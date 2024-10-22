@@ -84,7 +84,7 @@ name = "fetch-fsm"
 [[example]]
 name = "fetch-stream"
 
-[workspace.lints.rust]
+[lints.rust]
 missing_debug_implementations = "warn"
 
 # We use this --cfg for documenting the cargo features on which an API
@@ -97,5 +97,5 @@ missing_debug_implementations = "warn"
 # feature(doc_cfg))]` in the crate.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(iroh_docsrs)"] }
 
-[workspace.lints.clippy]
+[lints.clippy]
 unused-async = "warn"
