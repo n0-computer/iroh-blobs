@@ -161,8 +161,8 @@ jobs:
       - name: Add wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: wasm32 build (iroh-base)
-        run: cargo build -p iroh-base --all-features --target wasm32-unknown-unknown
+      - name: wasm32 build
+        run: cargo build --all-features --target wasm32-unknown-unknown
 
   check_semver:
     runs-on: ubuntu-latest
@@ -190,7 +190,7 @@ jobs:
         # uses: obi1kenobi/cargo-semver-checks-action@v2
         uses: n0-computer/cargo-semver-checks-action@feat-baseline
         with:
-          package: iroh, iroh-base, iroh-blobs, iroh-cli, iroh-dns-server, iroh-gossip, iroh-metrics, iroh-net, iroh-net-bench, iroh-docs
+          package: iroh-blobs
           baseline-rev: ${{ env.HEAD_COMMIT_SHA }}
           use-cache: false
 
