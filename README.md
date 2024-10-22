@@ -1,34 +1,32 @@
-<h1 align="center"><a href="https://iroh.computer"><img alt="iroh" src="./.img/iroh_wordmark.svg" width="100" /></a></h1>
+# iroh-blobs
 
-<h3 align="center">
-An iroh protocol for moving bytes over the internet
-</h3>
+This crate provides blob and collection transfer support for iroh. It implements a simple request-response protocol based on blake3 verified streaming.
 
-[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square)](https://docs.rs/iroh-blobs/)
-[![Crates.io](https://img.shields.io/crates/v/iroh.svg?style=flat-square)](https://crates.io/crates/iroh-blobs)
-[![downloads](https://img.shields.io/crates/d/iroh.svg?style=flat-square)](https://crates.io/crates/iroh-blobs)
-[![Chat](https://img.shields.io/discord/1161119546170687619?logo=discord&style=flat-square)](https://discord.com/invite/DpmJgtU7cW)
-[![Youtube](https://img.shields.io/badge/YouTube-red?logo=youtube&logoColor=white&style=flat-square)](https://www.youtube.com/@n0computer)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE-MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE-APACHE)
-[![CI](https://github.com/n0-computer/iroh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/n0-computer/iroh-blobs/actions/workflows/ci.yml)
+A request describes data in terms of blake3 hashes and byte ranges. It is possible to
+request blobs or ranges of blobs, as well as collections.
 
-<div align="center">
-  <h3>
-    <a href="https://iroh.computer/docs">
-      Docs Site
-    </a>
-    <span> | </span>
-    <a href="https://docs.rs/iroh-blobs">
-      Rust Docs
-    </a>
-  </h3>
-</div>
-<br/>
+The requester opens a quic stream to the provider and sends the request. The provider answers with the requested data, encoded as [blake3](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf) verified streams, on the same quic stream.
 
-## License
+This crate is usually used together with [iroh-net](https://crates.io/crates/iroh-net), but can also be used with normal [quinn](https://crates.io/crates/quinn) connections. Connection establishment is left up to the user or a higher level APIs such as the iroh CLI.
 
-Copyright 2024 N0, INC.
+## Concepts
+
+- **Blob:** a sequence of bytes of arbitrary size, without any metadata.
+
+- **Link:** a 32 byte blake3 hash of a blob.
+
+- **Collection:** any blob that contains links. The simplest collection is just an array of 32 byte blake3 hashes. 
+
+- **Provider:** The side that provides data and answers requests. Providers wait for incoming requests from Requests.
+
+- **Requester:** The side that asks for data. It is initiating requests to one or many providers.
+
+## Examples
+
+Examples that use `iroh-blobs` can be found in the `iroh` crate. the iroh crate publishes `iroh_blobs` as `iroh::bytes`.
+
+
+# License
 
 This project is licensed under either of
 
@@ -41,4 +39,7 @@ at your option.
 
 ### Contribution
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.
+
