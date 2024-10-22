@@ -99,3 +99,16 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(iroh_docsrs)"] }
 
 [lints.clippy]
 unused-async = "warn"
+
+[profile.dev-ci]
+inherits = 'dev'
+opt-level = 1 
+
+[profile.optimized-release]
+inherits = 'release'
+debug = false
+lto = true
+debug-assertions = false
+opt-level = 3
+panic = 'abort'
+incremental = false
