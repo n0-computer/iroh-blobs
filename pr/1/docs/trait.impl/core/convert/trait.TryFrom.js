@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"iroh_blobs":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/convert/trait.TryFrom.html\" title=\"trait core::convert::TryFrom\">TryFrom</a>&lt;Bytes&gt; for <a class=\"struct\" href=\"iroh_blobs/hashseq/struct.HashSeq.html\" title=\"struct iroh_blobs::hashseq::HashSeq\">HashSeq</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/convert/trait.TryFrom.html\" title=\"trait core::convert::TryFrom\">TryFrom</a>&lt;VarInt&gt; for <a class=\"enum\" href=\"iroh_blobs/protocol/enum.Closed.html\" title=\"enum iroh_blobs::protocol::Closed\">Closed</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
