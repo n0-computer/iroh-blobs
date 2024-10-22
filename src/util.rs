@@ -333,6 +333,7 @@ pub(crate) fn compute_outboard(
 
 /// Compute raw outboard, without the size header.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn raw_outboard(data: &[u8]) -> (Vec<u8>, Hash) {
     let res = bao_tree::io::outboard::PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
     (res.data, res.root.into())

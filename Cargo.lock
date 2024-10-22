@@ -1628,7 +1628,6 @@ dependencies = [
  "hex",
  "http-body 0.4.6",
  "iroh-base",
- "iroh-blobs 0.27.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "iroh-io",
  "iroh-metrics",
  "iroh-net",
@@ -1660,49 +1659,6 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "iroh-blobs"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69e83475d6c8cc312a224d4c6bdf287f862d30d2b176768ef71f188a0d8aa7cd"
-dependencies = [
- "anyhow",
- "async-channel",
- "bao-tree",
- "bytes",
- "chrono",
- "derive_more",
- "futures-buffered",
- "futures-lite 2.3.0",
- "genawaiter",
- "hashlink",
- "hex",
- "iroh-base",
- "iroh-io",
- "iroh-metrics",
- "iroh-net",
- "iroh-quinn",
- "num_cpus",
- "oneshot",
- "parking_lot",
- "pin-project",
- "postcard",
- "rand",
- "range-collections",
- "redb 1.5.1",
- "redb 2.1.1",
- "reflink-copy",
- "self_cell",
- "serde",
- "smallvec",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-futures",
 ]
 
 [[package]]
