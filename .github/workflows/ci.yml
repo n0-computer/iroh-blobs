@@ -161,8 +161,8 @@ jobs:
       - name: Add wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: wasm32 build (iroh-base)
-        run: cargo build -p iroh-base --all-features --target wasm32-unknown-unknown
+      - name: wasm32 build
+        run: cargo build --all-features --target wasm32-unknown-unknown
 
   check_semver:
     runs-on: ubuntu-latest
