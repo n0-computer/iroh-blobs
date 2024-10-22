@@ -15,7 +15,7 @@ This crate is usually used together with [iroh-net](https://crates.io/crates/iro
 
 - **Link:** a 32 byte blake3 hash of a blob.
 
-- **Collection:** any blob that contains links. The simplest collection is just an array of 32 byte blake3 hashes. 
+- **HashSeq:** a blob that contains a sequence of links. Its size is a multiple of 32.
 
 - **Provider:** The side that provides data and answers requests. Providers wait for incoming requests from Requests.
 
