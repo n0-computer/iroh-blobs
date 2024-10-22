@@ -51,7 +51,6 @@ tracing-futures = "0.2.5"
 
 [dev-dependencies]
 http-body = "0.4.5"
-iroh-blobs = { version = "0.27", features = ["downloader"] }
 iroh-test = { version = "0.27" }
 futures-buffered = "0.2.4"
 proptest = "1.0.0"
