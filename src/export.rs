@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use bytes::Bytes;
-use iroh_base::rpc::RpcError;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
 
@@ -124,7 +123,7 @@ pub enum ExportProgress {
     /// We are done with the whole operation.
     AllDone,
     /// We got an error and need to abort.
-    Abort(RpcError),
+    Abort(serde_error::Error),
 }
 
 fn pathbuf_from_name(name: &str) -> PathBuf {

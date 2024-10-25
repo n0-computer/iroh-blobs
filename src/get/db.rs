@@ -9,7 +9,7 @@ use genawaiter::{
     rc::{Co, Gen},
     GeneratorState,
 };
-use iroh_base::{hash::Hash, rpc::RpcError};
+use iroh_base::hash::Hash;
 use iroh_io::AsyncSliceReader;
 use iroh_net::endpoint::Connection;
 use serde::{Deserialize, Serialize};
@@ -669,7 +669,7 @@ pub enum DownloadProgress {
     /// We got an error and need to abort.
     ///
     /// This will be the last message in the stream.
-    Abort(RpcError),
+    Abort(serde_error::Error),
 }
 
 /// The id of a blob in a transfer
