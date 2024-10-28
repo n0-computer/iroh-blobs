@@ -796,9 +796,9 @@ impl<G: Getter<Connection = D::Connection>, D: Dialer> Service<G, D> {
             if let Some(sender) = handlers.on_progress {
                 self.progress_tracker.unsubscribe(&kind, &sender);
                 sender
-                    .send(DownloadProgress::Abort(
-                        anyhow::Error::from(DownloadError::Cancelled).into(),
-                    ))
+                    .send(DownloadProgress::Abort(serde_error::Error::new(
+                        &*anyhow::Error::from(DownloadError::Cancelled),
+                    )))
                     .await
                     .ok();
             }

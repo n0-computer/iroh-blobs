@@ -7,7 +7,6 @@ use bao_tree::io::{
     EncodeError,
 };
 use futures_lite::future::Boxed as BoxFuture;
-use iroh_base::rpc::RpcError;
 use iroh_io::{
     stats::{SliceReaderStats, StreamWriterStats, TrackingSliceReader, TrackingStreamWriter},
     AsyncSliceReader, AsyncStreamWriter, TokioStreamWriter,
@@ -157,7 +156,7 @@ pub enum AddProgress {
     /// We got an error and need to abort.
     ///
     /// This will be the last message in the stream.
-    Abort(RpcError),
+    Abort(serde_error::Error),
 }
 
 /// Progress updates for the batch add operation.
@@ -181,7 +180,7 @@ pub enum BatchAddPathProgress {
     /// We got an error and need to abort.
     ///
     /// This will be the last message in the stream.
-    Abort(RpcError),
+    Abort(serde_error::Error),
 }
 
 /// Read the request from the getter.

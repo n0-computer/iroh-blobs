@@ -9,7 +9,6 @@ use bao_tree::{
 use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use genawaiter::rc::{Co, Gen};
-use iroh_base::rpc::RpcError;
 use iroh_io::AsyncSliceReader;
 pub use range_collections;
 use serde::{Deserialize, Serialize};
@@ -877,7 +876,7 @@ pub enum ConsistencyCheckProgress {
     /// Consistency check ended
     Done,
     /// We got an error and need to abort.
-    Abort(RpcError),
+    Abort(serde_error::Error),
 }
 
 /// Progress updates for the validate operation
@@ -947,7 +946,7 @@ pub enum ValidateProgress {
     /// We are done with the whole operation.
     AllDone,
     /// We got an error and need to abort.
-    Abort(RpcError),
+    Abort(serde_error::Error),
 }
 
 /// Database events
