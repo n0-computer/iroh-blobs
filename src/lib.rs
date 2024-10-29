@@ -35,6 +35,9 @@ pub mod format;
 pub mod get;
 pub mod hashseq;
 pub mod metrics;
+#[cfg(feature = "downloader")]
+#[cfg_attr(iroh_docsrs, doc(cfg(feature = "downloader")))]
+pub mod net_protocol;
 pub mod protocol;
 pub mod provider;
 pub mod store;

@@ -28,6 +28,7 @@ iroh-base = { version = "0.27.0", features = ["redb"] }
 iroh-io = { version = "0.6.0", features = ["stats"] }
 iroh-metrics = { version = "0.27.0", default-features = false }
 iroh-net = { version = "0.27.0" }
+iroh-router = "0.27.0"
 num_cpus = "1.15.0"
 oneshot = "0.1.8"
 parking_lot = { version = "0.12.1", optional = true }
@@ -113,3 +114,9 @@ debug-assertions = false
 opt-level = 3
 panic = 'abort'
 incremental = false
+
+[patch.crates-io]
+iroh-router = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-net = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-metrics = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }
