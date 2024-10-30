@@ -40,6 +40,9 @@ pub mod metrics;
 pub mod net_protocol;
 pub mod protocol;
 pub mod provider;
+#[cfg(feature = "rpc")]
+#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
+pub mod rpc;
 pub mod store;
 pub mod util;
 
