@@ -108,7 +108,7 @@ async fn setup_router<S: crate::store::Store>(
     tokio::task::JoinHandle<()>,
     LocalPool,
 )> {
-    let endpoint = iroh_net::Endpoint::builder().bind().await?;
+    let endpoint = iroh_net::Endpoint::builder().discovery_n0().bind().await?;
     let local_pool = LocalPool::single();
     let mut router = iroh_router::Router::builder(endpoint.clone());
 
