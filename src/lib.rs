@@ -46,6 +46,8 @@ pub mod rpc;
 pub mod store;
 pub mod util;
 
+pub mod node;
+
 use bao_tree::BlockSize;
 pub use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 
