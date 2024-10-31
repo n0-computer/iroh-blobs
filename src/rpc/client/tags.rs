@@ -12,13 +12,15 @@
 //! [`Client::list_hash_seq`] can be used to list all tags with a hash_seq format.
 //!
 //! [`Client::delete`] can be used to delete a tag.
-use crate::{BlobFormat, Hash, Tag};
 use anyhow::Result;
 use futures_lite::{Stream, StreamExt};
 use quic_rpc::RpcClient;
 use serde::{Deserialize, Serialize};
 
-use crate::rpc::proto::tags::{DeleteRequest, ListRequest};
+use crate::{
+    rpc::proto::tags::{DeleteRequest, ListRequest},
+    BlobFormat, Hash, Tag,
+};
 
 /// Iroh tags client.
 #[derive(Debug, Clone)]

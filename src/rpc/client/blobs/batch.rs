@@ -4,14 +4,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{
-    format::collection::Collection,
-    net_protocol::BatchId,
-    provider::BatchAddPathProgress,
-    store::ImportMode,
-    util::{SetTagOption, TagDrop},
-    BlobFormat, HashAndFormat, Tag, TempTag,
-};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use futures_buffered::BufferedStreamExt;
@@ -23,12 +15,20 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
 
 use super::WrapOption;
-use crate::rpc::proto::{
-    blobs::{
-        BatchAddPathRequest, BatchAddStreamRequest, BatchAddStreamResponse, BatchAddStreamUpdate,
-        BatchCreateTempTagRequest, BatchUpdate,
+use crate::{
+    format::collection::Collection,
+    net_protocol::BatchId,
+    provider::BatchAddPathProgress,
+    rpc::proto::{
+        blobs::{
+            BatchAddPathRequest, BatchAddStreamRequest, BatchAddStreamResponse,
+            BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
+        },
+        tags::{self, SyncMode},
     },
-    tags::{self, SyncMode},
+    store::ImportMode,
+    util::{SetTagOption, TagDrop},
+    BlobFormat, HashAndFormat, Tag, TempTag,
 };
 
 /// A scope in which blobs can be added.

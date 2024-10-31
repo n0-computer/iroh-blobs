@@ -68,16 +68,6 @@ use std::{
     task::{Context, Poll},
 };
 
-pub use crate::net_protocol::DownloadMode;
-use crate::{
-    export::ExportProgress as BytesExportProgress,
-    format::collection::{Collection, SimpleStore},
-    get::db::DownloadProgress as BytesDownloadProgress,
-    net_protocol::BlobDownloadRequest,
-    store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
-    util::SetTagOption,
-    BlobFormat, Hash, Tag,
-};
 use anyhow::{anyhow, Context as _, Result};
 use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
@@ -90,6 +80,17 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::warn;
+
+pub use crate::net_protocol::DownloadMode;
+use crate::{
+    export::ExportProgress as BytesExportProgress,
+    format::collection::{Collection, SimpleStore},
+    get::db::DownloadProgress as BytesDownloadProgress,
+    net_protocol::BlobDownloadRequest,
+    store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
+    util::SetTagOption,
+    BlobFormat, Hash, Tag,
+};
 
 mod batch;
 pub use batch::{AddDirOpts, AddFileOpts, AddReaderOpts, Batch};
@@ -982,13 +983,13 @@ pub struct DownloadOptions {
 
 #[cfg(test)]
 mod tests {
-    use crate::hashseq::HashSeq;
     use iroh_net::NodeId;
     use rand::RngCore;
     use testresult::TestResult;
     use tokio::{io::AsyncWriteExt, sync::mpsc};
 
     use super::*;
+    use crate::hashseq::HashSeq;
 
     #[tokio::test]
     async fn test_blob_create_collection() -> Result<()> {

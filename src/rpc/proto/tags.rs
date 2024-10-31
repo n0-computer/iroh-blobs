@@ -4,8 +4,7 @@ use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
 
 use super::{RpcResult, RpcService};
-use crate::rpc::client::tags::TagInfo;
-use crate::{net_protocol::BatchId, HashAndFormat, Tag};
+use crate::{net_protocol::BatchId, rpc::client::tags::TagInfo, HashAndFormat, Tag};
 
 #[allow(missing_docs)]
 #[derive(strum::Display, Debug, Serialize, Deserialize)]

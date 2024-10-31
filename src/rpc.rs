@@ -18,9 +18,18 @@ use iroh_base::hash::{BlobFormat, HashAndFormat};
 use iroh_io::AsyncSliceReader;
 use proto::{
     blobs::{
-        AddPathRequest, AddPathResponse, AddStreamRequest, AddStreamResponse, AddStreamUpdate, BatchAddPathRequest, BatchAddPathResponse, BatchAddStreamRequest, BatchAddStreamResponse, BatchAddStreamUpdate, BatchCreateRequest, BatchCreateResponse, BatchCreateTempTagRequest, BatchUpdate, BlobStatusRequest, BlobStatusResponse, ConsistencyCheckRequest, CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse, ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest, ReadAtResponse, ValidateRequest
+        AddPathRequest, AddPathResponse, AddStreamRequest, AddStreamResponse, AddStreamUpdate,
+        BatchAddPathRequest, BatchAddPathResponse, BatchAddStreamRequest, BatchAddStreamResponse,
+        BatchAddStreamUpdate, BatchCreateRequest, BatchCreateResponse, BatchCreateTempTagRequest,
+        BatchUpdate, BlobStatusRequest, BlobStatusResponse, ConsistencyCheckRequest,
+        CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
+        ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
+        ReadAtResponse, ValidateRequest,
     },
-    tags::SyncMode,
+    tags::{
+        CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
+        ListRequest as TagListRequest, SetRequest as TagsSetRequest, SyncMode,
+    },
     RpcError, RpcResult,
 };
 use quic_rpc::server::{RpcChannel, RpcServerError};
@@ -38,10 +47,6 @@ use crate::{
     },
     Tag,
 };
-use proto::tags::{
-    CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
-    ListRequest as TagListRequest, SetRequest as TagsSetRequest,
-};
 pub mod client;
 pub mod proto;
 
@@ -51,15 +56,15 @@ const RPC_BLOB_GET_CHUNK_SIZE: usize = 1024 * 64;
 const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
-
     /// Handle an RPC request
-    pub async fn handle_rpc_request<S, C>(self: Arc<Self>,
+    pub async fn handle_rpc_request<S, C>(
+        self: Arc<Self>,
         msg: crate::rpc::proto::Request,
-        chan: RpcChannel<crate::rpc::proto::RpcService, C, S>
+        chan: RpcChannel<crate::rpc::proto::RpcService, C, S>,
     ) -> std::result::Result<(), RpcServerError<C>>
-        where 
-                S: quic_rpc::Service,
-                C: quic_rpc::ServiceEndpoint<S>,
+    where
+        S: quic_rpc::Service,
+        C: quic_rpc::ServiceEndpoint<S>,
     {
         use crate::rpc::proto::Request::*;
         match msg {
@@ -72,11 +77,11 @@ impl<D: crate::store::Store> Blobs<D> {
     pub async fn handle_tags_request<S, C>(
         self: Arc<Self>,
         msg: proto::tags::Request,
-        chan: RpcChannel<proto::RpcService, C, S>
+        chan: RpcChannel<proto::RpcService, C, S>,
     ) -> std::result::Result<(), RpcServerError<C>>
-        where 
-            S: quic_rpc::Service,
-            C: quic_rpc::ServiceEndpoint<S>,
+    where
+        S: quic_rpc::Service,
+        C: quic_rpc::ServiceEndpoint<S>,
     {
         use proto::tags::Request::*;
         match msg {
@@ -91,46 +96,46 @@ impl<D: crate::store::Store> Blobs<D> {
     pub async fn handle_blobs_request<Sv, C>(
         self: Arc<Self>,
         msg: proto::blobs::Request,
-        chan: RpcChannel<proto::RpcService, C, Sv>
+        chan: RpcChannel<proto::RpcService, C, Sv>,
     ) -> std::result::Result<(), RpcServerError<C>>
-        where 
-            Sv: quic_rpc::Service,
-            C: quic_rpc::ServiceEndpoint<Sv>,
+    where
+        Sv: quic_rpc::Service,
+        C: quic_rpc::ServiceEndpoint<Sv>,
     {
         use proto::blobs::Request::*;
-    match msg {
-        List(msg) => chan.server_streaming(msg, self, Self::blob_list).await,
-        ListIncomplete(msg) => {
-            chan.server_streaming(msg, self, Self::blob_list_incomplete)
-                .await
+        match msg {
+            List(msg) => chan.server_streaming(msg, self, Self::blob_list).await,
+            ListIncomplete(msg) => {
+                chan.server_streaming(msg, self, Self::blob_list_incomplete)
+                    .await
+            }
+            CreateCollection(msg) => chan.rpc(msg, self, Self::create_collection).await,
+            Delete(msg) => chan.rpc(msg, self, Self::blob_delete_blob).await,
+            AddPath(msg) => {
+                chan.server_streaming(msg, self, Self::blob_add_from_path)
+                    .await
+            }
+            Download(msg) => chan.server_streaming(msg, self, Self::blob_download).await,
+            Export(msg) => chan.server_streaming(msg, self, Self::blob_export).await,
+            Validate(msg) => chan.server_streaming(msg, self, Self::blob_validate).await,
+            Fsck(msg) => {
+                chan.server_streaming(msg, self, Self::blob_consistency_check)
+                    .await
+            }
+            ReadAt(msg) => chan.server_streaming(msg, self, Self::blob_read_at).await,
+            AddStream(msg) => chan.bidi_streaming(msg, self, Self::blob_add_stream).await,
+            AddStreamUpdate(_msg) => Err(RpcServerError::UnexpectedUpdateMessage),
+            BlobStatus(msg) => chan.rpc(msg, self, Self::blob_status).await,
+            BatchCreate(msg) => chan.bidi_streaming(msg, self, Self::batch_create).await,
+            BatchUpdate(_) => Err(RpcServerError::UnexpectedStartMessage),
+            BatchAddStream(msg) => chan.bidi_streaming(msg, self, Self::batch_add_stream).await,
+            BatchAddStreamUpdate(_) => Err(RpcServerError::UnexpectedStartMessage),
+            BatchAddPath(msg) => {
+                chan.server_streaming(msg, self, Self::batch_add_from_path)
+                    .await
+            }
+            BatchCreateTempTag(msg) => chan.rpc(msg, self, Self::batch_create_temp_tag).await,
         }
-        CreateCollection(msg) => chan.rpc(msg, self, Self::create_collection).await,
-        Delete(msg) => chan.rpc(msg, self, Self::blob_delete_blob).await,
-        AddPath(msg) => {
-            chan.server_streaming(msg, self, Self::blob_add_from_path)
-                .await
-        }
-        Download(msg) => chan.server_streaming(msg, self, Self::blob_download).await,
-        Export(msg) => chan.server_streaming(msg, self, Self::blob_export).await,
-        Validate(msg) => chan.server_streaming(msg, self, Self::blob_validate).await,
-        Fsck(msg) => {
-            chan.server_streaming(msg, self, Self::blob_consistency_check)
-                .await
-        }
-        ReadAt(msg) => chan.server_streaming(msg, self, Self::blob_read_at).await,
-        AddStream(msg) => chan.bidi_streaming(msg, self, Self::blob_add_stream).await,
-        AddStreamUpdate(_msg) => Err(RpcServerError::UnexpectedUpdateMessage),
-        BlobStatus(msg) => chan.rpc(msg, self, Self::blob_status).await,
-        BatchCreate(msg) => chan.bidi_streaming(msg, self, Self::batch_create).await,
-        BatchUpdate(_) => Err(RpcServerError::UnexpectedStartMessage),
-        BatchAddStream(msg) => chan.bidi_streaming(msg, self, Self::batch_add_stream).await,
-        BatchAddStreamUpdate(_) => Err(RpcServerError::UnexpectedStartMessage),
-        BatchAddPath(msg) => {
-            chan.server_streaming(msg, self, Self::batch_add_from_path)
-                .await
-        }
-        BatchCreateTempTag(msg) => chan.rpc(msg, self, Self::batch_create_temp_tag).await,
-    }
     }
 
     async fn blob_status(self: Arc<Self>, msg: BlobStatusRequest) -> RpcResult<BlobStatusResponse> {
@@ -236,7 +241,10 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(())
     }
 
-    fn blob_list_tags(self: Arc<Self>, msg: TagListRequest) -> impl Stream<Item = TagInfo> + Send + 'static {
+    fn blob_list_tags(
+        self: Arc<Self>,
+        msg: TagListRequest,
+    ) -> impl Stream<Item = TagInfo> + Send + 'static {
         tracing::info!("blob_list_tags");
         let blobs = self;
         Gen::new(|co| async move {
@@ -353,7 +361,10 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(tag)
     }
 
-    fn blob_download(self: Arc<Self>, msg: BlobDownloadRequest) -> impl Stream<Item = DownloadResponse> {
+    fn blob_download(
+        self: Arc<Self>,
+        msg: BlobDownloadRequest,
+    ) -> impl Stream<Item = DownloadResponse> {
         let (sender, receiver) = async_channel::bounded(1024);
         let endpoint = self.endpoint().clone();
         let progress = AsyncChannelProgressSender::new(sender);
@@ -518,7 +529,10 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(())
     }
 
-    async fn batch_create_temp_tag(self: Arc<Self>, msg: BatchCreateTempTagRequest) -> RpcResult<()> {
+    async fn batch_create_temp_tag(
+        self: Arc<Self>,
+        msg: BatchCreateTempTagRequest,
+    ) -> RpcResult<()> {
         let blobs = self;
         let tag = blobs.store().temp_tag(msg.content);
         blobs.batches().await.store(msg.batch, tag);
@@ -812,7 +826,6 @@ impl<D: crate::store::Store> Blobs<D> {
         }
         .into_stream()
     }
-
 
     async fn create_collection(
         self: Arc<Self>,
