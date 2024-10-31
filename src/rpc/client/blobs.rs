@@ -86,7 +86,6 @@ use genawaiter::sync::{Co, Gen};
 use iroh_net::NodeAddr;
 use portable_atomic::{AtomicU64, Ordering};
 use quic_rpc::{client::BoxStreamSync, RpcClient};
-use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio_util::io::{ReaderStream, StreamReader};
@@ -104,8 +103,7 @@ use crate::rpc::proto::blobs::{
 };
 
 /// Iroh blobs client.
-#[derive(Debug, Clone, RefCast)]
-#[repr(transparent)]
+#[derive(Debug, Clone)]
 pub struct Client<C, S> {
     pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
 }
@@ -115,6 +113,11 @@ where
     S: quic_rpc::Service,
     C: quic_rpc::ServiceConnection<S>,
 {
+    /// Create a new client
+    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C, S>) -> Self {
+        Self { rpc }
+    }
+
     /// Check if a blob is completely stored on the node.
     ///
     /// Note that this will return false for blobs that are partially stored on
@@ -213,7 +216,7 @@ where
     /// For automatically clearing the tags for the passed in blobs you can set
     /// `tags_to_delete` to those tags, and they will be deleted once the collection is created.
     pub async fn create_collection(
-        &self,
+        self,
         collection: Collection,
         tag: SetTagOption,
         tags_to_delete: Vec<Tag>,
@@ -451,9 +454,7 @@ where
     }
 
     fn tags_client(&self) -> tags::Client<C, S> {
-        tags::Client {
-            rpc: self.rpc.clone(),
-        }
+        tags::Client::new(self.rpc.clone())
     }
 }
 
@@ -480,7 +481,8 @@ pub enum ReadAtLen {
 }
 
 impl ReadAtLen {
-    pub(crate) fn as_result_len(&self, size_remaining: u64) -> u64 {
+    /// todo make private again
+    pub fn as_result_len(&self, size_remaining: u64) -> u64 {
         match self {
             ReadAtLen::All => size_remaining,
             ReadAtLen::Exact(len) => *len,
@@ -875,7 +877,8 @@ impl Reader {
         }
     }
 
-    pub(crate) async fn from_rpc_read<C, S>(
+    /// todo make private again
+    pub async fn from_rpc_read<C, S>(
         rpc: &RpcClient<crate::rpc::proto::RpcService, C, S>,
         hash: Hash,
     ) -> anyhow::Result<Self>

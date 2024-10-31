@@ -30,5 +30,7 @@ pub enum Response {
     Tags(tags::Response),
 }
 
-type RpcError = serde_error::Error;
-type RpcResult<T> = Result<T, RpcError>;
+/// Error type for RPC operations
+pub type RpcError = serde_error::Error;
+/// Result type for RPC operations
+pub type RpcResult<T> = Result<T, RpcError>;
