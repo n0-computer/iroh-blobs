@@ -993,7 +993,6 @@ mod tests {
         use std::{path::Path, sync::Arc};
 
         use iroh_net::{NodeAddr, NodeId};
-        use quic_rpc::client::BoxedServiceConnection;
         use tokio_util::task::AbortOnDropHandle;
 
         use crate::{
