@@ -7,12 +7,6 @@ use std::{
 
 use anyhow::{bail, Context};
 use bytes::Bytes;
-use iroh_net::key::SecretKey;
-use tokio::io::AsyncWriteExt;
-use walkdir::WalkDir;
-
-use crate::rpc::client::blobs::WrapOption;
-
 /// A data source
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct DataSource {
@@ -62,7 +56,12 @@ impl From<&std::path::Path> for DataSource {
 }
 
 /// Create data sources from a path.
-pub fn scan_path(path: PathBuf, wrap: WrapOption) -> anyhow::Result<Vec<DataSource>> {
+#[cfg(feature = "rpc")]
+pub fn scan_path(
+    path: PathBuf,
+    wrap: crate::rpc::client::blobs::WrapOption,
+) -> anyhow::Result<Vec<DataSource>> {
+    use crate::rpc::client::blobs::WrapOption;
     if path.is_dir() {
         scan_dir(path, wrap)
     } else {
@@ -75,12 +74,20 @@ pub fn scan_path(path: PathBuf, wrap: WrapOption) -> anyhow::Result<Vec<DataSour
     }
 }
 
+#[cfg(feature = "rpc")]
+#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 fn file_name(path: &Path) -> anyhow::Result<String> {
     relative_canonicalized_path_to_string(path.file_name().context("path is invalid")?)
 }
 
 /// Create data sources from a directory.
-pub fn scan_dir(root: PathBuf, wrap: WrapOption) -> anyhow::Result<Vec<DataSource>> {
+#[cfg(feature = "rpc")]
+#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
+pub fn scan_dir(
+    root: PathBuf,
+    wrap: crate::rpc::client::blobs::WrapOption,
+) -> anyhow::Result<Vec<DataSource>> {
+    use crate::rpc::client::blobs::WrapOption;
     if !root.is_dir() {
         bail!("Expected {} to be a file", root.to_string_lossy());
     }
@@ -89,7 +96,7 @@ pub fn scan_dir(root: PathBuf, wrap: WrapOption) -> anyhow::Result<Vec<DataSourc
         WrapOption::Wrap { name: None } => Some(file_name(&root)?),
         WrapOption::Wrap { name: Some(name) } => Some(name),
     };
-    let files = WalkDir::new(&root).into_iter();
+    let files = walkdir::WalkDir::new(&root).into_iter();
     let data_sources = files
         .map(|entry| {
             let entry = entry?;
@@ -121,13 +128,18 @@ pub fn relative_canonicalized_path_to_string(path: impl AsRef<Path>) -> anyhow::
 
 /// Loads a [`SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
-pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<SecretKey> {
+#[cfg(feature = "rpc")]
+#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
+pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<iroh_net::key::SecretKey> {
+    use tokio::io::AsyncWriteExt;
+
     if key_path.exists() {
         let keystr = tokio::fs::read(key_path).await?;
-        let secret_key = SecretKey::try_from_openssh(keystr).context("invalid keyfile")?;
+        let secret_key =
+            iroh_net::key::SecretKey::try_from_openssh(keystr).context("invalid keyfile")?;
         Ok(secret_key)
     } else {
-        let secret_key = SecretKey::generate();
+        let secret_key = iroh_net::key::SecretKey::generate();
         let ser_key = secret_key.to_openssh()?;
 
         // Try to canonicalize if possible
