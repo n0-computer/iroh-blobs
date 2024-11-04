@@ -1594,8 +1594,8 @@ checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
 name = "iroh-base"
-version = "0.27.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#6c6827d63ec12d9c9583b73b5530a7641060535c"
+version = "0.28.0"
+source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
 dependencies = [
  "aead",
  "anyhow",
@@ -1610,29 +1610,13 @@ dependencies = [
  "postcard",
  "rand",
  "rand_core",
+ "redb 2.1.1",
  "serde",
  "ssh-key",
  "thiserror",
  "ttl_cache",
  "url",
  "zeroize",
-]
-
-[[package]]
-name = "iroh-base"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c21fd8eb71f166a172a9779c2244db992218e9a9bd929b9df6fc355d2b630c9"
-dependencies = [
- "anyhow",
- "data-encoding",
- "derive_more",
- "hex",
- "iroh-blake3",
- "postcard",
- "redb 2.1.1",
- "serde",
- "thiserror",
 ]
 
 [[package]]
@@ -1665,9 +1649,9 @@ dependencies = [
  "hashlink",
  "hex",
  "http-body 0.4.6",
- "iroh-base 0.28.0",
+ "iroh-base",
  "iroh-io",
- "iroh-metrics 0.28.0",
+ "iroh-metrics",
  "iroh-net",
  "iroh-quinn",
  "iroh-router",
@@ -1716,29 +1700,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.27.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#6c6827d63ec12d9c9583b73b5530a7641060535c"
-dependencies = [
- "anyhow",
- "erased_set",
- "http-body-util",
- "hyper",
- "hyper-util",
- "once_cell",
- "prometheus-client",
- "reqwest",
- "serde",
- "struct_iterable",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "iroh-metrics"
 version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0d40f2ee3997489d47403d204a06514ed65373d224b5b43a8ea133f543e5db1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
 dependencies = [
  "anyhow",
  "erased_set",
@@ -1757,8 +1720,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-net"
-version = "0.27.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#6c6827d63ec12d9c9583b73b5530a7641060535c"
+version = "0.28.0"
+source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
 dependencies = [
  "anyhow",
  "backoff",
@@ -1783,8 +1746,8 @@ dependencies = [
  "hyper",
  "hyper-util",
  "igd-next",
- "iroh-base 0.27.0",
- "iroh-metrics 0.27.0",
+ "iroh-base",
+ "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
  "iroh-quinn-udp",
@@ -1793,11 +1756,13 @@ dependencies = [
  "netlink-packet-core",
  "netlink-packet-route",
  "netlink-sys",
+ "netwatch",
  "num_enum",
  "once_cell",
  "parking_lot",
  "pin-project",
  "pkarr",
+ "portmapper",
  "postcard",
  "rand",
  "rcgen",
@@ -1833,9 +1798,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-quinn"
-version = "0.11.3"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fd590a39a14cfc168efa4d894de5039d65641e62d8da4a80733018ababe3c33"
+checksum = "ef889060d564b72f7b7a2090f3e004bc194a748d27b06ce83634e335f62f3d4c"
 dependencies = [
  "bytes",
  "iroh-quinn-proto",
@@ -1851,9 +1816,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-quinn-proto"
-version = "0.11.6"
+version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd0538ff12efe3d61ea1deda2d7913f4270873a519d43e6995c6e87a1558538"
+checksum = "81c99aa693163f28bd8d460a63891b5f5f2fd9b2c6e047e97299816709797d2d"
 dependencies = [
  "bytes",
  "rand",
@@ -1869,9 +1834,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-quinn-udp"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0619b59471fdd393ac8a6c047f640171119c1c8b41f7d2927db91776dcdbc5f"
+checksum = "bfcfc0abc2fdf8cf18a6c72893b7cbebeac2274a3b1306c1760c48c0e10ac5e0"
 dependencies = [
  "libc",
  "once_cell",
@@ -1883,7 +1848,7 @@ dependencies = [
 [[package]]
 name = "iroh-router"
 version = "0.27.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#6c6827d63ec12d9c9583b73b5530a7641060535c"
+source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -1953,9 +1918,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.155"
+version = "0.2.161"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97b3888a4aecf77e811145cadf6eef5901f4782c53886191b2f693f24761847c"
+checksum = "8e9489c2807c139ffd9c1794f4af0ebe86a828db53ecdc7fea2111d0fed085d1"
 
 [[package]]
 name = "libm"
@@ -2200,6 +2165,34 @@ dependencies = [
  "libc",
  "log",
  "tokio",
+]
+
+[[package]]
+name = "netwatch"
+version = "0.1.0"
+source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "derive_more",
+ "futures-lite 2.3.0",
+ "futures-sink",
+ "futures-util",
+ "libc",
+ "netdev",
+ "netlink-packet-core",
+ "netlink-packet-route",
+ "netlink-sys",
+ "once_cell",
+ "rtnetlink",
+ "serde",
+ "socket2",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "windows 0.51.1",
+ "wmi",
 ]
 
 [[package]]
@@ -2683,6 +2676,34 @@ name = "portable-atomic"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da544ee218f0d287a911e9c99a39a8c9bc8fcad3cb8db5959940044ecfc67265"
+
+[[package]]
+name = "portmapper"
+version = "0.1.0"
+source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "derive_more",
+ "futures-lite 2.3.0",
+ "futures-util",
+ "igd-next",
+ "iroh-metrics",
+ "libc",
+ "netwatch",
+ "num_enum",
+ "rand",
+ "serde",
+ "smallvec",
+ "socket2",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
 
 [[package]]
 name = "positioned-io"
