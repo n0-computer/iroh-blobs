@@ -74,7 +74,7 @@ use iroh_net::NodeAddr;
 use portable_atomic::{AtomicU64, Ordering};
 use quic_rpc::{
     client::{BoxStreamSync, BoxedServiceConnection},
-    RpcClient,
+    RpcClient, ServiceConnection,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -87,6 +87,7 @@ use crate::{
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress as BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
+    rpc::proto::RpcService,
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
     util::SetTagOption,
     BlobFormat, Hash, Tag,
@@ -105,16 +106,16 @@ use crate::rpc::proto::blobs::{
 
 /// Iroh blobs client.
 #[derive(Debug, Clone)]
-pub struct Client<C = BoxedServiceConnection<crate::rpc::proto::RpcService>> {
-    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C>,
+pub struct Client<C = BoxedServiceConnection<RpcService>> {
+    pub(super) rpc: RpcClient<RpcService, C>,
 }
 
 impl<C> Client<C>
 where
-    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+    C: ServiceConnection<RpcService>,
 {
     /// Create a new client
-    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C>) -> Self {
+    pub fn new(rpc: RpcClient<RpcService, C>) -> Self {
         Self { rpc }
     }
 
@@ -460,7 +461,7 @@ where
 
 impl<C> SimpleStore for Client<C>
 where
-    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+    C: ServiceConnection<RpcService>,
 {
     async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
         self.read_to_bytes(hash).await
@@ -878,23 +879,23 @@ impl Reader {
 
     /// todo make private again
     pub async fn from_rpc_read<C>(
-        rpc: &RpcClient<crate::rpc::proto::RpcService, C>,
+        rpc: &RpcClient<RpcService, C>,
         hash: Hash,
     ) -> anyhow::Result<Self>
     where
-        C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+        C: ServiceConnection<RpcService>,
     {
         Self::from_rpc_read_at(rpc, hash, 0, ReadAtLen::All).await
     }
 
     async fn from_rpc_read_at<C>(
-        rpc: &RpcClient<crate::rpc::proto::RpcService, C>,
+        rpc: &RpcClient<RpcService, C>,
         hash: Hash,
         offset: u64,
         len: ReadAtLen,
     ) -> anyhow::Result<Self>
     where
-        C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+        C: ServiceConnection<RpcService>,
     {
         let stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -1001,10 +1002,9 @@ mod tests {
             util::local_pool::LocalPool,
         };
 
-        type RpcClient = quic_rpc::RpcClient<
-            crate::rpc::proto::RpcService,
-            BoxedServiceConnection<crate::rpc::proto::RpcService>,
-        >;
+        use super::RpcService;
+
+        type RpcClient = quic_rpc::RpcClient<RpcService>;
 
         /// An iroh node that just has the blobs transport
         #[derive(Debug)]
@@ -1122,7 +1122,7 @@ mod tests {
 
             // Setup RPC
             let (internal_rpc, controller) =
-                quic_rpc::transport::flume::service_connection::<crate::rpc::proto::RpcService>(32);
+                quic_rpc::transport::flume::service_connection::<RpcService>(32);
             let controller = quic_rpc::transport::boxed::Connection::new(controller);
             let internal_rpc = quic_rpc::transport::boxed::ServerEndpoint::new(internal_rpc);
             let internal_rpc = quic_rpc::RpcServer::new(internal_rpc);

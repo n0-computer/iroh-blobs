@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_buffered::BufferedStreamExt;
 use futures_lite::StreamExt;
 use futures_util::{sink::Buffer, FutureExt, SinkExt, Stream};
-use quic_rpc::{client::UpdateSink, RpcClient};
+use quic_rpc::{client::UpdateSink, RpcClient, ServiceConnection};
 use tokio::io::AsyncRead;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
@@ -25,6 +25,7 @@ use crate::{
             BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
         },
         tags::{self, SyncMode},
+        RpcService,
     },
     store::ImportMode,
     util::{SetTagOption, TagDrop},
@@ -35,12 +36,12 @@ use crate::{
 #[derive(derive_more::Debug)]
 struct BatchInner<C>
 where
-    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+    C: ServiceConnection<RpcService>,
 {
     /// The id of the scope.
     batch: BatchId,
     /// The rpc client.
-    rpc: RpcClient<crate::rpc::proto::RpcService, C>,
+    rpc: RpcClient<RpcService, C>,
     /// The stream to send drop
     #[debug(skip)]
     updates: Mutex<Buffer<UpdateSink<C, BatchUpdate>, BatchUpdate>>,
@@ -55,11 +56,11 @@ where
 #[derive(derive_more::Debug)]
 pub struct Batch<C>(Arc<BatchInner<C>>)
 where
-    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>;
+    C: ServiceConnection<RpcService>;
 
 impl<C> TagDrop for BatchInner<C>
 where
-    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+    C: ServiceConnection<RpcService>,
 {
     fn on_drop(&self, content: &HashAndFormat) {
         let mut updates = self.updates.lock().unwrap();
@@ -129,11 +130,11 @@ impl Default for AddReaderOpts {
 
 impl<C> Batch<C>
 where
-    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
+    C: ServiceConnection<RpcService>,
 {
     pub(super) fn new(
         batch: BatchId,
-        rpc: RpcClient<crate::rpc::proto::RpcService, C>,
+        rpc: RpcClient<RpcService, C>,
         updates: UpdateSink<C, BatchUpdate>,
         buffer_size: usize,
     ) -> Self {
