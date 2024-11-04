@@ -1595,7 +1595,7 @@ checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 [[package]]
 name = "iroh-base"
 version = "0.28.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+source = "git+https://github.com/n0-computer/iroh?branch=main#5437dbb4e409200f66c3d97d9b277be14a2b6b33"
 dependencies = [
  "aead",
  "anyhow",
@@ -1701,7 +1701,7 @@ dependencies = [
 [[package]]
 name = "iroh-metrics"
 version = "0.28.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+source = "git+https://github.com/n0-computer/iroh?branch=main#5437dbb4e409200f66c3d97d9b277be14a2b6b33"
 dependencies = [
  "anyhow",
  "erased_set",
@@ -1721,7 +1721,7 @@ dependencies = [
 [[package]]
 name = "iroh-net"
 version = "0.28.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+source = "git+https://github.com/n0-computer/iroh?branch=main#5437dbb4e409200f66c3d97d9b277be14a2b6b33"
 dependencies = [
  "anyhow",
  "backoff",
@@ -1847,8 +1847,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-router"
-version = "0.27.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+version = "0.28.0"
+source = "git+https://github.com/n0-computer/iroh?branch=main#5437dbb4e409200f66c3d97d9b277be14a2b6b33"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2170,7 +2170,7 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+source = "git+https://github.com/n0-computer/iroh?branch=main#5437dbb4e409200f66c3d97d9b277be14a2b6b33"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2680,7 +2680,7 @@ checksum = "da544ee218f0d287a911e9c99a39a8c9bc8fcad3cb8db5959940044ecfc67265"
 [[package]]
 name = "portmapper"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#2073bf40176789c36a607d10a6bbaef38b16846b"
+source = "git+https://github.com/n0-computer/iroh?branch=main#5437dbb4e409200f66c3d97d9b277be14a2b6b33"
 dependencies = [
  "anyhow",
  "base64",
