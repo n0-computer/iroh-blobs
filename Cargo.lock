@@ -1610,13 +1610,29 @@ dependencies = [
  "postcard",
  "rand",
  "rand_core",
- "redb 2.1.1",
  "serde",
  "ssh-key",
  "thiserror",
  "ttl_cache",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "iroh-base"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c21fd8eb71f166a172a9779c2244db992218e9a9bd929b9df6fc355d2b630c9"
+dependencies = [
+ "anyhow",
+ "data-encoding",
+ "derive_more",
+ "hex",
+ "iroh-blake3",
+ "postcard",
+ "redb 2.1.1",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -1649,9 +1665,9 @@ dependencies = [
  "hashlink",
  "hex",
  "http-body 0.4.6",
- "iroh-base",
+ "iroh-base 0.28.0",
  "iroh-io",
- "iroh-metrics",
+ "iroh-metrics 0.28.0",
  "iroh-net",
  "iroh-quinn",
  "iroh-router",
@@ -1719,6 +1735,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroh-metrics"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0d40f2ee3997489d47403d204a06514ed65373d224b5b43a8ea133f543e5db1"
+dependencies = [
+ "anyhow",
+ "erased_set",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "once_cell",
+ "prometheus-client",
+ "reqwest",
+ "serde",
+ "struct_iterable",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iroh-net"
 version = "0.27.0"
 source = "git+https://github.com/n0-computer/iroh?branch=main#6c6827d63ec12d9c9583b73b5530a7641060535c"
@@ -1746,8 +1783,8 @@ dependencies = [
  "hyper",
  "hyper-util",
  "igd-next",
- "iroh-base",
- "iroh-metrics",
+ "iroh-base 0.27.0",
+ "iroh-metrics 0.27.0",
  "iroh-quinn",
  "iroh-quinn-proto",
  "iroh-quinn-udp",
@@ -1860,9 +1897,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-test"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0656192e6e80d714b316a9b9ca1bdf160de46a85b708034c0355c3e6c25b91a1"
+checksum = "f909a839e5aafd4c4ca473e6e143bacdd6a8483385e64186cacfa62e91f4081d"
 dependencies = [
  "anyhow",
  "tokio",
