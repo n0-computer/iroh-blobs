@@ -23,20 +23,16 @@ use crate::{
 /// Iroh tags client.
 #[derive(Debug, Clone)]
 #[repr(transparent)]
-pub struct Client<
-    C = BoxedServiceConnection<crate::rpc::proto::RpcService>,
-    S = crate::rpc::proto::RpcService,
-> {
-    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
+pub struct Client<C = BoxedServiceConnection<crate::rpc::proto::RpcService>> {
+    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C>,
 }
 
-impl<C, S> Client<C, S>
+impl<C> Client<C>
 where
-    C: quic_rpc::ServiceConnection<S>,
-    S: quic_rpc::Service,
+    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
 {
     /// Creates a new client
-    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C, S>) -> Self {
+    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C>) -> Self {
         Self { rpc }
     }
 

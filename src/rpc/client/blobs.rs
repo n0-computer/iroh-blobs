@@ -105,20 +105,16 @@ use crate::rpc::proto::blobs::{
 
 /// Iroh blobs client.
 #[derive(Debug, Clone)]
-pub struct Client<
-    C = BoxedServiceConnection<crate::rpc::proto::RpcService>,
-    S = crate::rpc::proto::RpcService,
-> {
-    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
+pub struct Client<C = BoxedServiceConnection<crate::rpc::proto::RpcService>> {
+    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C>,
 }
 
-impl<C, S> Client<C, S>
+impl<C> Client<C>
 where
-    S: quic_rpc::Service,
-    C: quic_rpc::ServiceConnection<S>,
+    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
 {
     /// Create a new client
-    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C, S>) -> Self {
+    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C>) -> Self {
         Self { rpc }
     }
 
@@ -147,7 +143,7 @@ where
     /// A batch is a context in which temp tags are created and data is added to the node. Temp tags
     /// are automatically deleted when the batch is dropped, leading to the data being garbage collected
     /// unless a permanent tag is created for it.
-    pub async fn batch(&self) -> Result<Batch<C, S>> {
+    pub async fn batch(&self) -> Result<Batch<C>> {
         let (updates, mut stream) = self.rpc.bidi(BatchCreateRequest).await?;
         let BatchCreateResponse::Id(batch) = stream.next().await.context("expected scope id")??;
         let rpc = self.rpc.clone();
@@ -457,15 +453,14 @@ where
         Ok(())
     }
 
-    fn tags_client(&self) -> tags::Client<C, S> {
+    fn tags_client(&self) -> tags::Client<C> {
         tags::Client::new(self.rpc.clone())
     }
 }
 
-impl<C, S> SimpleStore for Client<C, S>
+impl<C> SimpleStore for Client<C>
 where
-    S: quic_rpc::Service,
-    C: quic_rpc::ServiceConnection<S>,
+    C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
 {
     async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
         self.read_to_bytes(hash).await
@@ -882,26 +877,24 @@ impl Reader {
     }
 
     /// todo make private again
-    pub async fn from_rpc_read<C, S>(
-        rpc: &RpcClient<crate::rpc::proto::RpcService, C, S>,
+    pub async fn from_rpc_read<C>(
+        rpc: &RpcClient<crate::rpc::proto::RpcService, C>,
         hash: Hash,
     ) -> anyhow::Result<Self>
     where
-        C: quic_rpc::ServiceConnection<S>,
-        S: quic_rpc::Service,
+        C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
     {
         Self::from_rpc_read_at(rpc, hash, 0, ReadAtLen::All).await
     }
 
-    async fn from_rpc_read_at<C, S>(
-        rpc: &RpcClient<crate::rpc::proto::RpcService, C, S>,
+    async fn from_rpc_read_at<C>(
+        rpc: &RpcClient<crate::rpc::proto::RpcService, C>,
         hash: Hash,
         offset: u64,
         len: ReadAtLen,
     ) -> anyhow::Result<Self>
     where
-        C: quic_rpc::ServiceConnection<S>,
-        S: quic_rpc::Service,
+        C: quic_rpc::ServiceConnection<crate::rpc::proto::RpcService>,
     {
         let stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -1011,7 +1004,6 @@ mod tests {
         type RpcClient = quic_rpc::RpcClient<
             crate::rpc::proto::RpcService,
             BoxedServiceConnection<crate::rpc::proto::RpcService>,
-            crate::rpc::proto::RpcService,
         >;
 
         /// An iroh node that just has the blobs transport
