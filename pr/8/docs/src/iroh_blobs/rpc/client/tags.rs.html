@@ -65,6 +65,9 @@
 <a href="#65" id="65">65</a>
 <a href="#66" id="66">66</a>
 <a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! API for tag management.
 //!
 //! The purpose of tags is to mark information as important to prevent it
@@ -79,27 +82,30 @@
 //! [`Client::delete`] can be used to delete a tag.
 </span><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>futures_lite::{Stream, StreamExt};
-<span class="kw">use </span>quic_rpc::{client::BoxedServiceConnection, RpcClient};
+<span class="kw">use </span>quic_rpc::{client::BoxedServiceConnection, RpcClient, ServiceConnection};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use crate</span>::{
-    rpc::proto::tags::{DeleteRequest, ListRequest},
+    rpc::proto::{
+        tags::{DeleteRequest, ListRequest},
+        RpcService,
+    },
     BlobFormat, Hash, Tag,
 };
 
 <span class="doccomment">/// Iroh tags client.
 </span><span class="attr">#[derive(Debug, Clone)]
 #[repr(transparent)]
-</span><span class="kw">pub struct </span>Client&lt;C = BoxedServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;&gt; {
-    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;,
+</span><span class="kw">pub struct </span>Client&lt;C = BoxedServiceConnection&lt;RpcService&gt;&gt; {
+    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
 <span class="kw">impl</span>&lt;C&gt; Client&lt;C&gt;
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+    </span>C: ServiceConnection&lt;RpcService&gt;,
 {
     <span class="doccomment">/// Creates a new client
-    </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ rpc }
     }
 

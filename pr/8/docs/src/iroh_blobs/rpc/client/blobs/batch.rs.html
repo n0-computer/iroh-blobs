@@ -469,6 +469,7 @@
 <a href="#469" id="469">469</a>
 <a href="#470" id="470">470</a>
 <a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io,
     path::PathBuf,
@@ -480,7 +481,7 @@
 <span class="kw">use </span>futures_buffered::BufferedStreamExt;
 <span class="kw">use </span>futures_lite::StreamExt;
 <span class="kw">use </span>futures_util::{sink::Buffer, FutureExt, SinkExt, Stream};
-<span class="kw">use </span>quic_rpc::{client::UpdateSink, RpcClient};
+<span class="kw">use </span>quic_rpc::{client::UpdateSink, RpcClient, ServiceConnection};
 <span class="kw">use </span>tokio::io::AsyncRead;
 <span class="kw">use </span>tokio_util::io::ReaderStream;
 <span class="kw">use </span>tracing::{debug, warn};
@@ -496,6 +497,7 @@
             BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
         },
         tags::{<span class="self">self</span>, SyncMode},
+        RpcService,
     },
     store::ImportMode,
     util::{SetTagOption, TagDrop},
@@ -506,12 +508,12 @@
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">struct </span>BatchInner&lt;C&gt;
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+    </span>C: ServiceConnection&lt;RpcService&gt;,
 {
     <span class="doccomment">/// The id of the scope.
     </span>batch: BatchId,
     <span class="doccomment">/// The rpc client.
-    </span>rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;,
+    </span>rpc: RpcClient&lt;RpcService, C&gt;,
     <span class="doccomment">/// The stream to send drop
     </span><span class="attr">#[debug(skip)]
     </span>updates: Mutex&lt;Buffer&lt;UpdateSink&lt;C, BatchUpdate&gt;, BatchUpdate&gt;&gt;,
@@ -526,11 +528,11 @@
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">pub struct </span>Batch&lt;C&gt;(Arc&lt;BatchInner&lt;C&gt;&gt;)
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;;
+    </span>C: ServiceConnection&lt;RpcService&gt;;
 
 <span class="kw">impl</span>&lt;C&gt; TagDrop <span class="kw">for </span>BatchInner&lt;C&gt;
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+    </span>C: ServiceConnection&lt;RpcService&gt;,
 {
     <span class="kw">fn </span>on_drop(<span class="kw-2">&amp;</span><span class="self">self</span>, content: <span class="kw-2">&amp;</span>HashAndFormat) {
         <span class="kw">let </span><span class="kw-2">mut </span>updates = <span class="self">self</span>.updates.lock().unwrap();
@@ -600,11 +602,11 @@
 
 <span class="kw">impl</span>&lt;C&gt; Batch&lt;C&gt;
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+    </span>C: ServiceConnection&lt;RpcService&gt;,
 {
     <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>new(
         batch: BatchId,
-        rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;,
+        rpc: RpcClient&lt;RpcService, C&gt;,
         updates: UpdateSink&lt;C, BatchUpdate&gt;,
         buffer_size: usize,
     ) -&gt; <span class="self">Self </span>{

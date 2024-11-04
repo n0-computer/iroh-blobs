@@ -1871,7 +1871,7 @@
 <span class="kw">use </span>portable_atomic::{AtomicU64, Ordering};
 <span class="kw">use </span>quic_rpc::{
     client::{BoxStreamSync, BoxedServiceConnection},
-    RpcClient,
+    RpcClient, ServiceConnection,
 };
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -1884,6 +1884,7 @@
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
+    rpc::proto::RpcService,
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
     util::SetTagOption,
     BlobFormat, Hash, Tag,
@@ -1902,16 +1903,16 @@
 
 <span class="doccomment">/// Iroh blobs client.
 </span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>Client&lt;C = BoxedServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;&gt; {
-    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;,
+</span><span class="kw">pub struct </span>Client&lt;C = BoxedServiceConnection&lt;RpcService&gt;&gt; {
+    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
 <span class="kw">impl</span>&lt;C&gt; Client&lt;C&gt;
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+    </span>C: ServiceConnection&lt;RpcService&gt;,
 {
     <span class="doccomment">/// Create a new client
-    </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ rpc }
     }
 
@@ -2257,7 +2258,7 @@
 
 <span class="kw">impl</span>&lt;C&gt; SimpleStore <span class="kw">for </span>Client&lt;C&gt;
 <span class="kw">where
-    </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+    </span>C: ServiceConnection&lt;RpcService&gt;,
 {
     <span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; anyhow::Result&lt;Bytes&gt; {
         <span class="self">self</span>.read_to_bytes(hash).<span class="kw">await
@@ -2675,23 +2676,23 @@
 
     <span class="doccomment">/// todo make private again
     </span><span class="kw">pub async fn </span>from_rpc_read&lt;C&gt;(
-        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;,
+        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;RpcService, C&gt;,
         hash: Hash,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+        </span>C: ServiceConnection&lt;RpcService&gt;,
     {
         <span class="self">Self</span>::from_rpc_read_at(rpc, hash, <span class="number">0</span>, ReadAtLen::All).<span class="kw">await
     </span>}
 
     <span class="kw">async fn </span>from_rpc_read_at&lt;C&gt;(
-        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C&gt;,
+        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;RpcService, C&gt;,
         hash: Hash,
         offset: u64,
         len: ReadAtLen,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
+        </span>C: ServiceConnection&lt;RpcService&gt;,
     {
         <span class="kw">let </span>stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -2798,10 +2799,9 @@
             util::local_pool::LocalPool,
         };
 
-        <span class="kw">type </span>RpcClient = quic_rpc::RpcClient&lt;
-            <span class="kw">crate</span>::rpc::proto::RpcService,
-            BoxedServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
-        &gt;;
+        <span class="kw">use </span><span class="kw">super</span>::RpcService;
+
+        <span class="kw">type </span>RpcClient = quic_rpc::RpcClient&lt;RpcService&gt;;
 
         <span class="doccomment">/// An iroh node that just has the blobs transport
         </span><span class="attr">#[derive(Debug)]
@@ -2919,7 +2919,7 @@
 
             <span class="comment">// Setup RPC
             </span><span class="kw">let </span>(internal_rpc, controller) =
-                quic_rpc::transport::flume::service_connection::&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;(<span class="number">32</span>);
+                quic_rpc::transport::flume::service_connection::&lt;RpcService&gt;(<span class="number">32</span>);
             <span class="kw">let </span>controller = quic_rpc::transport::boxed::Connection::new(controller);
             <span class="kw">let </span>internal_rpc = quic_rpc::transport::boxed::ServerEndpoint::new(internal_rpc);
             <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
