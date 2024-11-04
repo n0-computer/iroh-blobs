@@ -995,13 +995,12 @@ mod tests {
         use iroh_net::{NodeAddr, NodeId};
         use tokio_util::task::AbortOnDropHandle;
 
+        use super::RpcService;
         use crate::{
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
             util::local_pool::LocalPool,
         };
-
-        use super::RpcService;
 
         type RpcClient = quic_rpc::RpcClient<RpcService>;
 

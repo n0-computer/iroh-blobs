@@ -25,10 +25,12 @@ use proto::{
         CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
         ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
         ReadAtResponse, ValidateRequest,
-    }, tags::{
+    },
+    tags::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
         ListRequest as TagListRequest, SetRequest as TagsSetRequest, SyncMode,
-    }, Request, RpcError, RpcResult, RpcService
+    },
+    Request, RpcError, RpcResult, RpcService,
 };
 use quic_rpc::server::{RpcChannel, RpcServerError};
 
