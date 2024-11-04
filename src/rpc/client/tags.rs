@@ -6,8 +6,6 @@
 //!
 //! The main entry point is the [`Client`].
 //!
-//! You obtain a [`Client`] via [`Iroh::tags()`](crate::client::Iroh::tags).
-//!
 //! [`Client::list`] can be used to list all tags.
 //! [`Client::list_hash_seq`] can be used to list all tags with a hash_seq format.
 //!

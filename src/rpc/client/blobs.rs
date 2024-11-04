@@ -2,8 +2,6 @@
 //!
 //! The main entry point is the [`Client`].
 //!
-//! You obtain a [`Client`] via [`Iroh::blobs()`](crate::client::Iroh::blobs).
-//!
 //! ## Interacting with the local blob store
 //!
 //! ### Importing data
@@ -33,7 +31,6 @@
 //! ## Interacting with remote nodes
 //!
 //! - [`download`](Client::download) downloads data from a remote node.
-//! - [`share`](Client::share) allows creating a ticket to share data with a
 //!   remote node.
 //!
 //! ## Interacting with the blob store itself
@@ -52,13 +49,13 @@
 //! For complex update operations, there is a [`batch`](Client::batch) API that
 //! allows you to add multiple blobs in a single logical batch.
 //!
-//! Operations in a batch return [temporary tags](crate::blobs::TempTag) that
+//! Operations in a batch return [temporary tags](crate::util::TempTag) that
 //! protect the added data from garbage collection as long as the batch is
 //! alive.
 //!
 //! To store the data permanently, a temp tag needs to be upgraded to a
-//! permanent tag using [`persist`](crate::client::blobs::Batch::persist) or
-//! [`persist_to`](crate::client::blobs::Batch::persist_to).
+//! permanent tag using [`persist`](crate::rpc::client::blobs::Batch::persist) or
+//! [`persist_to`](crate::rpc::client::blobs::Batch::persist_to).
 use std::{
     future::Future,
     io,

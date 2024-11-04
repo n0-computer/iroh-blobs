@@ -126,7 +126,7 @@ pub fn relative_canonicalized_path_to_string(path: impl AsRef<Path>) -> anyhow::
     canonicalized_path_to_string(path, true)
 }
 
-/// Loads a [`SecretKey`] from the provided file, or stores a newly generated one
+/// Loads a [`iroh_net::key::SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
 #[cfg(feature = "rpc")]
 #[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
