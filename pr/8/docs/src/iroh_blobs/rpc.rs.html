@@ -867,6 +867,8 @@
 <a href="#867" id="867">867</a>
 <a href="#868" id="868">868</a>
 <a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
@@ -894,10 +896,12 @@
         CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
         ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
         ReadAtResponse, ValidateRequest,
-    }, tags::{
+    },
+    tags::{
         CreateRequest <span class="kw">as </span>TagsCreateRequest, DeleteRequest <span class="kw">as </span>TagDeleteRequest,
         ListRequest <span class="kw">as </span>TagListRequest, SetRequest <span class="kw">as </span>TagsSetRequest, SyncMode,
-    }, Request, RpcError, RpcResult, RpcService
+    },
+    Request, RpcError, RpcResult, RpcService,
 };
 <span class="kw">use </span>quic_rpc::server::{RpcChannel, RpcServerError};
 
