@@ -25,12 +25,10 @@ use proto::{
         CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
         ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
         ReadAtResponse, ValidateRequest,
-    },
-    tags::{
+    }, tags::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
         ListRequest as TagListRequest, SetRequest as TagsSetRequest, SyncMode,
-    },
-    RpcError, RpcResult, RpcService,
+    }, Request, RpcError, RpcResult, RpcService
 };
 use quic_rpc::server::{RpcChannel, RpcServerError};
 
@@ -59,13 +57,13 @@ impl<D: crate::store::Store> Blobs<D> {
     /// Handle an RPC request
     pub async fn handle_rpc_request<C>(
         self: Arc<Self>,
-        msg: crate::rpc::proto::Request,
+        msg: Request,
         chan: RpcChannel<RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
         C: quic_rpc::ServiceEndpoint<RpcService>,
     {
-        use crate::rpc::proto::Request::*;
+        use Request::*;
         match msg {
             Blobs(msg) => self.handle_blobs_request(msg, chan).await,
             Tags(msg) => self.handle_tags_request(msg, chan).await,
