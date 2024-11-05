@@ -934,7 +934,7 @@
         chan: RpcChannel&lt;RpcService, C&gt;,
     ) -&gt; std::result::Result&lt;(), RpcServerError&lt;C&gt;&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceEndpoint&lt;RpcService&gt;,
+        </span>C: quic_rpc::ServiceChannel&lt;RpcService&gt;,
     {
         <span class="kw">use </span>Request::<span class="kw-2">*</span>;
         <span class="kw">match </span>msg {
@@ -950,7 +950,7 @@
         chan: RpcChannel&lt;proto::RpcService, C&gt;,
     ) -&gt; std::result::Result&lt;(), RpcServerError&lt;C&gt;&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceEndpoint&lt;proto::RpcService&gt;,
+        </span>C: quic_rpc::ServiceChannel&lt;proto::RpcService&gt;,
     {
         <span class="kw">use </span>proto::tags::Request::<span class="kw-2">*</span>;
         <span class="kw">match </span>msg {
@@ -968,7 +968,7 @@
         chan: RpcChannel&lt;proto::RpcService, C&gt;,
     ) -&gt; std::result::Result&lt;(), RpcServerError&lt;C&gt;&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceEndpoint&lt;proto::RpcService&gt;,
+        </span>C: quic_rpc::ServiceChannel&lt;proto::RpcService&gt;,
     {
         <span class="kw">use </span>proto::blobs::Request::<span class="kw-2">*</span>;
         <span class="kw">match </span>msg {
