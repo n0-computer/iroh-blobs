@@ -481,7 +481,7 @@
 <span class="kw">use </span>futures_buffered::BufferedStreamExt;
 <span class="kw">use </span>futures_lite::StreamExt;
 <span class="kw">use </span>futures_util::{sink::Buffer, FutureExt, SinkExt, Stream};
-<span class="kw">use </span>quic_rpc::{client::UpdateSink, RpcClient, ServiceConnection};
+<span class="kw">use </span>quic_rpc::{client::UpdateSink, Connector, RpcClient};
 <span class="kw">use </span>tokio::io::AsyncRead;
 <span class="kw">use </span>tokio_util::io::ReaderStream;
 <span class="kw">use </span>tracing::{debug, warn};
@@ -508,7 +508,7 @@
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">struct </span>BatchInner&lt;C&gt;
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="doccomment">/// The id of the scope.
     </span>batch: BatchId,
@@ -528,11 +528,11 @@
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">pub struct </span>Batch&lt;C&gt;(Arc&lt;BatchInner&lt;C&gt;&gt;)
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;;
+    </span>C: Connector&lt;RpcService&gt;;
 
 <span class="kw">impl</span>&lt;C&gt; TagDrop <span class="kw">for </span>BatchInner&lt;C&gt;
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="kw">fn </span>on_drop(<span class="kw-2">&amp;</span><span class="self">self</span>, content: <span class="kw-2">&amp;</span>HashAndFormat) {
         <span class="kw">let </span><span class="kw-2">mut </span>updates = <span class="self">self</span>.updates.lock().unwrap();
@@ -602,7 +602,7 @@
 
 <span class="kw">impl</span>&lt;C&gt; Batch&lt;C&gt;
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>new(
         batch: BatchId,

@@ -1868,8 +1868,8 @@
 <span class="kw">use </span>iroh_net::NodeAddr;
 <span class="kw">use </span>portable_atomic::{AtomicU64, Ordering};
 <span class="kw">use </span>quic_rpc::{
-    client::{BoxStreamSync, BoxedServiceConnection},
-    RpcClient, ServiceConnection,
+    client::{BoxStreamSync, BoxedConnector},
+    Connector, RpcClient,
 };
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -1901,13 +1901,13 @@
 
 <span class="doccomment">/// Iroh blobs client.
 </span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>Client&lt;C = BoxedServiceConnection&lt;RpcService&gt;&gt; {
+</span><span class="kw">pub struct </span>Client&lt;C = BoxedConnector&lt;RpcService&gt;&gt; {
     <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
 <span class="kw">impl</span>&lt;C&gt; Client&lt;C&gt;
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="doccomment">/// Create a new client
     </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
@@ -2256,7 +2256,7 @@
 
 <span class="kw">impl</span>&lt;C&gt; SimpleStore <span class="kw">for </span>Client&lt;C&gt;
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; anyhow::Result&lt;Bytes&gt; {
         <span class="self">self</span>.read_to_bytes(hash).<span class="kw">await
@@ -2678,7 +2678,7 @@
         hash: Hash,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
-        </span>C: ServiceConnection&lt;RpcService&gt;,
+        </span>C: Connector&lt;RpcService&gt;,
     {
         <span class="self">Self</span>::from_rpc_read_at(rpc, hash, <span class="number">0</span>, ReadAtLen::All).<span class="kw">await
     </span>}
@@ -2690,7 +2690,7 @@
         len: ReadAtLen,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
-        </span>C: ServiceConnection&lt;RpcService&gt;,
+        </span>C: Connector&lt;RpcService&gt;,
     {
         <span class="kw">let </span>stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -2788,6 +2788,7 @@
         </span><span class="kw">use </span>std::{path::Path, sync::Arc};
 
         <span class="kw">use </span>iroh_net::{NodeAddr, NodeId};
+        <span class="kw">use </span>quic_rpc::transport::{Connector, Listener};
         <span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
 
         <span class="kw">use </span><span class="kw">super</span>::RpcService;
@@ -2914,10 +2915,9 @@
             </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
             <span class="comment">// Setup RPC
-            </span><span class="kw">let </span>(internal_rpc, controller) =
-                quic_rpc::transport::flume::service_connection::&lt;RpcService&gt;(<span class="number">32</span>);
-            <span class="kw">let </span>controller = quic_rpc::transport::boxed::Connection::new(controller);
-            <span class="kw">let </span>internal_rpc = quic_rpc::transport::boxed::ServerEndpoint::new(internal_rpc);
+            </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
+            <span class="kw">let </span>controller = controller.boxed();
+            <span class="kw">let </span>internal_rpc = internal_rpc.boxed();
             <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
 
             <span class="kw">let </span>rpc_server_task: tokio::task::JoinHandle&lt;()&gt; = tokio::task::spawn(<span class="kw">async move </span>{

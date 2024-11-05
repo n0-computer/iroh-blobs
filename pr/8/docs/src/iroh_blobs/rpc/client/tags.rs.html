@@ -82,7 +82,7 @@
 //! [`Client::delete`] can be used to delete a tag.
 </span><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>futures_lite::{Stream, StreamExt};
-<span class="kw">use </span>quic_rpc::{client::BoxedServiceConnection, RpcClient, ServiceConnection};
+<span class="kw">use </span>quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use crate</span>::{
@@ -96,13 +96,13 @@
 <span class="doccomment">/// Iroh tags client.
 </span><span class="attr">#[derive(Debug, Clone)]
 #[repr(transparent)]
-</span><span class="kw">pub struct </span>Client&lt;C = BoxedServiceConnection&lt;RpcService&gt;&gt; {
+</span><span class="kw">pub struct </span>Client&lt;C = BoxedConnector&lt;RpcService&gt;&gt; {
     <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
 <span class="kw">impl</span>&lt;C&gt; Client&lt;C&gt;
 <span class="kw">where
-    </span>C: ServiceConnection&lt;RpcService&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="doccomment">/// Creates a new client
     </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
