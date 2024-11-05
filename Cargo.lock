@@ -350,9 +350,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.34"
+version = "1.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b9470d453346108f93a59222a9a1a5724db32d0a4727b7ab7ace4b4d822dc9"
+checksum = "0f57c4b4da2a9d619dd035f27316d7a426305b75be93d09e92f2b9229c34feaf"
 dependencies = [
  "shlex",
 ]
@@ -1270,6 +1270,25 @@ dependencies = [
 
 [[package]]
 name = "h2"
+version = "0.3.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
+dependencies = [
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
+ "http 0.2.12",
+ "indexmap",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "h2"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524e8ac6999421f49a846c2d4411f337e53497d8ec55d67753beffa43c5d9205"
@@ -1488,6 +1507,30 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hyper"
+version = "0.14.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c08302e8fa335b151b788c775ff56e7a03ae64ff85c548ee820fecb70356e85"
+dependencies = [
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "h2 0.3.26",
+ "http 0.2.12",
+ "http-body 0.4.6",
+ "httparse",
+ "httpdate",
+ "itoa",
+ "pin-project-lite",
+ "socket2",
+ "tokio",
+ "tower-service",
+ "tracing",
+ "want",
+]
+
+[[package]]
+name = "hyper"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbff0a806a4728c99295b254c8838933b5b082d75e3cb70c8dab21fdfbcfa9a"
@@ -1495,7 +1538,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "h2",
+ "h2 0.4.6",
  "http 1.1.0",
  "http-body 1.0.1",
  "httparse",
@@ -1515,7 +1558,7 @@ checksum = "08afdbb5c31130e3034af566421053ab03787c640246a446327f550d11bcb333"
 dependencies = [
  "futures-util",
  "http 1.1.0",
- "hyper",
+ "hyper 1.5.0",
  "hyper-util",
  "rustls",
  "rustls-pki-types",
@@ -1536,7 +1579,7 @@ dependencies = [
  "futures-util",
  "http 1.1.0",
  "http-body 1.0.1",
- "hyper",
+ "hyper 1.5.0",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -1728,7 +1771,7 @@ dependencies = [
  "futures",
  "http 1.1.0",
  "http-body-util",
- "hyper",
+ "hyper 1.5.0",
  "hyper-util",
  "log",
  "rand",
@@ -1795,7 +1838,7 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 [[package]]
 name = "iroh-base"
 version = "0.28.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b17b1f20b4c5e584e1fa4219ce5e375b37e9dbf1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#0a7a534128bf1234a326fcfba134d878e796c377"
 dependencies = [
  "aead",
  "anyhow",
@@ -1864,7 +1907,7 @@ dependencies = [
  "portable-atomic",
  "postcard",
  "proptest",
- "quic-rpc 0.14.0 (git+https://github.com/n0-computer/quic-rpc.git?branch=map-transports-not-services)",
+ "quic-rpc 0.14.0 (git+https://github.com/n0-computer/quic-rpc.git?branch=naming-bikeshedding)",
  "quic-rpc-derive",
  "rand",
  "range-collections",
@@ -1909,12 +1952,12 @@ dependencies = [
 [[package]]
 name = "iroh-metrics"
 version = "0.28.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b17b1f20b4c5e584e1fa4219ce5e375b37e9dbf1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#0a7a534128bf1234a326fcfba134d878e796c377"
 dependencies = [
  "anyhow",
  "erased_set",
  "http-body-util",
- "hyper",
+ "hyper 1.5.0",
  "hyper-util",
  "once_cell",
  "prometheus-client",
@@ -1929,7 +1972,7 @@ dependencies = [
 [[package]]
 name = "iroh-net"
 version = "0.28.1"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b17b1f20b4c5e584e1fa4219ce5e375b37e9dbf1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#0a7a534128bf1234a326fcfba134d878e796c377"
 dependencies = [
  "anyhow",
  "backoff",
@@ -1951,7 +1994,7 @@ dependencies = [
  "hostname",
  "http 1.1.0",
  "http-body-util",
- "hyper",
+ "hyper 1.5.0",
  "hyper-util",
  "igd-next",
  "iroh-base",
@@ -2056,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "iroh-router"
 version = "0.28.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b17b1f20b4c5e584e1fa4219ce5e375b37e9dbf1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#0a7a534128bf1234a326fcfba134d878e796c377"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2396,7 +2439,7 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b17b1f20b4c5e584e1fa4219ce5e375b37e9dbf1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#0a7a534128bf1234a326fcfba134d878e796c377"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2915,7 +2958,7 @@ checksum = "cc9c68a3f6da06753e9335d63e27f6b9754dd1920d941135b7ea8224f141adb2"
 [[package]]
 name = "portmapper"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b17b1f20b4c5e584e1fa4219ce5e375b37e9dbf1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#0a7a534128bf1234a326fcfba134d878e796c377"
 dependencies = [
  "anyhow",
  "base64",
@@ -3164,10 +3207,11 @@ dependencies = [
 [[package]]
 name = "quic-rpc"
 version = "0.14.0"
-source = "git+https://github.com/n0-computer/quic-rpc.git?branch=map-transports-not-services#03f97ab0bc5287f873970984d783320350ad3d8a"
+source = "git+https://github.com/n0-computer/quic-rpc.git?branch=naming-bikeshedding#067ae4b04bad16036571225904cd6970decb040b"
 dependencies = [
  "anyhow",
  "bincode",
+ "bytes",
  "derive_more",
  "educe",
  "flume",
@@ -3175,6 +3219,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "hex",
+ "hyper 0.14.31",
  "iroh-quinn",
  "pin-project",
  "serde",
@@ -3240,9 +3285,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.6"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e346e016eacfff12233c243718197ca12f148c84e1e84268a896699b41c71780"
+checksum = "7d5a626c6807713b15cac82a6acaccd6043c9a5408c24baae07611fec3f243da"
 dependencies = [
  "cfg_aliases",
  "libc",
@@ -3464,7 +3509,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper",
+ "hyper 1.5.0",
  "hyper-rustls",
  "hyper-util",
  "ipnet",

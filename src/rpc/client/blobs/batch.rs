@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_buffered::BufferedStreamExt;
 use futures_lite::StreamExt;
 use futures_util::{sink::Buffer, FutureExt, SinkExt, Stream};
-use quic_rpc::{client::UpdateSink, RpcClient, ServiceConnection};
+use quic_rpc::{client::UpdateSink, Connector, RpcClient};
 use tokio::io::AsyncRead;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
@@ -36,7 +36,7 @@ use crate::{
 #[derive(derive_more::Debug)]
 struct BatchInner<C>
 where
-    C: ServiceConnection<RpcService>,
+    C: Connector<RpcService>,
 {
     /// The id of the scope.
     batch: BatchId,
@@ -56,11 +56,11 @@ where
 #[derive(derive_more::Debug)]
 pub struct Batch<C>(Arc<BatchInner<C>>)
 where
-    C: ServiceConnection<RpcService>;
+    C: Connector<RpcService>;
 
 impl<C> TagDrop for BatchInner<C>
 where
-    C: ServiceConnection<RpcService>,
+    C: Connector<RpcService>,
 {
     fn on_drop(&self, content: &HashAndFormat) {
         let mut updates = self.updates.lock().unwrap();
@@ -130,7 +130,7 @@ impl Default for AddReaderOpts {
 
 impl<C> Batch<C>
 where
-    C: ServiceConnection<RpcService>,
+    C: Connector<RpcService>,
 {
     pub(super) fn new(
         batch: BatchId,

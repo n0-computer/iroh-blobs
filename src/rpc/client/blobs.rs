@@ -73,8 +73,8 @@ use genawaiter::sync::{Co, Gen};
 use iroh_net::NodeAddr;
 use portable_atomic::{AtomicU64, Ordering};
 use quic_rpc::{
-    client::{BoxStreamSync, BoxedServiceConnection},
-    RpcClient, ServiceConnection,
+    client::{BoxStreamSync, BoxedConnector},
+    Connector, RpcClient,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -106,13 +106,13 @@ use crate::rpc::proto::blobs::{
 
 /// Iroh blobs client.
 #[derive(Debug, Clone)]
-pub struct Client<C = BoxedServiceConnection<RpcService>> {
+pub struct Client<C = BoxedConnector<RpcService>> {
     pub(super) rpc: RpcClient<RpcService, C>,
 }
 
 impl<C> Client<C>
 where
-    C: ServiceConnection<RpcService>,
+    C: Connector<RpcService>,
 {
     /// Create a new client
     pub fn new(rpc: RpcClient<RpcService, C>) -> Self {
@@ -461,7 +461,7 @@ where
 
 impl<C> SimpleStore for Client<C>
 where
-    C: ServiceConnection<RpcService>,
+    C: Connector<RpcService>,
 {
     async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
         self.read_to_bytes(hash).await
@@ -883,7 +883,7 @@ impl Reader {
         hash: Hash,
     ) -> anyhow::Result<Self>
     where
-        C: ServiceConnection<RpcService>,
+        C: Connector<RpcService>,
     {
         Self::from_rpc_read_at(rpc, hash, 0, ReadAtLen::All).await
     }
@@ -895,7 +895,7 @@ impl Reader {
         len: ReadAtLen,
     ) -> anyhow::Result<Self>
     where
-        C: ServiceConnection<RpcService>,
+        C: Connector<RpcService>,
     {
         let stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -993,6 +993,7 @@ mod tests {
         use std::{path::Path, sync::Arc};
 
         use iroh_net::{NodeAddr, NodeId};
+        use quic_rpc::transport::{Connector, Listener};
         use tokio_util::task::AbortOnDropHandle;
 
         use super::RpcService;
@@ -1121,8 +1122,8 @@ mod tests {
             // Setup RPC
             let (internal_rpc, controller) =
                 quic_rpc::transport::flume::service_connection::<RpcService>(32);
-            let controller = quic_rpc::transport::boxed::Connection::new(controller);
-            let internal_rpc = quic_rpc::transport::boxed::ServerEndpoint::new(internal_rpc);
+            let controller = controller.boxed();
+            let internal_rpc = internal_rpc.boxed();
             let internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
 
             let rpc_server_task: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
