@@ -63,7 +63,7 @@ impl<D: crate::store::Store> Blobs<D> {
         chan: RpcChannel<RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        C: quic_rpc::ServiceEndpoint<RpcService>,
+        C: quic_rpc::ServiceChannel<RpcService>,
     {
         use Request::*;
         match msg {
@@ -79,7 +79,7 @@ impl<D: crate::store::Store> Blobs<D> {
         chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        C: quic_rpc::ServiceEndpoint<proto::RpcService>,
+        C: quic_rpc::ServiceChannel<proto::RpcService>,
     {
         use proto::tags::Request::*;
         match msg {
@@ -97,7 +97,7 @@ impl<D: crate::store::Store> Blobs<D> {
         chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        C: quic_rpc::ServiceEndpoint<proto::RpcService>,
+        C: quic_rpc::ServiceChannel<proto::RpcService>,
     {
         use proto::blobs::Request::*;
         match msg {
