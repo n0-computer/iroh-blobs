@@ -1120,8 +1120,7 @@ mod tests {
             let router = router.spawn().await?;
 
             // Setup RPC
-            let (internal_rpc, controller) =
-                quic_rpc::transport::flume::service_connection::<RpcService>(32);
+            let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);
             let controller = controller.boxed();
             let internal_rpc = internal_rpc.boxed();
             let internal_rpc = quic_rpc::RpcServer::new(internal_rpc);

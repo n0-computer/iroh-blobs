@@ -32,7 +32,7 @@ use proto::{
     },
     Request, RpcError, RpcResult, RpcService,
 };
-use quic_rpc::server::{RpcChannel, RpcServerError};
+use quic_rpc::server::{ChannelTypes, RpcChannel, RpcServerError};
 
 use crate::{
     export::ExportProgress,
@@ -63,7 +63,7 @@ impl<D: crate::store::Store> Blobs<D> {
         chan: RpcChannel<RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        C: quic_rpc::ListenerTypes<RpcService>,
+        C: ChannelTypes<RpcService>,
     {
         use Request::*;
         match msg {
@@ -79,7 +79,7 @@ impl<D: crate::store::Store> Blobs<D> {
         chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        C: quic_rpc::ListenerTypes<proto::RpcService>,
+        C: ChannelTypes<proto::RpcService>,
     {
         use proto::tags::Request::*;
         match msg {
@@ -97,7 +97,7 @@ impl<D: crate::store::Store> Blobs<D> {
         chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        C: quic_rpc::ListenerTypes<proto::RpcService>,
+        C: ChannelTypes<proto::RpcService>,
     {
         use proto::blobs::Request::*;
         match msg {
