@@ -28,44 +28,6 @@ use crate::{
     HashAndFormat, TempTag,
 };
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Serialize, Deserialize, Ord, Clone, Copy, Hash)]
-pub struct BatchId(u64);
-
-/// A request to the node to download and share the data specified by the hash.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlobDownloadRequest {
-    /// This mandatory field contains the hash of the data to download and share.
-    pub hash: Hash,
-    /// If the format is [`BlobFormat::HashSeq`], all children are downloaded and shared as
-    /// well.
-    pub format: BlobFormat,
-    /// This mandatory field specifies the nodes to download the data from.
-    ///
-    /// If set to more than a single node, they will all be tried. If `mode` is set to
-    /// [`DownloadMode::Direct`], they will be tried sequentially until a download succeeds.
-    /// If `mode` is set to [`DownloadMode::Queued`], the nodes may be dialed in parallel,
-    /// if the concurrency limits permit.
-    pub nodes: Vec<NodeAddr>,
-    /// Optional tag to tag the data with.
-    pub tag: SetTagOption,
-    /// Whether to directly start the download or add it to the download queue.
-    pub mode: DownloadMode,
-}
-
-/// Set the mode for whether to directly start the download or add it to the download queue.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DownloadMode {
-    /// Start the download right away.
-    ///
-    /// No concurrency limits or queuing will be applied. It is up to the user to manage download
-    /// concurrency.
-    Direct,
-    /// Queue the download.
-    ///
-    /// The download queue will be processed in-order, while respecting the downloader concurrency limits.
-    Queued,
-}
-
 #[derive(Debug)]
 pub struct Blobs<S> {
     rt: LocalPoolHandle,
@@ -81,7 +43,7 @@ const BLOB_DOWNLOAD_SOURCE_NAME: &str = "blob_download";
 
 /// Keeps track of all the currently active batch operations of the blobs api.
 #[derive(Debug, Default)]
-pub struct BlobBatches {
+pub(crate) struct BlobBatches {
     /// Currently active batches
     batches: BTreeMap<BatchId, BlobBatch>,
     /// Used to generate new batch ids.
@@ -152,19 +114,19 @@ impl<S: crate::store::Store> Blobs<S> {
         &self.store
     }
 
-    pub(crate) fn rt(&self) -> LocalPoolHandle {
-        self.rt.clone()
+    pub fn rt(&self) -> &LocalPoolHandle {
+        &self.rt
     }
 
-    pub(crate) fn endpoint(&self) -> &Endpoint {
+    pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
 
-    pub async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
+    pub(crate) async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
         self.batches.lock().await
     }
 
-    pub async fn download(
+    pub(crate) async fn download(
         &self,
         endpoint: Endpoint,
         req: BlobDownloadRequest,
@@ -318,3 +280,42 @@ impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
         })
     }
 }
+
+/// A request to the node to download and share the data specified by the hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobDownloadRequest {
+    /// This mandatory field contains the hash of the data to download and share.
+    pub hash: Hash,
+    /// If the format is [`BlobFormat::HashSeq`], all children are downloaded and shared as
+    /// well.
+    pub format: BlobFormat,
+    /// This mandatory field specifies the nodes to download the data from.
+    ///
+    /// If set to more than a single node, they will all be tried. If `mode` is set to
+    /// [`DownloadMode::Direct`], they will be tried sequentially until a download succeeds.
+    /// If `mode` is set to [`DownloadMode::Queued`], the nodes may be dialed in parallel,
+    /// if the concurrency limits permit.
+    pub nodes: Vec<NodeAddr>,
+    /// Optional tag to tag the data with.
+    pub tag: SetTagOption,
+    /// Whether to directly start the download or add it to the download queue.
+    pub mode: DownloadMode,
+}
+
+/// Set the mode for whether to directly start the download or add it to the download queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadMode {
+    /// Start the download right away.
+    ///
+    /// No concurrency limits or queuing will be applied. It is up to the user to manage download
+    /// concurrency.
+    Direct,
+    /// Queue the download.
+    ///
+    /// The download queue will be processed in-order, while respecting the downloader concurrency limits.
+    Queued,
+}
+
+/// Newtype for a batch id
+#[derive(Debug, PartialEq, Eq, PartialOrd, Serialize, Deserialize, Ord, Clone, Copy, Hash)]
+pub struct BatchId(pub u64);

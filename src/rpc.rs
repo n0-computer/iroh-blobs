@@ -73,7 +73,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     /// Handle a tags request
-    pub async fn handle_tags_request<C>(
+    async fn handle_tags_request<C>(
         self: Arc<Self>,
         msg: proto::tags::Request,
         chan: RpcChannel<proto::RpcService, C>,
@@ -91,7 +91,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     /// Handle a blobs request
-    pub async fn handle_blobs_request<C>(
+    async fn handle_blobs_request<C>(
         self: Arc<Self>,
         msg: proto::blobs::Request,
         chan: RpcChannel<proto::RpcService, C>,
@@ -308,7 +308,8 @@ impl<D: crate::store::Store> Blobs<D> {
         // provide a little buffer so that we don't slow down the sender
         let (tx, rx) = async_channel::bounded(32);
         let tx2 = tx.clone();
-        self.rt().spawn_detached(|| async move {
+        let rt = self.rt().clone();
+        rt.spawn_detached(|| async move {
             if let Err(e) = self.blob_add_from_path0(msg, tx).await {
                 tx2.send(AddProgress::Abort(RpcError::new(&*e))).await.ok();
             }
@@ -386,7 +387,8 @@ impl<D: crate::store::Store> Blobs<D> {
     fn blob_export(self: Arc<Self>, msg: ExportRequest) -> impl Stream<Item = ExportResponse> {
         let (tx, rx) = async_channel::bounded(1024);
         let progress = AsyncChannelProgressSender::new(tx);
-        self.rt().spawn_detached(move || async move {
+        let rt = self.rt().clone();
+        rt.spawn_detached(move || async move {
             let res = crate::export::export(
                 self.store(),
                 msg.hash,
