@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_buffered::BufferedStreamExt;
 use futures_lite::StreamExt;
 use futures_util::{sink::Buffer, FutureExt, SinkExt, Stream};
-use quic_rpc::{client::UpdateSink, RpcClient};
+use quic_rpc::{client::UpdateSink, Connector, RpcClient};
 use tokio::io::AsyncRead;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
@@ -25,6 +25,7 @@ use crate::{
             BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
         },
         tags::{self, SyncMode},
+        RpcService,
     },
     store::ImportMode,
     util::{SetTagOption, TagDrop},
@@ -33,19 +34,17 @@ use crate::{
 
 /// A scope in which blobs can be added.
 #[derive(derive_more::Debug)]
-struct BatchInner<C, S>
+struct BatchInner<C>
 where
-    C: quic_rpc::ServiceConnection<S>,
-    S: quic_rpc::Service,
+    C: Connector<RpcService>,
 {
     /// The id of the scope.
     batch: BatchId,
     /// The rpc client.
-    rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
+    rpc: RpcClient<RpcService, C>,
     /// The stream to send drop
     #[debug(skip)]
-    updates:
-        Mutex<Buffer<UpdateSink<S, C, BatchUpdate, crate::rpc::proto::RpcService>, BatchUpdate>>,
+    updates: Mutex<Buffer<UpdateSink<C, BatchUpdate>, BatchUpdate>>,
 }
 
 /// A batch for write operations.
@@ -55,15 +54,13 @@ where
 /// It is not a transaction, so things in a batch are not atomic. Also, there is
 /// no isolation between batches.
 #[derive(derive_more::Debug)]
-pub struct Batch<C, S>(Arc<BatchInner<C, S>>)
+pub struct Batch<C>(Arc<BatchInner<C>>)
 where
-    C: quic_rpc::ServiceConnection<S>,
-    S: quic_rpc::Service;
+    C: Connector<RpcService>;
 
-impl<C, S> TagDrop for BatchInner<C, S>
+impl<C> TagDrop for BatchInner<C>
 where
-    C: quic_rpc::ServiceConnection<S>,
-    S: quic_rpc::Service,
+    C: Connector<RpcService>,
 {
     fn on_drop(&self, content: &HashAndFormat) {
         let mut updates = self.updates.lock().unwrap();
@@ -131,15 +128,14 @@ impl Default for AddReaderOpts {
     }
 }
 
-impl<C, S> Batch<C, S>
+impl<C> Batch<C>
 where
-    C: quic_rpc::ServiceConnection<S>,
-    S: quic_rpc::Service,
+    C: Connector<RpcService>,
 {
     pub(super) fn new(
         batch: BatchId,
-        rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
-        updates: UpdateSink<S, C, BatchUpdate, crate::rpc::proto::RpcService>,
+        rpc: RpcClient<RpcService, C>,
+        updates: UpdateSink<C, BatchUpdate>,
         buffer_size: usize,
     ) -> Self {
         let updates = updates.buffer(buffer_size);

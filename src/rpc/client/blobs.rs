@@ -73,8 +73,8 @@ use genawaiter::sync::{Co, Gen};
 use iroh_net::NodeAddr;
 use portable_atomic::{AtomicU64, Ordering};
 use quic_rpc::{
-    client::{BoxStreamSync, BoxedServiceConnection},
-    RpcClient,
+    client::{BoxStreamSync, BoxedConnector},
+    Connector, RpcClient,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -87,6 +87,7 @@ use crate::{
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress as BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
+    rpc::proto::RpcService,
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
     util::SetTagOption,
     BlobFormat, Hash, Tag,
@@ -105,20 +106,16 @@ use crate::rpc::proto::blobs::{
 
 /// Iroh blobs client.
 #[derive(Debug, Clone)]
-pub struct Client<
-    C = BoxedServiceConnection<crate::rpc::proto::RpcService>,
-    S = crate::rpc::proto::RpcService,
-> {
-    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
+pub struct Client<C = BoxedConnector<RpcService>> {
+    pub(super) rpc: RpcClient<RpcService, C>,
 }
 
-impl<C, S> Client<C, S>
+impl<C> Client<C>
 where
-    S: quic_rpc::Service,
-    C: quic_rpc::ServiceConnection<S>,
+    C: Connector<RpcService>,
 {
     /// Create a new client
-    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C, S>) -> Self {
+    pub fn new(rpc: RpcClient<RpcService, C>) -> Self {
         Self { rpc }
     }
 
@@ -147,7 +144,7 @@ where
     /// A batch is a context in which temp tags are created and data is added to the node. Temp tags
     /// are automatically deleted when the batch is dropped, leading to the data being garbage collected
     /// unless a permanent tag is created for it.
-    pub async fn batch(&self) -> Result<Batch<C, S>> {
+    pub async fn batch(&self) -> Result<Batch<C>> {
         let (updates, mut stream) = self.rpc.bidi(BatchCreateRequest).await?;
         let BatchCreateResponse::Id(batch) = stream.next().await.context("expected scope id")??;
         let rpc = self.rpc.clone();
@@ -457,15 +454,14 @@ where
         Ok(())
     }
 
-    fn tags_client(&self) -> tags::Client<C, S> {
+    fn tags_client(&self) -> tags::Client<C> {
         tags::Client::new(self.rpc.clone())
     }
 }
 
-impl<C, S> SimpleStore for Client<C, S>
+impl<C> SimpleStore for Client<C>
 where
-    S: quic_rpc::Service,
-    C: quic_rpc::ServiceConnection<S>,
+    C: Connector<RpcService>,
 {
     async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
         self.read_to_bytes(hash).await
@@ -882,26 +878,24 @@ impl Reader {
     }
 
     /// todo make private again
-    pub async fn from_rpc_read<C, S>(
-        rpc: &RpcClient<crate::rpc::proto::RpcService, C, S>,
+    pub async fn from_rpc_read<C>(
+        rpc: &RpcClient<RpcService, C>,
         hash: Hash,
     ) -> anyhow::Result<Self>
     where
-        C: quic_rpc::ServiceConnection<S>,
-        S: quic_rpc::Service,
+        C: Connector<RpcService>,
     {
         Self::from_rpc_read_at(rpc, hash, 0, ReadAtLen::All).await
     }
 
-    async fn from_rpc_read_at<C, S>(
-        rpc: &RpcClient<crate::rpc::proto::RpcService, C, S>,
+    async fn from_rpc_read_at<C>(
+        rpc: &RpcClient<RpcService, C>,
         hash: Hash,
         offset: u64,
         len: ReadAtLen,
     ) -> anyhow::Result<Self>
     where
-        C: quic_rpc::ServiceConnection<S>,
-        S: quic_rpc::Service,
+        C: Connector<RpcService>,
     {
         let stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -999,20 +993,17 @@ mod tests {
         use std::{path::Path, sync::Arc};
 
         use iroh_net::{NodeAddr, NodeId};
-        use quic_rpc::client::BoxedServiceConnection;
+        use quic_rpc::transport::{Connector, Listener};
         use tokio_util::task::AbortOnDropHandle;
 
+        use super::RpcService;
         use crate::{
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
             util::local_pool::LocalPool,
         };
 
-        type RpcClient = quic_rpc::RpcClient<
-            crate::rpc::proto::RpcService,
-            BoxedServiceConnection<crate::rpc::proto::RpcService>,
-            crate::rpc::proto::RpcService,
-        >;
+        type RpcClient = quic_rpc::RpcClient<RpcService>;
 
         /// An iroh node that just has the blobs transport
         #[derive(Debug)]
@@ -1129,10 +1120,9 @@ mod tests {
             let router = router.spawn().await?;
 
             // Setup RPC
-            let (internal_rpc, controller) =
-                quic_rpc::transport::flume::service_connection::<crate::rpc::proto::RpcService>(32);
-            let controller = quic_rpc::transport::boxed::Connection::new(controller);
-            let internal_rpc = quic_rpc::transport::boxed::ServerEndpoint::new(internal_rpc);
+            let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);
+            let controller = controller.boxed();
+            let internal_rpc = internal_rpc.boxed();
             let internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
 
             let rpc_server_task: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {

@@ -30,9 +30,9 @@ use proto::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
         ListRequest as TagListRequest, SetRequest as TagsSetRequest, SyncMode,
     },
-    RpcError, RpcResult,
+    Request, RpcError, RpcResult, RpcService,
 };
-use quic_rpc::server::{RpcChannel, RpcServerError};
+use quic_rpc::server::{ChannelTypes, RpcChannel, RpcServerError};
 
 use crate::{
     export::ExportProgress,
@@ -57,16 +57,15 @@ const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
     /// Handle an RPC request
-    pub async fn handle_rpc_request<S, C>(
+    pub async fn handle_rpc_request<C>(
         self: Arc<Self>,
-        msg: crate::rpc::proto::Request,
-        chan: RpcChannel<crate::rpc::proto::RpcService, C, S>,
+        msg: Request,
+        chan: RpcChannel<RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        S: quic_rpc::Service,
-        C: quic_rpc::ServiceEndpoint<S>,
+        C: ChannelTypes<RpcService>,
     {
-        use crate::rpc::proto::Request::*;
+        use Request::*;
         match msg {
             Blobs(msg) => self.handle_blobs_request(msg, chan).await,
             Tags(msg) => self.handle_tags_request(msg, chan).await,
@@ -74,14 +73,13 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     /// Handle a tags request
-    pub async fn handle_tags_request<S, C>(
+    pub async fn handle_tags_request<C>(
         self: Arc<Self>,
         msg: proto::tags::Request,
-        chan: RpcChannel<proto::RpcService, C, S>,
+        chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        S: quic_rpc::Service,
-        C: quic_rpc::ServiceEndpoint<S>,
+        C: ChannelTypes<proto::RpcService>,
     {
         use proto::tags::Request::*;
         match msg {
@@ -93,14 +91,13 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     /// Handle a blobs request
-    pub async fn handle_blobs_request<Sv, C>(
+    pub async fn handle_blobs_request<C>(
         self: Arc<Self>,
         msg: proto::blobs::Request,
-        chan: RpcChannel<proto::RpcService, C, Sv>,
+        chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
-        Sv: quic_rpc::Service,
-        C: quic_rpc::ServiceEndpoint<Sv>,
+        C: ChannelTypes<proto::RpcService>,
     {
         use proto::blobs::Request::*;
         match msg {

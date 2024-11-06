@@ -12,31 +12,30 @@
 //! [`Client::delete`] can be used to delete a tag.
 use anyhow::Result;
 use futures_lite::{Stream, StreamExt};
-use quic_rpc::{client::BoxedServiceConnection, RpcClient};
+use quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    rpc::proto::tags::{DeleteRequest, ListRequest},
+    rpc::proto::{
+        tags::{DeleteRequest, ListRequest},
+        RpcService,
+    },
     BlobFormat, Hash, Tag,
 };
 
 /// Iroh tags client.
 #[derive(Debug, Clone)]
 #[repr(transparent)]
-pub struct Client<
-    C = BoxedServiceConnection<crate::rpc::proto::RpcService>,
-    S = crate::rpc::proto::RpcService,
-> {
-    pub(super) rpc: RpcClient<crate::rpc::proto::RpcService, C, S>,
+pub struct Client<C = BoxedConnector<RpcService>> {
+    pub(super) rpc: RpcClient<RpcService, C>,
 }
 
-impl<C, S> Client<C, S>
+impl<C> Client<C>
 where
-    C: quic_rpc::ServiceConnection<S>,
-    S: quic_rpc::Service,
+    C: Connector<RpcService>,
 {
     /// Creates a new client
-    pub fn new(rpc: RpcClient<crate::rpc::proto::RpcService, C, S>) -> Self {
+    pub fn new(rpc: RpcClient<RpcService, C>) -> Self {
         Self { rpc }
     }
 
