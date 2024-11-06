@@ -1793,16 +1793,6 @@
 <a href="#1793" id="1793">1793</a>
 <a href="#1794" id="1794">1794</a>
 <a href="#1795" id="1795">1795</a>
-<a href="#1796" id="1796">1796</a>
-<a href="#1797" id="1797">1797</a>
-<a href="#1798" id="1798">1798</a>
-<a href="#1799" id="1799">1799</a>
-<a href="#1800" id="1800">1800</a>
-<a href="#1801" id="1801">1801</a>
-<a href="#1802" id="1802">1802</a>
-<a href="#1803" id="1803">1803</a>
-<a href="#1804" id="1804">1804</a>
-<a href="#1805" id="1805">1805</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
@@ -1878,8 +1868,8 @@
 <span class="kw">use </span>iroh_net::NodeAddr;
 <span class="kw">use </span>portable_atomic::{AtomicU64, Ordering};
 <span class="kw">use </span>quic_rpc::{
-    client::{BoxStreamSync, BoxedServiceConnection},
-    RpcClient,
+    client::{BoxStreamSync, BoxedConnector},
+    Connector, RpcClient,
 };
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -1892,6 +1882,7 @@
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
+    rpc::proto::RpcService,
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
     util::SetTagOption,
     BlobFormat, Hash, Tag,
@@ -1910,20 +1901,16 @@
 
 <span class="doccomment">/// Iroh blobs client.
 </span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>Client&lt;
-    C = BoxedServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
-    S = <span class="kw">crate</span>::rpc::proto::RpcService,
-&gt; {
-    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C, S&gt;,
+</span><span class="kw">pub struct </span>Client&lt;C = BoxedConnector&lt;RpcService&gt;&gt; {
+    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
-<span class="kw">impl</span>&lt;C, S&gt; Client&lt;C, S&gt;
+<span class="kw">impl</span>&lt;C&gt; Client&lt;C&gt;
 <span class="kw">where
-    </span>S: quic_rpc::Service,
-    C: quic_rpc::ServiceConnection&lt;S&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="doccomment">/// Create a new client
-    </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C, S&gt;) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ rpc }
     }
 
@@ -1952,7 +1939,7 @@
     /// A batch is a context in which temp tags are created and data is added to the node. Temp tags
     /// are automatically deleted when the batch is dropped, leading to the data being garbage collected
     /// unless a permanent tag is created for it.
-    </span><span class="kw">pub async fn </span>batch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Batch&lt;C, S&gt;&gt; {
+    </span><span class="kw">pub async fn </span>batch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Batch&lt;C&gt;&gt; {
         <span class="kw">let </span>(updates, <span class="kw-2">mut </span>stream) = <span class="self">self</span>.rpc.bidi(BatchCreateRequest).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>BatchCreateResponse::Id(batch) = stream.next().<span class="kw">await</span>.context(<span class="string">"expected scope id"</span>)<span class="question-mark">??</span>;
         <span class="kw">let </span>rpc = <span class="self">self</span>.rpc.clone();
@@ -2262,15 +2249,14 @@
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">fn </span>tags_client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tags::Client&lt;C, S&gt; {
+    <span class="kw">fn </span>tags_client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tags::Client&lt;C&gt; {
         tags::Client::new(<span class="self">self</span>.rpc.clone())
     }
 }
 
-<span class="kw">impl</span>&lt;C, S&gt; SimpleStore <span class="kw">for </span>Client&lt;C, S&gt;
+<span class="kw">impl</span>&lt;C&gt; SimpleStore <span class="kw">for </span>Client&lt;C&gt;
 <span class="kw">where
-    </span>S: quic_rpc::Service,
-    C: quic_rpc::ServiceConnection&lt;S&gt;,
+    </span>C: Connector&lt;RpcService&gt;,
 {
     <span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; anyhow::Result&lt;Bytes&gt; {
         <span class="self">self</span>.read_to_bytes(hash).<span class="kw">await
@@ -2687,26 +2673,24 @@
     }
 
     <span class="doccomment">/// todo make private again
-    </span><span class="kw">pub async fn </span>from_rpc_read&lt;C, S&gt;(
-        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C, S&gt;,
+    </span><span class="kw">pub async fn </span>from_rpc_read&lt;C&gt;(
+        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;RpcService, C&gt;,
         hash: Hash,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceConnection&lt;S&gt;,
-        S: quic_rpc::Service,
+        </span>C: Connector&lt;RpcService&gt;,
     {
         <span class="self">Self</span>::from_rpc_read_at(rpc, hash, <span class="number">0</span>, ReadAtLen::All).<span class="kw">await
     </span>}
 
-    <span class="kw">async fn </span>from_rpc_read_at&lt;C, S&gt;(
-        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C, S&gt;,
+    <span class="kw">async fn </span>from_rpc_read_at&lt;C&gt;(
+        rpc: <span class="kw-2">&amp;</span>RpcClient&lt;RpcService, C&gt;,
         hash: Hash,
         offset: u64,
         len: ReadAtLen,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
-        </span>C: quic_rpc::ServiceConnection&lt;S&gt;,
-        S: quic_rpc::Service,
+        </span>C: Connector&lt;RpcService&gt;,
     {
         <span class="kw">let </span>stream = rpc
             .server_streaming(ReadAtRequest { hash, offset, len })
@@ -2804,20 +2788,17 @@
         </span><span class="kw">use </span>std::{path::Path, sync::Arc};
 
         <span class="kw">use </span>iroh_net::{NodeAddr, NodeId};
-        <span class="kw">use </span>quic_rpc::client::BoxedServiceConnection;
+        <span class="kw">use </span>quic_rpc::transport::{Connector, Listener};
         <span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
 
+        <span class="kw">use </span><span class="kw">super</span>::RpcService;
         <span class="kw">use crate</span>::{
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
             util::local_pool::LocalPool,
         };
 
-        <span class="kw">type </span>RpcClient = quic_rpc::RpcClient&lt;
-            <span class="kw">crate</span>::rpc::proto::RpcService,
-            BoxedServiceConnection&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;,
-            <span class="kw">crate</span>::rpc::proto::RpcService,
-        &gt;;
+        <span class="kw">type </span>RpcClient = quic_rpc::RpcClient&lt;RpcService&gt;;
 
         <span class="doccomment">/// An iroh node that just has the blobs transport
         </span><span class="attr">#[derive(Debug)]
@@ -2934,10 +2915,9 @@
             </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
             <span class="comment">// Setup RPC
-            </span><span class="kw">let </span>(internal_rpc, controller) =
-                quic_rpc::transport::flume::service_connection::&lt;<span class="kw">crate</span>::rpc::proto::RpcService&gt;(<span class="number">32</span>);
-            <span class="kw">let </span>controller = quic_rpc::transport::boxed::Connection::new(controller);
-            <span class="kw">let </span>internal_rpc = quic_rpc::transport::boxed::ServerEndpoint::new(internal_rpc);
+            </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
+            <span class="kw">let </span>controller = controller.boxed();
+            <span class="kw">let </span>internal_rpc = internal_rpc.boxed();
             <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
 
             <span class="kw">let </span>rpc_server_task: tokio::task::JoinHandle&lt;()&gt; = tokio::task::spawn(<span class="kw">async move </span>{

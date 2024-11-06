@@ -869,9 +869,6 @@
 <a href="#869" id="869">869</a>
 <a href="#870" id="870">870</a>
 <a href="#871" id="871">871</a>
-<a href="#872" id="872">872</a>
-<a href="#873" id="873">873</a>
-<a href="#874" id="874">874</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
@@ -904,9 +901,9 @@
         CreateRequest <span class="kw">as </span>TagsCreateRequest, DeleteRequest <span class="kw">as </span>TagDeleteRequest,
         ListRequest <span class="kw">as </span>TagListRequest, SetRequest <span class="kw">as </span>TagsSetRequest, SyncMode,
     },
-    RpcError, RpcResult,
+    Request, RpcError, RpcResult, RpcService,
 };
-<span class="kw">use </span>quic_rpc::server::{RpcChannel, RpcServerError};
+<span class="kw">use </span>quic_rpc::server::{ChannelTypes, RpcChannel, RpcServerError};
 
 <span class="kw">use crate</span>::{
     export::ExportProgress,
@@ -931,16 +928,15 @@
 
 <span class="kw">impl</span>&lt;D: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;D&gt; {
     <span class="doccomment">/// Handle an RPC request
-    </span><span class="kw">pub async fn </span>handle_rpc_request&lt;S, C&gt;(
+    </span><span class="kw">pub async fn </span>handle_rpc_request&lt;C&gt;(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-        msg: <span class="kw">crate</span>::rpc::proto::Request,
-        chan: RpcChannel&lt;<span class="kw">crate</span>::rpc::proto::RpcService, C, S&gt;,
+        msg: Request,
+        chan: RpcChannel&lt;RpcService, C&gt;,
     ) -&gt; std::result::Result&lt;(), RpcServerError&lt;C&gt;&gt;
     <span class="kw">where
-        </span>S: quic_rpc::Service,
-        C: quic_rpc::ServiceEndpoint&lt;S&gt;,
+        </span>C: ChannelTypes&lt;RpcService&gt;,
     {
-        <span class="kw">use </span><span class="kw">crate</span>::rpc::proto::Request::<span class="kw-2">*</span>;
+        <span class="kw">use </span>Request::<span class="kw-2">*</span>;
         <span class="kw">match </span>msg {
             Blobs(msg) =&gt; <span class="self">self</span>.handle_blobs_request(msg, chan).<span class="kw">await</span>,
             Tags(msg) =&gt; <span class="self">self</span>.handle_tags_request(msg, chan).<span class="kw">await</span>,
@@ -948,14 +944,13 @@
     }
 
     <span class="doccomment">/// Handle a tags request
-    </span><span class="kw">pub async fn </span>handle_tags_request&lt;S, C&gt;(
+    </span><span class="kw">pub async fn </span>handle_tags_request&lt;C&gt;(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
         msg: proto::tags::Request,
-        chan: RpcChannel&lt;proto::RpcService, C, S&gt;,
+        chan: RpcChannel&lt;proto::RpcService, C&gt;,
     ) -&gt; std::result::Result&lt;(), RpcServerError&lt;C&gt;&gt;
     <span class="kw">where
-        </span>S: quic_rpc::Service,
-        C: quic_rpc::ServiceEndpoint&lt;S&gt;,
+        </span>C: ChannelTypes&lt;proto::RpcService&gt;,
     {
         <span class="kw">use </span>proto::tags::Request::<span class="kw-2">*</span>;
         <span class="kw">match </span>msg {
@@ -967,14 +962,13 @@
     }
 
     <span class="doccomment">/// Handle a blobs request
-    </span><span class="kw">pub async fn </span>handle_blobs_request&lt;Sv, C&gt;(
+    </span><span class="kw">pub async fn </span>handle_blobs_request&lt;C&gt;(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
         msg: proto::blobs::Request,
-        chan: RpcChannel&lt;proto::RpcService, C, Sv&gt;,
+        chan: RpcChannel&lt;proto::RpcService, C&gt;,
     ) -&gt; std::result::Result&lt;(), RpcServerError&lt;C&gt;&gt;
     <span class="kw">where
-        </span>Sv: quic_rpc::Service,
-        C: quic_rpc::ServiceEndpoint&lt;Sv&gt;,
+        </span>C: ChannelTypes&lt;proto::RpcService&gt;,
     {
         <span class="kw">use </span>proto::blobs::Request::<span class="kw-2">*</span>;
         <span class="kw">match </span>msg {
