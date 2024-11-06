@@ -73,6 +73,7 @@ pub struct Blobs<S> {
     events: EventSender,
     downloader: Downloader,
     batches: tokio::sync::Mutex<BlobBatches>,
+    endpoint: Endpoint,
 }
 
 /// Name used for logging when new node addresses are added from gossip.
@@ -135,18 +136,28 @@ impl<S: crate::store::Store> Blobs<S> {
         rt: LocalPoolHandle,
         events: EventSender,
         downloader: Downloader,
+        endpoint: Endpoint,
     ) -> Self {
         Self {
             rt,
             store,
             events,
             downloader,
+            endpoint,
             batches: Default::default(),
         }
     }
 
     pub fn store(&self) -> &S {
         &self.store
+    }
+
+    pub(crate) fn rt(&self) -> LocalPoolHandle {
+        self.rt.clone()
+    }
+
+    pub(crate) fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
     }
 
     pub async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {

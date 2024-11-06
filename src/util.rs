@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{BlobFormat, Hash, HashAndFormat, IROH_BLOCK_SIZE};
 
+pub mod fs;
 pub mod io;
 mod mem_or_file;
 pub mod progress;
