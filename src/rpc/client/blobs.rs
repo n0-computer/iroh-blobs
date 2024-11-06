@@ -106,6 +106,7 @@ use crate::rpc::proto::blobs::{
 
 /// Iroh blobs client.
 #[derive(Debug, Clone)]
+#[repr(transparent)]
 pub struct Client<C = BoxedConnector<RpcService>> {
     pub(super) rpc: RpcClient<RpcService, C>,
 }
