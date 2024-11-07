@@ -27,6 +27,9 @@
 #![recursion_limit = "256"]
 #![cfg_attr(iroh_docsrs, feature(doc_cfg))]
 
+#[cfg(feature = "cli")]
+#[cfg_attr(iroh_docsrs, doc(cfg(feature = "cli")))]
+pub mod cli;
 #[cfg(feature = "downloader")]
 #[cfg_attr(iroh_docsrs, doc(cfg(feature = "downloader")))]
 pub mod downloader;

@@ -18,6 +18,8 @@ async-channel = "2.3.1"
 bao-tree = {  version = "0.13", features = ["tokio_fsm", "validate"], default-features = false }
 bytes = { version = "1.7", features = ["serde"] }
 chrono = "0.4.31"
+clap = { version = "4.5.20", features = ["derive"], optional = true }
+console = { version = "0.15.8", optional = true }
 derive_more = { version = "1.0.0", features = ["debug", "display", "deref", "deref_mut", "from", "try_into", "into"] }
 futures-buffered = "0.2.4"
 futures-lite = "2.3"
@@ -25,6 +27,7 @@ futures-util = { version = "0.3.30", optional = true }
 genawaiter = { version = "0.99.1", features = ["futures03"] }
 hashlink = { version = "0.9.0", optional = true }
 hex = "0.4.3"
+indicatif = { version = "0.17.8", optional = true }
 iroh-base = { version = "0.28.0", features = ["redb"] }
 iroh-io = { version = "0.6.0", features = ["stats"] }
 iroh-metrics = { version = "0.28.0", default-features = false }
@@ -76,13 +79,17 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "rpc", "net_protocol"]
+default = ["fs-store", "rpc", "net_protocol", "cli"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader"]
 fs-store = ["dep:reflink-copy", "redb", "dep:redb_v1", "dep:tempfile"]
 metrics = ["iroh-metrics/metrics"]
 redb = ["dep:redb"]
+cli = ["dep:clap", "dep:indicatif", "dep:console"]
 rpc = ["dep:quic-rpc", "dep:quic-rpc-derive", "dep:nested_enum_utils", "dep:strum", "dep:futures-util", "dep:ref-cast", "dep:portable-atomic", "dep:walkdir", "downloader"]
+clap = ["dep:clap"]
+console = ["dep:console"]
+indicatif = ["dep:indicatif"]
 
 [package.metadata.docs.rs]
 all-features = true
