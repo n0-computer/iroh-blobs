@@ -3134,8 +3134,7 @@ dependencies = [
 [[package]]
 name = "quic-rpc"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61e131f594054d27d077162815db3b5e9ddd76a28fbb9091b68095971e75c286"
+source = "git+https://github.com/n0-computer/quic-rpc?branch=main#32d5bc1a08609f4f0b5650980088f07d81971a55"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -3149,6 +3148,7 @@ dependencies = [
  "serde",
  "slab",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

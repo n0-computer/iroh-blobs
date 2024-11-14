@@ -37,9 +37,7 @@ use quic_rpc::{
     server::{ChannelTypes, RpcChannel, RpcServerError},
     RpcClient, RpcServer,
 };
-use tokio::task::JoinSet;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{error, warn};
 
 use crate::{
     export::ExportProgress,
@@ -892,7 +890,7 @@ impl<D: crate::store::Store> Blobs<D> {
 #[derive(Debug)]
 pub(crate) struct RpcHandler {
     /// Client to hand out
-    client: RpcClient<crate::rpc::proto::RpcService, MemConnector>,
+    client: RpcClient<RpcService, MemConnector>,
     /// Handler task
     _handler: AbortOnDropHandle<()>,
 }
@@ -903,45 +901,8 @@ impl RpcHandler {
         let (listener, connector) = quic_rpc::transport::flume::channel(1);
         let listener = RpcServer::new(listener);
         let client = RpcClient::new(connector);
-        let task = tokio::spawn(async move {
-            let mut tasks = JoinSet::new();
-            loop {
-                tokio::select! {
-                    Some(res) = tasks.join_next(), if !tasks.is_empty() => {
-                        if let Err(e) = res {
-                            if e.is_panic() {
-                                error!("Panic handling RPC request: {e}");
-                            }
-                        }
-                    }
-                    req = listener.accept() => {
-                        let req = match req {
-                            Ok(req) => req,
-                            Err(e) => {
-                                warn!("Error accepting RPC request: {e}");
-                                continue;
-                            }
-                        };
-                        let blobs = blobs.clone();
-                        tasks.spawn(async move {
-                            let (req, client) = match req.read_first().await {
-                                Ok((req, client)) => (req, client),
-                                Err(e) => {
-                                    warn!("Error reading first message: {e}");
-                                    return;
-                                }
-                            };
-                            if let Err(cause) = blobs.handle_rpc_request(req, client).await {
-                                warn!("Error handling RPC request: {:?}", cause);
-                            }
-                        });
-                    }
-                }
-            }
-        });
-        Self {
-            client,
-            _handler: AbortOnDropHandle::new(task),
-        }
+        let _handler = listener
+            .spawn_accept_loop(move |req, chan| blobs.clone().handle_rpc_request(req, chan));
+        Self { client, _handler }
     }
 }

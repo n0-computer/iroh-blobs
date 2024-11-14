@@ -645,7 +645,6 @@ impl<G: Getter<Connection = D::Connection>, D: Dialer> Service<G, D> {
     }
 
     /// Handle receiving a [`Message`].
-    ///
     // This is called in the actor loop, and only async because subscribing to an existing transfer
     // sends the initial state.
     async fn handle_message(&mut self, msg: Message) {
