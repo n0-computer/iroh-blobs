@@ -970,7 +970,7 @@
 
 <span class="kw">impl</span>&lt;D: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;D&gt; {
     <span class="doccomment">/// Get a client for the blobs protocol
-    </span><span class="kw">pub fn </span>client(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; blobs::Client&lt;MemConnector&gt; {
+    </span><span class="kw">pub fn </span>client(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; blobs::MemClient {
         <span class="kw">let </span>client = <span class="self">self
             </span>.rpc_handler
             .get_or_init(|| RpcHandler::new(<span class="kw-2">&amp;</span><span class="self">self</span>))
