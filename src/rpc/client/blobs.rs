@@ -111,6 +111,9 @@ pub struct Client<C = BoxedConnector<RpcService>> {
     pub(super) rpc: RpcClient<RpcService, C>,
 }
 
+/// Type alias for a memory-backed client.
+pub type MemClient = Client<crate::rpc::MemConnector>;
+
 impl<C> Client<C>
 where
     C: Connector<RpcService>,

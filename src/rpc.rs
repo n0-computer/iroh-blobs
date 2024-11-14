@@ -62,7 +62,7 @@ const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
     /// Get a client for the blobs protocol
-    pub fn client(self: Arc<Self>) -> blobs::Client<MemConnector> {
+    pub fn client(self: Arc<Self>) -> blobs::MemClient {
         let client = self
             .rpc_handler
             .get_or_init(|| RpcHandler::new(&self))
