@@ -3,7 +3,10 @@
 // TODO: reduce API surface and add documentation
 #![allow(missing_docs)]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{anyhow, Result};
 use futures_lite::future::Boxed as BoxedFuture;
