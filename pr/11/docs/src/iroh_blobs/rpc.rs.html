@@ -906,45 +906,6 @@
 <a href="#906" id="906">906</a>
 <a href="#907" id="907">907</a>
 <a href="#908" id="908">908</a>
-<a href="#909" id="909">909</a>
-<a href="#910" id="910">910</a>
-<a href="#911" id="911">911</a>
-<a href="#912" id="912">912</a>
-<a href="#913" id="913">913</a>
-<a href="#914" id="914">914</a>
-<a href="#915" id="915">915</a>
-<a href="#916" id="916">916</a>
-<a href="#917" id="917">917</a>
-<a href="#918" id="918">918</a>
-<a href="#919" id="919">919</a>
-<a href="#920" id="920">920</a>
-<a href="#921" id="921">921</a>
-<a href="#922" id="922">922</a>
-<a href="#923" id="923">923</a>
-<a href="#924" id="924">924</a>
-<a href="#925" id="925">925</a>
-<a href="#926" id="926">926</a>
-<a href="#927" id="927">927</a>
-<a href="#928" id="928">928</a>
-<a href="#929" id="929">929</a>
-<a href="#930" id="930">930</a>
-<a href="#931" id="931">931</a>
-<a href="#932" id="932">932</a>
-<a href="#933" id="933">933</a>
-<a href="#934" id="934">934</a>
-<a href="#935" id="935">935</a>
-<a href="#936" id="936">936</a>
-<a href="#937" id="937">937</a>
-<a href="#938" id="938">938</a>
-<a href="#939" id="939">939</a>
-<a href="#940" id="940">940</a>
-<a href="#941" id="941">941</a>
-<a href="#942" id="942">942</a>
-<a href="#943" id="943">943</a>
-<a href="#944" id="944">944</a>
-<a href="#945" id="945">945</a>
-<a href="#946" id="946">946</a>
-<a href="#947" id="947">947</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
@@ -984,9 +945,7 @@
     server::{ChannelTypes, RpcChannel, RpcServerError},
     RpcClient, RpcServer,
 };
-<span class="kw">use </span>tokio::task::JoinSet;
 <span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
-<span class="kw">use </span>tracing::{error, warn};
 
 <span class="kw">use crate</span>::{
     export::ExportProgress,
@@ -1839,7 +1798,7 @@
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>RpcHandler {
     <span class="doccomment">/// Client to hand out
-    </span>client: RpcClient&lt;<span class="kw">crate</span>::rpc::proto::RpcService, MemConnector&gt;,
+    </span>client: RpcClient&lt;RpcService, MemConnector&gt;,
     <span class="doccomment">/// Handler task
     </span>_handler: AbortOnDropHandle&lt;()&gt;,
 }
@@ -1850,46 +1809,9 @@
         <span class="kw">let </span>(listener, connector) = quic_rpc::transport::flume::channel(<span class="number">1</span>);
         <span class="kw">let </span>listener = RpcServer::new(listener);
         <span class="kw">let </span>client = RpcClient::new(connector);
-        <span class="kw">let </span>task = tokio::spawn(<span class="kw">async move </span>{
-            <span class="kw">let </span><span class="kw-2">mut </span>tasks = JoinSet::new();
-            <span class="kw">loop </span>{
-                <span class="macro">tokio::select!</span> {
-                    <span class="prelude-val">Some</span>(res) = tasks.join_next(), <span class="kw">if </span>!tasks.is_empty() =&gt; {
-                        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = res {
-                            <span class="kw">if </span>e.is_panic() {
-                                <span class="macro">error!</span>(<span class="string">"Panic handling RPC request: {e}"</span>);
-                            }
-                        }
-                    }
-                    req = listener.accept() =&gt; {
-                        <span class="kw">let </span>req = <span class="kw">match </span>req {
-                            <span class="prelude-val">Ok</span>(req) =&gt; req,
-                            <span class="prelude-val">Err</span>(e) =&gt; {
-                                <span class="macro">warn!</span>(<span class="string">"Error accepting RPC request: {e}"</span>);
-                                <span class="kw">continue</span>;
-                            }
-                        };
-                        <span class="kw">let </span>blobs = blobs.clone();
-                        tasks.spawn(<span class="kw">async move </span>{
-                            <span class="kw">let </span>(req, client) = <span class="kw">match </span>req.read_first().<span class="kw">await </span>{
-                                <span class="prelude-val">Ok</span>((req, client)) =&gt; (req, client),
-                                <span class="prelude-val">Err</span>(e) =&gt; {
-                                    <span class="macro">warn!</span>(<span class="string">"Error reading first message: {e}"</span>);
-                                    <span class="kw">return</span>;
-                                }
-                            };
-                            <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = blobs.handle_rpc_request(req, client).<span class="kw">await </span>{
-                                <span class="macro">warn!</span>(<span class="string">"Error handling RPC request: {:?}"</span>, cause);
-                            }
-                        });
-                    }
-                }
-            }
-        });
-        <span class="self">Self </span>{
-            client,
-            _handler: AbortOnDropHandle::new(task),
-        }
+        <span class="kw">let </span>_handler = listener
+            .spawn_accept_loop(<span class="kw">move </span>|req, chan| blobs.clone().handle_rpc_request(req, chan));
+        <span class="self">Self </span>{ client, _handler }
     }
 }
 </code></pre></div></section></main></body></html>
