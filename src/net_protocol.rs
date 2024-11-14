@@ -36,6 +36,8 @@ pub struct Blobs<S> {
     downloader: Downloader,
     batches: tokio::sync::Mutex<BlobBatches>,
     endpoint: Endpoint,
+    #[cfg(feature = "rpc")]
+    pub(crate) rpc_handler: Arc<OnceLock<crate::rpc::RpcHandler>>,
 }
 
 /// Name used for logging when new node addresses are added from gossip.
@@ -107,6 +109,8 @@ impl<S: crate::store::Store> Blobs<S> {
             downloader,
             endpoint,
             batches: Default::default(),
+            #[cfg(feature = "rpc")]
+            rpc_handler: Arc::new(OnceLock::new()),
         }
     }
 

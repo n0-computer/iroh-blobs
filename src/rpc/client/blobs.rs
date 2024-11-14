@@ -120,6 +120,11 @@ where
         Self { rpc }
     }
 
+    /// Get a tags client.
+    pub fn tags(&self) -> tags::Client<C> {
+        tags::Client::new(self.rpc.clone())
+    }
+
     /// Check if a blob is completely stored on the node.
     ///
     /// Note that this will return false for blobs that are partially stored on

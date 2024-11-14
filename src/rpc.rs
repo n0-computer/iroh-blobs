@@ -7,8 +7,9 @@ use std::{
 
 use anyhow::anyhow;
 use client::{
-    blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, WrapOption},
+    blobs::{self, BlobInfo, BlobStatus, IncompleteBlobInfo, WrapOption},
     tags::TagInfo,
+    MemConnector,
 };
 use futures_buffered::BufferedStreamExt;
 use futures_lite::StreamExt;
@@ -32,7 +33,13 @@ use proto::{
     },
     Request, RpcError, RpcResult, RpcService,
 };
-use quic_rpc::server::{ChannelTypes, RpcChannel, RpcServerError};
+use quic_rpc::{
+    server::{ChannelTypes, RpcChannel, RpcServerError},
+    RpcClient, RpcServer,
+};
+use tokio::task::JoinSet;
+use tokio_util::task::AbortOnDropHandle;
+use tracing::{error, warn};
 
 use crate::{
     export::ExportProgress,
@@ -56,6 +63,16 @@ const RPC_BLOB_GET_CHUNK_SIZE: usize = 1024 * 64;
 const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
+    /// Get a client for the blobs protocol
+    pub fn client(self: Arc<Self>) -> blobs::Client<MemConnector> {
+        let client = self
+            .rpc_handler
+            .get_or_init(|| RpcHandler::new(&self))
+            .client
+            .clone();
+        blobs::Client::new(client)
+    }
+
     /// Handle an RPC request
     pub async fn handle_rpc_request<C>(
         self: Arc<Self>,
@@ -869,5 +886,62 @@ impl<D: crate::store::Store> Blobs<D> {
         }
 
         Ok(CreateCollectionResponse { hash, tag })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RpcHandler {
+    /// Client to hand out
+    client: RpcClient<crate::rpc::proto::RpcService, MemConnector>,
+    /// Handler task
+    _handler: AbortOnDropHandle<()>,
+}
+
+impl RpcHandler {
+    fn new<D: crate::store::Store>(blobs: &Arc<Blobs<D>>) -> Self {
+        let blobs = blobs.clone();
+        let (listener, connector) = quic_rpc::transport::flume::channel(1);
+        let listener = RpcServer::new(listener);
+        let client = RpcClient::new(connector);
+        let task = tokio::spawn(async move {
+            let mut tasks = JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(res) = tasks.join_next(), if !tasks.is_empty() => {
+                        if let Err(e) = res {
+                            if e.is_panic() {
+                                error!("Panic handling RPC request: {e}");
+                            }
+                        }
+                    }
+                    req = listener.accept() => {
+                        let req = match req {
+                            Ok(req) => req,
+                            Err(e) => {
+                                warn!("Error accepting RPC request: {e}");
+                                continue;
+                            }
+                        };
+                        let blobs = blobs.clone();
+                        tasks.spawn(async move {
+                            let (req, client) = match req.read_first().await {
+                                Ok((req, client)) => (req, client),
+                                Err(e) => {
+                                    warn!("Error reading first message: {e}");
+                                    return;
+                                }
+                            };
+                            if let Err(cause) = blobs.handle_rpc_request(req, client).await {
+                                warn!("Error handling RPC request: {:?}", cause);
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        Self {
+            client,
+            _handler: AbortOnDropHandle::new(task),
+        }
     }
 }
