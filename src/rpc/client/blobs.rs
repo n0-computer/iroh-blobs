@@ -111,6 +111,9 @@ pub struct Client<C = BoxedConnector<RpcService>> {
     pub(super) rpc: RpcClient<RpcService, C>,
 }
 
+/// Type alias for a memory-backed client.
+pub type MemClient = Client<crate::rpc::MemConnector>;
+
 impl<C> Client<C>
 where
     C: Connector<RpcService>,
@@ -118,6 +121,11 @@ where
     /// Create a new client
     pub fn new(rpc: RpcClient<RpcService, C>) -> Self {
         Self { rpc }
+    }
+
+    /// Get a tags client.
+    pub fn tags(&self) -> tags::Client<C> {
+        tags::Client::new(self.rpc.clone())
     }
 
     /// Check if a blob is completely stored on the node.
