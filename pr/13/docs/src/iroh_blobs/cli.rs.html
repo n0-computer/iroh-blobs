@@ -1208,6 +1208,7 @@
 <a href="#1208" id="1208">1208</a>
 <a href="#1209" id="1209">1209</a>
 <a href="#1210" id="1210">1210</a>
+<a href="#1211" id="1211">1211</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Define blob-related commands.
 </span><span class="attr">#![allow(missing_docs)]
 </span><span class="kw">use </span>std::{
@@ -1391,7 +1392,7 @@
 
 <span class="kw">impl </span>BlobCommands {
     <span class="doccomment">/// Runs the blob command given the iroh client.
-    </span><span class="kw">pub async fn </span>run(<span class="self">self</span>, blobs: <span class="kw-2">&amp;</span>blobs::Client) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    </span><span class="kw">pub async fn </span>run(<span class="self">self</span>, blobs: <span class="kw-2">&amp;</span>blobs::Client, addr: NodeAddr) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Get {
                 ticket,
@@ -1562,7 +1563,7 @@
             <span class="self">Self</span>::Add {
                 source: path,
                 options,
-            } =&gt; add_with_opts(blobs, path, options).<span class="kw">await</span>,
+            } =&gt; add_with_opts(blobs, addr, path, options).<span class="kw">await</span>,
             <span class="self">Self</span>::Share {
                 hash,
                 addr_options,
@@ -1575,7 +1576,7 @@
                     BlobFormat::Raw
                 };
                 <span class="kw">let </span>status = blobs.status(hash).<span class="kw">await</span><span class="question-mark">?</span>;
-                <span class="kw">let </span><span class="kw-2">mut </span>addr: NodeAddr = <span class="macro">todo!</span>();
+                <span class="kw">let </span><span class="kw-2">mut </span>addr = addr;
                 addr.apply_options(addr_options);
                 <span class="kw">let </span>ticket = BlobTicket::new(addr, hash, format)<span class="question-mark">?</span>;
 
@@ -2025,6 +2026,7 @@
 <span class="doccomment">/// Adds a [`BlobSource`] given some [`BlobAddOptions`].
 </span><span class="kw">pub async fn </span>add_with_opts(
     blobs: <span class="kw-2">&amp;</span>blobs::Client,
+    addr: NodeAddr,
     source: BlobSource,
     opts: BlobAddOptions,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -2052,12 +2054,13 @@
         (<span class="bool-val">false</span>, <span class="prelude-val">Some</span>(<span class="kw">_</span>)) =&gt; <span class="macro">bail!</span>(<span class="string">"`--filename` may not be used without `--wrap`"</span>),
     };
 
-    add(blobs, source, tag, ticket, wrap).<span class="kw">await
+    add(blobs, addr, source, tag, ticket, wrap).<span class="kw">await
 </span>}
 
 <span class="doccomment">/// Adds data to iroh, either from a path or, if path is `None`, from STDIN.
 </span><span class="kw">pub async fn </span>add(
     blobs: <span class="kw-2">&amp;</span>blobs::Client,
+    addr: NodeAddr,
     source: BlobSourceIroh,
     tag: SetTagOption,
     ticket: TicketOption,
@@ -2091,7 +2094,6 @@
 
     print_add_response(hash, format, entries);
     <span class="kw">if let </span>TicketOption::Print = ticket {
-        <span class="kw">let </span>addr = <span class="macro">todo!</span>();
         <span class="kw">let </span>ticket = BlobTicket::new(addr, hash, format)<span class="question-mark">?</span>;
         <span class="macro">println!</span>(<span class="string">"All-in-one ticket: {ticket}"</span>);
     }
