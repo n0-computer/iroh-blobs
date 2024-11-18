@@ -181,7 +181,7 @@ impl std::str::FromStr for TicketOrHash {
 
 impl BlobCommands {
     /// Runs the blob command given the iroh client.
-    pub async fn run(self, blobs: &blobs::Client) -> Result<()> {
+    pub async fn run(self, blobs: &blobs::Client, addr: NodeAddr) -> Result<()> {
         match self {
             Self::Get {
                 ticket,
@@ -352,7 +352,7 @@ impl BlobCommands {
             Self::Add {
                 source: path,
                 options,
-            } => add_with_opts(blobs, path, options).await,
+            } => add_with_opts(blobs, addr, path, options).await,
             Self::Share {
                 hash,
                 addr_options,
@@ -365,7 +365,7 @@ impl BlobCommands {
                     BlobFormat::Raw
                 };
                 let status = blobs.status(hash).await?;
-                let mut addr: NodeAddr = todo!();
+                let mut addr = addr;
                 addr.apply_options(addr_options);
                 let ticket = BlobTicket::new(addr, hash, format)?;
 
@@ -815,6 +815,7 @@ pub enum TicketOption {
 /// Adds a [`BlobSource`] given some [`BlobAddOptions`].
 pub async fn add_with_opts(
     blobs: &blobs::Client,
+    addr: NodeAddr,
     source: BlobSource,
     opts: BlobAddOptions,
 ) -> Result<()> {
@@ -842,12 +843,13 @@ pub async fn add_with_opts(
         (false, Some(_)) => bail!("`--filename` may not be used without `--wrap`"),
     };
 
-    add(blobs, source, tag, ticket, wrap).await
+    add(blobs, addr, source, tag, ticket, wrap).await
 }
 
 /// Adds data to iroh, either from a path or, if path is `None`, from STDIN.
 pub async fn add(
     blobs: &blobs::Client,
+    addr: NodeAddr,
     source: BlobSourceIroh,
     tag: SetTagOption,
     ticket: TicketOption,
@@ -881,7 +883,6 @@ pub async fn add(
 
     print_add_response(hash, format, entries);
     if let TicketOption::Print = ticket {
-        let addr = todo!();
         let ticket = BlobTicket::new(addr, hash, format)?;
         println!("All-in-one ticket: {ticket}");
     }
