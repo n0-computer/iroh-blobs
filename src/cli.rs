@@ -31,6 +31,8 @@ use crate::{
     BlobFormat, Hash, HashAndFormat, Tag,
 };
 
+pub mod tags;
+
 /// Subcommands for the blob command.
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug, Clone)]
