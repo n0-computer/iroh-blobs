@@ -3,7 +3,10 @@
 // TODO: reduce API surface and add documentation
 #![allow(missing_docs)]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{anyhow, Result};
 use futures_lite::future::Boxed as BoxedFuture;
@@ -36,6 +39,8 @@ pub struct Blobs<S> {
     downloader: Downloader,
     batches: tokio::sync::Mutex<BlobBatches>,
     endpoint: Endpoint,
+    #[cfg(feature = "rpc")]
+    pub(crate) rpc_handler: Arc<OnceLock<crate::rpc::RpcHandler>>,
 }
 
 /// Name used for logging when new node addresses are added from gossip.
@@ -107,6 +112,8 @@ impl<S: crate::store::Store> Blobs<S> {
             downloader,
             endpoint,
             batches: Default::default(),
+            #[cfg(feature = "rpc")]
+            rpc_handler: Arc::new(OnceLock::new()),
         }
     }
 
