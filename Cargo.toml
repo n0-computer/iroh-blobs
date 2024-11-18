@@ -86,9 +86,6 @@ metrics = ["iroh-metrics/metrics"]
 redb = ["dep:redb"]
 cli = ["dep:clap", "dep:indicatif", "dep:console"]
 rpc = ["dep:quic-rpc", "dep:quic-rpc-derive", "dep:nested_enum_utils", "dep:strum", "dep:futures-util", "dep:ref-cast", "dep:portable-atomic", "dep:walkdir", "downloader"]
-clap = ["dep:clap"]
-console = ["dep:console"]
-indicatif = ["dep:indicatif"]
 
 [package.metadata.docs.rs]
 all-features = true
