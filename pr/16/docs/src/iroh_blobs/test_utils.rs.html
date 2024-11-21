@@ -129,49 +129,27 @@
 <a href="#129" id="129">129</a>
 <a href="#130" id="130">130</a>
 <a href="#131" id="131">131</a>
-<a href="#132" id="132">132</a>
-<a href="#133" id="133">133</a>
-<a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a>
-<a href="#136" id="136">136</a>
-<a href="#137" id="137">137</a>
-<a href="#138" id="138">138</a>
-<a href="#139" id="139">139</a>
-<a href="#140" id="140">140</a>
-<a href="#141" id="141">141</a>
-<a href="#142" id="142">142</a>
-<a href="#143" id="143">143</a>
-<a href="#144" id="144">144</a>
-<a href="#145" id="145">145</a>
-<a href="#146" id="146">146</a>
-<a href="#147" id="147">147</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! An iroh node that just has the blobs transport
 </span><span class="kw">use </span>std::{path::Path, sync::Arc};
 
 <span class="kw">use </span>iroh_net::{Endpoint, NodeAddr, NodeId};
 <span class="kw">use </span>iroh_router::Router;
-<span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
 
 <span class="kw">use crate</span>::{
     downloader::Downloader,
     net_protocol::Blobs,
     provider::{CustomEventSender, EventSender},
-    rpc::{
-        client::{blobs, tags},
-        proto::RpcService,
-    },
+    rpc::client::blobs,
     util::local_pool::LocalPool,
 };
 
-<span class="kw">type </span>RpcClient = quic_rpc::RpcClient&lt;RpcService&gt;;
-
 <span class="doccomment">/// An iroh node that just has the blobs transport
 </span><span class="attr">#[derive(Debug)]
+
 </span><span class="kw">pub struct </span>Node {
     router: iroh_router::Router,
-    client: RpcClient,
+    client: blobs::MemClient,
     _local_pool: LocalPool,
-    _rpc_task: AbortOnDropHandle&lt;()&gt;,
 }
 
 <span class="doccomment">/// An iroh node builder
@@ -227,15 +205,10 @@
         </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// Setup RPC
-        </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
-        <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc).boxed();
-        <span class="kw">let </span>_rpc_task = internal_rpc
-            .spawn_accept_loop(<span class="kw">move </span>|msg, chan| blobs.clone().handle_rpc_request(msg, chan));
-        <span class="kw">let </span>client = quic_rpc::RpcClient::new(controller).boxed();
+        </span><span class="kw">let </span>client = blobs.client();
         <span class="prelude-val">Ok</span>(Node {
             router,
             client,
-            _rpc_task,
             _local_pool: local_pool,
         })
     }
@@ -283,13 +256,8 @@
     </span>}
 
     <span class="doccomment">/// Returns an in-memory blobs client
-    </span><span class="kw">pub fn </span>blobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; blobs::Client {
-        blobs::Client::new(<span class="self">self</span>.client.clone())
-    }
-
-    <span class="doccomment">/// Returns an in-memory tags client
-    </span><span class="kw">pub fn </span>tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tags::Client {
-        tags::Client::new(<span class="self">self</span>.client.clone())
+    </span><span class="kw">pub fn </span>blobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>blobs::MemClient {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.client
     }
 }
 </code></pre></div></section></main></body></html>

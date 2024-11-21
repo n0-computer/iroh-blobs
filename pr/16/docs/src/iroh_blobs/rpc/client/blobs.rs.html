@@ -2861,7 +2861,7 @@
         }
 
         <span class="comment">// check that "temp" tags have been deleted
-        </span><span class="kw">let </span>tags: Vec&lt;<span class="kw">_</span>&gt; = node.tags().list().<span class="kw">await</span><span class="question-mark">?</span>.try_collect().<span class="kw">await</span><span class="question-mark">?</span>;
+        </span><span class="kw">let </span>tags: Vec&lt;<span class="kw">_</span>&gt; = node.blobs().tags().list().<span class="kw">await</span><span class="question-mark">?</span>.try_collect().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="macro">assert_eq!</span>(tags.len(), <span class="number">1</span>);
         <span class="macro">assert_eq!</span>(tags[<span class="number">0</span>].hash, hash);
         <span class="macro">assert_eq!</span>(tags[<span class="number">0</span>].name, tag);
