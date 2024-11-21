@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         BlobTicket::from_str(&args[1]).context("failed parsing blob ticket\n\nGet a ticket by running the follow command in a separate terminal:\n\n`cargo run --example hello-world-provide`")?;
 
     // create a new node
-    let node = Node::memory().spawn().await?;
+    let node = Node::memory().build().await?;
 
     println!("fetching hash:  {}", ticket.hash());
     println!("node id:        {}", node.node_id());

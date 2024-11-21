@@ -1005,7 +1005,7 @@ mod tests {
     async fn test_blob_create_collection() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1089,7 +1089,7 @@ mod tests {
     async fn test_blob_read_at() -> Result<()> {
         // let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1228,7 +1228,7 @@ mod tests {
     async fn test_blob_get_collection() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1294,7 +1294,7 @@ mod tests {
     async fn test_blob_share() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1369,10 +1369,10 @@ mod tests {
         let _guard = iroh_test::logging::setup();
 
         let (node1_events, mut node1_events_r) = BlobEvents::new(16);
-        let node1 = Node::memory().blobs_events(node1_events).spawn().await?;
+        let node1 = Node::memory().blobs_events(node1_events).build().await?;
 
         let (node2_events, mut node2_events_r) = BlobEvents::new(16);
-        let node2 = Node::memory().blobs_events(node2_events).spawn().await?;
+        let node2 = Node::memory().blobs_events(node2_events).build().await?;
 
         let import_outcome = node1.blobs().add_bytes(&b"hello world"[..]).await?;
 
@@ -1427,7 +1427,7 @@ mod tests {
     async fn test_blob_get_self_existing() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
         let node_id = node.node_id();
         let blobs = node.blobs();
 
@@ -1475,7 +1475,7 @@ mod tests {
     async fn test_blob_get_self_missing() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
         let node_id = node.node_id();
         let blobs = node.blobs();
 
@@ -1527,7 +1527,7 @@ mod tests {
     async fn test_blob_get_existing_collection() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
         // We use a nonexisting node id because we just want to check that this succeeds without
         // hitting the network.
         let node_id = NodeId::from_bytes(&[0u8; 32])?;
@@ -1600,7 +1600,7 @@ mod tests {
     async fn test_blob_delete_mem() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         let res = node.blobs().add_bytes(&b"hello world"[..]).await?;
 
@@ -1622,7 +1622,7 @@ mod tests {
         let _guard = iroh_test::logging::setup();
 
         let dir = tempfile::tempdir()?;
-        let node = Node::persistent(dir.path()).await?.spawn().await?;
+        let node = Node::persistent(dir.path()).await?.build().await?;
 
         let res = node.blobs().add_bytes(&b"hello world"[..]).await?;
 
@@ -1643,7 +1643,7 @@ mod tests {
     async fn test_ticket_multiple_addrs() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
         let hash = node
             .blobs()
             .add_bytes(Bytes::from_static(b"hello"))
@@ -1663,7 +1663,7 @@ mod tests {
         let _guard = iroh_test::logging::setup();
 
         use std::io::Cursor;
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         let blobs = node.blobs();
         let input = vec![2u8; 1024 * 256]; // 265kb so actually streaming, chunk size is 64kb
@@ -1680,7 +1680,7 @@ mod tests {
     async fn test_node_add_tagged_blob_event() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().spawn().await?;
+        let node = Node::memory().build().await?;
 
         let _got_hash = tokio::time::timeout(Duration::from_secs(10), async move {
             let mut stream = node
@@ -1721,11 +1721,11 @@ mod tests {
         let endpoint1 = iroh_net::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true);
-        let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
+        let node1 = Node::memory().endpoint(endpoint1).build().await?;
         let endpoint2 = iroh_net::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true);
-        let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
+        let node2 = Node::memory().endpoint(endpoint2).build().await?;
         let AddOutcome { hash, .. } = node1.blobs().add_bytes(b"foo".to_vec()).await?;
 
         // create a node addr with only a relay URL, no direct addresses
@@ -1757,7 +1757,7 @@ mod tests {
             .dns_resolver(dns_pkarr_server.dns_resolver())
             .secret_key(secret1.clone())
             .discovery(dns_pkarr_server.discovery(secret1));
-        let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
+        let node1 = Node::memory().endpoint(endpoint1).build().await?;
         let secret2 = SecretKey::generate();
         let endpoint2 = iroh_net::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
@@ -1765,7 +1765,7 @@ mod tests {
             .dns_resolver(dns_pkarr_server.dns_resolver())
             .secret_key(secret2.clone())
             .discovery(dns_pkarr_server.discovery(secret2));
-        let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
+        let node2 = Node::memory().endpoint(endpoint2).build().await?;
         let hash = node1.blobs().add_bytes(b"foo".to_vec()).await?.hash;
 
         // create a node addr with node id only

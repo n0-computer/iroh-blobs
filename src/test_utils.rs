@@ -46,8 +46,8 @@ impl<S: crate::store::Store> Builder<S> {
         }
     }
 
-    /// Spawns the node
-    pub async fn spawn(self) -> anyhow::Result<Node> {
+    /// Build the node
+    pub async fn build(self) -> anyhow::Result<Node> {
         let store = self.store;
         let events = self.events;
         let endpoint = self

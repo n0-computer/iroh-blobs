@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
         .discovery(Box::new(discovery))
         .relay_mode(iroh_net::RelayMode::Disabled);
     // create a new node
-    let node = Node::memory().endpoint(endpoint).spawn().await?;
+    let node = Node::memory().endpoint(endpoint).build().await?;
 
     match &cli.command {
         Commands::Accept { path } => {

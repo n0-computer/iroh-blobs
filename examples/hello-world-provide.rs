@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     println!("'Hello World' provide example!");
 
     // create a new node
-    let node = iroh_blobs::test_utils::Node::memory().spawn().await?;
+    let node = iroh_blobs::test_utils::Node::memory().build().await?;
 
     // add some data and remember the hash
     let res = node.blobs().add_bytes("Hello, world!").await?;
@@ -51,7 +51,6 @@ async fn main() -> anyhow::Result<()> {
     println!("\t cargo run --example hello-world-fetch {}", ticket);
     // block until SIGINT is received (ctrl+c)
     tokio::signal::ctrl_c().await?;
-    println!("shutting down node");
     node.shutdown().await?;
     Ok(())
 }
