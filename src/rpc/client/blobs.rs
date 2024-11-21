@@ -1005,9 +1005,7 @@ mod tests {
         //! An iroh node that just has the blobs transport
         use std::{path::Path, sync::Arc};
 
-        use iroh_net::{
-            discovery::Discovery, dns::DnsResolver, key::SecretKey, NodeAddr, NodeId, RelayMode,
-        };
+        use iroh_net::{NodeAddr, NodeId};
         use quic_rpc::transport::{Connector, Listener};
         use tokio_util::task::AbortOnDropHandle;
 
@@ -1034,56 +1032,22 @@ mod tests {
         pub struct Builder<S> {
             store: S,
             events: EventSender,
-            secret_key: Option<SecretKey>,
-            dns_resolver: Option<DnsResolver>,
-            node_discovery: Option<Box<dyn Discovery>>,
-            insecure_skip_relay_cert_verify: bool,
-            relay_mode: RelayMode,
+            endpoint: Option<iroh_net::endpoint::Builder>,
         }
 
         impl<S: crate::store::Store> Builder<S> {
-            /// Sets the relay mode
-            pub fn relay_mode(self, mode: RelayMode) -> Self {
-                Self {
-                    relay_mode: mode,
-                    ..self
-                }
-            }
-
-            /// Skip relay certificate verification
-            pub fn insecure_skip_relay_cert_verify(self, value: bool) -> Self {
-                Self {
-                    insecure_skip_relay_cert_verify: value,
-                    ..self
-                }
-            }
-
-            pub fn dns_resolver(self, value: DnsResolver) -> Self {
-                Self {
-                    dns_resolver: Some(value),
-                    ..self
-                }
-            }
-
-            pub fn node_discovery(self, value: Box<dyn Discovery>) -> Self {
-                Self {
-                    node_discovery: Some(value),
-                    ..self
-                }
-            }
-
-            /// Sets the secret key
-            pub fn secret_key(self, secret_key: SecretKey) -> Self {
-                Self {
-                    secret_key: Some(secret_key),
-                    ..self
-                }
-            }
-
             /// Sets the event sender
             pub fn blobs_events(self, events: impl CustomEventSender) -> Self {
                 Self {
                     events: events.into(),
+                    ..self
+                }
+            }
+
+            /// Set an endpoint builder
+            pub fn endpoint(self, endpoint: iroh_net::endpoint::Builder) -> Self {
+                Self {
+                    endpoint: Some(endpoint),
                     ..self
                 }
             }
@@ -1109,27 +1073,11 @@ mod tests {
             )> {
                 let store = self.store;
                 let events = self.events;
-                let builder = iroh_net::Endpoint::builder()
-                    .discovery_n0()
-                    .insecure_skip_relay_cert_verify(self.insecure_skip_relay_cert_verify)
-                    .relay_mode(self.relay_mode);
-                let builder = if let Some(secret_key) = self.secret_key {
-                    builder.secret_key(secret_key)
-                } else {
-                    builder
-                };
-                let builder = if let Some(dns_resolver) = self.dns_resolver {
-                    builder.dns_resolver(dns_resolver)
-                } else {
-                    builder
-                };
-                let builder = if let Some(node_discovery) = self.node_discovery {
-                    builder.discovery(node_discovery)
-                } else {
-                    builder
-                };
-
-                let endpoint = builder.bind().await?;
+                let endpoint = self
+                    .endpoint
+                    .unwrap_or_else(|| iroh_net::Endpoint::builder().discovery_n0())
+                    .bind()
+                    .await?;
                 let local_pool = LocalPool::single();
                 let mut router = iroh_router::Router::builder(endpoint.clone());
 
@@ -1187,11 +1135,7 @@ mod tests {
                 Builder {
                     store: crate::store::mem::Store::new(),
                     events: Default::default(),
-                    secret_key: None,
-                    relay_mode: RelayMode::Default,
-                    insecure_skip_relay_cert_verify: false,
-                    dns_resolver: None,
-                    node_discovery: None,
+                    endpoint: None,
                 }
             }
 
@@ -1202,11 +1146,7 @@ mod tests {
                 Ok(Builder {
                     store: crate::store::fs::Store::load(path).await?,
                     events: Default::default(),
-                    secret_key: None,
-                    relay_mode: RelayMode::Default,
-                    insecure_skip_relay_cert_verify: false,
-                    dns_resolver: None,
-                    node_discovery: None,
+                    endpoint: None,
                 })
             }
 
@@ -1960,16 +1900,14 @@ mod tests {
         let _guard = iroh_test::logging::setup();
         let (relay_map, relay_url, _guard) = iroh_net::test_utils::run_relay_server().await?;
 
-        let node1 = Node::memory()
+        let endpoint1 = iroh_net::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
-            .insecure_skip_relay_cert_verify(true)
-            .spawn()
-            .await?;
-        let node2 = Node::memory()
+            .insecure_skip_relay_cert_verify(true);
+        let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
+        let endpoint2 = iroh_net::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
-            .insecure_skip_relay_cert_verify(true)
-            .spawn()
-            .await?;
+            .insecure_skip_relay_cert_verify(true);
+        let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
         let AddOutcome { hash, .. } = node1.blobs().add_bytes(b"foo".to_vec()).await?;
 
         // create a node addr with only a relay URL, no direct addresses
@@ -1995,23 +1933,21 @@ mod tests {
         let dns_pkarr_server = DnsPkarrServer::run().await?;
 
         let secret1 = SecretKey::generate();
-        let node1 = Node::memory()
+        let endpoint1 = iroh_net::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(true)
+            .dns_resolver(dns_pkarr_server.dns_resolver())
             .secret_key(secret1.clone())
-            .relay_mode(RelayMode::Custom(relay_map.clone()))
-            .insecure_skip_relay_cert_verify(true)
-            .dns_resolver(dns_pkarr_server.dns_resolver())
-            .node_discovery(dns_pkarr_server.discovery(secret1))
-            .spawn()
-            .await?;
+            .discovery(dns_pkarr_server.discovery(secret1));
+        let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
         let secret2 = SecretKey::generate();
-        let node2 = Node::memory()
-            .secret_key(secret2.clone())
+        let endpoint2 = iroh_net::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .dns_resolver(dns_pkarr_server.dns_resolver())
-            .node_discovery(dns_pkarr_server.discovery(secret2))
-            .spawn()
-            .await?;
+            .secret_key(secret2.clone())
+            .discovery(dns_pkarr_server.discovery(secret2));
+        let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
         let hash = node1.blobs().add_bytes(b"foo".to_vec()).await?.hash;
 
         // create a node addr with node id only
