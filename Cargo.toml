@@ -82,6 +82,7 @@ console = { version = "0.15.8", optional = true }
 [dev-dependencies]
 http-body = "1.0"
 iroh-test = { version = "0.28" }
+iroh-net = { version = "0.28", features = ["test-utils"] }
 futures-buffered = "0.2.4"
 proptest = "1.0.0"
 serde_json = "1.0.107"
@@ -94,7 +95,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tempfile = "3.10.0"
 futures-util = "0.3.30"
 testdir = "0.9.1"
-
 
 [features]
 default = ["fs-store", "rpc", "net_protocol"]
