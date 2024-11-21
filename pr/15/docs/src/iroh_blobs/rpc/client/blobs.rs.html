@@ -1933,38 +1933,6 @@
 <a href="#1933" id="1933">1933</a>
 <a href="#1934" id="1934">1934</a>
 <a href="#1935" id="1935">1935</a>
-<a href="#1936" id="1936">1936</a>
-<a href="#1937" id="1937">1937</a>
-<a href="#1938" id="1938">1938</a>
-<a href="#1939" id="1939">1939</a>
-<a href="#1940" id="1940">1940</a>
-<a href="#1941" id="1941">1941</a>
-<a href="#1942" id="1942">1942</a>
-<a href="#1943" id="1943">1943</a>
-<a href="#1944" id="1944">1944</a>
-<a href="#1945" id="1945">1945</a>
-<a href="#1946" id="1946">1946</a>
-<a href="#1947" id="1947">1947</a>
-<a href="#1948" id="1948">1948</a>
-<a href="#1949" id="1949">1949</a>
-<a href="#1950" id="1950">1950</a>
-<a href="#1951" id="1951">1951</a>
-<a href="#1952" id="1952">1952</a>
-<a href="#1953" id="1953">1953</a>
-<a href="#1954" id="1954">1954</a>
-<a href="#1955" id="1955">1955</a>
-<a href="#1956" id="1956">1956</a>
-<a href="#1957" id="1957">1957</a>
-<a href="#1958" id="1958">1958</a>
-<a href="#1959" id="1959">1959</a>
-<a href="#1960" id="1960">1960</a>
-<a href="#1961" id="1961">1961</a>
-<a href="#1962" id="1962">1962</a>
-<a href="#1963" id="1963">1963</a>
-<a href="#1964" id="1964">1964</a>
-<a href="#1965" id="1965">1965</a>
-<a href="#1966" id="1966">1966</a>
-<a href="#1967" id="1967">1967</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
@@ -2972,12 +2940,14 @@
         <span class="doccomment">//! An iroh node that just has the blobs transport
         </span><span class="kw">use </span>std::{path::Path, sync::Arc};
 
-        <span class="kw">use </span>iroh_net::{NodeAddr, NodeId};
-        <span class="kw">use </span>quic_rpc::transport::{Connector, Listener};
+        <span class="kw">use </span>iroh_net::{Endpoint, NodeAddr, NodeId};
+        <span class="kw">use </span>iroh_router::Router;
         <span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
 
         <span class="kw">use </span><span class="kw">super</span>::RpcService;
         <span class="kw">use crate</span>::{
+            downloader::Downloader,
+            net_protocol::Blobs,
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
             util::local_pool::LocalPool,
@@ -3021,40 +2991,20 @@
 
             <span class="doccomment">/// Spawns the node
             </span><span class="kw">pub async fn </span>spawn(<span class="self">self</span>) -&gt; anyhow::Result&lt;Node&gt; {
-                <span class="kw">let </span>(client, router, rpc_task, _local_pool) = <span class="self">self</span>.setup_router().<span class="kw">await</span><span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(Node {
-                    router,
-                    client,
-                    _rpc_task: AbortOnDropHandle::new(rpc_task),
-                    _local_pool,
-                })
-            }
-
-            <span class="kw">async fn </span>setup_router(
-                <span class="self">self</span>,
-            ) -&gt; anyhow::Result&lt;(
-                RpcClient,
-                iroh_router::Router,
-                tokio::task::JoinHandle&lt;()&gt;,
-                LocalPool,
-            )&gt; {
                 <span class="kw">let </span>store = <span class="self">self</span>.store;
                 <span class="kw">let </span>events = <span class="self">self</span>.events;
                 <span class="kw">let </span>endpoint = <span class="self">self
                     </span>.endpoint
-                    .unwrap_or_else(|| iroh_net::Endpoint::builder().discovery_n0())
+                    .unwrap_or_else(|| Endpoint::builder().discovery_n0())
                     .bind()
                     .<span class="kw">await</span><span class="question-mark">?</span>;
                 <span class="kw">let </span>local_pool = LocalPool::single();
-                <span class="kw">let </span><span class="kw-2">mut </span>router = iroh_router::Router::builder(endpoint.clone());
+                <span class="kw">let </span><span class="kw-2">mut </span>router = Router::builder(endpoint.clone());
 
                 <span class="comment">// Setup blobs
-                </span><span class="kw">let </span>downloader = <span class="kw">crate</span>::downloader::Downloader::new(
-                    store.clone(),
-                    endpoint.clone(),
-                    local_pool.handle().clone(),
-                );
-                <span class="kw">let </span>blobs = Arc::new(<span class="kw">crate</span>::net_protocol::Blobs::new_with_events(
+                </span><span class="kw">let </span>downloader =
+                    Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
+                <span class="kw">let </span>blobs = Arc::new(Blobs::new_with_events(
                     store.clone(),
                     local_pool.handle().clone(),
                     events,
@@ -3068,31 +3018,17 @@
 
                 <span class="comment">// Setup RPC
                 </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
-                <span class="kw">let </span>controller = controller.boxed();
-                <span class="kw">let </span>internal_rpc = internal_rpc.boxed();
-                <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
-
-                <span class="kw">let </span>rpc_server_task: tokio::task::JoinHandle&lt;()&gt; = tokio::task::spawn(<span class="kw">async move </span>{
-                    <span class="kw">loop </span>{
-                        <span class="kw">let </span>request = internal_rpc.accept().<span class="kw">await</span>;
-                        <span class="kw">match </span>request {
-                            <span class="prelude-val">Ok</span>(accepting) =&gt; {
-                                <span class="kw">let </span>blobs = blobs.clone();
-                                tokio::task::spawn(<span class="kw">async move </span>{
-                                    <span class="kw">let </span>(msg, chan) = accepting.read_first().<span class="kw">await</span>.unwrap();
-                                    blobs.handle_rpc_request(msg, chan).<span class="kw">await</span>.unwrap();
-                                });
-                            }
-                            <span class="prelude-val">Err</span>(err) =&gt; {
-                                <span class="macro">tracing::warn!</span>(<span class="string">"rpc error: {:?}"</span>, err);
-                            }
-                        }
-                    }
+                <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc).boxed();
+                <span class="kw">let </span>_rpc_task = internal_rpc.spawn_accept_loop(<span class="kw">move </span>|msg, chan| {
+                    blobs.clone().handle_rpc_request(msg, chan)
                 });
-
-                <span class="kw">let </span>client = quic_rpc::RpcClient::new(controller);
-
-                <span class="prelude-val">Ok</span>((client, router, rpc_server_task, local_pool))
+                <span class="kw">let </span>client = quic_rpc::RpcClient::new(controller).boxed();
+                <span class="prelude-val">Ok</span>(Node {
+                    router,
+                    client,
+                    _rpc_task,
+                    _local_pool: local_pool,
+                })
             }
         }
 
