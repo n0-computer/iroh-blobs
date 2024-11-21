@@ -97,7 +97,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "rpc", "net_protocol"]
+default = ["fs-store", "rpc", "net_protocol", "example-iroh"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader"]
 fs-store = ["dep:reflink-copy", "redb", "dep:redb_v1", "dep:tempfile"]
@@ -115,8 +115,9 @@ rpc = [
     "dep:walkdir",
     "downloader",
 ]
+test-utils = ["rpc"]
 
-example-iroh = ["dep:iroh", "dep:clap", "dep:indicatif", "dep:console"]
+example-iroh = ["dep:iroh", "dep:clap", "dep:indicatif", "dep:console", "test-utils"]
 
 [package.metadata.docs.rs]
 all-features = true

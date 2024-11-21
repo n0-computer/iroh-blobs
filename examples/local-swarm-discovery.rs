@@ -5,19 +5,15 @@
 //! Wait for output that looks like the following:
 //!  $ cargo run --example local_swarm_discovery --features="discovery-local-network" -- connect [NODE_ID] [HASH] -o [FILE_PATH]
 //! Run that command on another machine in the same local network, replacing [FILE_PATH] to the path on which you want to save the transferred content.
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use anyhow::ensure;
 use clap::{Parser, Subcommand};
 use iroh::{
     base::{hash::Hash, key::SecretKey},
     net::{discovery::local_swarm_discovery::LocalSwarmDiscovery, key::PublicKey, NodeAddr},
-    node::DiscoveryConfig,
 };
-use iroh_blobs::{
-    downloader::Downloader, net_protocol::Blobs, rpc::client::blobs::WrapOption,
-    util::local_pool::LocalPool,
-};
+use iroh_blobs::{rpc::client::blobs::WrapOption, test_utils::Node};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 use self::progress::show_download_progress;
@@ -65,33 +61,14 @@ async fn main() -> anyhow::Result<()> {
 
     let key = SecretKey::generate();
     let discovery = LocalSwarmDiscovery::new(key.public())?;
-    let cfg = DiscoveryConfig::Custom(Box::new(discovery));
 
     println!("Starting iroh node with local node discovery...");
-    // create a new node
-    let mut builder = iroh::node::Node::memory()
+    let endpoint = iroh_net::Endpoint::builder()
         .secret_key(key)
-        .node_discovery(cfg)
-        .relay_mode(iroh_net::RelayMode::Disabled)
-        .build()
-        .await?;
-    let local_pool = LocalPool::default();
-    let store = iroh_blobs::store::mem::Store::new();
-    let downloader = Downloader::new(
-        store.clone(),
-        builder.endpoint().clone(),
-        local_pool.handle().clone(),
-    );
-    let blobs = Arc::new(Blobs::new_with_events(
-        store,
-        local_pool.handle().clone(),
-        Default::default(),
-        downloader,
-        builder.endpoint().clone(),
-    ));
-    let blobs_client = blobs.clone().client();
-    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs);
-    let node = builder.spawn().await?;
+        .discovery(Box::new(discovery))
+        .relay_mode(iroh_net::RelayMode::Disabled);
+    // create a new node
+    let node = Node::memory().endpoint(endpoint).spawn().await?;
 
     match &cli.command {
         Commands::Accept { path } => {
@@ -102,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
             }
             let absolute = path.canonicalize()?;
             println!("Adding {} as {}...", path.display(), absolute.display());
-            let stream = blobs_client
+            let stream = node
+                .blobs()
                 .add_from_path(
                     absolute,
                     true,
@@ -118,7 +96,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Connect { node_id, hash, out } => {
             println!("NodeID: {}", node.node_id());
-            let mut stream = blobs_client
+            let mut stream = node
+                .blobs()
                 .download(*hash, NodeAddr::new(*node_id))
                 .await?;
             show_download_progress(*hash, &mut stream).await?;
@@ -130,7 +109,8 @@ async fn main() -> anyhow::Result<()> {
                     path.display(),
                     absolute.display()
                 );
-                let stream = blobs_client
+                let stream = node
+                    .blobs()
                     .export(
                         *hash,
                         absolute,

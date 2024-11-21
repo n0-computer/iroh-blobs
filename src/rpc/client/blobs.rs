@@ -988,168 +988,24 @@ pub struct DownloadOptions {
 }
 
 #[cfg(test)]
+#[cfg(feature = "test-utils")]
 mod tests {
     use std::{path::Path, time::Duration};
 
     use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
     use iroh_net::{key::SecretKey, test_utils::DnsPkarrServer, NodeId, RelayMode};
-    use node::Node;
     use rand::RngCore;
     use testresult::TestResult;
     use tokio::{io::AsyncWriteExt, sync::mpsc};
 
     use super::*;
-    use crate::hashseq::HashSeq;
-
-    mod node {
-        //! An iroh node that just has the blobs transport
-        use std::{path::Path, sync::Arc};
-
-        use iroh_net::{Endpoint, NodeAddr, NodeId};
-        use iroh_router::Router;
-        use tokio_util::task::AbortOnDropHandle;
-
-        use super::RpcService;
-        use crate::{
-            downloader::Downloader,
-            net_protocol::Blobs,
-            provider::{CustomEventSender, EventSender},
-            rpc::client::{blobs, tags},
-            util::local_pool::LocalPool,
-        };
-
-        type RpcClient = quic_rpc::RpcClient<RpcService>;
-
-        /// An iroh node that just has the blobs transport
-        #[derive(Debug)]
-        pub struct Node {
-            router: iroh_router::Router,
-            client: RpcClient,
-            _local_pool: LocalPool,
-            _rpc_task: AbortOnDropHandle<()>,
-        }
-
-        /// An iroh node builder
-        #[derive(Debug)]
-        pub struct Builder<S> {
-            store: S,
-            events: EventSender,
-            endpoint: Option<iroh_net::endpoint::Builder>,
-        }
-
-        impl<S: crate::store::Store> Builder<S> {
-            /// Sets the event sender
-            pub fn blobs_events(self, events: impl CustomEventSender) -> Self {
-                Self {
-                    events: events.into(),
-                    ..self
-                }
-            }
-
-            /// Set an endpoint builder
-            pub fn endpoint(self, endpoint: iroh_net::endpoint::Builder) -> Self {
-                Self {
-                    endpoint: Some(endpoint),
-                    ..self
-                }
-            }
-
-            /// Spawns the node
-            pub async fn spawn(self) -> anyhow::Result<Node> {
-                let store = self.store;
-                let events = self.events;
-                let endpoint = self
-                    .endpoint
-                    .unwrap_or_else(|| Endpoint::builder().discovery_n0())
-                    .bind()
-                    .await?;
-                let local_pool = LocalPool::single();
-                let mut router = Router::builder(endpoint.clone());
-
-                // Setup blobs
-                let downloader =
-                    Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
-                let blobs = Arc::new(Blobs::new_with_events(
-                    store.clone(),
-                    local_pool.handle().clone(),
-                    events,
-                    downloader,
-                    endpoint.clone(),
-                ));
-                router = router.accept(crate::protocol::ALPN.to_vec(), blobs.clone());
-
-                // Build the router
-                let router = router.spawn().await?;
-
-                // Setup RPC
-                let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);
-                let internal_rpc = quic_rpc::RpcServer::new(internal_rpc).boxed();
-                let _rpc_task = internal_rpc.spawn_accept_loop(move |msg, chan| {
-                    blobs.clone().handle_rpc_request(msg, chan)
-                });
-                let client = quic_rpc::RpcClient::new(controller).boxed();
-                Ok(Node {
-                    router,
-                    client,
-                    _rpc_task,
-                    _local_pool: local_pool,
-                })
-            }
-        }
-
-        impl Node {
-            /// Creates a new node with memory storage
-            pub fn memory() -> Builder<crate::store::mem::Store> {
-                Builder {
-                    store: crate::store::mem::Store::new(),
-                    events: Default::default(),
-                    endpoint: None,
-                }
-            }
-
-            /// Creates a new node with persistent storage
-            pub async fn persistent(
-                path: impl AsRef<Path>,
-            ) -> anyhow::Result<Builder<crate::store::fs::Store>> {
-                Ok(Builder {
-                    store: crate::store::fs::Store::load(path).await?,
-                    events: Default::default(),
-                    endpoint: None,
-                })
-            }
-
-            /// Returns the node id
-            pub fn node_id(&self) -> NodeId {
-                self.router.endpoint().node_id()
-            }
-
-            /// Returns the node address
-            pub async fn node_addr(&self) -> anyhow::Result<NodeAddr> {
-                self.router.endpoint().node_addr().await
-            }
-
-            /// Shuts down the node
-            pub async fn shutdown(self) -> anyhow::Result<()> {
-                self.router.shutdown().await
-            }
-
-            /// Returns an in-memory blobs client
-            pub fn blobs(&self) -> blobs::Client {
-                blobs::Client::new(self.client.clone())
-            }
-
-            /// Returns an in-memory tags client
-            pub fn tags(&self) -> tags::Client {
-                tags::Client::new(self.client.clone())
-            }
-        }
-    }
+    use crate::{hashseq::HashSeq, test_utils::Node};
 
     #[tokio::test]
     async fn test_blob_create_collection() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1233,7 +1089,7 @@ mod tests {
     async fn test_blob_read_at() -> Result<()> {
         // let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1372,7 +1228,7 @@ mod tests {
     async fn test_blob_get_collection() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1438,7 +1294,7 @@ mod tests {
     async fn test_blob_share() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         // create temp file
         let temp_dir = tempfile::tempdir().context("tempdir")?;
@@ -1513,16 +1369,10 @@ mod tests {
         let _guard = iroh_test::logging::setup();
 
         let (node1_events, mut node1_events_r) = BlobEvents::new(16);
-        let node1 = node::Node::memory()
-            .blobs_events(node1_events)
-            .spawn()
-            .await?;
+        let node1 = Node::memory().blobs_events(node1_events).spawn().await?;
 
         let (node2_events, mut node2_events_r) = BlobEvents::new(16);
-        let node2 = node::Node::memory()
-            .blobs_events(node2_events)
-            .spawn()
-            .await?;
+        let node2 = Node::memory().blobs_events(node2_events).spawn().await?;
 
         let import_outcome = node1.blobs().add_bytes(&b"hello world"[..]).await?;
 
@@ -1577,7 +1427,7 @@ mod tests {
     async fn test_blob_get_self_existing() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
         let node_id = node.node_id();
         let blobs = node.blobs();
 
@@ -1625,7 +1475,7 @@ mod tests {
     async fn test_blob_get_self_missing() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
         let node_id = node.node_id();
         let blobs = node.blobs();
 
@@ -1677,7 +1527,7 @@ mod tests {
     async fn test_blob_get_existing_collection() -> TestResult<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
         // We use a nonexisting node id because we just want to check that this succeeds without
         // hitting the network.
         let node_id = NodeId::from_bytes(&[0u8; 32])?;
@@ -1750,7 +1600,7 @@ mod tests {
     async fn test_blob_delete_mem() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = node::Node::memory().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         let res = node.blobs().add_bytes(&b"hello world"[..]).await?;
 
@@ -1772,7 +1622,7 @@ mod tests {
         let _guard = iroh_test::logging::setup();
 
         let dir = tempfile::tempdir()?;
-        let node = node::Node::persistent(dir.path()).await?.spawn().await?;
+        let node = Node::persistent(dir.path()).await?.spawn().await?;
 
         let res = node.blobs().add_bytes(&b"hello world"[..]).await?;
 

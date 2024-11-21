@@ -47,6 +47,9 @@ pub mod provider;
 #[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 pub mod rpc;
 pub mod store;
+#[cfg(any(test, feature = "test-utils"))]
+#[cfg_attr(iroh_docsrs, doc(cfg(any(test, feature = "test-utils"))))]
+pub mod test_utils;
 pub mod util;
 
 use bao_tree::BlockSize;

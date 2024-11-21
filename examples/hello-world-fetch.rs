@@ -3,13 +3,11 @@
 //!
 //! This is using an in memory database and a random node id.
 //! Run the `provide` example, which will give you instructions on how to run this example.
-use std::{env, str::FromStr, sync::Arc};
+use std::{env, str::FromStr};
 
 use anyhow::{bail, ensure, Context, Result};
 use iroh::base::ticket::BlobTicket;
-use iroh_blobs::{
-    downloader::Downloader, net_protocol::Blobs, util::local_pool::LocalPool, BlobFormat,
-};
+use iroh_blobs::{test_utils::Node, BlobFormat};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -37,35 +35,19 @@ async fn main() -> Result<()> {
         BlobTicket::from_str(&args[1]).context("failed parsing blob ticket\n\nGet a ticket by running the follow command in a separate terminal:\n\n`cargo run --example hello-world-provide`")?;
 
     // create a new node
-    let mut builder = iroh::node::Node::memory().build().await?;
-    let local_pool = LocalPool::default();
-    let store = iroh_blobs::store::mem::Store::new();
-    let downloader = Downloader::new(
-        store.clone(),
-        builder.endpoint().clone(),
-        local_pool.handle().clone(),
-    );
-    let blobs = Arc::new(Blobs::new_with_events(
-        store,
-        local_pool.handle().clone(),
-        Default::default(),
-        downloader,
-        builder.endpoint().clone(),
-    ));
-    let blobs_client = blobs.clone().client();
-    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs);
-    let node = builder.spawn().await?;
+    let node = Node::memory().spawn().await?;
 
     println!("fetching hash:  {}", ticket.hash());
     println!("node id:        {}", node.node_id());
     println!("node listening addresses:");
-    let addrs = node.net().node_addr().await?;
+    let addrs = node.endpoint().node_addr().await?;
     for addr in addrs.direct_addresses() {
         println!("\t{:?}", addr);
     }
     println!(
         "node relay server url: {:?}",
-        node.home_relay()
+        node.endpoint()
+            .home_relay()
             .expect("a default relay url should be provided")
             .to_string()
     );
@@ -78,7 +60,8 @@ async fn main() -> Result<()> {
 
     // `download` returns a stream of `DownloadProgress` events. You can iterate through these updates to get progress
     // on the state of your download.
-    let download_stream = blobs_client
+    let download_stream = node
+        .blobs()
         .download(ticket.hash(), ticket.node_addr().clone())
         .await?;
 
@@ -93,7 +76,7 @@ async fn main() -> Result<()> {
 
     // Get the content we have just fetched from the iroh database.
 
-    let bytes = blobs_client.read_to_bytes(ticket.hash()).await?;
+    let bytes = node.blobs().read_to_bytes(ticket.hash()).await?;
     let s = std::str::from_utf8(&bytes).context("unable to parse blob as as utf-8 string")?;
     println!("{s}");
 
