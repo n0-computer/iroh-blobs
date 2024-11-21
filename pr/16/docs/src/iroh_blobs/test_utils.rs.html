@@ -177,8 +177,8 @@
         </span>}
     }
 
-    <span class="doccomment">/// Spawns the node
-    </span><span class="kw">pub async fn </span>spawn(<span class="self">self</span>) -&gt; anyhow::Result&lt;Node&gt; {
+    <span class="doccomment">/// Build the node
+    </span><span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Node&gt; {
         <span class="kw">let </span>store = <span class="self">self</span>.store;
         <span class="kw">let </span>events = <span class="self">self</span>.events;
         <span class="kw">let </span>endpoint = <span class="self">self
