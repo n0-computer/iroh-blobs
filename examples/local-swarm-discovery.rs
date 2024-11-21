@@ -72,7 +72,6 @@ async fn main() -> anyhow::Result<()> {
     let mut builder = iroh::node::Node::memory()
         .secret_key(key)
         .node_discovery(cfg)
-        .bind_random_port()
         .relay_mode(iroh_net::RelayMode::Disabled)
         .build()
         .await?;

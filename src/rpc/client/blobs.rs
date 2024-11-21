@@ -1037,20 +1037,11 @@ mod tests {
             secret_key: Option<SecretKey>,
             dns_resolver: Option<DnsResolver>,
             node_discovery: Option<Box<dyn Discovery>>,
-            bind_random_port: bool,
             insecure_skip_relay_cert_verify: bool,
             relay_mode: RelayMode,
         }
 
         impl<S: crate::store::Store> Builder<S> {
-            /// Binds the endpoint to a random port
-            pub fn bind_random_port(self) -> Self {
-                Self {
-                    bind_random_port: true,
-                    ..self
-                }
-            }
-
             /// Sets the relay mode
             pub fn relay_mode(self, mode: RelayMode) -> Self {
                 Self {
@@ -1197,7 +1188,6 @@ mod tests {
                     store: crate::store::mem::Store::new(),
                     events: Default::default(),
                     secret_key: None,
-                    bind_random_port: false,
                     relay_mode: RelayMode::Default,
                     insecure_skip_relay_cert_verify: false,
                     dns_resolver: None,
@@ -1213,7 +1203,6 @@ mod tests {
                     store: crate::store::fs::Store::load(path).await?,
                     events: Default::default(),
                     secret_key: None,
-                    bind_random_port: false,
                     relay_mode: RelayMode::Default,
                     insecure_skip_relay_cert_verify: false,
                     dns_resolver: None,
@@ -1916,7 +1905,7 @@ mod tests {
         let _guard = iroh_test::logging::setup();
 
         use std::io::Cursor;
-        let node = Node::memory().bind_random_port().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         let blobs = node.blobs();
         let input = vec![2u8; 1024 * 256]; // 265kb so actually streaming, chunk size is 64kb
@@ -1933,7 +1922,7 @@ mod tests {
     async fn test_node_add_tagged_blob_event() -> Result<()> {
         let _guard = iroh_test::logging::setup();
 
-        let node = Node::memory().bind_random_port().spawn().await?;
+        let node = Node::memory().spawn().await?;
 
         let _got_hash = tokio::time::timeout(Duration::from_secs(10), async move {
             let mut stream = node
@@ -1972,13 +1961,11 @@ mod tests {
         let (relay_map, relay_url, _guard) = iroh_net::test_utils::run_relay_server().await?;
 
         let node1 = Node::memory()
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .spawn()
             .await?;
         let node2 = Node::memory()
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .spawn()
@@ -2010,7 +1997,6 @@ mod tests {
         let secret1 = SecretKey::generate();
         let node1 = Node::memory()
             .secret_key(secret1.clone())
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .dns_resolver(dns_pkarr_server.dns_resolver())
@@ -2020,7 +2006,6 @@ mod tests {
         let secret2 = SecretKey::generate();
         let node2 = Node::memory()
             .secret_key(secret2.clone())
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .dns_resolver(dns_pkarr_server.dns_resolver())
