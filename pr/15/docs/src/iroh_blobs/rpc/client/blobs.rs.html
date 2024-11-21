@@ -2029,21 +2029,6 @@
 <a href="#2029" id="2029">2029</a>
 <a href="#2030" id="2030">2030</a>
 <a href="#2031" id="2031">2031</a>
-<a href="#2032" id="2032">2032</a>
-<a href="#2033" id="2033">2033</a>
-<a href="#2034" id="2034">2034</a>
-<a href="#2035" id="2035">2035</a>
-<a href="#2036" id="2036">2036</a>
-<a href="#2037" id="2037">2037</a>
-<a href="#2038" id="2038">2038</a>
-<a href="#2039" id="2039">2039</a>
-<a href="#2040" id="2040">2040</a>
-<a href="#2041" id="2041">2041</a>
-<a href="#2042" id="2042">2042</a>
-<a href="#2043" id="2043">2043</a>
-<a href="#2044" id="2044">2044</a>
-<a href="#2045" id="2045">2045</a>
-<a href="#2046" id="2046">2046</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
@@ -3083,20 +3068,11 @@
             secret_key: <span class="prelude-ty">Option</span>&lt;SecretKey&gt;,
             dns_resolver: <span class="prelude-ty">Option</span>&lt;DnsResolver&gt;,
             node_discovery: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>Discovery&gt;&gt;,
-            bind_random_port: bool,
             insecure_skip_relay_cert_verify: bool,
             relay_mode: RelayMode,
         }
 
         <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Builder&lt;S&gt; {
-            <span class="doccomment">/// Binds the endpoint to a random port
-            </span><span class="kw">pub fn </span>bind_random_port(<span class="self">self</span>) -&gt; <span class="self">Self </span>{
-                <span class="self">Self </span>{
-                    bind_random_port: <span class="bool-val">true</span>,
-                    ..<span class="self">self
-                </span>}
-            }
-
             <span class="doccomment">/// Sets the relay mode
             </span><span class="kw">pub fn </span>relay_mode(<span class="self">self</span>, mode: RelayMode) -&gt; <span class="self">Self </span>{
                 <span class="self">Self </span>{
@@ -3243,7 +3219,6 @@
                     store: <span class="kw">crate</span>::store::mem::Store::new(),
                     events: Default::default(),
                     secret_key: <span class="prelude-val">None</span>,
-                    bind_random_port: <span class="bool-val">false</span>,
                     relay_mode: RelayMode::Default,
                     insecure_skip_relay_cert_verify: <span class="bool-val">false</span>,
                     dns_resolver: <span class="prelude-val">None</span>,
@@ -3259,7 +3234,6 @@
                     store: <span class="kw">crate</span>::store::fs::Store::load(path).<span class="kw">await</span><span class="question-mark">?</span>,
                     events: Default::default(),
                     secret_key: <span class="prelude-val">None</span>,
-                    bind_random_port: <span class="bool-val">false</span>,
                     relay_mode: RelayMode::Default,
                     insecure_skip_relay_cert_verify: <span class="bool-val">false</span>,
                     dns_resolver: <span class="prelude-val">None</span>,
@@ -3962,7 +3936,7 @@
         <span class="kw">let </span>_guard = iroh_test::logging::setup();
 
         <span class="kw">use </span>std::io::Cursor;
-        <span class="kw">let </span>node = Node::memory().bind_random_port().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>blobs = node.blobs();
         <span class="kw">let </span>input = <span class="macro">vec!</span>[<span class="number">2u8</span>; <span class="number">1024 </span>* <span class="number">256</span>]; <span class="comment">// 265kb so actually streaming, chunk size is 64kb
@@ -3979,7 +3953,7 @@
     </span><span class="kw">async fn </span>test_node_add_tagged_blob_event() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>_guard = iroh_test::logging::setup();
 
-        <span class="kw">let </span>node = Node::memory().bind_random_port().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>_got_hash = tokio::time::timeout(Duration::from_secs(<span class="number">10</span>), <span class="kw">async move </span>{
             <span class="kw">let </span><span class="kw-2">mut </span>stream = node
@@ -4018,13 +3992,11 @@
         <span class="kw">let </span>(relay_map, relay_url, _guard) = iroh_net::test_utils::run_relay_server().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>node1 = Node::memory()
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
             .spawn()
             .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>node2 = Node::memory()
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
             .spawn()
@@ -4056,7 +4028,6 @@
         <span class="kw">let </span>secret1 = SecretKey::generate();
         <span class="kw">let </span>node1 = Node::memory()
             .secret_key(secret1.clone())
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
             .dns_resolver(dns_pkarr_server.dns_resolver())
@@ -4066,7 +4037,6 @@
         <span class="kw">let </span>secret2 = SecretKey::generate();
         <span class="kw">let </span>node2 = Node::memory()
             .secret_key(secret2.clone())
-            .bind_random_port()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
             .dns_resolver(dns_pkarr_server.dns_resolver())
