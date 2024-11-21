@@ -1076,7 +1076,7 @@ mod tests {
         }
 
         // check that "temp" tags have been deleted
-        let tags: Vec<_> = node.tags().list().await?.try_collect().await?;
+        let tags: Vec<_> = node.blobs().tags().list().await?.try_collect().await?;
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].hash, hash);
         assert_eq!(tags[0].name, tag);

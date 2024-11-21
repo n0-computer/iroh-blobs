@@ -3,28 +3,22 @@ use std::{path::Path, sync::Arc};
 
 use iroh_net::{Endpoint, NodeAddr, NodeId};
 use iroh_router::Router;
-use tokio_util::task::AbortOnDropHandle;
 
 use crate::{
     downloader::Downloader,
     net_protocol::Blobs,
     provider::{CustomEventSender, EventSender},
-    rpc::{
-        client::{blobs, tags},
-        proto::RpcService,
-    },
+    rpc::client::blobs,
     util::local_pool::LocalPool,
 };
 
-type RpcClient = quic_rpc::RpcClient<RpcService>;
-
 /// An iroh node that just has the blobs transport
 #[derive(Debug)]
+
 pub struct Node {
     router: iroh_router::Router,
-    client: RpcClient,
+    client: blobs::MemClient,
     _local_pool: LocalPool,
-    _rpc_task: AbortOnDropHandle<()>,
 }
 
 /// An iroh node builder
@@ -80,15 +74,10 @@ impl<S: crate::store::Store> Builder<S> {
         let router = router.spawn().await?;
 
         // Setup RPC
-        let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);
-        let internal_rpc = quic_rpc::RpcServer::new(internal_rpc).boxed();
-        let _rpc_task = internal_rpc
-            .spawn_accept_loop(move |msg, chan| blobs.clone().handle_rpc_request(msg, chan));
-        let client = quic_rpc::RpcClient::new(controller).boxed();
+        let client = blobs.client();
         Ok(Node {
             router,
             client,
-            _rpc_task,
             _local_pool: local_pool,
         })
     }
@@ -136,12 +125,7 @@ impl Node {
     }
 
     /// Returns an in-memory blobs client
-    pub fn blobs(&self) -> blobs::Client {
-        blobs::Client::new(self.client.clone())
-    }
-
-    /// Returns an in-memory tags client
-    pub fn tags(&self) -> tags::Client {
-        tags::Client::new(self.client.clone())
+    pub fn blobs(&self) -> &blobs::MemClient {
+        &self.client
     }
 }
