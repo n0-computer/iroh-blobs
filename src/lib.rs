@@ -56,3 +56,6 @@ pub use crate::util::{Tag, TempTag};
 
 /// Block size used by iroh, 2^4*1024 = 16KiB
 pub const IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(4);
+
+#[doc(inline)]
+pub use crate::protocol::ALPN;
