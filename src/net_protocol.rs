@@ -4,7 +4,9 @@
 #![allow(missing_docs)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    path::Path,
     sync::{Arc, OnceLock},
 };
 
@@ -23,8 +25,9 @@ use crate::{
         Stats,
     },
     provider::EventSender,
+    store::GcConfig,
     util::{
-        local_pool::LocalPoolHandle,
+        local_pool::{self, LocalPoolHandle},
         progress::{AsyncChannelProgressSender, ProgressSender},
         SetTagOption,
     },
@@ -39,6 +42,7 @@ pub struct Blobs<S> {
     downloader: Downloader,
     batches: tokio::sync::Mutex<BlobBatches>,
     endpoint: Endpoint,
+    gc_handle: Option<local_pool::Run<()>>,
     #[cfg(feature = "rpc")]
     pub(crate) rpc_handler: Arc<OnceLock<crate::rpc::RpcHandler>>,
 }
@@ -97,6 +101,27 @@ impl BlobBatches {
     }
 }
 
+impl Blobs<crate::store::mem::Store> {
+    pub fn from_endpoint(endpoint: Endpoint, local_pool: LocalPoolHandle) -> Self {
+        let store = crate::store::mem::Store::new();
+        let downloader = Downloader::new(store.clone(), endpoint.clone(), local_pool.clone());
+        Self::new_with_events(store, local_pool, Default::default(), downloader, endpoint)
+    }
+}
+impl Blobs<crate::store::fs::Store> {
+    pub async fn from_endpoint(
+        endpoint: Endpoint,
+        local_pool: LocalPoolHandle,
+        path: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let store = crate::store::fs::Store::load(path.as_ref().to_path_buf()).await?;
+        let downloader = Downloader::new(store.clone(), endpoint.clone(), local_pool.clone());
+        let blobs =
+            Self::new_with_events(store, local_pool, Default::default(), downloader, endpoint);
+        Ok(blobs)
+    }
+}
+
 impl<S: crate::store::Store> Blobs<S> {
     pub fn new_with_events(
         store: S,
@@ -111,10 +136,24 @@ impl<S: crate::store::Store> Blobs<S> {
             events,
             downloader,
             endpoint,
+            gc_handle: None,
             batches: Default::default(),
             #[cfg(feature = "rpc")]
             rpc_handler: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Configure gc
+    pub fn spawn_gc<G, Gut>(&mut self, config: GcConfig, protected_cb: G)
+    where
+        G: Fn() -> Gut + Send + 'static,
+        Gut: Future<Output = BTreeSet<Hash>> + Send,
+    {
+        let store = self.store.clone();
+        let gc_handle = self
+            .rt
+            .spawn(move || async move { store.gc_run(config, protected_cb).await });
+        self.gc_handle.replace(gc_handle);
     }
 
     pub fn store(&self) -> &S {
@@ -127,6 +166,10 @@ impl<S: crate::store::Store> Blobs<S> {
 
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    pub fn downloader(&self) -> &Downloader {
+        &self.downloader
     }
 
     pub(crate) async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
