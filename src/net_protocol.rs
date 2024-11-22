@@ -125,6 +125,10 @@ impl<S: crate::store::Store> Blobs<S> {
         &self.rt
     }
 
+    pub fn downloader(&self) -> &Downloader {
+        &self.downloader
+    }
+
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
