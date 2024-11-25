@@ -4,13 +4,15 @@
 #![allow(missing_docs)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::Debug,
+    ops::DerefMut,
     sync::{Arc, OnceLock},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
+use futures_util::future::BoxFuture;
 use iroh_base::hash::{BlobFormat, Hash};
 use iroh_net::{endpoint::Connecting, Endpoint, NodeAddr};
 use iroh_router::ProtocolHandler;
@@ -24,27 +26,32 @@ use crate::{
         Stats,
     },
     provider::EventSender,
+    store::GcConfig,
     util::{
-        local_pool::LocalPoolHandle,
+        local_pool::{self, LocalPoolHandle},
         progress::{AsyncChannelProgressSender, ProgressSender},
         SetTagOption,
     },
     HashAndFormat, TempTag,
 };
 
-// pub type ProtectCb = Box<dyn Fn(&mut BTreeSet<Hash>) -> BoxFuture<()> + Send + Sync>;
-//
-// #[derive(derive_more::Debug)]
-// enum GcState {
-//     Initial(#[debug(skip)] Vec<ProtectCb>),
-//     Started(#[allow(dead_code)] Option<local_pool::Run<()>>),
-// }
-//
-// impl Default for GcState {
-//     fn default() -> Self {
-//         Self::Initial(Vec::new())
-//     }
-// }
+/// A callback that blobs can ask about a set of hashes that should not be garbage collected.
+pub type ProtectCb = Box<dyn Fn(&mut BTreeSet<Hash>) -> BoxFuture<()> + Send + Sync>;
+
+/// The state of the gc loop.
+#[derive(derive_more::Debug)]
+enum GcState {
+    // Gc loop is not yet running. Other protcols can add protect callbacks
+    Initial(#[debug(skip)] Vec<ProtectCb>),
+    // Gc loop is running. No more protect callbacks can be added.
+    Started(#[allow(dead_code)] Option<local_pool::Run<()>>),
+}
+
+impl Default for GcState {
+    fn default() -> Self {
+        Self::Initial(Vec::new())
+    }
+}
 
 #[derive(Debug)]
 pub struct Blobs<S> {
@@ -54,6 +61,7 @@ pub struct Blobs<S> {
     downloader: Downloader,
     batches: tokio::sync::Mutex<BlobBatches>,
     endpoint: Endpoint,
+    gc_state: Arc<std::sync::Mutex<GcState>>,
     #[cfg(feature = "rpc")]
     pub(crate) rpc_handler: Arc<OnceLock<crate::rpc::RpcHandler>>,
 }
@@ -185,6 +193,7 @@ impl<S: crate::store::Store> Blobs<S> {
             downloader,
             endpoint,
             batches: Default::default(),
+            gc_state: Default::default(),
             #[cfg(feature = "rpc")]
             rpc_handler: Arc::new(OnceLock::new()),
         }
@@ -206,43 +215,47 @@ impl<S: crate::store::Store> Blobs<S> {
         &self.endpoint
     }
 
-    // pub fn add_protected(&self, cb: ProtectCb) -> Result<()> {
-    //     let mut state = self.gc_state.lock().unwrap();
-    //     match &mut *state {
-    //         GcState::Initial(cbs) => {
-    //             cbs.push(cb);
-    //         }
-    //         GcState::Started(_) => {
-    //             anyhow::bail!("cannot add protected blobs after gc has started");
-    //         }
-    //     }
-    //     Ok(())
-    // }
-    //
-    // pub fn start_gc(&self, config: GcConfig) -> Result<()> {
-    //     let mut state = self.gc_state.lock().unwrap();
-    //     let protected = match state.deref_mut() {
-    //         GcState::Initial(items) => std::mem::take(items),
-    //         GcState::Started(_) => anyhow::bail!("gc already started"),
-    //     };
-    //     let protected = Arc::new(protected);
-    //     let protected_cb = move || {
-    //         let protected = protected.clone();
-    //         async move {
-    //             let mut set = BTreeSet::new();
-    //             for cb in protected.iter() {
-    //                 cb(&mut set).await;
-    //             }
-    //             set
-    //         }
-    //     };
-    //     let store = self.store.clone();
-    //     let run = self
-    //         .rt
-    //         .spawn(move || async move { store.gc_run(config, protected_cb).await });
-    //     *state = GcState::Started(Some(run));
-    //     Ok(())
-    // }
+    /// Add a callback that will be called before the garbage collector runs.
+    ///
+    /// This can only be called before the garbage collector has started, otherwise it will return an error.
+    pub fn add_protected(&self, cb: ProtectCb) -> Result<()> {
+        let mut state = self.gc_state.lock().unwrap();
+        match &mut *state {
+            GcState::Initial(cbs) => {
+                cbs.push(cb);
+            }
+            GcState::Started(_) => {
+                anyhow::bail!("cannot add protected blobs after gc has started");
+            }
+        }
+        Ok(())
+    }
+
+    /// Start garbage collection with the given settings.
+    pub fn start_gc(&self, config: GcConfig) -> Result<()> {
+        let mut state = self.gc_state.lock().unwrap();
+        let protected = match state.deref_mut() {
+            GcState::Initial(items) => std::mem::take(items),
+            GcState::Started(_) => bail!("gc already started"),
+        };
+        let protected = Arc::new(protected);
+        let protected_cb = move || {
+            let protected = protected.clone();
+            async move {
+                let mut set = BTreeSet::new();
+                for cb in protected.iter() {
+                    cb(&mut set).await;
+                }
+                set
+            }
+        };
+        let store = self.store.clone();
+        let run = self
+            .rt
+            .spawn(move || async move { store.gc_run(config, protected_cb).await });
+        *state = GcState::Started(Some(run));
+        Ok(())
+    }
 
     pub(crate) async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
         self.batches.lock().await
