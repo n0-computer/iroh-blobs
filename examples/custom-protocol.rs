@@ -51,10 +51,7 @@ use iroh::{
     router::ProtocolHandler,
 };
 use iroh_base::hash::Hash;
-use iroh_blobs::{
-    downloader::Downloader, net_protocol::Blobs, rpc::client::blobs::MemClient,
-    util::local_pool::LocalPool,
-};
+use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -93,21 +90,9 @@ async fn main() -> Result<()> {
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
     let mut builder = iroh::node::Node::memory().build().await?;
     let local_pool = LocalPool::default();
-    let store = iroh_blobs::store::mem::Store::new();
-    let downloader = Downloader::new(
-        store.clone(),
-        builder.endpoint().clone(),
-        local_pool.handle().clone(),
-    );
-    let blobs = Arc::new(Blobs::new(
-        store,
-        local_pool.handle().clone(),
-        Default::default(),
-        downloader,
-        builder.endpoint().clone(),
-    ));
-    let blobs_client = blobs.clone().client();
-    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs);
+    let blobs = Blobs::memory().build(&local_pool.handle(), builder.endpoint());
+    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs.clone());
+    let blobs_client = blobs.client();
 
     // Build our custom protocol handler. The `builder` exposes access to various subsystems in the
     // iroh node. In our case, we need a blobs client and the endpoint.

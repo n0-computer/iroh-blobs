@@ -3,13 +3,11 @@
 //!
 //! This is using an in memory database and a random node id.
 //! Run the `provide` example, which will give you instructions on how to run this example.
-use std::{env, str::FromStr, sync::Arc};
+use std::{env, str::FromStr};
 
 use anyhow::{bail, ensure, Context, Result};
 use iroh::base::ticket::BlobTicket;
-use iroh_blobs::{
-    downloader::Downloader, net_protocol::Blobs, util::local_pool::LocalPool, BlobFormat,
-};
+use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool, BlobFormat};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -39,22 +37,10 @@ async fn main() -> Result<()> {
     // create a new node
     let mut builder = iroh::node::Node::memory().build().await?;
     let local_pool = LocalPool::default();
-    let store = iroh_blobs::store::mem::Store::new();
-    let downloader = Downloader::new(
-        store.clone(),
-        builder.endpoint().clone(),
-        local_pool.handle().clone(),
-    );
-    let blobs = Arc::new(Blobs::new(
-        store,
-        local_pool.handle().clone(),
-        Default::default(),
-        downloader,
-        builder.endpoint().clone(),
-    ));
-    let blobs_client = blobs.clone().client();
-    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs);
+    let blobs = Blobs::memory().build(&local_pool.handle(), builder.endpoint());
+    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs.clone());
     let node = builder.spawn().await?;
+    let blobs_client = blobs.client();
 
     println!("fetching hash:  {}", ticket.hash());
     println!("node id:        {}", node.node_id());
