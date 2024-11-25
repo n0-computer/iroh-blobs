@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     let mut builder = iroh::node::Node::memory().build().await?;
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
-    builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs.clone());
+    builder = builder.accept(iroh_blobs::ALPN.to_vec(), blobs.clone());
     let node = builder.spawn().await?;
     let blobs_client = blobs.client();
 

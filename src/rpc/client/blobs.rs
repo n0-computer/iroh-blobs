@@ -1076,7 +1076,7 @@ mod tests {
                     downloader,
                     endpoint.clone(),
                 ));
-                router = router.accept(crate::protocol::ALPN.to_vec(), blobs.clone());
+                router = router.accept(crate::ALPN.to_vec(), blobs.clone());
 
                 // Build the router
                 let router = router.spawn().await?;
