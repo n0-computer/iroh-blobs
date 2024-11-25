@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
     let mut builder = iroh::node::Node::memory().build().await?;
     let local_pool = LocalPool::default();
-    let blobs = Blobs::memory().build(&local_pool.handle(), builder.endpoint());
+    let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
     builder = builder.accept(iroh_blobs::protocol::ALPN.to_vec(), blobs.clone());
     let blobs_client = blobs.client();
 
