@@ -41,7 +41,7 @@ pub type ProtectCb = Box<dyn Fn(&mut BTreeSet<Hash>) -> BoxFuture<()> + Send + S
 /// The state of the gc loop.
 #[derive(derive_more::Debug)]
 enum GcState {
-    // Gc loop is not yet running. Other protcols can add protect callbacks
+    // Gc loop is not yet running. Other protocols can add protect callbacks
     Initial(#[debug(skip)] Vec<ProtectCb>),
     // Gc loop is running. No more protect callbacks can be added.
     Started(#[allow(dead_code)] Option<local_pool::Run<()>>),
