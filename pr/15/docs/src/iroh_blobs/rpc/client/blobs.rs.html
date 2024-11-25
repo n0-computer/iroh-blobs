@@ -3004,7 +3004,7 @@
                 <span class="comment">// Setup blobs
                 </span><span class="kw">let </span>downloader =
                     Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
-                <span class="kw">let </span>blobs = Arc::new(Blobs::new_with_events(
+                <span class="kw">let </span>blobs = Arc::new(Blobs::new(
                     store.clone(),
                     local_pool.handle().clone(),
                     events,

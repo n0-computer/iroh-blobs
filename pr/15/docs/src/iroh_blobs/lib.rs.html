@@ -56,6 +56,9 @@
 <a href="#56" id="56">56</a>
 <a href="#57" id="57">57</a>
 <a href="#58" id="58">58</a>
+<a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Blobs layer for iroh.
 //!
 //! The crate is designed to be used from the [iroh] crate, which provides a
@@ -114,4 +117,7 @@
 
 <span class="doccomment">/// Block size used by iroh, 2^4*1024 = 16KiB
 </span><span class="kw">pub const </span>IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(<span class="number">4</span>);
+
+<span class="attr">#[doc(inline)]
+</span><span class="kw">pub use </span><span class="kw">crate</span>::protocol::ALPN;
 </code></pre></div></section></main></body></html>
