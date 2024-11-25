@@ -556,7 +556,7 @@
 <span class="doccomment">/// The state of the gc loop.
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">enum </span>GcState {
-    <span class="comment">// Gc loop is not yet running. Other protcols can add protect callbacks
+    <span class="comment">// Gc loop is not yet running. Other protocols can add protect callbacks
     </span>Initial(<span class="attr">#[debug(skip)] </span>Vec&lt;ProtectCb&gt;),
     <span class="comment">// Gc loop is running. No more protect callbacks can be added.
     </span>Started(<span class="attr">#[allow(dead_code)] </span><span class="prelude-ty">Option</span>&lt;local_pool::Run&lt;()&gt;&gt;),
