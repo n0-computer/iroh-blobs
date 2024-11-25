@@ -1069,7 +1069,7 @@ mod tests {
                 // Setup blobs
                 let downloader =
                     Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
-                let blobs = Arc::new(Blobs::new_with_events(
+                let blobs = Arc::new(Blobs::new(
                     store.clone(),
                     local_pool.handle().clone(),
                     events,

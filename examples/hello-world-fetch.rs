@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
         builder.endpoint().clone(),
         local_pool.handle().clone(),
     );
-    let blobs = Arc::new(Blobs::new_with_events(
+    let blobs = Arc::new(Blobs::new(
         store,
         local_pool.handle().clone(),
         Default::default(),
