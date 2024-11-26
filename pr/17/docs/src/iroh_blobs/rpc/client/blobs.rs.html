@@ -3011,7 +3011,7 @@
                     downloader,
                     endpoint.clone(),
                 ));
-                router = router.accept(<span class="kw">crate</span>::ALPN.to_vec(), blobs.clone());
+                router = router.accept(<span class="kw">crate</span>::ALPN, blobs.clone());
 
                 <span class="comment">// Build the router
                 </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
