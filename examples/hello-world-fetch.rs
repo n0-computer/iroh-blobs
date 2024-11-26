@@ -8,6 +8,8 @@ use std::{env, str::FromStr};
 use anyhow::{bail, ensure, Context, Result};
 use iroh::base::ticket::BlobTicket;
 use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool, BlobFormat};
+use iroh_net::Endpoint;
+use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -35,23 +37,25 @@ async fn main() -> Result<()> {
         BlobTicket::from_str(&args[1]).context("failed parsing blob ticket\n\nGet a ticket by running the follow command in a separate terminal:\n\n`cargo run --example hello-world-provide`")?;
 
     // create a new node
-    let mut builder = iroh::node::Node::memory().build().await?;
+    let endpoint = Endpoint::builder().bind().await?;
+    let builder = Router::builder(endpoint);
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
-    builder = builder.accept(iroh_blobs::ALPN.to_vec(), blobs.clone());
+    let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn().await?;
     let blobs_client = blobs.client();
 
     println!("fetching hash:  {}", ticket.hash());
-    println!("node id:        {}", node.node_id());
+    println!("node id:        {}", node.endpoint().node_id());
     println!("node listening addresses:");
-    let addrs = node.net().node_addr().await?;
+    let addrs = node.endpoint().node_addr().await?;
     for addr in addrs.direct_addresses() {
         println!("\t{:?}", addr);
     }
     println!(
         "node relay server url: {:?}",
-        node.home_relay()
+        node.endpoint()
+            .home_relay()
             .expect("a default relay url should be provided")
             .to_string()
     );

@@ -52,6 +52,7 @@ use iroh::{
 };
 use iroh_base::hash::Hash;
 use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool};
+use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -88,10 +89,11 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
 
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
-    let mut builder = iroh::node::Node::memory().build().await?;
+    let endpoint = Endpoint::builder().bind().await?;
+    let builder = Router::builder(endpoint);
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
-    builder = builder.accept(iroh_blobs::ALPN.to_vec(), blobs.clone());
+    let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let blobs_client = blobs.client();
 
     // Build our custom protocol handler. The `builder` exposes access to various subsystems in the
@@ -99,11 +101,12 @@ async fn main() -> Result<()> {
     let proto = BlobSearch::new(blobs_client.clone(), builder.endpoint().clone());
 
     // Add our protocol, identified by our ALPN, to the node, and spawn the node.
-    let node = builder.accept(ALPN.to_vec(), proto.clone()).spawn().await?;
+    let builder = builder.accept(ALPN, proto.clone());
+    let node = builder.spawn().await?;
 
     match args.command {
         Command::Listen { text } => {
-            let node_id = node.node_id();
+            let node_id = node.endpoint().node_id();
             println!("our node id: {node_id}");
 
             // Insert the text strings as blobs and index them.

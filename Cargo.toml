@@ -177,8 +177,8 @@ panic = 'abort'
 incremental = false
 
 [patch.crates-io]
-iroh-router = { git = "https://github.com/n0-computer/iroh", branch = "refactor-drop-external-protocols" }
-iroh-net = { git = "https://github.com/n0-computer/iroh", branch = "refactor-drop-external-protocols" }
-iroh-metrics = { git = "https://github.com/n0-computer/iroh", branch = "refactor-drop-external-protocols" }
-iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "refactor-drop-external-protocols" }
-iroh = { git = "https://github.com/n0-computer/iroh", branch = "refactor-drop-external-protocols" }
+iroh-router = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-net = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-metrics = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
