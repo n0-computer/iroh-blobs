@@ -5,6 +5,8 @@
 //!     $ cargo run --example hello-world-provide
 use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
 use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
+use iroh_net::Endpoint;
+use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -22,10 +24,11 @@ async fn main() -> anyhow::Result<()> {
     println!("'Hello World' provide example!");
 
     // create a new node
-    let mut builder = iroh::node::Node::memory().build().await?;
+    let endpoint = Endpoint::builder().bind().await?;
+    let builder = Router::builder(endpoint);
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
-    builder = builder.accept(iroh_blobs::ALPN.to_vec(), blobs.clone());
+    let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let blobs_client = blobs.client();
     let node = builder.spawn().await?;
 
@@ -33,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     let res = blobs_client.add_bytes("Hello, world!").await?;
 
     // create a ticket
-    let mut addr = node.net().node_addr().await?;
+    let mut addr = node.endpoint().node_addr().await?;
     addr.apply_options(AddrInfoOptions::RelayAndAddresses);
     let ticket = BlobTicket::new(addr, res.hash, res.format)?;
 

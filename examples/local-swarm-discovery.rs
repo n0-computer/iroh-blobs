@@ -12,11 +12,12 @@ use clap::{Parser, Subcommand};
 use iroh::{
     base::{hash::Hash, key::SecretKey},
     net::{discovery::local_swarm_discovery::LocalSwarmDiscovery, key::PublicKey, NodeAddr},
-    node::DiscoveryConfig,
 };
 use iroh_blobs::{
     net_protocol::Blobs, rpc::client::blobs::WrapOption, util::local_pool::LocalPool,
 };
+use iroh_net::{Endpoint, RelayMode};
+use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 use self::progress::show_download_progress;
@@ -64,19 +65,19 @@ async fn main() -> anyhow::Result<()> {
 
     let key = SecretKey::generate();
     let discovery = LocalSwarmDiscovery::new(key.public())?;
-    let cfg = DiscoveryConfig::Custom(Box::new(discovery));
 
     println!("Starting iroh node with local node discovery...");
     // create a new node
-    let mut builder = iroh::node::Node::memory()
+    let endpoint = Endpoint::builder()
         .secret_key(key)
-        .node_discovery(cfg)
-        .relay_mode(iroh_net::RelayMode::Disabled)
-        .build()
+        .discovery(Box::new(discovery))
+        .relay_mode(RelayMode::Disabled)
+        .bind()
         .await?;
+    let builder = Router::builder(endpoint);
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
-    builder = builder.accept(iroh_blobs::ALPN.to_vec(), blobs.clone());
+    let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn().await?;
     let blobs_client = blobs.client();
 
@@ -98,13 +99,13 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
             let outcome = stream.finish().await?;
-            println!("To fetch the blob:\n\tcargo run --example local_swarm_discovery --features=\"local-swarm-discovery\" -- connect {} {} -o [FILE_PATH]", node.node_id(), outcome.hash);
+            println!("To fetch the blob:\n\tcargo run --example local_swarm_discovery --features=\"local-swarm-discovery\" -- connect {} {} -o [FILE_PATH]", node.endpoint().node_id(), outcome.hash);
             tokio::signal::ctrl_c().await?;
             node.shutdown().await?;
             std::process::exit(0);
         }
         Commands::Connect { node_id, hash, out } => {
-            println!("NodeID: {}", node.node_id());
+            println!("NodeID: {}", node.endpoint().node_id());
             let mut stream = blobs_client
                 .download(*hash, NodeAddr::new(*node_id))
                 .await?;
