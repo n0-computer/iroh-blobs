@@ -989,7 +989,11 @@ pub struct DownloadOptions {
 
 #[cfg(test)]
 mod tests {
-    use iroh_net::NodeId;
+    use std::{path::Path, time::Duration};
+
+    use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
+    use iroh_net::{key::SecretKey, test_utils::DnsPkarrServer, NodeId, RelayMode};
+    use node::Node;
     use rand::RngCore;
     use testresult::TestResult;
     use tokio::{io::AsyncWriteExt, sync::mpsc};
@@ -1001,12 +1005,14 @@ mod tests {
         //! An iroh node that just has the blobs transport
         use std::{path::Path, sync::Arc};
 
-        use iroh_net::{NodeAddr, NodeId};
-        use quic_rpc::transport::{Connector, Listener};
+        use iroh_net::{Endpoint, NodeAddr, NodeId};
+        use iroh_router::Router;
         use tokio_util::task::AbortOnDropHandle;
 
         use super::RpcService;
         use crate::{
+            downloader::Downloader,
+            net_protocol::Blobs,
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
             util::local_pool::LocalPool,
@@ -1028,26 +1034,65 @@ mod tests {
         pub struct Builder<S> {
             store: S,
             events: EventSender,
+            endpoint: Option<iroh_net::endpoint::Builder>,
         }
 
         impl<S: crate::store::Store> Builder<S> {
             /// Sets the event sender
             pub fn blobs_events(self, events: impl CustomEventSender) -> Self {
-                Builder {
-                    store: self.store,
+                Self {
                     events: events.into(),
+                    ..self
+                }
+            }
+
+            /// Set an endpoint builder
+            pub fn endpoint(self, endpoint: iroh_net::endpoint::Builder) -> Self {
+                Self {
+                    endpoint: Some(endpoint),
+                    ..self
                 }
             }
 
             /// Spawns the node
             pub async fn spawn(self) -> anyhow::Result<Node> {
-                let (client, router, rpc_task, _local_pool) =
-                    setup_router(self.store, self.events).await?;
+                let store = self.store;
+                let events = self.events;
+                let endpoint = self
+                    .endpoint
+                    .unwrap_or_else(|| Endpoint::builder().discovery_n0())
+                    .bind()
+                    .await?;
+                let local_pool = LocalPool::single();
+                let mut router = Router::builder(endpoint.clone());
+
+                // Setup blobs
+                let downloader =
+                    Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
+                let blobs = Arc::new(Blobs::new(
+                    store.clone(),
+                    local_pool.handle().clone(),
+                    events,
+                    downloader,
+                    endpoint.clone(),
+                ));
+                router = router.accept(crate::ALPN, blobs.clone());
+
+                // Build the router
+                let router = router.spawn().await?;
+
+                // Setup RPC
+                let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);
+                let internal_rpc = quic_rpc::RpcServer::new(internal_rpc).boxed();
+                let _rpc_task = internal_rpc.spawn_accept_loop(move |msg, chan| {
+                    blobs.clone().handle_rpc_request(msg, chan)
+                });
+                let client = quic_rpc::RpcClient::new(controller).boxed();
                 Ok(Node {
                     router,
                     client,
-                    _rpc_task: AbortOnDropHandle::new(rpc_task),
-                    _local_pool,
+                    _rpc_task,
+                    _local_pool: local_pool,
                 })
             }
         }
@@ -1058,6 +1103,7 @@ mod tests {
                 Builder {
                     store: crate::store::mem::Store::new(),
                     events: Default::default(),
+                    endpoint: None,
                 }
             }
 
@@ -1068,6 +1114,7 @@ mod tests {
                 Ok(Builder {
                     store: crate::store::fs::Store::load(path).await?,
                     events: Default::default(),
+                    endpoint: None,
                 })
             }
 
@@ -1095,66 +1142,6 @@ mod tests {
             pub fn tags(&self) -> tags::Client {
                 tags::Client::new(self.client.clone())
             }
-        }
-
-        async fn setup_router<S: crate::store::Store>(
-            store: S,
-            events: EventSender,
-        ) -> anyhow::Result<(
-            RpcClient,
-            iroh_router::Router,
-            tokio::task::JoinHandle<()>,
-            LocalPool,
-        )> {
-            let endpoint = iroh_net::Endpoint::builder().discovery_n0().bind().await?;
-            let local_pool = LocalPool::single();
-            let mut router = iroh_router::Router::builder(endpoint.clone());
-
-            // Setup blobs
-            let downloader = crate::downloader::Downloader::new(
-                store.clone(),
-                endpoint.clone(),
-                local_pool.handle().clone(),
-            );
-            let blobs = Arc::new(crate::net_protocol::Blobs::new_with_events(
-                store.clone(),
-                local_pool.handle().clone(),
-                events,
-                downloader,
-                endpoint.clone(),
-            ));
-            router = router.accept(crate::protocol::ALPN.to_vec(), blobs.clone());
-
-            // Build the router
-            let router = router.spawn().await?;
-
-            // Setup RPC
-            let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);
-            let controller = controller.boxed();
-            let internal_rpc = internal_rpc.boxed();
-            let internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
-
-            let rpc_server_task: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
-                loop {
-                    let request = internal_rpc.accept().await;
-                    match request {
-                        Ok(accepting) => {
-                            let blobs = blobs.clone();
-                            tokio::task::spawn(async move {
-                                let (msg, chan) = accepting.read_first().await.unwrap();
-                                blobs.handle_rpc_request(msg, chan).await.unwrap();
-                            });
-                        }
-                        Err(err) => {
-                            tracing::warn!("rpc error: {:?}", err);
-                        }
-                    }
-                }
-            });
-
-            let client = quic_rpc::RpcClient::new(controller);
-
-            Ok((client, router, rpc_server_task, local_pool))
         }
     }
 
@@ -1799,6 +1786,150 @@ mod tests {
         let hashes: Vec<_> = node.blobs().list().await?.try_collect().await?;
         assert!(hashes.is_empty());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ticket_multiple_addrs() -> TestResult<()> {
+        let _guard = iroh_test::logging::setup();
+
+        let node = Node::memory().spawn().await?;
+        let hash = node
+            .blobs()
+            .add_bytes(Bytes::from_static(b"hello"))
+            .await?
+            .hash;
+
+        let mut addr = node.node_addr().await?;
+        addr.apply_options(AddrInfoOptions::RelayAndAddresses);
+        let ticket = BlobTicket::new(addr, hash, BlobFormat::Raw)?;
+        println!("addrs: {:?}", ticket.node_addr().info);
+        assert!(!ticket.node_addr().info.direct_addresses.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_node_add_blob_stream() -> Result<()> {
+        let _guard = iroh_test::logging::setup();
+
+        use std::io::Cursor;
+        let node = Node::memory().spawn().await?;
+
+        let blobs = node.blobs();
+        let input = vec![2u8; 1024 * 256]; // 265kb so actually streaming, chunk size is 64kb
+        let reader = Cursor::new(input.clone());
+        let progress = blobs.add_reader(reader, SetTagOption::Auto).await?;
+        let outcome = progress.finish().await?;
+        let hash = outcome.hash;
+        let output = blobs.read_to_bytes(hash).await?;
+        assert_eq!(input, output.to_vec());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_node_add_tagged_blob_event() -> Result<()> {
+        let _guard = iroh_test::logging::setup();
+
+        let node = Node::memory().spawn().await?;
+
+        let _got_hash = tokio::time::timeout(Duration::from_secs(10), async move {
+            let mut stream = node
+                .blobs()
+                .add_from_path(
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
+                    false,
+                    SetTagOption::Auto,
+                    WrapOption::NoWrap,
+                )
+                .await?;
+
+            while let Some(progress) = stream.next().await {
+                match progress? {
+                    crate::provider::AddProgress::AllDone { hash, .. } => {
+                        return Ok(hash);
+                    }
+                    crate::provider::AddProgress::Abort(e) => {
+                        anyhow::bail!("Error while adding data: {e}");
+                    }
+                    _ => {}
+                }
+            }
+            anyhow::bail!("stream ended without providing data");
+        })
+        .await
+        .context("timeout")?
+        .context("get failed")?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_download_via_relay() -> Result<()> {
+        let _guard = iroh_test::logging::setup();
+        let (relay_map, relay_url, _guard) = iroh_net::test_utils::run_relay_server().await?;
+
+        let endpoint1 = iroh_net::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(true);
+        let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
+        let endpoint2 = iroh_net::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(true);
+        let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
+        let AddOutcome { hash, .. } = node1.blobs().add_bytes(b"foo".to_vec()).await?;
+
+        // create a node addr with only a relay URL, no direct addresses
+        let addr = NodeAddr::new(node1.node_id()).with_relay_url(relay_url);
+        node2.blobs().download(hash, addr).await?.await?;
+        assert_eq!(
+            node2
+                .blobs()
+                .read_to_bytes(hash)
+                .await
+                .context("get")?
+                .as_ref(),
+            b"foo"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "flaky"]
+    async fn test_download_via_relay_with_discovery() -> Result<()> {
+        let _guard = iroh_test::logging::setup();
+        let (relay_map, _relay_url, _guard) = iroh_net::test_utils::run_relay_server().await?;
+        let dns_pkarr_server = DnsPkarrServer::run().await?;
+
+        let secret1 = SecretKey::generate();
+        let endpoint1 = iroh_net::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(true)
+            .dns_resolver(dns_pkarr_server.dns_resolver())
+            .secret_key(secret1.clone())
+            .discovery(dns_pkarr_server.discovery(secret1));
+        let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
+        let secret2 = SecretKey::generate();
+        let endpoint2 = iroh_net::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(true)
+            .dns_resolver(dns_pkarr_server.dns_resolver())
+            .secret_key(secret2.clone())
+            .discovery(dns_pkarr_server.discovery(secret2));
+        let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
+        let hash = node1.blobs().add_bytes(b"foo".to_vec()).await?.hash;
+
+        // create a node addr with node id only
+        let addr = NodeAddr::new(node1.node_id());
+        node2.blobs().download(hash, addr).await?.await?;
+        assert_eq!(
+            node2
+                .blobs()
+                .read_to_bytes(hash)
+                .await
+                .context("get")?
+                .as_ref(),
+            b"foo"
+        );
         Ok(())
     }
 }

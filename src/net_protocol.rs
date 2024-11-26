@@ -5,6 +5,7 @@
 
 use std::{
     collections::BTreeMap,
+    fmt::Debug,
     sync::{Arc, OnceLock},
 };
 
@@ -30,6 +31,20 @@ use crate::{
     },
     HashAndFormat, TempTag,
 };
+
+// pub type ProtectCb = Box<dyn Fn(&mut BTreeSet<Hash>) -> BoxFuture<()> + Send + Sync>;
+//
+// #[derive(derive_more::Debug)]
+// enum GcState {
+//     Initial(#[debug(skip)] Vec<ProtectCb>),
+//     Started(#[allow(dead_code)] Option<local_pool::Run<()>>),
+// }
+//
+// impl Default for GcState {
+//     fn default() -> Self {
+//         Self::Initial(Vec::new())
+//     }
+// }
 
 #[derive(Debug)]
 pub struct Blobs<S> {
@@ -97,8 +112,66 @@ impl BlobBatches {
     }
 }
 
+/// Builder for the Blobs protocol handler
+#[derive(Debug)]
+pub struct Builder<S> {
+    store: S,
+    events: Option<EventSender>,
+    gc_config: Option<crate::store::GcConfig>,
+}
+
+impl<S: crate::store::Store> Builder<S> {
+    /// Set the event sender for the blobs protocol.
+    pub fn events(mut self, value: EventSender) -> Self {
+        self.events = Some(value);
+        self
+    }
+
+    pub fn gc_config(mut self, value: crate::store::GcConfig) -> Self {
+        self.gc_config = Some(value);
+        self
+    }
+
+    /// Build the Blobs protocol handler.
+    /// You need to provide a local pool handle and an endpoint.
+    pub fn build(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Arc<Blobs<S>> {
+        let downloader = Downloader::new(self.store.clone(), endpoint.clone(), rt.clone());
+        Arc::new(Blobs::new(
+            self.store,
+            rt.clone(),
+            self.events.unwrap_or_default(),
+            downloader,
+            endpoint.clone(),
+        ))
+    }
+}
+
+impl Blobs<crate::store::mem::Store> {
+    /// Create a new memory-backed Blobs protocol handler.
+    pub fn memory() -> Builder<crate::store::mem::Store> {
+        Builder {
+            store: crate::store::mem::Store::new(),
+            events: None,
+            gc_config: None,
+        }
+    }
+}
+
+impl Blobs<crate::store::fs::Store> {
+    /// Load a persistent Blobs protocol handler from a path.
+    pub async fn persistent(
+        path: impl AsRef<std::path::Path>,
+    ) -> anyhow::Result<Builder<crate::store::fs::Store>> {
+        Ok(Builder {
+            store: crate::store::fs::Store::load(path).await?,
+            events: None,
+            gc_config: None,
+        })
+    }
+}
+
 impl<S: crate::store::Store> Blobs<S> {
-    pub fn new_with_events(
+    pub fn new(
         store: S,
         rt: LocalPoolHandle,
         events: EventSender,
@@ -125,9 +198,51 @@ impl<S: crate::store::Store> Blobs<S> {
         &self.rt
     }
 
+    pub fn downloader(&self) -> &Downloader {
+        &self.downloader
+    }
+
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
+
+    // pub fn add_protected(&self, cb: ProtectCb) -> Result<()> {
+    //     let mut state = self.gc_state.lock().unwrap();
+    //     match &mut *state {
+    //         GcState::Initial(cbs) => {
+    //             cbs.push(cb);
+    //         }
+    //         GcState::Started(_) => {
+    //             anyhow::bail!("cannot add protected blobs after gc has started");
+    //         }
+    //     }
+    //     Ok(())
+    // }
+    //
+    // pub fn start_gc(&self, config: GcConfig) -> Result<()> {
+    //     let mut state = self.gc_state.lock().unwrap();
+    //     let protected = match state.deref_mut() {
+    //         GcState::Initial(items) => std::mem::take(items),
+    //         GcState::Started(_) => anyhow::bail!("gc already started"),
+    //     };
+    //     let protected = Arc::new(protected);
+    //     let protected_cb = move || {
+    //         let protected = protected.clone();
+    //         async move {
+    //             let mut set = BTreeSet::new();
+    //             for cb in protected.iter() {
+    //                 cb(&mut set).await;
+    //             }
+    //             set
+    //         }
+    //     };
+    //     let store = self.store.clone();
+    //     let run = self
+    //         .rt
+    //         .spawn(move || async move { store.gc_run(config, protected_cb).await });
+    //     *state = GcState::Started(Some(run));
+    //     Ok(())
+    // }
 
     pub(crate) async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
         self.batches.lock().await
@@ -266,6 +381,65 @@ impl<S: crate::store::Store> Blobs<S> {
         }
     }
 }
+
+// trait BlobsInner: Debug + Send + Sync + 'static {
+//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()>;
+//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>>;
+//     fn client(self: Arc<Self>) -> MemClient;
+//     fn local_pool_handle(&self) -> &LocalPoolHandle;
+//     fn downloader(&self) -> &Downloader;
+// }
+
+// #[derive(Debug)]
+// struct Blobs2 {
+//     inner: Arc<dyn BlobsInner>,
+// }
+
+// impl Blobs2 {
+//     fn client(&self) -> MemClient {
+//         self.inner.clone().client()
+//     }
+
+//     fn local_pool_handle(&self) -> &LocalPoolHandle {
+//         self.inner.local_pool_handle()
+//     }
+
+//     fn downloader(&self) -> &Downloader {
+//         self.inner.downloader()
+//     }
+// }
+
+// impl<S: crate::store::Store> BlobsInner for Blobs<S> {
+//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
+//         ProtocolHandler::shutdown(self)
+//     }
+
+//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
+//         ProtocolHandler::accept(self, conn)
+//     }
+
+//     fn client(self: Arc<Self>) -> MemClient {
+//         Blobs::client(self)
+//     }
+
+//     fn local_pool_handle(&self) -> &LocalPoolHandle {
+//         self.rt()
+//     }
+
+//     fn downloader(&self) -> &Downloader {
+//         self.downloader()
+//     }
+// }
+
+// impl ProtocolHandler for Blobs2 {
+//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
+//         self.inner.clone().accept(conn)
+//     }
+
+//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
+//         self.inner.clone().shutdown()
+//     }
+// }
 
 impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
