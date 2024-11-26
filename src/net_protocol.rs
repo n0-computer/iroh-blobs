@@ -24,6 +24,7 @@ use crate::{
         Stats,
     },
     provider::EventSender,
+    rpc::client::blobs::MemClient,
     util::{
         local_pool::LocalPoolHandle,
         progress::{AsyncChannelProgressSender, ProgressSender},
@@ -382,64 +383,64 @@ impl<S: crate::store::Store> Blobs<S> {
     }
 }
 
-// trait BlobsInner: Debug + Send + Sync + 'static {
-//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()>;
-//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>>;
-//     fn client(self: Arc<Self>) -> MemClient;
-//     fn local_pool_handle(&self) -> &LocalPoolHandle;
-//     fn downloader(&self) -> &Downloader;
-// }
+trait BlobsInner: Debug + Send + Sync + 'static {
+    fn shutdown(self: Arc<Self>) -> BoxedFuture<()>;
+    fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>>;
+    fn client(self: Arc<Self>) -> MemClient;
+    fn local_pool_handle(&self) -> &LocalPoolHandle;
+    fn downloader(&self) -> &Downloader;
+}
 
-// #[derive(Debug)]
-// struct Blobs2 {
-//     inner: Arc<dyn BlobsInner>,
-// }
+#[derive(Debug)]
+struct Blobs2 {
+    inner: Arc<dyn BlobsInner>,
+}
 
-// impl Blobs2 {
-//     fn client(&self) -> MemClient {
-//         self.inner.clone().client()
-//     }
+impl Blobs2 {
+    pub fn client(&self) -> MemClient {
+        self.inner.clone().client()
+    }
 
-//     fn local_pool_handle(&self) -> &LocalPoolHandle {
-//         self.inner.local_pool_handle()
-//     }
+    pub fn local_pool_handle(&self) -> &LocalPoolHandle {
+        self.inner.local_pool_handle()
+    }
 
-//     fn downloader(&self) -> &Downloader {
-//         self.inner.downloader()
-//     }
-// }
+    pub fn downloader(&self) -> &Downloader {
+        self.inner.downloader()
+    }
+}
 
-// impl<S: crate::store::Store> BlobsInner for Blobs<S> {
-//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
-//         ProtocolHandler::shutdown(self)
-//     }
+impl<S: crate::store::Store> BlobsInner for Blobs<S> {
+    fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
+        ProtocolHandler::shutdown(self)
+    }
 
-//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
-//         ProtocolHandler::accept(self, conn)
-//     }
+    fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
+        ProtocolHandler::accept(self, conn)
+    }
 
-//     fn client(self: Arc<Self>) -> MemClient {
-//         Blobs::client(self)
-//     }
+    fn client(self: Arc<Self>) -> MemClient {
+        Blobs::client(self)
+    }
 
-//     fn local_pool_handle(&self) -> &LocalPoolHandle {
-//         self.rt()
-//     }
+    fn local_pool_handle(&self) -> &LocalPoolHandle {
+        self.rt()
+    }
 
-//     fn downloader(&self) -> &Downloader {
-//         self.downloader()
-//     }
-// }
+    fn downloader(&self) -> &Downloader {
+        self.downloader()
+    }
+}
 
-// impl ProtocolHandler for Blobs2 {
-//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
-//         self.inner.clone().accept(conn)
-//     }
+impl ProtocolHandler for Blobs2 {
+    fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
+        self.inner.clone().accept(conn)
+    }
 
-//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
-//         self.inner.clone().shutdown()
-//     }
-// }
+    fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
+        self.inner.clone().shutdown()
+    }
+}
 
 impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
