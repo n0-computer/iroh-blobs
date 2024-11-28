@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use iroh_blobs::{net_protocol::Blobs, store::GcConfig, util::local_pool::LocalPool, Hash};
+use iroh_blobs::{net_protocol::Blobs, store::GcConfig, util::local_pool::LocalPool};
 use iroh_net::Endpoint;
 use testresult::TestResult;
 
@@ -39,6 +39,7 @@ async fn blobs_gc_protected() -> TestResult<()> {
         >,
     > = blobs.clone().client();
     let h1 = client.add_bytes(b"test".to_vec()).await?;
+    let protected = Arc::new(Mutex::new(Vec::new()));
     blobs.add_protected(Box::new({
         let protected = protected.clone();
         move |x| {
