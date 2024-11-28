@@ -153,14 +153,21 @@ impl<S: crate::store::Store> Builder<S> {
     }
 }
 
-impl Blobs<crate::store::mem::Store> {
-    /// Create a new memory-backed Blobs protocol handler.
-    pub fn memory() -> Builder<crate::store::mem::Store> {
+impl<S> Blobs<S> {
+    /// Create a new Blobs protocol handler builder, given a store.
+    pub fn builder(store: S) -> Builder<S> {
         Builder {
-            store: crate::store::mem::Store::new(),
+            store,
             events: None,
             gc_config: None,
         }
+    }
+}
+
+impl Blobs<crate::store::mem::Store> {
+    /// Create a new memory-backed Blobs protocol handler.
+    pub fn memory() -> Builder<crate::store::mem::Store> {
+        Self::builder(crate::store::mem::Store::new())
     }
 }
 
@@ -169,11 +176,7 @@ impl Blobs<crate::store::fs::Store> {
     pub async fn persistent(
         path: impl AsRef<std::path::Path>,
     ) -> anyhow::Result<Builder<crate::store::fs::Store>> {
-        Ok(Builder {
-            store: crate::store::fs::Store::load(path).await?,
-            events: None,
-            gc_config: None,
-        })
+        Ok(Self::builder(crate::store::fs::Store::load(path).await?))
     }
 }
 
