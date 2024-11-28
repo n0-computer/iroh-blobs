@@ -59,8 +59,8 @@ async fn blobs_gc_protected() -> TestResult<()> {
     tokio::time::sleep(Duration::from_millis(100)).await;
     // protected from gc due to tag
     assert!(client.has(h1.hash).await?);
-    client.tags().delete(h1.tag).await?;
     protected.lock().unwrap().push(h1.hash);
+    client.tags().delete(h1.tag).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
     // protected from gc due to being in protected set
     assert!(client.has(h1.hash).await?);
