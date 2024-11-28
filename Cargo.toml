@@ -95,7 +95,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "rpc", "net_protocol", "example-iroh"]
+default = ["fs-store", "rpc", "net_protocol"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader"]
 fs-store = ["dep:reflink-copy", "redb", "dep:redb_v1", "dep:tempfile"]
@@ -133,6 +133,9 @@ name = "fetch-fsm"
 
 [[example]]
 name = "fetch-stream"
+
+[[example]]
+name = "transfer"
 
 [[example]]
 name = "hello-world-fetch"
