@@ -39,16 +39,17 @@ async fn blobs_gc_protected() -> TestResult<()> {
         >,
     > = blobs.clone().client();
     let h1 = client.add_bytes(b"test".to_vec()).await?;
-    let protected: Arc<Mutex<Vec<Hash>>> = Arc::new(Mutex::new(Vec::new()));
-    let protected2 = protected.clone();
-    blobs.add_protected(Box::new(move |x| {
-        let protected = protected2.clone();
-        Box::pin(async move {
-            let protected = protected.lock().unwrap();
-            for h in protected.as_slice() {
-                x.insert(*h);
-            }
-        })
+    blobs.add_protected(Box::new({
+        let protected = protected.clone();
+        move |x| {
+            let protected = protected.clone();
+            Box::pin(async move {
+                let protected = protected.lock().unwrap();
+                for h in protected.as_slice() {
+                    x.insert(*h);
+                }
+            })
+        }
     }))?;
     blobs.start_gc(GcConfig {
         period: Duration::from_millis(1),
