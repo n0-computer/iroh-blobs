@@ -1556,9 +1556,9 @@
 
 <span class="kw">use </span>futures_lite::{future::BoxedLocal, Stream, StreamExt};
 <span class="kw">use </span>hashlink::LinkedHashSet;
+<span class="kw">use </span>iroh::{endpoint, Endpoint, NodeAddr, NodeId};
 <span class="kw">use </span>iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 <span class="kw">use </span>iroh_metrics::inc;
-<span class="kw">use </span>iroh_net::{endpoint, Endpoint, NodeAddr, NodeId};
 <span class="kw">use </span>tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
@@ -1867,7 +1867,7 @@
     {
         <span class="kw">let </span>me = endpoint.node_id().fmt_short();
         <span class="kw">let </span>(msg_tx, msg_rx) = mpsc::channel(SERVICE_CHANNEL_CAPACITY);
-        <span class="kw">let </span>dialer = iroh_net::dialer::Dialer::new(endpoint);
+        <span class="kw">let </span>dialer = iroh::dialer::Dialer::new(endpoint);
 
         <span class="kw">let </span>create_future = <span class="kw">move </span>|| {
             <span class="kw">let </span>getter = get::IoGetter {
@@ -3005,7 +3005,7 @@
     }
 }
 
-<span class="kw">impl </span>Dialer <span class="kw">for </span>iroh_net::dialer::Dialer {
+<span class="kw">impl </span>Dialer <span class="kw">for </span>iroh::dialer::Dialer {
     <span class="kw">type </span>Connection = endpoint::Connection;
 
     <span class="kw">fn </span>queue_dial(<span class="kw-2">&amp;mut </span><span class="self">self</span>, node_id: NodeId) {

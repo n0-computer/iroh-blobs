@@ -668,11 +668,11 @@
     EncodeError,
 };
 <span class="kw">use </span>futures_lite::future::Boxed <span class="kw">as </span>BoxFuture;
+<span class="kw">use </span>iroh::endpoint::{<span class="self">self</span>, RecvStream, SendStream};
 <span class="kw">use </span>iroh_io::{
     stats::{SliceReaderStats, StreamWriterStats, TrackingSliceReader, TrackingStreamWriter},
     AsyncSliceReader, AsyncStreamWriter, TokioStreamWriter,
 };
-<span class="kw">use </span>iroh_net::endpoint::{<span class="self">self</span>, RecvStream, SendStream};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tracing::{debug, debug_span, info, trace, warn};
 <span class="kw">use </span>tracing_futures::Instrument;

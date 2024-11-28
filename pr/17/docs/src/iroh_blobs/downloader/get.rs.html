@@ -97,10 +97,10 @@
 <a href="#97" id="97">97</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! [`Getter`] implementation that performs requests over [`Connection`]s.
 //!
-//! [`Connection`]: iroh_net::endpoint::Connection
+//! [`Connection`]: iroh::endpoint::Connection
 
 </span><span class="kw">use </span>futures_lite::FutureExt;
-<span class="kw">use </span>iroh_net::endpoint;
+<span class="kw">use </span>iroh::endpoint;
 
 <span class="kw">use super</span>::{progress::BroadcastProgressSender, DownloadKind, FailureAction, GetStartFut, Getter};
 <span class="kw">use crate</span>::{
@@ -124,7 +124,7 @@
 
 <span class="doccomment">/// [`Getter`] implementation that performs requests over [`Connection`]s.
 ///
-/// [`Connection`]: iroh_net::endpoint::Connection
+/// [`Connection`]: iroh::endpoint::Connection
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>IoGetter&lt;S: Store&gt; {
     <span class="kw">pub </span>store: S,
 }

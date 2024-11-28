@@ -856,7 +856,7 @@
 //! keep a connection open and reuse it for multiple requests.
 </span><span class="kw">use </span>bao_tree::{ChunkNum, ChunkRanges};
 <span class="kw">use </span>derive_more::From;
-<span class="kw">use </span>iroh_net::endpoint::VarInt;
+<span class="kw">use </span>iroh::endpoint::VarInt;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">mod </span>range_spec;
 <span class="kw">pub use </span>range_spec::{NonEmptyRequestRangeSpecIter, RangeSpec, RangeSpecSeq};
@@ -949,8 +949,8 @@
     /// [`RecvStream::stop`].  We don't use this explicitly but this is here as
     /// documentation as to what happened to `0`.
     ///
-    /// [`RecvStream`]: iroh_net::endpoint::RecvStream
-    /// [`RecvStream::stop`]: iroh_net::endpoint::RecvStream::stop
+    /// [`RecvStream`]: iroh::endpoint::RecvStream
+    /// [`RecvStream::stop`]: iroh::endpoint::RecvStream::stop
     </span>StreamDropped = <span class="number">0</span>,
     <span class="doccomment">/// The provider is terminating.
     ///

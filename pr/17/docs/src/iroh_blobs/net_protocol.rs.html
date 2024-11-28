@@ -512,7 +512,6 @@
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
 <a href="#514" id="514">514</a>
-<a href="#515" id="515">515</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
@@ -528,9 +527,8 @@
 <span class="kw">use </span>anyhow::{anyhow, bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>futures_lite::future::Boxed <span class="kw">as </span>BoxedFuture;
 <span class="kw">use </span>futures_util::future::BoxFuture;
+<span class="kw">use </span>iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
 <span class="kw">use </span>iroh_base::hash::{BlobFormat, Hash};
-<span class="kw">use </span>iroh_net::{endpoint::Connecting, Endpoint, NodeAddr};
-<span class="kw">use </span>iroh_router::ProtocolHandler;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tracing::{debug, warn};
 

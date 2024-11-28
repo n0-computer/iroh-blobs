@@ -965,7 +965,7 @@
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>bao_tree::{io::fsm::BaoContentItem, ChunkNum};
-<span class="kw">use </span>iroh_net::endpoint::{<span class="self">self</span>, RecvStream, SendStream};
+<span class="kw">use </span>iroh::endpoint::{<span class="self">self</span>, RecvStream, SendStream};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tracing::{debug, error};
 
@@ -1011,8 +1011,8 @@
         BaoTree, ChunkRanges, TreeNode,
     };
     <span class="kw">use </span>derive_more::From;
+    <span class="kw">use </span>iroh::endpoint::Connection;
     <span class="kw">use </span>iroh_io::{AsyncSliceWriter, AsyncStreamReader, TokioStreamReader};
-    <span class="kw">use </span>iroh_net::endpoint::Connection;
     <span class="kw">use </span>tokio::io::AsyncWriteExt;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
