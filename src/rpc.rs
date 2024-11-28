@@ -901,8 +901,11 @@ impl RpcHandler {
         let (listener, connector) = quic_rpc::transport::flume::channel(1);
         let listener = RpcServer::new(listener);
         let client = RpcClient::new(connector);
-        let _handler = listener
-            .spawn_accept_loop(move |req, chan| blobs.clone().handle_rpc_request(req, chan));
+        let tokio_rt = blobs.tokio_rt.clone();
+        let handler = tokio_rt.spawn(
+            listener.accept_loop(move |req, chan| blobs.clone().handle_rpc_request(req, chan)),
+        );
+        let _handler = AbortOnDropHandle::new(handler);
         Self { client, _handler }
     }
 }
