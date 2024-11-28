@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bao_tree::{ChunkNum, ChunkRanges};
 use bytes::Bytes;
-use iroh_net::endpoint::Connection;
+use iroh::endpoint::Connection;
 use rand::Rng;
 
 use super::{fsm, Stats};

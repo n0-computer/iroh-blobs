@@ -41,8 +41,7 @@ indicatif = { version = "0.17.8", optional = true }
 iroh-base = { version = "0.28.0", features = ["redb"] }
 iroh-io = { version = "0.6.0", features = ["stats"] }
 iroh-metrics = { version = "0.28.0", default-features = false }
-iroh-net = { version = "0.28.1" }
-iroh-router = "0.28.0"
+iroh = { version = "0.28.1" }
 nested_enum_utils = { version = "0.1.0", optional = true }
 num_cpus = "1.15.0"
 oneshot = "0.1.8"
@@ -76,13 +75,12 @@ tracing-futures = "0.2.5"
 walkdir = { version = "2.5.0", optional = true }
 
 # Examples
-iroh = { version = "0.28", optional = true }
 console = { version = "0.15.8", optional = true }
 
 [dev-dependencies]
 http-body = "1.0"
 iroh-test = { version = "0.28" }
-iroh-net = { version = "0.28", features = ["test-utils"] }
+iroh = { version = "0.28", features = ["test-utils"] }
 futures-buffered = "0.2.4"
 proptest = "1.0.0"
 serde_json = "1.0.107"
@@ -116,7 +114,12 @@ rpc = [
     "downloader",
 ]
 
-example-iroh = ["dep:iroh", "dep:clap", "dep:indicatif", "dep:console"]
+example-iroh = [
+  "dep:clap",
+  "dep:indicatif",
+  "dep:console",
+  "iroh/discovery-local-network"
+]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -177,8 +180,6 @@ panic = 'abort'
 incremental = false
 
 [patch.crates-io]
-iroh-router = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-iroh-net = { git = "https://github.com/n0-computer/iroh", branch = "main" }
 iroh-metrics = { git = "https://github.com/n0-computer/iroh", branch = "main" }
 iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }
 iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
