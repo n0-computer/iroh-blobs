@@ -10,14 +10,13 @@ use std::path::PathBuf;
 use anyhow::ensure;
 use clap::{Parser, Subcommand};
 use iroh::{
-    base::{hash::Hash, key::SecretKey},
-    net::{discovery::local_swarm_discovery::LocalSwarmDiscovery, key::PublicKey, NodeAddr},
+    discovery::local_swarm_discovery::LocalSwarmDiscovery, key::PublicKey, protocol::Router,
+    Endpoint, NodeAddr, RelayMode,
 };
+use iroh_base::{hash::Hash, key::SecretKey};
 use iroh_blobs::{
     net_protocol::Blobs, rpc::client::blobs::WrapOption, util::local_pool::LocalPool,
 };
-use iroh_net::{Endpoint, RelayMode};
-use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 use self::progress::show_download_progress;

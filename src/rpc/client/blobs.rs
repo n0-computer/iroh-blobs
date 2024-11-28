@@ -70,7 +70,7 @@ use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use futures_util::SinkExt;
 use genawaiter::sync::{Co, Gen};
-use iroh_net::NodeAddr;
+use iroh::NodeAddr;
 use portable_atomic::{AtomicU64, Ordering};
 use quic_rpc::{
     client::{BoxStreamSync, BoxedConnector},
@@ -991,8 +991,8 @@ pub struct DownloadOptions {
 mod tests {
     use std::{path::Path, time::Duration};
 
+    use iroh::{key::SecretKey, test_utils::DnsPkarrServer, NodeId, RelayMode};
     use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
-    use iroh_net::{key::SecretKey, test_utils::DnsPkarrServer, NodeId, RelayMode};
     use node::Node;
     use rand::RngCore;
     use testresult::TestResult;
@@ -1005,8 +1005,7 @@ mod tests {
         //! An iroh node that just has the blobs transport
         use std::{path::Path, sync::Arc};
 
-        use iroh_net::{Endpoint, NodeAddr, NodeId};
-        use iroh_router::Router;
+        use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
         use tokio_util::task::AbortOnDropHandle;
 
         use super::RpcService;
@@ -1023,7 +1022,7 @@ mod tests {
         /// An iroh node that just has the blobs transport
         #[derive(Debug)]
         pub struct Node {
-            router: iroh_router::Router,
+            router: iroh::protocol::Router,
             client: RpcClient,
             _local_pool: LocalPool,
             _rpc_task: AbortOnDropHandle<()>,
@@ -1034,7 +1033,7 @@ mod tests {
         pub struct Builder<S> {
             store: S,
             events: EventSender,
-            endpoint: Option<iroh_net::endpoint::Builder>,
+            endpoint: Option<iroh::endpoint::Builder>,
         }
 
         impl<S: crate::store::Store> Builder<S> {
@@ -1047,7 +1046,7 @@ mod tests {
             }
 
             /// Set an endpoint builder
-            pub fn endpoint(self, endpoint: iroh_net::endpoint::Builder) -> Self {
+            pub fn endpoint(self, endpoint: iroh::endpoint::Builder) -> Self {
                 Self {
                     endpoint: Some(endpoint),
                     ..self
@@ -1866,13 +1865,13 @@ mod tests {
     #[tokio::test]
     async fn test_download_via_relay() -> Result<()> {
         let _guard = iroh_test::logging::setup();
-        let (relay_map, relay_url, _guard) = iroh_net::test_utils::run_relay_server().await?;
+        let (relay_map, relay_url, _guard) = iroh::test_utils::run_relay_server().await?;
 
-        let endpoint1 = iroh_net::Endpoint::builder()
+        let endpoint1 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true);
         let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
-        let endpoint2 = iroh_net::Endpoint::builder()
+        let endpoint2 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true);
         let node2 = Node::memory().endpoint(endpoint2).spawn().await?;
@@ -1897,11 +1896,11 @@ mod tests {
     #[ignore = "flaky"]
     async fn test_download_via_relay_with_discovery() -> Result<()> {
         let _guard = iroh_test::logging::setup();
-        let (relay_map, _relay_url, _guard) = iroh_net::test_utils::run_relay_server().await?;
+        let (relay_map, _relay_url, _guard) = iroh::test_utils::run_relay_server().await?;
         let dns_pkarr_server = DnsPkarrServer::run().await?;
 
         let secret1 = SecretKey::generate();
-        let endpoint1 = iroh_net::Endpoint::builder()
+        let endpoint1 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .dns_resolver(dns_pkarr_server.dns_resolver())
@@ -1909,7 +1908,7 @@ mod tests {
             .discovery(dns_pkarr_server.discovery(secret1));
         let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
         let secret2 = SecretKey::generate();
-        let endpoint2 = iroh_net::Endpoint::builder()
+        let endpoint2 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
             .dns_resolver(dns_pkarr_server.dns_resolver())

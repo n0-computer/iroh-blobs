@@ -7,11 +7,11 @@ use bao_tree::io::{
     EncodeError,
 };
 use futures_lite::future::Boxed as BoxFuture;
+use iroh::endpoint::{self, RecvStream, SendStream};
 use iroh_io::{
     stats::{SliceReaderStats, StreamWriterStats, TrackingSliceReader, TrackingStreamWriter},
     AsyncSliceReader, AsyncStreamWriter, TokioStreamWriter,
 };
-use iroh_net::endpoint::{self, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, debug_span, info, trace, warn};
 use tracing_futures::Instrument;
