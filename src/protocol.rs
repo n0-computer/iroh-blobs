@@ -339,7 +339,7 @@
 //! keep a connection open and reuse it for multiple requests.
 use bao_tree::{ChunkNum, ChunkRanges};
 use derive_more::From;
-use iroh_net::endpoint::VarInt;
+use iroh::endpoint::VarInt;
 use serde::{Deserialize, Serialize};
 mod range_spec;
 pub use range_spec::{NonEmptyRequestRangeSpecIter, RangeSpec, RangeSpecSeq};
@@ -432,8 +432,8 @@ pub enum Closed {
     /// [`RecvStream::stop`].  We don't use this explicitly but this is here as
     /// documentation as to what happened to `0`.
     ///
-    /// [`RecvStream`]: iroh_net::endpoint::RecvStream
-    /// [`RecvStream::stop`]: iroh_net::endpoint::RecvStream::stop
+    /// [`RecvStream`]: iroh::endpoint::RecvStream
+    /// [`RecvStream::stop`]: iroh::endpoint::RecvStream::stop
     StreamDropped = 0,
     /// The provider is terminating.
     ///

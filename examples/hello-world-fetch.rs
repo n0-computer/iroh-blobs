@@ -6,10 +6,9 @@
 use std::{env, str::FromStr};
 
 use anyhow::{bail, ensure, Context, Result};
-use iroh::base::ticket::BlobTicket;
+use iroh::{protocol::Router, Endpoint};
+use iroh_base::ticket::BlobTicket;
 use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool, BlobFormat};
-use iroh_net::Endpoint;
-use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info

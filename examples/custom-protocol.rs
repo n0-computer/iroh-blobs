@@ -44,15 +44,12 @@ use anyhow::Result;
 use clap::Parser;
 use futures_lite::future::Boxed as BoxedFuture;
 use iroh::{
-    net::{
-        endpoint::{get_remote_node_id, Connecting},
-        Endpoint, NodeId,
-    },
-    router::ProtocolHandler,
+    endpoint::{get_remote_node_id, Connecting},
+    protocol::{ProtocolHandler, Router},
+    Endpoint, NodeId,
 };
 use iroh_base::hash::Hash;
 use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool};
-use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]

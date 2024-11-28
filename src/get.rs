@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
-use iroh_net::endpoint::{self, RecvStream, SendStream};
+use iroh::endpoint::{self, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
@@ -66,8 +66,8 @@ pub mod fsm {
         BaoTree, ChunkRanges, TreeNode,
     };
     use derive_more::From;
+    use iroh::endpoint::Connection;
     use iroh_io::{AsyncSliceWriter, AsyncStreamReader, TokioStreamReader};
-    use iroh_net::endpoint::Connection;
     use tokio::io::AsyncWriteExt;
 
     use super::*;

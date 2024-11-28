@@ -9,9 +9,9 @@ use genawaiter::{
     rc::{Co, Gen},
     GeneratorState,
 };
+use iroh::endpoint::Connection;
 use iroh_base::hash::Hash;
 use iroh_io::AsyncSliceReader;
-use iroh_net::endpoint::Connection;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::trace;

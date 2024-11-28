@@ -3,10 +3,9 @@
 //! This is using an in memory database and a random node id.
 //! run this example from the project root:
 //!     $ cargo run --example hello-world-provide
+use iroh::{protocol::Router, Endpoint};
 use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
 use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
-use iroh_net::Endpoint;
-use iroh_router::Router;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info

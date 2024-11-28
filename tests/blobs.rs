@@ -4,8 +4,8 @@ use std::{
     time::Duration,
 };
 
+use iroh::Endpoint;
 use iroh_blobs::{net_protocol::Blobs, store::GcConfig, util::local_pool::LocalPool};
-use iroh_net::Endpoint;
 use testresult::TestResult;
 
 #[tokio::test]

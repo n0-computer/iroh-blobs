@@ -43,9 +43,9 @@ use std::{
 
 use futures_lite::{future::BoxedLocal, Stream, StreamExt};
 use hashlink::LinkedHashSet;
+use iroh::{endpoint, Endpoint, NodeAddr, NodeId};
 use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 use iroh_metrics::inc;
-use iroh_net::{endpoint, Endpoint, NodeAddr, NodeId};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
@@ -354,7 +354,7 @@ impl Downloader {
     {
         let me = endpoint.node_id().fmt_short();
         let (msg_tx, msg_rx) = mpsc::channel(SERVICE_CHANNEL_CAPACITY);
-        let dialer = iroh_net::dialer::Dialer::new(endpoint);
+        let dialer = iroh::dialer::Dialer::new(endpoint);
 
         let create_future = move || {
             let getter = get::IoGetter {
@@ -1492,7 +1492,7 @@ impl Queue {
     }
 }
 
-impl Dialer for iroh_net::dialer::Dialer {
+impl Dialer for iroh::dialer::Dialer {
     type Connection = endpoint::Connection;
 
     fn queue_dial(&mut self, node_id: NodeId) {

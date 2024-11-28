@@ -13,9 +13,8 @@ use std::{
 use anyhow::{anyhow, bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_util::future::BoxFuture;
+use iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
 use iroh_base::hash::{BlobFormat, Hash};
-use iroh_net::{endpoint::Connecting, Endpoint, NodeAddr};
-use iroh_router::ProtocolHandler;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
