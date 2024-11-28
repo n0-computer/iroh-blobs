@@ -1074,6 +1074,7 @@ mod tests {
                     events,
                     downloader,
                     endpoint.clone(),
+                    tokio::runtime::Handle::current(),
                 ));
                 router = router.accept(crate::ALPN, blobs.clone());
 

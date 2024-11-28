@@ -55,6 +55,7 @@ impl Default for GcState {
 #[derive(Debug)]
 pub struct Blobs<S> {
     rt: LocalPoolHandle,
+    pub(crate) tokio_rt: tokio::runtime::Handle,
     store: S,
     events: EventSender,
     downloader: Downloader,
@@ -125,6 +126,7 @@ pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
     gc_config: Option<crate::store::GcConfig>,
+    tokio_rt: Option<tokio::runtime::Handle>,
 }
 
 impl<S: crate::store::Store> Builder<S> {
@@ -139,6 +141,12 @@ impl<S: crate::store::Store> Builder<S> {
         self
     }
 
+    /// Set the tokio runtime handle to use for the rpc handler
+    pub fn tokio_rt(mut self, value: tokio::runtime::Handle) -> Self {
+        self.tokio_rt = Some(value);
+        self
+    }
+
     /// Build the Blobs protocol handler.
     /// You need to provide a local pool handle and an endpoint.
     pub fn build(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Arc<Blobs<S>> {
@@ -149,6 +157,8 @@ impl<S: crate::store::Store> Builder<S> {
             self.events.unwrap_or_default(),
             downloader,
             endpoint.clone(),
+            self.tokio_rt
+                .unwrap_or_else(|| tokio::runtime::Handle::current()),
         ))
     }
 }
@@ -160,6 +170,7 @@ impl<S> Blobs<S> {
             store,
             events: None,
             gc_config: None,
+            tokio_rt: None,
         }
     }
 }
@@ -187,9 +198,11 @@ impl<S: crate::store::Store> Blobs<S> {
         events: EventSender,
         downloader: Downloader,
         endpoint: Endpoint,
+        tokio_rt: tokio::runtime::Handle,
     ) -> Self {
         Self {
             rt,
+            tokio_rt,
             store,
             events,
             downloader,
