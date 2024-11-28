@@ -83,8 +83,8 @@ pub(super) struct ReadOnlyTables {
     pub inline_outboard: redb::ReadOnlyTable<Hash, &'static [u8]>,
 }
 
-impl<'txn> ReadOnlyTables {
-    pub fn new(tx: &'txn redb::ReadTransaction) -> std::result::Result<Self, TableError> {
+impl ReadOnlyTables {
+    pub fn new(tx: &redb::ReadTransaction) -> std::result::Result<Self, TableError> {
         Ok(Self {
             blobs: tx.open_table(BLOBS_TABLE)?,
             tags: tx.open_table(TAGS_TABLE)?,
