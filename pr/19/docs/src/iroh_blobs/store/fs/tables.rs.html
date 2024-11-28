@@ -247,8 +247,8 @@
     <span class="kw">pub </span>inline_outboard: redb::ReadOnlyTable&lt;Hash, <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[u8]&gt;,
 }
 
-<span class="kw">impl</span>&lt;<span class="lifetime">'txn</span>&gt; ReadOnlyTables {
-    <span class="kw">pub fn </span>new(tx: <span class="kw-2">&amp;</span><span class="lifetime">'txn </span>redb::ReadTransaction) -&gt; std::result::Result&lt;<span class="self">Self</span>, TableError&gt; {
+<span class="kw">impl </span>ReadOnlyTables {
+    <span class="kw">pub fn </span>new(tx: <span class="kw-2">&amp;</span>redb::ReadTransaction) -&gt; std::result::Result&lt;<span class="self">Self</span>, TableError&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             blobs: tx.open_table(BLOBS_TABLE)<span class="question-mark">?</span>,
             tags: tx.open_table(TAGS_TABLE)<span class="question-mark">?</span>,
