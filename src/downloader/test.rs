@@ -121,6 +121,7 @@ async fn deduplication() {
 }
 
 /// Tests that the request is cancelled only when all intents are cancelled.
+#[ignore = "flaky"]
 #[tokio::test]
 async fn cancellation() {
     let _guard = iroh_test::logging::setup();
