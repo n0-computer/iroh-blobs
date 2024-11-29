@@ -6,7 +6,6 @@ use iroh_base::ticket::BlobTicket;
 use iroh_blobs::{
     net_protocol::Blobs,
     rpc::client::blobs::{ReadAtLen, WrapOption},
-    store::mem,
     util::{local_pool::LocalPool, SetTagOption},
 };
 
@@ -23,19 +22,16 @@ async fn main() -> Result<()> {
     // Now we build a router that accepts blobs connections & routes them
     // to the blobs protocol.
     let node = Router::builder(endpoint)
-        .accept(iroh_blobs::ALPN, blobs)
+        .accept(iroh_blobs::ALPN, blobs.clone())
         .spawn()
         .await?;
+
+    let blobs = blobs.client();
 
     let args = std::env::args().collect::<Vec<_>>();
     match &args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [_cmd, "send", path] => {
             let abs_path = PathBuf::from_str(path)?.canonicalize()?;
-
-            let blobs = node
-                .get_protocol::<Blobs<mem::Store>>(iroh_blobs::ALPN)
-                .unwrap()
-                .client();
 
             println!("Analyzing file.");
 
@@ -56,11 +52,6 @@ async fn main() -> Result<()> {
         [_cmd, "receive", ticket, path] => {
             let path_buf = PathBuf::from_str(path)?;
             let ticket = BlobTicket::from_str(ticket)?;
-
-            let blobs = node
-                .get_protocol::<Blobs<mem::Store>>(iroh_blobs::ALPN)
-                .unwrap()
-                .client();
 
             println!("Starting download.");
 
