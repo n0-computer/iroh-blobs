@@ -55,7 +55,7 @@ impl Default for GcState {
 #[derive(Debug)]
 pub struct Blobs<S> {
     rt: LocalPoolHandle,
-    store: S,
+    pub(crate) store: S,
     events: EventSender,
     downloader: Downloader,
     batches: tokio::sync::Mutex<BlobBatches>,

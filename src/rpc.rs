@@ -2,6 +2,7 @@
 
 use std::{
     io,
+    ops::Deref,
     sync::{Arc, Mutex},
 };
 
@@ -81,15 +82,33 @@ impl<D: crate::store::Store> Blobs<D> {
         C: ChannelTypes<RpcService>,
     {
         use Request::*;
+        let handler = Handler(self);
         match msg {
-            Blobs(msg) => self.handle_blobs_request(msg, chan).await,
-            Tags(msg) => self.handle_tags_request(msg, chan).await,
+            Blobs(msg) => handler.handle_blobs_request(msg, chan).await,
+            Tags(msg) => handler.handle_tags_request(msg, chan).await,
         }
+    }
+}
+
+#[derive(Clone)]
+struct Handler<S>(Arc<Blobs<S>>);
+
+impl<S> Deref for Handler<S> {
+    type Target = Blobs<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<D: crate::store::Store> Handler<D> {
+    fn store(&self) -> &D {
+        &self.0.store
     }
 
     /// Handle a tags request
-    async fn handle_tags_request<C>(
-        self: Arc<Self>,
+    pub async fn handle_tags_request<C>(
+        self,
         msg: proto::tags::Request,
         chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
@@ -106,8 +125,8 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     /// Handle a blobs request
-    async fn handle_blobs_request<C>(
-        self: Arc<Self>,
+    pub async fn handle_blobs_request<C>(
+        self,
         msg: proto::blobs::Request,
         chan: RpcChannel<proto::RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
@@ -150,7 +169,7 @@ impl<D: crate::store::Store> Blobs<D> {
         }
     }
 
-    async fn blob_status(self: Arc<Self>, msg: BlobStatusRequest) -> RpcResult<BlobStatusResponse> {
+    async fn blob_status(self, msg: BlobStatusRequest) -> RpcResult<BlobStatusResponse> {
         let blobs = self;
         let entry = blobs
             .store()
@@ -171,7 +190,7 @@ impl<D: crate::store::Store> Blobs<D> {
         }))
     }
 
-    async fn blob_list_impl(self: Arc<Self>, co: &Co<RpcResult<BlobInfo>>) -> io::Result<()> {
+    async fn blob_list_impl(self, co: &Co<RpcResult<BlobInfo>>) -> io::Result<()> {
         use bao_tree::io::fsm::Outboard;
 
         let blobs = self;
@@ -190,7 +209,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     async fn blob_list_incomplete_impl(
-        self: Arc<Self>,
+        self,
         co: &Co<RpcResult<IncompleteBlobInfo>>,
     ) -> io::Result<()> {
         let blobs = self;
@@ -216,7 +235,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn blob_list(
-        self: Arc<Self>,
+        self,
         _msg: ListRequest,
     ) -> impl Stream<Item = RpcResult<BlobInfo>> + Send + 'static {
         Gen::new(|co| async move {
@@ -227,7 +246,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn blob_list_incomplete(
-        self: Arc<Self>,
+        self,
         _msg: ListIncompleteRequest,
     ) -> impl Stream<Item = RpcResult<IncompleteBlobInfo>> + Send + 'static {
         Gen::new(move |co| async move {
@@ -237,7 +256,7 @@ impl<D: crate::store::Store> Blobs<D> {
         })
     }
 
-    async fn blob_delete_tag(self: Arc<Self>, msg: TagDeleteRequest) -> RpcResult<()> {
+    async fn blob_delete_tag(self, msg: TagDeleteRequest) -> RpcResult<()> {
         self.store()
             .set_tag(msg.name, None)
             .await
@@ -245,7 +264,7 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(())
     }
 
-    async fn blob_delete_blob(self: Arc<Self>, msg: DeleteRequest) -> RpcResult<()> {
+    async fn blob_delete_blob(self, msg: DeleteRequest) -> RpcResult<()> {
         self.store()
             .delete(vec![msg.hash])
             .await
@@ -253,10 +272,7 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(())
     }
 
-    fn blob_list_tags(
-        self: Arc<Self>,
-        msg: TagListRequest,
-    ) -> impl Stream<Item = TagInfo> + Send + 'static {
+    fn blob_list_tags(self, msg: TagListRequest) -> impl Stream<Item = TagInfo> + Send + 'static {
         tracing::info!("blob_list_tags");
         let blobs = self;
         Gen::new(|co| async move {
@@ -274,7 +290,7 @@ impl<D: crate::store::Store> Blobs<D> {
 
     /// Invoke validate on the database and stream out the result
     fn blob_validate(
-        self: Arc<Self>,
+        self,
         msg: ValidateRequest,
     ) -> impl Stream<Item = ValidateProgress> + Send + 'static {
         let (tx, rx) = async_channel::bounded(1);
@@ -296,7 +312,7 @@ impl<D: crate::store::Store> Blobs<D> {
 
     /// Invoke validate on the database and stream out the result
     fn blob_consistency_check(
-        self: Arc<Self>,
+        self,
         msg: ConsistencyCheckRequest,
     ) -> impl Stream<Item = ConsistencyCheckProgress> + Send + 'static {
         let (tx, rx) = async_channel::bounded(1);
@@ -316,10 +332,7 @@ impl<D: crate::store::Store> Blobs<D> {
         rx
     }
 
-    fn blob_add_from_path(
-        self: Arc<Self>,
-        msg: AddPathRequest,
-    ) -> impl Stream<Item = AddPathResponse> {
+    fn blob_add_from_path(self, msg: AddPathRequest) -> impl Stream<Item = AddPathResponse> {
         // provide a little buffer so that we don't slow down the sender
         let (tx, rx) = async_channel::bounded(32);
         let tx2 = tx.clone();
@@ -332,7 +345,7 @@ impl<D: crate::store::Store> Blobs<D> {
         rx.map(AddPathResponse)
     }
 
-    async fn tags_set(self: Arc<Self>, msg: TagsSetRequest) -> RpcResult<()> {
+    async fn tags_set(self, msg: TagsSetRequest) -> RpcResult<()> {
         let blobs = self;
         blobs
             .store()
@@ -354,7 +367,7 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(())
     }
 
-    async fn tags_create(self: Arc<Self>, msg: TagsCreateRequest) -> RpcResult<Tag> {
+    async fn tags_create(self, msg: TagsCreateRequest) -> RpcResult<Tag> {
         let blobs = self;
         let tag = blobs
             .store()
@@ -374,10 +387,7 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(tag)
     }
 
-    fn blob_download(
-        self: Arc<Self>,
-        msg: BlobDownloadRequest,
-    ) -> impl Stream<Item = DownloadResponse> {
+    fn blob_download(self, msg: BlobDownloadRequest) -> impl Stream<Item = DownloadResponse> {
         let (sender, receiver) = async_channel::bounded(1024);
         let endpoint = self.endpoint().clone();
         let progress = AsyncChannelProgressSender::new(sender);
@@ -399,7 +409,7 @@ impl<D: crate::store::Store> Blobs<D> {
         receiver.map(DownloadResponse)
     }
 
-    fn blob_export(self: Arc<Self>, msg: ExportRequest) -> impl Stream<Item = ExportResponse> {
+    fn blob_export(self, msg: ExportRequest) -> impl Stream<Item = ExportResponse> {
         let (tx, rx) = async_channel::bounded(1024);
         let progress = AsyncChannelProgressSender::new(tx);
         let rt = self.rt().clone();
@@ -425,7 +435,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     async fn blob_add_from_path0(
-        self: Arc<Self>,
+        self,
         msg: AddPathRequest,
         progress: async_channel::Sender<AddProgress>,
     ) -> anyhow::Result<()> {
@@ -543,10 +553,7 @@ impl<D: crate::store::Store> Blobs<D> {
         Ok(())
     }
 
-    async fn batch_create_temp_tag(
-        self: Arc<Self>,
-        msg: BatchCreateTempTagRequest,
-    ) -> RpcResult<()> {
+    async fn batch_create_temp_tag(self, msg: BatchCreateTempTagRequest) -> RpcResult<()> {
         let blobs = self;
         let tag = blobs.store().temp_tag(msg.content);
         blobs.batches().await.store(msg.batch, tag);
@@ -554,7 +561,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn batch_add_stream(
-        self: Arc<Self>,
+        self,
         msg: BatchAddStreamRequest,
         stream: impl Stream<Item = BatchAddStreamUpdate> + Send + Unpin + 'static,
     ) -> impl Stream<Item = BatchAddStreamResponse> {
@@ -572,7 +579,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn batch_add_from_path(
-        self: Arc<Self>,
+        self,
         msg: BatchAddPathRequest,
     ) -> impl Stream<Item = BatchAddPathResponse> {
         // provide a little buffer so that we don't slow down the sender
@@ -590,7 +597,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     async fn batch_add_stream0(
-        self: Arc<Self>,
+        self,
         msg: BatchAddStreamRequest,
         stream: impl Stream<Item = BatchAddStreamUpdate> + Send + Unpin + 'static,
         progress: async_channel::Sender<BatchAddStreamResponse>,
@@ -624,7 +631,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     async fn batch_add_from_path0(
-        self: Arc<Self>,
+        self,
         msg: BatchAddPathRequest,
         progress: async_channel::Sender<BatchAddPathProgress>,
     ) -> anyhow::Result<()> {
@@ -664,7 +671,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn blob_add_stream(
-        self: Arc<Self>,
+        self,
         msg: AddStreamRequest,
         stream: impl Stream<Item = AddStreamUpdate> + Send + Unpin + 'static,
     ) -> impl Stream<Item = AddStreamResponse> {
@@ -681,7 +688,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     async fn blob_add_stream0(
-        self: Arc<Self>,
+        self,
         msg: AddStreamRequest,
         stream: impl Stream<Item = AddStreamUpdate> + Send + Unpin + 'static,
         progress: async_channel::Sender<AddProgress>,
@@ -735,7 +742,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn blob_read_at(
-        self: Arc<Self>,
+        self,
         req: ReadAtRequest,
     ) -> impl Stream<Item = RpcResult<ReadAtResponse>> + Send + 'static {
         let (tx, rx) = async_channel::bounded(RPC_BLOB_GET_CHANNEL_CAP);
@@ -816,7 +823,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     fn batch_create(
-        self: Arc<Self>,
+        self,
         _: BatchCreateRequest,
         mut updates: impl Stream<Item = BatchUpdate> + Send + Unpin + 'static,
     ) -> impl Stream<Item = BatchCreateResponse> {
@@ -842,7 +849,7 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 
     async fn create_collection(
-        self: Arc<Self>,
+        self,
         req: CreateCollectionRequest,
     ) -> RpcResult<CreateCollectionResponse> {
         let CreateCollectionRequest {
