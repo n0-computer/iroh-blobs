@@ -194,10 +194,6 @@ impl<S: crate::store::Store> Blobs<S> {
         }
     }
 
-    pub fn store(&self) -> &S {
-        &self.store
-    }
-
     pub fn rt(&self) -> &LocalPoolHandle {
         &self.rt
     }

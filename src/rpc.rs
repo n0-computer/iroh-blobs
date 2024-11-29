@@ -81,33 +81,50 @@ impl<D: crate::store::Store> Blobs<D> {
     where
         C: ChannelTypes<RpcService>,
     {
-        use Request::*;
-        let handler = Handler(self);
-        match msg {
-            Blobs(msg) => handler.handle_blobs_request(msg, chan).await,
-            Tags(msg) => handler.handle_tags_request(msg, chan).await,
-        }
+        Handler {
+            blobs: self.clone(),
+            store: self.store.clone(),
+        }.handle_rpc_request(msg, chan).await
     }
 }
 
 #[derive(Clone)]
-struct Handler<S>(Arc<Blobs<S>>);
+struct Handler<S> {
+    blobs: Arc<Blobs<S>>,
+    store: S,
+}
 
 impl<S> Deref for Handler<S> {
     type Target = Blobs<S>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.blobs
     }
 }
 
 impl<D: crate::store::Store> Handler<D> {
     fn store(&self) -> &D {
-        &self.0.store
+        &self.store
+    }
+
+    /// Handle an RPC request
+    pub async fn handle_rpc_request<C>(
+        self,
+        msg: Request,
+        chan: RpcChannel<RpcService, C>,
+    ) -> std::result::Result<(), RpcServerError<C>>
+    where
+        C: ChannelTypes<RpcService>,
+    {
+        use Request::*;
+        match msg {
+            Blobs(msg) => self.handle_blobs_request(msg, chan).await,
+            Tags(msg) => self.handle_tags_request(msg, chan).await,
+        }
     }
 
     /// Handle a tags request
-    pub async fn handle_tags_request<C>(
+    async fn handle_tags_request<C>(
         self,
         msg: proto::tags::Request,
         chan: RpcChannel<proto::RpcService, C>,
@@ -125,7 +142,7 @@ impl<D: crate::store::Store> Handler<D> {
     }
 
     /// Handle a blobs request
-    pub async fn handle_blobs_request<C>(
+    async fn handle_blobs_request<C>(
         self,
         msg: proto::blobs::Request,
         chan: RpcChannel<proto::RpcService, C>,
