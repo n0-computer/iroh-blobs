@@ -30,6 +30,9 @@ pub struct Client<C = BoxedConnector<RpcService>> {
     pub(super) rpc: RpcClient<RpcService, C>,
 }
 
+/// A client that uses the memory connector.
+pub type MemClient = Client<crate::rpc::MemConnector>;
+
 impl<C> Client<C>
 where
     C: Connector<RpcService>,

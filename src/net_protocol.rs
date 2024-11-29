@@ -124,18 +124,12 @@ impl BlobBatches {
 pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
-    gc_config: Option<crate::store::GcConfig>,
 }
 
 impl<S: crate::store::Store> Builder<S> {
     /// Set the event sender for the blobs protocol.
     pub fn events(mut self, value: EventSender) -> Self {
         self.events = Some(value);
-        self
-    }
-
-    pub fn gc_config(mut self, value: crate::store::GcConfig) -> Self {
-        self.gc_config = Some(value);
         self
     }
 
@@ -159,7 +153,6 @@ impl<S> Blobs<S> {
         Builder {
             store,
             events: None,
-            gc_config: None,
         }
     }
 }
