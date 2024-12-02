@@ -25,7 +25,8 @@ use crate::{
         Stats,
     },
     provider::EventSender,
-    store::GcConfig,
+    rpc::{client::blobs::MemClient, RpcHandler},
+    store::{GcConfig, Store},
     util::{
         local_pool::{self, LocalPoolHandle},
         progress::{AsyncChannelProgressSender, ProgressSender},
@@ -53,8 +54,8 @@ impl Default for GcState {
 }
 
 #[derive(Debug)]
-pub struct Blobs<S> {
-    rt: LocalPoolHandle,
+pub(crate) struct BlobsInner<S> {
+    pub(crate) rt: LocalPoolHandle,
     pub(crate) store: S,
     events: EventSender,
     downloader: Downloader,
@@ -135,36 +136,33 @@ impl<S: crate::store::Store> Builder<S> {
 
     /// Build the Blobs protocol handler.
     /// You need to provide a local pool handle and an endpoint.
-    pub fn build(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Arc<Blobs<S>> {
+    pub fn build(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Arc<Blobs> {
         let downloader = Downloader::new(self.store.clone(), endpoint.clone(), rt.clone());
-        Arc::new(Blobs::new(
+        let inner = Arc::new(BlobsInner::new(
             self.store,
             rt.clone(),
             self.events.unwrap_or_default(),
             downloader,
             endpoint.clone(),
-        ))
+        ));
+        Arc::new(Blobs { inner })
     }
 }
 
-impl<S> Blobs<S> {
+impl Blobs {
     /// Create a new Blobs protocol handler builder, given a store.
-    pub fn builder(store: S) -> Builder<S> {
+    pub fn builder<S>(store: S) -> Builder<S> {
         Builder {
             store,
             events: None,
         }
     }
-}
 
-impl Blobs<crate::store::mem::Store> {
     /// Create a new memory-backed Blobs protocol handler.
     pub fn memory() -> Builder<crate::store::mem::Store> {
         Self::builder(crate::store::mem::Store::new())
     }
-}
 
-impl Blobs<crate::store::fs::Store> {
     /// Load a persistent Blobs protocol handler from a path.
     pub async fn persistent(
         path: impl AsRef<std::path::Path>,
@@ -173,8 +171,8 @@ impl Blobs<crate::store::fs::Store> {
     }
 }
 
-impl<S: crate::store::Store> Blobs<S> {
-    pub fn new(
+impl<S: crate::store::Store> BlobsInner<S> {
+    fn new(
         store: S,
         rt: LocalPoolHandle,
         events: EventSender,
@@ -192,14 +190,6 @@ impl<S: crate::store::Store> Blobs<S> {
             #[cfg(feature = "rpc")]
             rpc_handler: Arc::new(OnceLock::new()),
         }
-    }
-
-    pub fn rt(&self) -> &LocalPoolHandle {
-        &self.rt
-    }
-
-    pub fn downloader(&self) -> &Downloader {
-        &self.downloader
     }
 
     pub fn endpoint(&self) -> &Endpoint {
@@ -386,66 +376,67 @@ impl<S: crate::store::Store> Blobs<S> {
     }
 }
 
-// trait BlobsInner: Debug + Send + Sync + 'static {
-//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()>;
-//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>>;
-//     fn client(self: Arc<Self>) -> MemClient;
-//     fn local_pool_handle(&self) -> &LocalPoolHandle;
-//     fn downloader(&self) -> &Downloader;
-// }
+trait DynBlobs: Debug + Send + Sync + 'static {
+    fn shutdown(self: Arc<Self>) -> BoxedFuture<()>;
+    fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>>;
+    fn client(self: Arc<Self>) -> MemClient;
+    fn local_pool_handle(&self) -> &LocalPoolHandle;
+    fn downloader(&self) -> &Downloader;
+    fn endpoint(&self) -> &Endpoint;
+    fn start_gc(&self, config: GcConfig) -> Result<()>;
+    fn add_protected(&self, cb: ProtectCb) -> Result<()>;
+    fn stop_rpc_task(&self);
+}
 
-// #[derive(Debug)]
-// struct Blobs2 {
-//     inner: Arc<dyn BlobsInner>,
-// }
+#[derive(Debug)]
+pub struct Blobs {
+    inner: Arc<dyn DynBlobs>,
+}
 
-// impl Blobs2 {
-//     fn client(&self) -> MemClient {
-//         self.inner.clone().client()
-//     }
+impl Blobs {
+    pub fn client(&self) -> MemClient {
+        self.inner.clone().client()
+    }
 
-//     fn local_pool_handle(&self) -> &LocalPoolHandle {
-//         self.inner.local_pool_handle()
-//     }
+    pub fn local_pool_handle(&self) -> &LocalPoolHandle {
+        self.inner.local_pool_handle()
+    }
 
-//     fn downloader(&self) -> &Downloader {
-//         self.inner.downloader()
-//     }
-// }
+    pub fn downloader(&self) -> &Downloader {
+        self.inner.downloader()
+    }
 
-// impl<S: crate::store::Store> BlobsInner for Blobs<S> {
-//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
-//         ProtocolHandler::shutdown(self)
-//     }
+    pub fn endpoint(&self) -> &Endpoint {
+        self.inner.endpoint()
+    }
 
-//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
-//         ProtocolHandler::accept(self, conn)
-//     }
+    pub fn add_protected(&self, cb: ProtectCb) -> Result<()> {
+        self.inner.add_protected(cb)
+    }
 
-//     fn client(self: Arc<Self>) -> MemClient {
-//         Blobs::client(self)
-//     }
+    pub fn start_gc(&self, config: GcConfig) -> Result<()> {
+        self.inner.start_gc(config)
+    }
 
-//     fn local_pool_handle(&self) -> &LocalPoolHandle {
-//         self.rt()
-//     }
+    pub fn new<S: Store>(
+        store: S,
+        rt: LocalPoolHandle,
+        events: EventSender,
+        downloader: Downloader,
+        endpoint: Endpoint,
+    ) -> Self {
+        let inner = Arc::new(BlobsInner::new(store, rt, events, downloader, endpoint));
+        Self { inner }
+    }
+}
 
-//     fn downloader(&self) -> &Downloader {
-//         self.downloader()
-//     }
-// }
+impl Drop for Blobs {
+    fn drop(&mut self) {
+        self.inner.stop_rpc_task();
+    }
+}
 
-// impl ProtocolHandler for Blobs2 {
-//     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
-//         self.inner.clone().accept(conn)
-//     }
-
-//     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
-//         self.inner.clone().shutdown()
-//     }
-// }
-
-impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
+impl<S: crate::store::Store> DynBlobs for BlobsInner<S> {
     fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
         Box::pin(async move {
             crate::provider::handle_connection(
@@ -461,8 +452,54 @@ impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
 
     fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
         Box::pin(async move {
+            self.stop_rpc_task();
             self.store.shutdown().await;
         })
+    }
+
+    fn stop_rpc_task(&self) {
+        if let Some(rpc_handler) = self.rpc_handler.get() {
+            rpc_handler.shutdown();
+        }
+    }
+
+    fn client(self: Arc<Self>) -> MemClient {
+        let client = self
+            .rpc_handler
+            .get_or_init(|| RpcHandler::new(&self))
+            .client
+            .clone();
+        MemClient::new(client)
+    }
+
+    fn local_pool_handle(&self) -> &LocalPoolHandle {
+        &self.rt
+    }
+
+    fn downloader(&self) -> &Downloader {
+        &self.downloader
+    }
+
+    fn start_gc(&self, config: GcConfig) -> Result<()> {
+        self.start_gc(config)
+    }
+
+    fn add_protected(&self, cb: ProtectCb) -> Result<()> {
+        self.add_protected(cb)
+    }
+
+    fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+}
+
+impl ProtocolHandler for Blobs {
+    fn accept(self: Arc<Self>, conn: Connecting) -> BoxedFuture<Result<()>> {
+        self.inner.clone().accept(conn)
+    }
+
+    fn shutdown(self: Arc<Self>) -> BoxedFuture<()> {
+        self.inner.clone().shutdown()
     }
 }
 

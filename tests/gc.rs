@@ -41,7 +41,7 @@ use tokio::io::AsyncReadExt;
 #[derive(Debug)]
 pub struct Node<S> {
     pub router: iroh::protocol::Router,
-    pub blobs: Arc<Blobs<S>>,
+    pub blobs: Arc<Blobs>,
     pub store: S,
     pub _local_pool: LocalPool,
 }

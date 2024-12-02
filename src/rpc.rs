@@ -2,13 +2,12 @@
 
 use std::{
     io,
-    ops::Deref,
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
 use client::{
-    blobs::{self, BlobInfo, BlobStatus, IncompleteBlobInfo, WrapOption},
+    blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, WrapOption},
     tags::TagInfo,
     MemConnector,
 };
@@ -44,10 +43,11 @@ use crate::{
     export::ExportProgress,
     format::collection::Collection,
     get::db::DownloadProgress,
-    net_protocol::{BlobDownloadRequest, Blobs},
+    net_protocol::{BlobDownloadRequest, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{ConsistencyCheckProgress, ImportProgress, MapEntry, ValidateProgress},
     util::{
+        local_pool::LocalPoolHandle,
         progress::{AsyncChannelProgressSender, ProgressSender},
         SetTagOption,
     },
@@ -61,17 +61,7 @@ const RPC_BLOB_GET_CHUNK_SIZE: usize = 1024 * 64;
 /// Channel cap for getting blobs over RPC
 const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
-impl<D: crate::store::Store> Blobs<D> {
-    /// Get a client for the blobs protocol
-    pub fn client(self: Arc<Self>) -> blobs::MemClient {
-        let client = self
-            .rpc_handler
-            .get_or_init(|| RpcHandler::new(&self))
-            .client
-            .clone();
-        blobs::Client::new(client)
-    }
-
+impl<D: crate::store::Store> BlobsInner<D> {
     /// Handle an RPC request
     pub async fn handle_rpc_request<C>(
         self: Arc<Self>,
@@ -83,28 +73,25 @@ impl<D: crate::store::Store> Blobs<D> {
     {
         Handler {
             blobs: self.clone(),
-            store: self.store.clone(),
-        }.handle_rpc_request(msg, chan).await
+        }
+        .handle_rpc_request(msg, chan)
+        .await
     }
 }
 
-#[derive(Clone)]
-struct Handler<S> {
-    blobs: Arc<Blobs<S>>,
-    store: S,
-}
-
-impl<S> Deref for Handler<S> {
-    type Target = Blobs<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.blobs
-    }
+/// RPC handler for the blobs protocol
+#[derive(Debug, Clone)]
+pub struct Handler<S> {
+    blobs: Arc<BlobsInner<S>>,
 }
 
 impl<D: crate::store::Store> Handler<D> {
     fn store(&self) -> &D {
-        &self.store
+        &self.blobs.store
+    }
+
+    fn rt(&self) -> &LocalPoolHandle {
+        &self.blobs.rt
     }
 
     /// Handle an RPC request
@@ -187,9 +174,9 @@ impl<D: crate::store::Store> Handler<D> {
     }
 
     async fn blob_status(self, msg: BlobStatusRequest) -> RpcResult<BlobStatusResponse> {
-        let blobs = self;
+        let blobs = self.blobs;
         let entry = blobs
-            .store()
+            .store
             .get(&msg.hash)
             .await
             .map_err(|e| RpcError::new(&e))?;
@@ -210,8 +197,8 @@ impl<D: crate::store::Store> Handler<D> {
     async fn blob_list_impl(self, co: &Co<RpcResult<BlobInfo>>) -> io::Result<()> {
         use bao_tree::io::fsm::Outboard;
 
-        let blobs = self;
-        let db = blobs.store();
+        let blobs = self.blobs;
+        let db = &blobs.store;
         for blob in db.blobs().await? {
             let blob = blob?;
             let Some(entry) = db.get(&blob).await? else {
@@ -363,14 +350,14 @@ impl<D: crate::store::Store> Handler<D> {
     }
 
     async fn tags_set(self, msg: TagsSetRequest) -> RpcResult<()> {
-        let blobs = self;
+        let blobs = self.blobs;
         blobs
-            .store()
+            .store
             .set_tag(msg.name, msg.value)
             .await
             .map_err(|e| RpcError::new(&e))?;
         if let SyncMode::Full = msg.sync {
-            blobs.store().sync().await.map_err(|e| RpcError::new(&e))?;
+            blobs.store.sync().await.map_err(|e| RpcError::new(&e))?;
         }
         if let Some(batch) = msg.batch {
             if let Some(content) = msg.value.as_ref() {
@@ -385,14 +372,14 @@ impl<D: crate::store::Store> Handler<D> {
     }
 
     async fn tags_create(self, msg: TagsCreateRequest) -> RpcResult<Tag> {
-        let blobs = self;
+        let blobs = self.blobs;
         let tag = blobs
-            .store()
+            .store
             .create_tag(msg.value)
             .await
             .map_err(|e| RpcError::new(&e))?;
         if let SyncMode::Full = msg.sync {
-            blobs.store().sync().await.map_err(|e| RpcError::new(&e))?;
+            blobs.store.sync().await.map_err(|e| RpcError::new(&e))?;
         }
         if let Some(batch) = msg.batch {
             blobs
@@ -406,13 +393,14 @@ impl<D: crate::store::Store> Handler<D> {
 
     fn blob_download(self, msg: BlobDownloadRequest) -> impl Stream<Item = DownloadResponse> {
         let (sender, receiver) = async_channel::bounded(1024);
-        let endpoint = self.endpoint().clone();
+        let endpoint = self.blobs.endpoint().clone();
         let progress = AsyncChannelProgressSender::new(sender);
 
         let blobs_protocol = self.clone();
 
         self.rt().spawn_detached(move || async move {
             if let Err(err) = blobs_protocol
+                .blobs
                 .download(endpoint, msg, progress.clone())
                 .await
             {
@@ -571,8 +559,8 @@ impl<D: crate::store::Store> Handler<D> {
     }
 
     async fn batch_create_temp_tag(self, msg: BatchCreateTempTagRequest) -> RpcResult<()> {
-        let blobs = self;
-        let tag = blobs.store().temp_tag(msg.content);
+        let blobs = self.blobs;
+        let tag = blobs.store.temp_tag(msg.content);
         blobs.batches().await.store(msg.batch, tag);
         Ok(())
     }
@@ -619,7 +607,7 @@ impl<D: crate::store::Store> Handler<D> {
         stream: impl Stream<Item = BatchAddStreamUpdate> + Send + Unpin + 'static,
         progress: async_channel::Sender<BatchAddStreamResponse>,
     ) -> anyhow::Result<()> {
-        let blobs = self;
+        let blobs = self.blobs;
         let progress = AsyncChannelProgressSender::new(progress);
 
         let stream = stream.map(|item| match item {
@@ -636,7 +624,7 @@ impl<D: crate::store::Store> Handler<D> {
             _ => None,
         });
         let (temp_tag, _len) = blobs
-            .store()
+            .store
             .import_stream(stream, msg.format, import_progress)
             .await?;
         let hash = temp_tag.inner().hash;
@@ -675,9 +663,9 @@ impl<D: crate::store::Store> Handler<D> {
             "trying to add missing path: {}",
             root.display()
         );
-        let blobs = self;
+        let blobs = self.blobs;
         let (tag, _) = blobs
-            .store()
+            .store
             .import_file(root, import_mode, format, import_progress)
             .await?;
         let hash = *tag.hash();
@@ -844,7 +832,7 @@ impl<D: crate::store::Store> Handler<D> {
         _: BatchCreateRequest,
         mut updates: impl Stream<Item = BatchUpdate> + Send + Unpin + 'static,
     ) -> impl Stream<Item = BatchCreateResponse> {
-        let blobs = self;
+        let blobs = self.blobs;
         async move {
             let batch = blobs.batches().await.create();
             tokio::spawn(async move {
@@ -914,19 +902,26 @@ impl<D: crate::store::Store> Handler<D> {
 #[derive(Debug)]
 pub(crate) struct RpcHandler {
     /// Client to hand out
-    client: RpcClient<RpcService, MemConnector>,
+    pub(crate) client: RpcClient<RpcService, MemConnector>,
     /// Handler task
-    _handler: AbortOnDropHandle<()>,
+    handler: AbortOnDropHandle<()>,
 }
 
 impl RpcHandler {
-    fn new<D: crate::store::Store>(blobs: &Arc<Blobs<D>>) -> Self {
+    pub fn new<D: crate::store::Store>(blobs: &Arc<BlobsInner<D>>) -> Self {
         let blobs = blobs.clone();
         let (listener, connector) = quic_rpc::transport::flume::channel(1);
         let listener = RpcServer::new(listener);
         let client = RpcClient::new(connector);
         let _handler = listener
             .spawn_accept_loop(move |req, chan| blobs.clone().handle_rpc_request(req, chan));
-        Self { client, _handler }
+        Self {
+            client,
+            handler: _handler,
+        }
+    }
+
+    pub fn shutdown(&self) {
+        self.handler.abort();
     }
 }
