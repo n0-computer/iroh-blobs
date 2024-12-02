@@ -43,7 +43,7 @@ use crate::{
     export::ExportProgress,
     format::collection::Collection,
     get::db::DownloadProgress,
-    net_protocol::{BlobDownloadRequest, BlobsInner},
+    net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{ConsistencyCheckProgress, ImportProgress, MapEntry, ValidateProgress},
     util::{
@@ -71,7 +71,7 @@ impl<D: crate::store::Store> BlobsInner<D> {
     where
         C: ChannelTypes<RpcService>,
     {
-        Handler {
+        RpcHandler {
             blobs: self.clone(),
         }
         .handle_rpc_request(msg, chan)
@@ -81,17 +81,26 @@ impl<D: crate::store::Store> BlobsInner<D> {
 
 /// RPC handler for the blobs protocol
 #[derive(Debug, Clone)]
-pub struct Handler<S> {
+pub struct RpcHandler<S> {
     blobs: Arc<BlobsInner<S>>,
 }
 
-impl<D: crate::store::Store> Handler<D> {
+impl<D: crate::store::Store> RpcHandler<D> {
     fn store(&self) -> &D {
         &self.blobs.store
     }
 
     fn rt(&self) -> &LocalPoolHandle {
         &self.blobs.rt
+    }
+
+    pub(crate) fn from_blobs(blobs: Arc<BlobsInner<D>>) -> Self {
+        Self { blobs }
+    }
+
+    /// Get the blobs ProtocolHandler
+    pub fn blobs(&self) -> Arc<Blobs> {
+        Arc::new(Blobs::from_inner(self.blobs.clone()))
     }
 
     /// Handle an RPC request
@@ -900,14 +909,14 @@ impl<D: crate::store::Store> Handler<D> {
 }
 
 #[derive(Debug)]
-pub(crate) struct RpcHandler {
+pub(crate) struct MemRpcHandler {
     /// Client to hand out
     pub(crate) client: RpcClient<RpcService, MemConnector>,
     /// Handler task
     handler: AbortOnDropHandle<()>,
 }
 
-impl RpcHandler {
+impl MemRpcHandler {
     pub fn new<D: crate::store::Store>(blobs: &Arc<BlobsInner<D>>) -> Self {
         let blobs = blobs.clone();
         let (listener, connector) = quic_rpc::transport::flume::channel(1);

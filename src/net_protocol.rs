@@ -25,7 +25,7 @@ use crate::{
         Stats,
     },
     provider::EventSender,
-    rpc::{client::blobs::MemClient, RpcHandler},
+    rpc::{client::blobs::MemClient, MemRpcHandler, RpcHandler},
     store::{GcConfig, Store},
     util::{
         local_pool::{self, LocalPoolHandle},
@@ -63,7 +63,7 @@ pub(crate) struct BlobsInner<S> {
     endpoint: Endpoint,
     gc_state: Arc<std::sync::Mutex<GcState>>,
     #[cfg(feature = "rpc")]
-    pub(crate) rpc_handler: Arc<OnceLock<crate::rpc::RpcHandler>>,
+    pub(crate) rpc_handler: Arc<OnceLock<crate::rpc::MemRpcHandler>>,
 }
 
 /// Name used for logging when new node addresses are added from gossip.
@@ -137,15 +137,26 @@ impl<S: crate::store::Store> Builder<S> {
     /// Build the Blobs protocol handler.
     /// You need to provide a local pool handle and an endpoint.
     pub fn build(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Arc<Blobs> {
+        let inner = self.build_inner(rt, endpoint);
+        Arc::new(Blobs { inner })
+    }
+
+    pub fn build_rpc_handler(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> RpcHandler<S> {
+        let inner = self.build_inner(rt, endpoint);
+        RpcHandler::from_blobs(inner)
+    }
+
+    /// Build the Blobs protocol handler.
+    /// You need to provide a local pool handle and an endpoint.
+    fn build_inner(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Arc<BlobsInner<S>> {
         let downloader = Downloader::new(self.store.clone(), endpoint.clone(), rt.clone());
-        let inner = Arc::new(BlobsInner::new(
+        Arc::new(BlobsInner::new(
             self.store,
             rt.clone(),
             self.events.unwrap_or_default(),
             downloader,
             endpoint.clone(),
-        ));
-        Arc::new(Blobs { inner })
+        ))
     }
 }
 
@@ -394,6 +405,10 @@ pub struct Blobs {
 }
 
 impl Blobs {
+    pub(crate) fn from_inner<S: Store>(inner: Arc<BlobsInner<S>>) -> Self {
+        Self { inner }
+    }
+
     pub fn client(&self) -> MemClient {
         self.inner.clone().client()
     }
@@ -466,7 +481,7 @@ impl<S: crate::store::Store> DynBlobs for BlobsInner<S> {
     fn client(self: Arc<Self>) -> MemClient {
         let client = self
             .rpc_handler
-            .get_or_init(|| RpcHandler::new(&self))
+            .get_or_init(|| MemRpcHandler::new(&self))
             .client
             .clone();
         MemClient::new(client)
