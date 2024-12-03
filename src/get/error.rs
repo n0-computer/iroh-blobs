@@ -8,24 +8,24 @@ use crate::util::progress::ProgressSendError;
 #[derive(Debug, thiserror::Error)]
 pub enum GetError {
     /// Hash not found.
-    #[error("Hash not found")]
+    #[error("Hash not found: {0}")]
     NotFound(#[source] anyhow::Error),
     /// Remote has reset the connection.
-    #[error("Remote has reset the connection")]
+    #[error("Remote has reset the connection: {0}")]
     RemoteReset(#[source] anyhow::Error),
     /// Remote behaved in a non-compliant way.
-    #[error("Remote behaved in a non-compliant way")]
+    #[error("Remote behaved in a non-compliant way: {0}")]
     NoncompliantNode(#[source] anyhow::Error),
 
     /// Network or IO operation failed.
-    #[error("A network or IO operation failed")]
+    #[error("A network or IO operation failed: {0}")]
     Io(#[source] anyhow::Error),
 
     /// Our download request is invalid.
-    #[error("Our download request is invalid")]
+    #[error("Our download request is invalid: {0}")]
     BadRequest(#[source] anyhow::Error),
     /// Operation failed on the local node.
-    #[error("Operation failed on the local node")]
+    #[error("Operation failed on the local node: {0}")]
     LocalFailure(#[source] anyhow::Error),
 }
 
