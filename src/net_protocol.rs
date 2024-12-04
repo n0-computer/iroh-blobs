@@ -187,7 +187,7 @@ impl<S: crate::store::Store> Blobs<S> {
             batches: Default::default(),
             gc_state: Default::default(),
             #[cfg(feature = "rpc")]
-            rpc_handler: Arc::new(Default::default()),
+            rpc_handler: Default::default(),
         }
     }
 
