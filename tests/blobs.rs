@@ -1,4 +1,4 @@
-#![cfg(feature = "net_protocol")]
+#![cfg(all(feature = "net_protocol", feature = "rpc"))]
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
