@@ -2,7 +2,7 @@
 # changelog header
 header = """
 # Changelog\n
-All notable changes to iroh will be documented in this file.\n
+All notable changes to iroh-blobs will be documented in this file.\n
 """
 
 body = """
@@ -39,8 +39,8 @@ body = """
 
 footer = ""
 postprocessors = [
-  { pattern = '<REPO>', replace = "https://github.com/n0-computer/iroh" },
-  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/n0-computer/iroh/issues/${1}))"}
+  { pattern = '<REPO>', replace = "https://github.com/n0-computer/iroh-blobs" },
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/n0-computer/iroh-blobs/issues/${1}))"}
 ]
 
 
