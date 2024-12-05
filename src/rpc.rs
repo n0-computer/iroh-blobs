@@ -2,7 +2,6 @@
 
 use std::{
     io,
-    ops::Deref,
     sync::{Arc, Mutex},
 };
 
@@ -82,28 +81,11 @@ impl<D: crate::store::Store> Blobs<D> {
         C: ChannelTypes<RpcService>,
     {
         use Request::*;
-        let handler = Handler(self);
+        let handler = self;
         match msg {
             Blobs(msg) => handler.handle_blobs_request(msg, chan).await,
             Tags(msg) => handler.handle_tags_request(msg, chan).await,
         }
-    }
-}
-
-#[derive(Clone)]
-struct Handler<S>(Blobs<S>);
-
-impl<S> Deref for Handler<S> {
-    type Target = Blobs<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<D: crate::store::Store> Handler<D> {
-    fn store(&self) -> &D {
-        &self.0.store
     }
 
     /// Handle a tags request
