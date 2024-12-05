@@ -962,7 +962,7 @@
     </span><span class="kw">pub fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; blobs::MemClient {
         <span class="kw">let </span>client = <span class="self">self
             </span>.rpc_handler
-            .get_or_init(|| RpcHandler::new(<span class="kw-2">&amp;</span><span class="self">self</span>))
+            .get_or_init(|| RpcHandler::new(<span class="self">self</span>))
             .client
             .clone();
         blobs::Client::new(client)
