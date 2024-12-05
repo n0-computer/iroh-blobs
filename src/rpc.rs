@@ -63,7 +63,7 @@ const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
     /// Get a client for the blobs protocol
-    pub fn client(self: Arc<Self>) -> blobs::MemClient {
+    pub fn client(&self) -> blobs::MemClient {
         let client = self
             .rpc_handler
             .get_or_init(|| RpcHandler::new(&self))
@@ -74,7 +74,7 @@ impl<D: crate::store::Store> Blobs<D> {
 
     /// Handle an RPC request
     pub async fn handle_rpc_request<C>(
-        self: Arc<Self>,
+        self,
         msg: Request,
         chan: RpcChannel<RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
@@ -91,7 +91,7 @@ impl<D: crate::store::Store> Blobs<D> {
 }
 
 #[derive(Clone)]
-struct Handler<S>(Arc<Blobs<S>>);
+struct Handler<S>(Blobs<S>);
 
 impl<S> Deref for Handler<S> {
     type Target = Blobs<S>;
@@ -903,7 +903,7 @@ pub(crate) struct RpcHandler {
 }
 
 impl RpcHandler {
-    fn new<D: crate::store::Store>(blobs: &Arc<Blobs<D>>) -> Self {
+    fn new<D: crate::store::Store>(blobs: &Blobs<D>) -> Self {
         let blobs = blobs.clone();
         let (listener, connector) = quic_rpc::transport::flume::channel(1);
         let listener = RpcServer::new(listener);

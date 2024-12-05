@@ -1003,7 +1003,7 @@ mod tests {
 
     mod node {
         //! An iroh node that just has the blobs transport
-        use std::{path::Path, sync::Arc};
+        use std::path::Path;
 
         use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
         use tokio_util::task::AbortOnDropHandle;
@@ -1068,13 +1068,13 @@ mod tests {
                 // Setup blobs
                 let downloader =
                     Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
-                let blobs = Arc::new(Blobs::new(
+                let blobs = Blobs::new(
                     store.clone(),
                     local_pool.handle().clone(),
                     events,
                     downloader,
                     endpoint.clone(),
-                ));
+                );
                 router = router.accept(crate::ALPN, blobs.clone());
 
                 // Build the router

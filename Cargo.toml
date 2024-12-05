@@ -95,7 +95,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "net_protocol"]
+default = ["fs-store", "net_protocol", "rpc"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader", "dep:futures-util"]
 fs-store = ["dep:reflink-copy", "redb", "dep:redb_v1", "dep:tempfile"]
@@ -184,6 +184,5 @@ panic = 'abort'
 incremental = false
 
 [patch.crates-io]
-# iroh-metrics = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-# iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-# iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh" }
+iroh = { git = "https://github.com/n0-computer/iroh" }

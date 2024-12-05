@@ -3,7 +3,6 @@ use std::{
     io,
     io::{Cursor, Write},
     path::PathBuf,
-    sync::Arc,
     time::Duration,
 };
 
@@ -41,7 +40,7 @@ use tokio::io::AsyncReadExt;
 #[derive(Debug)]
 pub struct Node<S> {
     pub router: iroh::protocol::Router,
-    pub blobs: Arc<Blobs<S>>,
+    pub blobs: Blobs<S>,
     pub store: S,
     pub _local_pool: LocalPool,
 }
