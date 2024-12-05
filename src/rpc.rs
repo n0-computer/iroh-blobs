@@ -65,7 +65,7 @@ impl<D: crate::store::Store> Blobs<D> {
     pub fn client(&self) -> blobs::MemClient {
         let client = self
             .rpc_handler
-            .get_or_init(|| RpcHandler::new(&self))
+            .get_or_init(|| RpcHandler::new(self))
             .client
             .clone();
         blobs::Client::new(client)
