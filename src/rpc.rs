@@ -2,7 +2,6 @@
 
 use std::{
     io,
-    ops::Deref,
     sync::{Arc, Mutex},
 };
 
@@ -63,10 +62,10 @@ const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
     /// Get a client for the blobs protocol
-    pub fn client(self: Arc<Self>) -> blobs::MemClient {
+    pub fn client(&self) -> blobs::MemClient {
         let client = self
             .rpc_handler
-            .get_or_init(|| RpcHandler::new(&self))
+            .get_or_init(|| RpcHandler::new(self))
             .client
             .clone();
         blobs::Client::new(client)
@@ -74,36 +73,17 @@ impl<D: crate::store::Store> Blobs<D> {
 
     /// Handle an RPC request
     pub async fn handle_rpc_request<C>(
-        self: Arc<Self>,
+        self,
         msg: Request,
         chan: RpcChannel<RpcService, C>,
     ) -> std::result::Result<(), RpcServerError<C>>
     where
         C: ChannelTypes<RpcService>,
     {
-        use Request::*;
-        let handler = Handler(self);
         match msg {
-            Blobs(msg) => handler.handle_blobs_request(msg, chan).await,
-            Tags(msg) => handler.handle_tags_request(msg, chan).await,
+            Request::Blobs(msg) => self.handle_blobs_request(msg, chan).await,
+            Request::Tags(msg) => self.handle_tags_request(msg, chan).await,
         }
-    }
-}
-
-#[derive(Clone)]
-struct Handler<S>(Arc<Blobs<S>>);
-
-impl<S> Deref for Handler<S> {
-    type Target = Blobs<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<D: crate::store::Store> Handler<D> {
-    fn store(&self) -> &D {
-        &self.0.store
     }
 
     /// Handle a tags request
@@ -903,7 +883,7 @@ pub(crate) struct RpcHandler {
 }
 
 impl RpcHandler {
-    fn new<D: crate::store::Store>(blobs: &Arc<Blobs<D>>) -> Self {
+    fn new<D: crate::store::Store>(blobs: &Blobs<D>) -> Self {
         let blobs = blobs.clone();
         let (listener, connector) = quic_rpc::transport::flume::channel(1);
         let listener = RpcServer::new(listener);
