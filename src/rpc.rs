@@ -80,11 +80,9 @@ impl<D: crate::store::Store> Blobs<D> {
     where
         C: ChannelTypes<RpcService>,
     {
-        use Request::*;
-        let handler = self;
         match msg {
-            Blobs(msg) => handler.handle_blobs_request(msg, chan).await,
-            Tags(msg) => handler.handle_tags_request(msg, chan).await,
+            Request::Blobs(msg) => self.handle_blobs_request(msg, chan).await,
+            Request::Tags(msg) => self.handle_tags_request(msg, chan).await,
         }
     }
 

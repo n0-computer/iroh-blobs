@@ -393,24 +393,20 @@ impl<S: crate::store::Store> Blobs<S> {
 
 impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     fn accept(&self, conn: Connecting) -> BoxedFuture<Result<()>> {
-        let this = self.clone();
+        let db = self.store.clone();
+        let events = self.events.clone();
+        let rt = self.rt.clone();
 
         Box::pin(async move {
-            crate::provider::handle_connection(
-                conn.await?,
-                this.store.clone(),
-                this.events.clone(),
-                this.rt.clone(),
-            )
-            .await;
+            crate::provider::handle_connection(conn.await?, db, events, rt).await;
             Ok(())
         })
     }
 
     fn shutdown(&self) -> BoxedFuture<()> {
-        let this = self.clone();
+        let store = self.store.clone();
         Box::pin(async move {
-            this.store.shutdown().await;
+            store.shutdown().await;
         })
     }
 }
