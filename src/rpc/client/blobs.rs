@@ -991,8 +991,10 @@ pub struct DownloadOptions {
 mod tests {
     use std::{path::Path, time::Duration};
 
-    use iroh::{key::SecretKey, test_utils::DnsPkarrServer, NodeId, RelayMode};
-    use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
+    use iroh::{
+        key::SecretKey, test_utils::DnsPkarrServer, ticket::BlobTicket, AddrInfoOptions, NodeId,
+        RelayMode,
+    };
     use node::Node;
     use rand::RngCore;
     use testresult::TestResult;

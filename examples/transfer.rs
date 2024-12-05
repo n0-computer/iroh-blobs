@@ -1,8 +1,7 @@
 use std::{path::PathBuf, str::FromStr};
 
 use anyhow::Result;
-use iroh::{protocol::Router, Endpoint};
-use iroh_base::ticket::BlobTicket;
+use iroh::{protocol::Router, ticket::BlobTicket, Endpoint};
 use iroh_blobs::{
     net_protocol::Blobs,
     rpc::client::blobs::{ReadAtLen, WrapOption},
