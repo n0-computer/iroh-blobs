@@ -895,29 +895,10 @@
 <a href="#895" id="895">895</a>
 <a href="#896" id="896">896</a>
 <a href="#897" id="897">897</a>
-<a href="#898" id="898">898</a>
-<a href="#899" id="899">899</a>
-<a href="#900" id="900">900</a>
-<a href="#901" id="901">901</a>
-<a href="#902" id="902">902</a>
-<a href="#903" id="903">903</a>
-<a href="#904" id="904">904</a>
-<a href="#905" id="905">905</a>
-<a href="#906" id="906">906</a>
-<a href="#907" id="907">907</a>
-<a href="#908" id="908">908</a>
-<a href="#909" id="909">909</a>
-<a href="#910" id="910">910</a>
-<a href="#911" id="911">911</a>
-<a href="#912" id="912">912</a>
-<a href="#913" id="913">913</a>
-<a href="#914" id="914">914</a>
-<a href="#915" id="915">915</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
     io,
-    ops::Deref,
     sync::{Arc, Mutex},
 };
 
@@ -997,28 +978,11 @@
         </span>C: ChannelTypes&lt;RpcService&gt;,
     {
         <span class="kw">use </span>Request::<span class="kw-2">*</span>;
-        <span class="kw">let </span>handler = Handler(<span class="self">self</span>);
+        <span class="kw">let </span>handler = <span class="self">self</span>;
         <span class="kw">match </span>msg {
             Blobs(msg) =&gt; handler.handle_blobs_request(msg, chan).<span class="kw">await</span>,
             Tags(msg) =&gt; handler.handle_tags_request(msg, chan).<span class="kw">await</span>,
         }
-    }
-}
-
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">struct </span>Handler&lt;S&gt;(Blobs&lt;S&gt;);
-
-<span class="kw">impl</span>&lt;S&gt; Deref <span class="kw">for </span>Handler&lt;S&gt; {
-    <span class="kw">type </span>Target = Blobs&lt;S&gt;;
-
-    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
-    </span>}
-}
-
-<span class="kw">impl</span>&lt;D: <span class="kw">crate</span>::store::Store&gt; Handler&lt;D&gt; {
-    <span class="kw">fn </span>store(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>D {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>.store
     }
 
     <span class="doccomment">/// Handle a tags request
