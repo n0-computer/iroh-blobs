@@ -449,10 +449,6 @@
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
@@ -848,24 +844,20 @@
 
 <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; ProtocolHandler <span class="kw">for </span>Blobs&lt;S&gt; {
     <span class="kw">fn </span>accept(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connecting) -&gt; BoxedFuture&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt; {
-        <span class="kw">let </span>this = <span class="self">self</span>.clone();
+        <span class="kw">let </span>db = <span class="self">self</span>.store.clone();
+        <span class="kw">let </span>events = <span class="self">self</span>.events.clone();
+        <span class="kw">let </span>rt = <span class="self">self</span>.rt.clone();
 
         Box::pin(<span class="kw">async move </span>{
-            <span class="kw">crate</span>::provider::handle_connection(
-                conn.<span class="kw">await</span><span class="question-mark">?</span>,
-                this.store.clone(),
-                this.events.clone(),
-                this.rt.clone(),
-            )
-            .<span class="kw">await</span>;
+            <span class="kw">crate</span>::provider::handle_connection(conn.<span class="kw">await</span><span class="question-mark">?</span>, db, events, rt).<span class="kw">await</span>;
             <span class="prelude-val">Ok</span>(())
         })
     }
 
     <span class="kw">fn </span>shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BoxedFuture&lt;()&gt; {
-        <span class="kw">let </span>this = <span class="self">self</span>.clone();
+        <span class="kw">let </span>store = <span class="self">self</span>.store.clone();
         Box::pin(<span class="kw">async move </span>{
-            this.store.shutdown().<span class="kw">await</span>;
+            store.shutdown().<span class="kw">await</span>;
         })
     }
 }
