@@ -47,16 +47,21 @@ impl Default for GcState {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Blobs<S> {
+#[derive(Debug)]
+struct BlobsInner<S> {
     rt: LocalPoolHandle,
     pub(crate) store: S,
     events: EventSender,
     downloader: Downloader,
-    #[cfg(feature = "rpc")]
-    batches: Arc<tokio::sync::Mutex<BlobBatches>>,
     endpoint: Endpoint,
-    gc_state: Arc<std::sync::Mutex<GcState>>,
+    gc_state: std::sync::Mutex<GcState>,
+    #[cfg(feature = "rpc")]
+    batches: tokio::sync::Mutex<BlobBatches>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Blobs<S> {
+    inner: Arc<BlobsInner<S>>,
     #[cfg(feature = "rpc")]
     pub(crate) rpc_handler: Arc<std::sync::OnceLock<crate::rpc::RpcHandler>>,
 }
@@ -178,40 +183,46 @@ impl<S: crate::store::Store> Blobs<S> {
         endpoint: Endpoint,
     ) -> Self {
         Self {
-            rt,
-            store,
-            events,
-            downloader,
-            endpoint,
-            #[cfg(feature = "rpc")]
-            batches: Default::default(),
-            gc_state: Default::default(),
+            inner: Arc::new(BlobsInner {
+                rt,
+                store,
+                events,
+                downloader,
+                endpoint,
+                #[cfg(feature = "rpc")]
+                batches: Default::default(),
+                gc_state: Default::default(),
+            }),
             #[cfg(feature = "rpc")]
             rpc_handler: Default::default(),
         }
     }
 
     pub fn store(&self) -> &S {
-        &self.store
+        &self.inner.store
+    }
+
+    pub fn events(&self) -> &EventSender {
+        &self.inner.events
     }
 
     pub fn rt(&self) -> &LocalPoolHandle {
-        &self.rt
+        &self.inner.rt
     }
 
     pub fn downloader(&self) -> &Downloader {
-        &self.downloader
+        &self.inner.downloader
     }
 
     pub fn endpoint(&self) -> &Endpoint {
-        &self.endpoint
+        &self.inner.endpoint
     }
 
     /// Add a callback that will be called before the garbage collector runs.
     ///
     /// This can only be called before the garbage collector has started, otherwise it will return an error.
     pub fn add_protected(&self, cb: ProtectCb) -> Result<()> {
-        let mut state = self.gc_state.lock().unwrap();
+        let mut state = self.inner.gc_state.lock().unwrap();
         match &mut *state {
             GcState::Initial(cbs) => {
                 cbs.push(cb);
@@ -225,7 +236,7 @@ impl<S: crate::store::Store> Blobs<S> {
 
     /// Start garbage collection with the given settings.
     pub fn start_gc(&self, config: GcConfig) -> Result<()> {
-        let mut state = self.gc_state.lock().unwrap();
+        let mut state = self.inner.gc_state.lock().unwrap();
         let protected = match state.deref_mut() {
             GcState::Initial(items) => std::mem::take(items),
             GcState::Started(_) => bail!("gc already started"),
@@ -241,9 +252,9 @@ impl<S: crate::store::Store> Blobs<S> {
                 set
             }
         };
-        let store = self.store.clone();
+        let store = self.store().clone();
         let run = self
-            .rt
+            .rt()
             .spawn(move || async move { store.gc_run(config, protected_cb).await });
         *state = GcState::Started(Some(run));
         Ok(())
@@ -251,7 +262,7 @@ impl<S: crate::store::Store> Blobs<S> {
 
     #[cfg(feature = "rpc")]
     pub(crate) async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
-        self.batches.lock().await
+        self.inner.batches.lock().await
     }
 
     pub(crate) async fn download(
@@ -268,7 +279,7 @@ impl<S: crate::store::Store> Blobs<S> {
             mode,
         } = req;
         let hash_and_format = HashAndFormat { hash, format };
-        let temp_tag = self.store.temp_tag(hash_and_format);
+        let temp_tag = self.store().temp_tag(hash_and_format);
         let stats = match mode {
             DownloadMode::Queued => {
                 self.download_queued(endpoint, hash_and_format, nodes, progress.clone())
@@ -283,10 +294,10 @@ impl<S: crate::store::Store> Blobs<S> {
         progress.send(DownloadProgress::AllDone(stats)).await.ok();
         match tag {
             SetTagOption::Named(tag) => {
-                self.store.set_tag(tag, Some(hash_and_format)).await?;
+                self.store().set_tag(tag, Some(hash_and_format)).await?;
             }
             SetTagOption::Auto => {
-                self.store.create_tag(hash_and_format).await?;
+                self.store().create_tag(hash_and_format).await?;
             }
         }
         drop(temp_tag);
@@ -316,7 +327,7 @@ impl<S: crate::store::Store> Blobs<S> {
         let can_download = !node_ids.is_empty() && (any_added || endpoint.discovery().is_some());
         anyhow::ensure!(can_download, "no way to reach a node for download");
         let req = DownloadRequest::new(hash_and_format, node_ids).progress_sender(progress);
-        let handle = self.downloader.queue(req).await;
+        let handle = self.downloader().queue(req).await;
         let stats = handle.await?;
         Ok(stats)
     }
@@ -334,7 +345,7 @@ impl<S: crate::store::Store> Blobs<S> {
         let mut nodes_iter = nodes.into_iter();
         'outer: loop {
             match crate::get::db::get_to_db_in_steps(
-                self.store.clone(),
+                self.store().clone(),
                 hash_and_format,
                 progress.clone(),
             )
@@ -393,9 +404,9 @@ impl<S: crate::store::Store> Blobs<S> {
 
 impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     fn accept(&self, conn: Connecting) -> BoxedFuture<Result<()>> {
-        let db = self.store.clone();
-        let events = self.events.clone();
-        let rt = self.rt.clone();
+        let db = self.store().clone();
+        let events = self.events().clone();
+        let rt = self.rt().clone();
 
         Box::pin(async move {
             crate::provider::handle_connection(conn.await?, db, events, rt).await;
@@ -404,7 +415,7 @@ impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     }
 
     fn shutdown(&self) -> BoxedFuture<()> {
-        let store = self.store.clone();
+        let store = self.store().clone();
         Box::pin(async move {
             store.shutdown().await;
         })
