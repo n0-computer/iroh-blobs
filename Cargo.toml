@@ -95,7 +95,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "net_protocol", "rpc"]
+default = ["fs-store", "net_protocol"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader", "dep:futures-util"]
 fs-store = ["dep:reflink-copy", "redb", "dep:redb_v1", "dep:tempfile"]
