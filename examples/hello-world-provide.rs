@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
-    let blobs_client = blobs.client();
+    let blobs_client = blobs.spawn_rpc();
     let node = builder.spawn().await?;
 
     // add some data and remember the hash

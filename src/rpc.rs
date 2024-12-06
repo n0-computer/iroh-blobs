@@ -62,8 +62,9 @@ const RPC_BLOB_GET_CHUNK_SIZE: usize = 1024 * 64;
 const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
-    /// Get a client for the blobs protocol
-    pub fn client(&self) -> RpcHandler {
+    /// Spawns an in-memory RPC client and server pair.
+    #[must_use = "Dropping the RpcHandler will stop the client"]
+    pub fn spawn_rpc(&self) -> RpcHandler {
         RpcHandler::new(self)
     }
 
@@ -870,11 +871,14 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 }
 
-/// A rpc handler for the blobs rpc protocol
+/// An in memory rpc handler for the blobs rpc protocol
 ///
 /// This struct contains both a task that handles rpc requests and a client
-/// that can be used to send rpc requests. Dropping it will stop the handler task,
-/// so you need to put it somewhere where it will be kept alive.
+/// that can be used to send rpc requests.
+///
+/// Dropping it will stop the handler task, so you need to put it somewhere
+/// where it will be kept alive. This struct will capture a copy of
+/// [`crate::net_protocol::Blobs`] and keep it alive.
 #[derive(Debug)]
 pub struct RpcHandler {
     /// Client to hand out
@@ -901,5 +905,10 @@ impl RpcHandler {
         let _handler = listener
             .spawn_accept_loop(move |req, chan| blobs.clone().handle_rpc_request(req, chan));
         Self { client, _handler }
+    }
+
+    /// Get a reference to the rpc client api
+    pub fn client(&self) -> &MemClient {
+        &self.client
     }
 }

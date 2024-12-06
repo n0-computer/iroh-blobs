@@ -67,7 +67,7 @@ impl<S: Store> Node<S> {
 
     /// Returns an in-memory blobs client
     pub fn blobs(&self) -> RpcHandler {
-        self.blobs.client()
+        self.blobs.spawn_rpc()
     }
 
     /// Returns an in-memory tags client

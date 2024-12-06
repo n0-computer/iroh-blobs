@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn().await?;
-    let blobs_client = blobs.client();
+    let blobs_client = blobs.spawn_rpc();
 
     println!("fetching hash:  {}", ticket.hash());
     println!("node id:        {}", node.endpoint().node_id());
