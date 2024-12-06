@@ -92,6 +92,8 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 }
 
+/// This is just an internal helper so I don't have to
+/// define all the rpc methods on `self: Arc<BlobsInner<S>>`
 #[derive(Clone)]
 struct Handler<S>(Arc<BlobsInner<S>>);
 
