@@ -903,6 +903,15 @@
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
 <a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
@@ -967,8 +976,9 @@
 </span><span class="kw">const </span>RPC_BLOB_GET_CHANNEL_CAP: usize = <span class="number">2</span>;
 
 <span class="kw">impl</span>&lt;D: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;D&gt; {
-    <span class="doccomment">/// Get a client for the blobs protocol
-    </span><span class="kw">pub fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RpcHandler {
+    <span class="doccomment">/// Spawns an in-memory RPC client and server pair.
+    </span><span class="attr">#[must_use = <span class="string">"Dropping the RpcHandler will stop the client"</span>]
+    </span><span class="kw">pub fn </span>spawn_rpc(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RpcHandler {
         RpcHandler::new(<span class="self">self</span>)
     }
 
@@ -1775,11 +1785,14 @@
     }
 }
 
-<span class="doccomment">/// A rpc handler for the blobs rpc protocol
+<span class="doccomment">/// An in memory rpc handler for the blobs rpc protocol
 ///
 /// This struct contains both a task that handles rpc requests and a client
-/// that can be used to send rpc requests. Dropping it will stop the handler task,
-/// so you need to put it somewhere where it will be kept alive.
+/// that can be used to send rpc requests.
+///
+/// Dropping it will stop the handler task, so you need to put it somewhere
+/// where it will be kept alive. This struct will capture a copy of
+/// [`crate::net_protocol::Blobs`] and keep it alive.
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>RpcHandler {
     <span class="doccomment">/// Client to hand out
@@ -1806,6 +1819,11 @@
         <span class="kw">let </span>_handler = listener
             .spawn_accept_loop(<span class="kw">move </span>|req, chan| blobs.clone().handle_rpc_request(req, chan));
         <span class="self">Self </span>{ client, _handler }
+    }
+
+    <span class="doccomment">/// Get a reference to the rpc client api
+    </span><span class="kw">pub fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>MemClient {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.client
     }
 }
 </code></pre></div></section></main></body></html>
