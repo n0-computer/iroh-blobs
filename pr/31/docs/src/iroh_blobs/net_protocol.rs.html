@@ -316,6 +316,7 @@
 <a href="#316" id="316">316</a>
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
@@ -509,7 +510,8 @@
                 </span>batches: Default::default(),
                 gc_state: Default::default(),
             }),
-            rpc_handler: Default::default(),
+            <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+            </span>rpc_handler: Default::default(),
         }
     }
 
