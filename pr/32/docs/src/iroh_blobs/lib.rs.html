@@ -60,7 +60,8 @@
 <a href="#60" id="60">60</a>
 <a href="#61" id="61">61</a>
 <a href="#62" id="62">62</a>
-</pre></div><pre class="rust"><code><span class="doccomment">//! Blobs layer for iroh.
+</pre></div><pre class="rust"><code><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../README.md"</span>)]
+</span><span class="doccomment">//! Blobs layer for iroh.
 //!
 //! The crate is designed to be used from the [iroh] crate, which provides a
 //! [high level interface](https://docs.rs/iroh/latest/iroh/client/blobs/index.html),
@@ -85,8 +86,7 @@
 //!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
 //! [iroh]: https://docs.rs/iroh
-</span><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../INSTALL.md"</span>)]
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+</span><span class="attr">#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![recursion_limit = <span class="string">"256"</span>]
 #![cfg_attr(iroh_docsrs, feature(doc_cfg))]
 
