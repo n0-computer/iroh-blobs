@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
 
             // Print out our query results.
             for hash in hashes {
-                read_and_print(&blobs_client, hash).await?;
+                read_and_print(blobs_client, hash).await?;
             }
         }
     }

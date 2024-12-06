@@ -5,28 +5,22 @@
 
 use std::{collections::BTreeSet, fmt::Debug, ops::DerefMut, sync::Arc};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_util::future::BoxFuture;
 use iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
 use iroh_base::hash::{BlobFormat, Hash};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::{
-    downloader::{DownloadRequest, Downloader},
-    get::{
-        db::{DownloadProgress, GetState},
-        Stats,
-    },
+    downloader::Downloader,
     provider::EventSender,
     store::GcConfig,
     util::{
         local_pool::{self, LocalPoolHandle},
-        progress::{AsyncChannelProgressSender, ProgressSender},
         SetTagOption,
     },
-    HashAndFormat,
 };
 
 /// A callback that blobs can ask about a set of hashes that should not be garbage collected.
@@ -47,16 +41,21 @@ impl Default for GcState {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Blobs<S> {
-    rt: LocalPoolHandle,
+#[derive(Debug)]
+pub(crate) struct BlobsInner<S> {
+    pub(crate) rt: LocalPoolHandle,
     pub(crate) store: S,
     events: EventSender,
-    downloader: Downloader,
+    pub(crate) downloader: Downloader,
+    pub(crate) endpoint: Endpoint,
+    gc_state: std::sync::Mutex<GcState>,
     #[cfg(feature = "rpc")]
-    batches: Arc<tokio::sync::Mutex<BlobBatches>>,
-    endpoint: Endpoint,
-    gc_state: Arc<std::sync::Mutex<GcState>>,
+    pub(crate) batches: tokio::sync::Mutex<BlobBatches>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Blobs<S> {
+    pub(crate) inner: Arc<BlobsInner<S>>,
     #[cfg(feature = "rpc")]
     pub(crate) rpc_handler: Arc<std::sync::OnceLock<crate::rpc::RpcHandler>>,
 }
@@ -76,7 +75,7 @@ pub(crate) struct BlobBatches {
 #[derive(Debug, Default)]
 struct BlobBatch {
     /// The tags in this batch.
-    tags: std::collections::BTreeMap<HashAndFormat, Vec<crate::TempTag>>,
+    tags: std::collections::BTreeMap<iroh::hash::HashAndFormat, Vec<crate::TempTag>>,
 }
 
 #[cfg(feature = "rpc")]
@@ -95,7 +94,11 @@ impl BlobBatches {
     }
 
     /// Remove a tag from a batch.
-    pub fn remove_one(&mut self, batch: BatchId, content: &HashAndFormat) -> Result<()> {
+    pub fn remove_one(
+        &mut self,
+        batch: BatchId,
+        content: &iroh::hash::HashAndFormat,
+    ) -> Result<()> {
         if let Some(batch) = self.batches.get_mut(&batch) {
             if let Some(tags) = batch.tags.get_mut(content) {
                 tags.pop();
@@ -178,40 +181,46 @@ impl<S: crate::store::Store> Blobs<S> {
         endpoint: Endpoint,
     ) -> Self {
         Self {
-            rt,
-            store,
-            events,
-            downloader,
-            endpoint,
-            #[cfg(feature = "rpc")]
-            batches: Default::default(),
-            gc_state: Default::default(),
+            inner: Arc::new(BlobsInner {
+                rt,
+                store,
+                events,
+                downloader,
+                endpoint,
+                #[cfg(feature = "rpc")]
+                batches: Default::default(),
+                gc_state: Default::default(),
+            }),
             #[cfg(feature = "rpc")]
             rpc_handler: Default::default(),
         }
     }
 
     pub fn store(&self) -> &S {
-        &self.store
+        &self.inner.store
+    }
+
+    pub fn events(&self) -> &EventSender {
+        &self.inner.events
     }
 
     pub fn rt(&self) -> &LocalPoolHandle {
-        &self.rt
+        &self.inner.rt
     }
 
     pub fn downloader(&self) -> &Downloader {
-        &self.downloader
+        &self.inner.downloader
     }
 
     pub fn endpoint(&self) -> &Endpoint {
-        &self.endpoint
+        &self.inner.endpoint
     }
 
     /// Add a callback that will be called before the garbage collector runs.
     ///
     /// This can only be called before the garbage collector has started, otherwise it will return an error.
     pub fn add_protected(&self, cb: ProtectCb) -> Result<()> {
-        let mut state = self.gc_state.lock().unwrap();
+        let mut state = self.inner.gc_state.lock().unwrap();
         match &mut *state {
             GcState::Initial(cbs) => {
                 cbs.push(cb);
@@ -225,7 +234,7 @@ impl<S: crate::store::Store> Blobs<S> {
 
     /// Start garbage collection with the given settings.
     pub fn start_gc(&self, config: GcConfig) -> Result<()> {
-        let mut state = self.gc_state.lock().unwrap();
+        let mut state = self.inner.gc_state.lock().unwrap();
         let protected = match state.deref_mut() {
             GcState::Initial(items) => std::mem::take(items),
             GcState::Started(_) => bail!("gc already started"),
@@ -241,161 +250,20 @@ impl<S: crate::store::Store> Blobs<S> {
                 set
             }
         };
-        let store = self.store.clone();
+        let store = self.store().clone();
         let run = self
-            .rt
+            .rt()
             .spawn(move || async move { store.gc_run(config, protected_cb).await });
         *state = GcState::Started(Some(run));
         Ok(())
-    }
-
-    #[cfg(feature = "rpc")]
-    pub(crate) async fn batches(&self) -> tokio::sync::MutexGuard<'_, BlobBatches> {
-        self.batches.lock().await
-    }
-
-    pub(crate) async fn download(
-        &self,
-        endpoint: Endpoint,
-        req: BlobDownloadRequest,
-        progress: AsyncChannelProgressSender<DownloadProgress>,
-    ) -> Result<()> {
-        let BlobDownloadRequest {
-            hash,
-            format,
-            nodes,
-            tag,
-            mode,
-        } = req;
-        let hash_and_format = HashAndFormat { hash, format };
-        let temp_tag = self.store.temp_tag(hash_and_format);
-        let stats = match mode {
-            DownloadMode::Queued => {
-                self.download_queued(endpoint, hash_and_format, nodes, progress.clone())
-                    .await?
-            }
-            DownloadMode::Direct => {
-                self.download_direct_from_nodes(endpoint, hash_and_format, nodes, progress.clone())
-                    .await?
-            }
-        };
-
-        progress.send(DownloadProgress::AllDone(stats)).await.ok();
-        match tag {
-            SetTagOption::Named(tag) => {
-                self.store.set_tag(tag, Some(hash_and_format)).await?;
-            }
-            SetTagOption::Auto => {
-                self.store.create_tag(hash_and_format).await?;
-            }
-        }
-        drop(temp_tag);
-
-        Ok(())
-    }
-
-    async fn download_queued(
-        &self,
-        endpoint: Endpoint,
-        hash_and_format: HashAndFormat,
-        nodes: Vec<NodeAddr>,
-        progress: AsyncChannelProgressSender<DownloadProgress>,
-    ) -> Result<Stats> {
-        /// Name used for logging when new node addresses are added from gossip.
-        const BLOB_DOWNLOAD_SOURCE_NAME: &str = "blob_download";
-
-        let mut node_ids = Vec::with_capacity(nodes.len());
-        let mut any_added = false;
-        for node in nodes {
-            node_ids.push(node.node_id);
-            if !node.info.is_empty() {
-                endpoint.add_node_addr_with_source(node, BLOB_DOWNLOAD_SOURCE_NAME)?;
-                any_added = true;
-            }
-        }
-        let can_download = !node_ids.is_empty() && (any_added || endpoint.discovery().is_some());
-        anyhow::ensure!(can_download, "no way to reach a node for download");
-        let req = DownloadRequest::new(hash_and_format, node_ids).progress_sender(progress);
-        let handle = self.downloader.queue(req).await;
-        let stats = handle.await?;
-        Ok(stats)
-    }
-
-    #[tracing::instrument("download_direct", skip_all, fields(hash=%hash_and_format.hash.fmt_short()))]
-    async fn download_direct_from_nodes(
-        &self,
-        endpoint: Endpoint,
-        hash_and_format: HashAndFormat,
-        nodes: Vec<NodeAddr>,
-        progress: AsyncChannelProgressSender<DownloadProgress>,
-    ) -> Result<Stats> {
-        let mut last_err = None;
-        let mut remaining_nodes = nodes.len();
-        let mut nodes_iter = nodes.into_iter();
-        'outer: loop {
-            match crate::get::db::get_to_db_in_steps(
-                self.store.clone(),
-                hash_and_format,
-                progress.clone(),
-            )
-            .await?
-            {
-                GetState::Complete(stats) => return Ok(stats),
-                GetState::NeedsConn(needs_conn) => {
-                    let (conn, node_id) = 'inner: loop {
-                        match nodes_iter.next() {
-                            None => break 'outer,
-                            Some(node) => {
-                                remaining_nodes -= 1;
-                                let node_id = node.node_id;
-                                if node_id == endpoint.node_id() {
-                                    debug!(
-                                        ?remaining_nodes,
-                                        "skip node {} (it is the node id of ourselves)",
-                                        node_id.fmt_short()
-                                    );
-                                    continue 'inner;
-                                }
-                                match endpoint.connect(node, crate::protocol::ALPN).await {
-                                    Ok(conn) => break 'inner (conn, node_id),
-                                    Err(err) => {
-                                        debug!(
-                                            ?remaining_nodes,
-                                            "failed to connect to {}: {err}",
-                                            node_id.fmt_short()
-                                        );
-                                        continue 'inner;
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    match needs_conn.proceed(conn).await {
-                        Ok(stats) => return Ok(stats),
-                        Err(err) => {
-                            warn!(
-                                ?remaining_nodes,
-                                "failed to download from {}: {err}",
-                                node_id.fmt_short()
-                            );
-                            last_err = Some(err);
-                        }
-                    }
-                }
-            }
-        }
-        match last_err {
-            Some(err) => Err(err.into()),
-            None => Err(anyhow!("No nodes to download from provided")),
-        }
     }
 }
 
 impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     fn accept(&self, conn: Connecting) -> BoxedFuture<Result<()>> {
-        let db = self.store.clone();
-        let events = self.events.clone();
-        let rt = self.rt.clone();
+        let db = self.store().clone();
+        let events = self.events().clone();
+        let rt = self.rt().clone();
 
         Box::pin(async move {
             crate::provider::handle_connection(conn.await?, db, events, rt).await;
@@ -404,7 +272,7 @@ impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
     }
 
     fn shutdown(&self) -> BoxedFuture<()> {
-        let store = self.store.clone();
+        let store = self.store().clone();
         Box::pin(async move {
             store.shutdown().await;
         })

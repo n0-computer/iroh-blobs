@@ -66,8 +66,8 @@ impl<S: Store> Node<S> {
     }
 
     /// Returns an in-memory blobs client
-    pub fn blobs(&self) -> blobs::MemClient {
-        self.blobs.clone().client()
+    pub fn blobs(&self) -> &blobs::MemClient {
+        self.blobs.client()
     }
 
     /// Returns an in-memory tags client
