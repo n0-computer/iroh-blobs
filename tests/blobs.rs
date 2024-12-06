@@ -32,12 +32,7 @@ async fn blobs_gc_protected() -> TestResult<()> {
     let pool = LocalPool::default();
     let endpoint = Endpoint::builder().bind().await?;
     let blobs = Blobs::memory().build(pool.handle(), &endpoint);
-    let client: iroh_blobs::rpc::client::blobs::Client<
-        quic_rpc::transport::flume::FlumeConnector<
-            iroh_blobs::rpc::proto::Response,
-            iroh_blobs::rpc::proto::Request,
-        >,
-    > = blobs.clone().client();
+    let client = blobs.clone().client();
     let h1 = client.add_bytes(b"test".to_vec()).await?;
     let protected = Arc::new(Mutex::new(Vec::new()));
     blobs.add_protected(Box::new({

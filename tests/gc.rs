@@ -20,7 +20,7 @@ use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
 use iroh_blobs::{
     hashseq::HashSeq,
     net_protocol::Blobs,
-    rpc::client::{blobs, tags},
+    rpc::{client::tags, RpcHandler},
     store::{
         bao_tree, BaoBatchWriter, ConsistencyCheckProgress, EntryStatus, GcConfig, MapEntryMut,
         MapMut, ReportLevel, Store,
@@ -66,8 +66,8 @@ impl<S: Store> Node<S> {
     }
 
     /// Returns an in-memory blobs client
-    pub fn blobs(&self) -> blobs::MemClient {
-        self.blobs.clone().client()
+    pub fn blobs(&self) -> RpcHandler {
+        self.blobs.client()
     }
 
     /// Returns an in-memory tags client

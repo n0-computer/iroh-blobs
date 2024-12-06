@@ -2,12 +2,13 @@
 
 use std::{
     io,
+    ops::Deref,
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
 use client::{
-    blobs::{self, BlobInfo, BlobStatus, IncompleteBlobInfo, WrapOption},
+    blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, MemClient, WrapOption},
     tags::TagInfo,
     MemConnector,
 };
@@ -62,13 +63,8 @@ const RPC_BLOB_GET_CHANNEL_CAP: usize = 2;
 
 impl<D: crate::store::Store> Blobs<D> {
     /// Get a client for the blobs protocol
-    pub fn client(&self) -> blobs::MemClient {
-        let client = self
-            .rpc_handler
-            .get_or_init(|| RpcHandler::new(self))
-            .client
-            .clone();
-        blobs::Client::new(client)
+    pub fn client(&self) -> RpcHandler {
+        RpcHandler::new(self)
     }
 
     /// Handle an RPC request
@@ -874,12 +870,25 @@ impl<D: crate::store::Store> Blobs<D> {
     }
 }
 
+/// A rpc handler for the blobs rpc protocol
+///
+/// This struct contains both a task that handles rpc requests and a client
+/// that can be used to send rpc requests. Dropping it will stop the handler task,
+/// so you need to put it somewhere where it will be kept alive.
 #[derive(Debug)]
-pub(crate) struct RpcHandler {
+pub struct RpcHandler {
     /// Client to hand out
-    client: RpcClient<RpcService, MemConnector>,
+    client: MemClient,
     /// Handler task
     _handler: AbortOnDropHandle<()>,
+}
+
+impl Deref for RpcHandler {
+    type Target = MemClient;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
 }
 
 impl RpcHandler {
@@ -888,6 +897,7 @@ impl RpcHandler {
         let (listener, connector) = quic_rpc::transport::flume::channel(1);
         let listener = RpcServer::new(listener);
         let client = RpcClient::new(connector);
+        let client = MemClient::new(client);
         let _handler = listener
             .spawn_accept_loop(move |req, chan| blobs.clone().handle_rpc_request(req, chan));
         Self { client, _handler }

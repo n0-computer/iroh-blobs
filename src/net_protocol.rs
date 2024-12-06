@@ -62,8 +62,6 @@ struct BlobsInner<S> {
 #[derive(Debug, Clone)]
 pub struct Blobs<S> {
     inner: Arc<BlobsInner<S>>,
-    #[cfg(feature = "rpc")]
-    pub(crate) rpc_handler: Arc<std::sync::OnceLock<crate::rpc::RpcHandler>>,
 }
 
 /// Keeps track of all the currently active batch operations of the blobs api.
@@ -193,8 +191,6 @@ impl<S: crate::store::Store> Blobs<S> {
                 batches: Default::default(),
                 gc_state: Default::default(),
             }),
-            #[cfg(feature = "rpc")]
-            rpc_handler: Default::default(),
         }
     }
 
