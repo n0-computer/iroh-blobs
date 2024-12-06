@@ -23,6 +23,7 @@
 //!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
 //! [iroh]: https://docs.rs/iroh
+#![doc = include_str!("../INSTALL.md")]
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![recursion_limit = "256"]
 #![cfg_attr(iroh_docsrs, feature(doc_cfg))]
