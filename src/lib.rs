@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 //! Blobs layer for iroh.
 //!
 //! The crate is designed to be used from the [iroh] crate, which provides a
