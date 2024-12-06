@@ -1103,6 +1103,8 @@
 <a href="#1103" id="1103">1103</a>
 <a href="#1104" id="1104">1104</a>
 <a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
@@ -1197,7 +1199,9 @@
     </span>}
 }
 
-<span class="attr">#[derive(Clone)]
+<span class="doccomment">/// This is just an internal helper so I don't have to
+/// define all the rpc methods on `self: Arc&lt;BlobsInner&lt;S&gt;&gt;`
+</span><span class="attr">#[derive(Clone)]
 </span><span class="kw">struct </span>Handler&lt;S&gt;(Arc&lt;BlobsInner&lt;S&gt;&gt;);
 
 <span class="kw">impl</span>&lt;S&gt; Deref <span class="kw">for </span>Handler&lt;S&gt; {
