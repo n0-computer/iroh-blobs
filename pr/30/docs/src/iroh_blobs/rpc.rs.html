@@ -893,16 +893,27 @@
 <a href="#893" id="893">893</a>
 <a href="#894" id="894">894</a>
 <a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
     io,
+    ops::Deref,
     sync::{Arc, Mutex},
 };
 
 <span class="kw">use </span>anyhow::anyhow;
 <span class="kw">use </span>client::{
-    blobs::{<span class="self">self</span>, BlobInfo, BlobStatus, IncompleteBlobInfo, WrapOption},
+    blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, MemClient, WrapOption},
     tags::TagInfo,
     MemConnector,
 };
@@ -957,13 +968,8 @@
 
 <span class="kw">impl</span>&lt;D: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;D&gt; {
     <span class="doccomment">/// Get a client for the blobs protocol
-    </span><span class="kw">pub fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; blobs::MemClient {
-        <span class="kw">let </span>client = <span class="self">self
-            </span>.rpc_handler
-            .get_or_init(|| RpcHandler::new(<span class="self">self</span>))
-            .client
-            .clone();
-        blobs::Client::new(client)
+    </span><span class="kw">pub fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RpcHandler {
+        RpcHandler::new(<span class="self">self</span>)
     }
 
     <span class="doccomment">/// Handle an RPC request
@@ -1769,12 +1775,25 @@
     }
 }
 
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>RpcHandler {
+<span class="doccomment">/// A rpc handler for the blobs rpc protocol
+///
+/// This struct contains both a task that handles rpc requests and a client
+/// that can be used to send rpc requests. Dropping it will stop the handler task,
+/// so you need to put it somewhere where it will be kept alive.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>RpcHandler {
     <span class="doccomment">/// Client to hand out
-    </span>client: RpcClient&lt;RpcService, MemConnector&gt;,
+    </span>client: MemClient,
     <span class="doccomment">/// Handler task
     </span>_handler: AbortOnDropHandle&lt;()&gt;,
+}
+
+<span class="kw">impl </span>Deref <span class="kw">for </span>RpcHandler {
+    <span class="kw">type </span>Target = MemClient;
+
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.client
+    }
 }
 
 <span class="kw">impl </span>RpcHandler {
@@ -1783,6 +1802,7 @@
         <span class="kw">let </span>(listener, connector) = quic_rpc::transport::flume::channel(<span class="number">1</span>);
         <span class="kw">let </span>listener = RpcServer::new(listener);
         <span class="kw">let </span>client = RpcClient::new(connector);
+        <span class="kw">let </span>client = MemClient::new(client);
         <span class="kw">let </span>_handler = listener
             .spawn_accept_loop(<span class="kw">move </span>|req, chan| blobs.clone().handle_rpc_request(req, chan));
         <span class="self">Self </span>{ client, _handler }
