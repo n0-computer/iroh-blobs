@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
     let local_pool = LocalPool::default();
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
-    let blobs_client = blobs.spawn_rpc();
+    let blobs_client = blobs.client();
 
     // Build our custom protocol handler. The `builder` exposes access to various subsystems in the
     // iroh node. In our case, we need a blobs client and the endpoint.
@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
 
             // Print out our query results.
             for hash in hashes {
-                read_and_print(&blobs_client, hash).await?;
+                read_and_print(blobs_client, hash).await?;
             }
         }
     }

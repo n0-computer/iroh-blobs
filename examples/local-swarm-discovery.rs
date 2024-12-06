@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn().await?;
-    let blobs_client = blobs.spawn_rpc();
+    let blobs_client = blobs.client();
 
     match &cli.command {
         Commands::Accept { path } => {

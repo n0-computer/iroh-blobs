@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         .spawn()
         .await?;
 
-    let blobs = blobs.spawn_rpc();
+    let blobs = blobs.client();
 
     let args = std::env::args().collect::<Vec<_>>();
     match &args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
