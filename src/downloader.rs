@@ -1538,12 +1538,6 @@ impl Dialer {
     }
 
     /// Starts to dial a node by [`NodeId`].
-    ///
-    /// Since this dials by [`NodeId`] the [`Endpoint`] must know how to contact the node by
-    /// [`NodeId`] only.  This relies on addressing information being provided by either the
-    /// [discovery service] or manually by calling [`Endpoint::add_node_addr`].
-    ///
-    /// [discovery service]: crate::discovery::Discovery
     fn queue_dial(&mut self, node_id: NodeId, alpn: &'static [u8]) {
         if self.is_pending(node_id) {
             return;
