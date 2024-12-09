@@ -87,7 +87,6 @@ use smallvec::SmallVec;
 use tokio::io::AsyncWriteExt;
 use tracing::trace_span;
 
-mod migrate_redb_v1_v2;
 mod tables;
 #[doc(hidden)]
 pub mod test_support;
@@ -1510,7 +1509,9 @@ impl Actor {
         let db = match redb::Database::create(path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
-                migrate_redb_v1_v2::run(path).map_err(ActorError::Migration)?
+                return Err(ActorError::Migration(anyhow::anyhow!(
+                    "migration from v1 no longer supported"
+                )))
             }
             Err(err) => return Err(err.into()),
         };
