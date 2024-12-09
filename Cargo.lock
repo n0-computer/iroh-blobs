@@ -2079,7 +2079,7 @@ dependencies = [
  "postcard",
  "rand",
  "rand_core",
- "redb 2.2.0",
+ "redb",
  "serde",
  "ssh-key",
  "thiserror 2.0.4",
@@ -2139,9 +2139,7 @@ dependencies = [
  "rand",
  "range-collections",
  "rcgen 0.12.1",
- "redb 1.5.1",
- "redb 2.2.0",
- "ref-cast",
+ "redb",
  "reflink-copy",
  "rustls",
  "self_cell",
@@ -3647,15 +3645,6 @@ dependencies = [
  "rustls-pki-types",
  "time",
  "yasna",
-]
-
-[[package]]
-name = "redb"
-version = "1.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd7f82ecd6ba647a39dd1a7172b8a1cd9453c0adee6da20cb553d83a9a460fa5"
-dependencies = [
- "libc",
 ]
 
 [[package]]
