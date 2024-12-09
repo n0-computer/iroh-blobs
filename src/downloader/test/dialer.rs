@@ -38,7 +38,7 @@ impl Default for TestingDialerInner {
     }
 }
 
-impl Dialer for TestingDialer {
+impl DialerT for TestingDialer {
     type Connection = NodeId;
 
     fn queue_dial(&mut self, node_id: NodeId) {
