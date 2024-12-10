@@ -34,6 +34,7 @@ license-files = [
 ignore = [
       "RUSTSEC-2024-0370", # unmaintained, no upgrade available
       "RUSTSEC-2024-0384", # unmaintained, no upgrade available
+      "RUSTSEC-2024-0421", # we store dns packets by key, and don't do anything else with them. Todo: remove 
 ]
 
 [sources]

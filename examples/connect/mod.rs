@@ -3,6 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use tokio::fs;
 
 pub const EXAMPLE_ALPN: &[u8] = b"n0/iroh/examples/bytes/0";
@@ -40,22 +41,19 @@ pub async fn make_and_write_certs() -> Result<(
     let key_path = path.join("key.der");
     let cert_path = path.join("cert.der");
 
-    let key = cert.serialize_private_key_der();
-    let cert = cert.serialize_der().unwrap();
+    let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+    let cert: CertificateDer = cert.cert.into();
     tokio::fs::create_dir_all(path)
         .await
         .context("failed to create certificate directory")?;
     tokio::fs::write(cert_path, &cert)
         .await
         .context("failed to write certificate")?;
-    tokio::fs::write(key_path, &key)
+    tokio::fs::write(key_path, key.secret_pkcs8_der())
         .await
         .context("failed to write private key")?;
 
-    Ok((
-        rustls::pki_types::PrivateKeyDer::try_from(key).unwrap(),
-        rustls::pki_types::CertificateDer::from(cert),
-    ))
+    Ok((rustls::pki_types::PrivateKeyDer::from(key), cert))
 }
 
 // derived from `quinn/examples/client.rs`
