@@ -117,6 +117,7 @@ example-iroh = [
   "dep:console",
   "iroh/discovery-local-network"
 ]
+test = ["quic-rpc/quinn-transport"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -183,3 +184,4 @@ incremental = false
 [patch.crates-io]
 iroh-base = { git = "https://github.com/n0-computer/iroh" }
 iroh = { git = "https://github.com/n0-computer/iroh" }
+quic-rpc = { git = "https://github.com/n0-computer/quic-rpc" }
