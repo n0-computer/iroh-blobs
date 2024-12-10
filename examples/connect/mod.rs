@@ -53,10 +53,7 @@ pub async fn make_and_write_certs() -> Result<(
         .await
         .context("failed to write private key")?;
 
-    Ok((
-        rustls::pki_types::PrivateKeyDer::try_from(key).unwrap(),
-        rustls::pki_types::CertificateDer::from(cert),
-    ))
+    Ok((rustls::pki_types::PrivateKeyDer::from(key), cert))
 }
 
 // derived from `quinn/examples/client.rs`
