@@ -3534,7 +3534,6 @@ dependencies = [
 [[package]]
 name = "quic-rpc"
 version = "0.17.0"
-source = "git+https://github.com/n0-computer/quic-rpc#1778e1d9523ade44a670f11d4263f8b9e1115b0c"
 dependencies = [
  "anyhow",
  "bytes",

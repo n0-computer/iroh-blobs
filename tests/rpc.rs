@@ -131,10 +131,23 @@ async fn node_and_client() -> TestResult<(Node, BlobsClient, TempDir)> {
 #[tokio::test]
 async fn quinn_rpc_smoke() -> TestResult<()> {
     let _ = tracing_subscriber::fmt::try_init();
-    let (node, client, _testdir) = node_and_client().await?;
-    println!("Made a client");
-    let hash = client.add_bytes(b"hello".to_vec()).await?;
-    println!("Hash: {:?}", hash);
-    drop(node);
+    let (_node, client, _testdir) = node_and_client().await?;
+    let data = b"hello";
+    let hash = client.add_bytes(data.to_vec()).await?.hash;
+    assert_eq!(hash, iroh_blobs::Hash::new(data));
+    let data2 = client.read_to_bytes(hash).await?;
+    assert_eq!(data, &data2[..]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn quinn_rpc_large() -> TestResult<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+    let (_node, client, _testdir) = node_and_client().await?;
+    let data = vec![0; 1024 * 1024 * 16];
+    let hash = client.add_bytes(data.clone()).await?.hash;
+    assert_eq!(hash, iroh_blobs::Hash::new(&data));
+    let data2 = client.read_to_bytes(hash).await?;
+    assert_eq!(data, &data2[..]);
     Ok(())
 }
