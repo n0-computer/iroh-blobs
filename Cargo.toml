@@ -52,7 +52,7 @@ postcard = { version = "1", default-features = false, features = [
     "use-std",
     "experimental-derive",
 ] }
-quic-rpc = { version = "0.17", optional = true }
+quic-rpc = { version = "0.17.1", optional = true }
 quic-rpc-derive = { version = "0.17", optional = true }
 quinn = { package = "iroh-quinn", version = "0.12", features = ["ring"] }
 rand = "0.8"
@@ -184,4 +184,3 @@ incremental = false
 [patch.crates-io]
 iroh-base = { git = "https://github.com/n0-computer/iroh" }
 iroh = { git = "https://github.com/n0-computer/iroh" }
-quic-rpc = { path = "../quic-rpc" }
