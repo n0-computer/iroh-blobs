@@ -31,10 +31,10 @@ request blobs or ranges of blobs, as well as collections.</p>
 <span class="kw">use </span>iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
 
 <span class="attr">#[tokio::main]
-</span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;(), std::fmt::Error&gt; {
+</span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
     <span class="comment">// create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
-    </span><span class="kw">let </span>endpoint = Endpoint::builder().discovery_n0().bind().<span class="kw">await</span>.unwrap();
+    </span><span class="kw">let </span>endpoint = Endpoint::builder().discovery_n0().bind().<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="comment">// spawn a local pool with one thread per CPU
     // for a single threaded pool use `LocalPool::single`
@@ -52,11 +52,15 @@ request blobs or ranges of blobs, as well as collections.</p>
     <span class="comment">// build the router
     </span><span class="kw">let </span>router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn();
+        .spawn()
+        .<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="comment">// do fun stuff with the blobs protocol!
     // make sure not to drop the local_pool before you are finished
-    </span><span class="prelude-val">Ok</span>(())
+    </span>router.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+    drop(local_pool);
+    drop(tags_client);
+    <span class="prelude-val">Ok</span>(())
 }</code></pre></div>
 <h3 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h3>
 <p>Examples that use <code>iroh-blobs</code> can be found in the <code>iroh</code> crate. the iroh crate publishes <code>iroh_blobs</code> as <code>iroh::bytes</code>.</p>

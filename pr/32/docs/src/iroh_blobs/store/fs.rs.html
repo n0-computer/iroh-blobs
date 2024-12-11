@@ -2610,6 +2610,7 @@
 <a href="#2610" id="2610">2610</a>
 <a href="#2611" id="2611">2611</a>
 <a href="#2612" id="2612">2612</a>
+<a href="#2613" id="2613">2613</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! redb backed storage
 //!
 //! Data can get into the store in two ways:
@@ -2699,7 +2700,6 @@
 <span class="kw">use </span>tokio::io::AsyncWriteExt;
 <span class="kw">use </span>tracing::trace_span;
 
-<span class="kw">mod </span>migrate_redb_v1_v2;
 <span class="kw">mod </span>tables;
 <span class="attr">#[doc(hidden)]
 </span><span class="kw">pub mod </span>test_support;
@@ -4122,8 +4122,10 @@
         <span class="kw">let </span>db = <span class="kw">match </span>redb::Database::create(path) {
             <span class="prelude-val">Ok</span>(db) =&gt; db,
             <span class="prelude-val">Err</span>(DatabaseError::UpgradeRequired(<span class="number">1</span>)) =&gt; {
-                migrate_redb_v1_v2::run(path).map_err(ActorError::Migration)<span class="question-mark">?
-            </span>}
+                <span class="kw">return </span><span class="prelude-val">Err</span>(ActorError::Migration(<span class="macro">anyhow::anyhow!</span>(
+                    <span class="string">"migration from v1 no longer supported"
+                </span>)))
+            }
             <span class="prelude-val">Err</span>(err) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(err.into()),
         };
 
