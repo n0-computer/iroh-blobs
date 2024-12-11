@@ -151,6 +151,10 @@ required-features = ["example-iroh"]
 name = "custom-protocol"
 required-features = ["example-iroh"]
 
+[[example]]
+name = "setup"
+required-features = ["example-iroh"]
+
 [lints.rust]
 missing_debug_implementations = "warn"
 
