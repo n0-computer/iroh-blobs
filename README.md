@@ -35,10 +35,10 @@ use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
 
 #[tokio::main]
-async fn main() -> Result<(), std::fmt::Error> {
+async fn main() -> anyhow::Result<()> {
     // create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
-    let endpoint = Endpoint::builder().discovery_n0().bind().await.unwrap();
+    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 
     // spawn a local pool with one thread per CPU
     // for a single threaded pool use `LocalPool::single`
@@ -56,10 +56,14 @@ async fn main() -> Result<(), std::fmt::Error> {
     // build the router
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn();
+        .spawn()
+        .await?;
 
     // do fun stuff with the blobs protocol!
     // make sure not to drop the local_pool before you are finished
+    router.shutdown().await?;
+    drop(local_pool);
+    drop(tags_client);
     Ok(())
 }
 ```
