@@ -992,14 +992,13 @@ mod tests {
     use std::{path::Path, time::Duration};
 
     use iroh::{key::SecretKey, test_utils::DnsPkarrServer, NodeId, RelayMode};
-    use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
     use node::Node;
     use rand::RngCore;
     use testresult::TestResult;
     use tokio::{io::AsyncWriteExt, sync::mpsc};
 
     use super::*;
-    use crate::hashseq::HashSeq;
+    use crate::{hashseq::HashSeq, ticket::BlobTicket};
 
     mod node {
         //! An iroh node that just has the blobs transport
@@ -1799,11 +1798,10 @@ mod tests {
             .await?
             .hash;
 
-        let mut addr = node.node_addr().await?;
-        addr.apply_options(AddrInfoOptions::RelayAndAddresses);
+        let addr = node.node_addr().await?;
         let ticket = BlobTicket::new(addr, hash, BlobFormat::Raw)?;
-        println!("addrs: {:?}", ticket.node_addr().info);
-        assert!(!ticket.node_addr().info.direct_addresses.is_empty());
+        println!("addrs: {:?}", ticket.node_addr());
+        assert!(!ticket.node_addr().direct_addresses.is_empty());
         Ok(())
     }
 

@@ -48,8 +48,9 @@ use iroh::{
     protocol::{ProtocolHandler, Router},
     Endpoint, NodeId,
 };
-use iroh_base::hash::Hash;
-use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool};
+use iroh_blobs::{
+    net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool, Hash,
+};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]

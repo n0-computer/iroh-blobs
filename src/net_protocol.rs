@@ -9,7 +9,6 @@ use anyhow::{bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_util::future::BoxFuture;
 use iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
-use iroh_base::hash::{BlobFormat, Hash};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -21,6 +20,7 @@ use crate::{
         local_pool::{self, LocalPoolHandle},
         SetTagOption,
     },
+    BlobFormat, Hash,
 };
 
 /// A callback that blobs can ask about a set of hashes that should not be garbage collected.
@@ -75,7 +75,7 @@ pub(crate) struct BlobBatches {
 #[derive(Debug, Default)]
 struct BlobBatch {
     /// The tags in this batch.
-    tags: std::collections::BTreeMap<iroh::hash::HashAndFormat, Vec<crate::TempTag>>,
+    tags: std::collections::BTreeMap<crate::HashAndFormat, Vec<crate::TempTag>>,
 }
 
 #[cfg(feature = "rpc")]
@@ -94,11 +94,7 @@ impl BlobBatches {
     }
 
     /// Remove a tag from a batch.
-    pub fn remove_one(
-        &mut self,
-        batch: BatchId,
-        content: &iroh::hash::HashAndFormat,
-    ) -> Result<()> {
+    pub fn remove_one(&mut self, batch: BatchId, content: &crate::HashAndFormat) -> Result<()> {
         if let Some(batch) = self.batches.get_mut(&batch) {
             if let Some(tags) = batch.tags.get_mut(content) {
                 tags.pop();

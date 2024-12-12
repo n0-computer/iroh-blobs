@@ -10,7 +10,6 @@ use genawaiter::{
     GeneratorState,
 };
 use iroh::endpoint::Connection;
-use iroh_base::hash::Hash;
 use iroh_io::AsyncSliceReader;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -31,7 +30,7 @@ use crate::{
         Store as BaoStore,
     },
     util::progress::{IdGenerator, ProgressSender},
-    BlobFormat, HashAndFormat,
+    BlobFormat, Hash, HashAndFormat,
 };
 
 type GetGenerator = Gen<Yield, (), Pin<Box<dyn Future<Output = Result<Stats, GetError>>>>>;

@@ -16,7 +16,6 @@ use bao_tree::{
 };
 use bytes::{Bytes, BytesMut};
 use futures_lite::{Stream, StreamExt};
-use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 use iroh_io::AsyncSliceReader;
 
 use super::{
@@ -31,7 +30,7 @@ use crate::{
         progress::{BoxedProgressSender, IdGenerator, IgnoreProgressSender, ProgressSender},
         TagCounter, TagDrop,
     },
-    Tag, TempTag, IROH_BLOCK_SIZE,
+    BlobFormat, Hash, HashAndFormat, Tag, TempTag, IROH_BLOCK_SIZE,
 };
 
 /// A fully featured in memory database for iroh-blobs, including support for
@@ -428,17 +427,13 @@ impl ReadableStore for Store {
         ))
     }
 
-    async fn tags(
-        &self,
-    ) -> io::Result<crate::store::DbIter<(crate::Tag, iroh_base::hash::HashAndFormat)>> {
+    async fn tags(&self) -> io::Result<crate::store::DbIter<(crate::Tag, crate::HashAndFormat)>> {
         #[allow(clippy::mutable_key_type)]
         let tags = self.read_lock().tags.clone();
         Ok(Box::new(tags.into_iter().map(Ok)))
     }
 
-    fn temp_tags(
-        &self,
-    ) -> Box<dyn Iterator<Item = iroh_base::hash::HashAndFormat> + Send + Sync + 'static> {
+    fn temp_tags(&self) -> Box<dyn Iterator<Item = crate::HashAndFormat> + Send + Sync + 'static> {
         let tags = self.read_lock().temp.keys();
         Box::new(tags)
     }
