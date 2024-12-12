@@ -2,7 +2,6 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use iroh_base::hash::Hash;
 use nested_enum_utils::enum_conversions;
 use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
@@ -20,7 +19,7 @@ use crate::{
         ValidateProgress,
     },
     util::SetTagOption,
-    BlobFormat, HashAndFormat, Tag,
+    BlobFormat, Hash, HashAndFormat, Tag,
 };
 
 #[allow(missing_docs)]

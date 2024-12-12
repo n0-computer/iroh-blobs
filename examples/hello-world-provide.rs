@@ -4,8 +4,7 @@
 //! run this example from the project root:
 //!     $ cargo run --example hello-world-provide
 use iroh::{protocol::Router, Endpoint};
-use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
-use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
+use iroh_blobs::{net_protocol::Blobs, ticket::BlobTicket, util::local_pool::LocalPool};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -35,8 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let res = blobs_client.add_bytes("Hello, world!").await?;
 
     // create a ticket
-    let mut addr = node.endpoint().node_addr().await?;
-    addr.apply_options(AddrInfoOptions::RelayAndAddresses);
+    let addr = node.endpoint().node_addr().await?;
     let ticket = BlobTicket::new(addr, res.hash, res.format)?;
 
     // print some info about the node

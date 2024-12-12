@@ -126,20 +126,20 @@ pub fn relative_canonicalized_path_to_string(path: impl AsRef<Path>) -> anyhow::
     canonicalized_path_to_string(path, true)
 }
 
-/// Loads a [`iroh::key::SecretKey`] from the provided file, or stores a newly generated one
+/// Loads a [`iroh::SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
 #[cfg(feature = "rpc")]
 #[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
-pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<iroh::key::SecretKey> {
+pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<iroh::SecretKey> {
+    use iroh::SecretKey;
     use tokio::io::AsyncWriteExt;
 
     if key_path.exists() {
         let keystr = tokio::fs::read(key_path).await?;
-        let secret_key =
-            iroh::key::SecretKey::try_from_openssh(keystr).context("invalid keyfile")?;
+        let secret_key = SecretKey::try_from_openssh(keystr).context("invalid keyfile")?;
         Ok(secret_key)
     } else {
-        let secret_key = iroh::key::SecretKey::generate();
+        let secret_key = SecretKey::generate();
         let ser_key = secret_key.to_openssh()?;
 
         // Try to canonicalize if possible

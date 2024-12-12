@@ -15,8 +15,7 @@ use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState,
     ProgressStyle,
 };
-use iroh::{key::PublicKey, relay::RelayUrl, NodeAddr};
-use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
+use iroh::{NodeAddr, PublicKey, RelayUrl};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
@@ -27,6 +26,7 @@ use crate::{
         self, BlobInfo, BlobStatus, CollectionInfo, DownloadOptions, IncompleteBlobInfo, WrapOption,
     },
     store::{ConsistencyCheckProgress, ExportFormat, ExportMode, ReportLevel, ValidateProgress},
+    ticket::BlobTicket,
     util::SetTagOption,
     BlobFormat, Hash, HashAndFormat, Tag,
 };
@@ -146,11 +146,6 @@ pub enum BlobCommands {
     Share {
         /// Hash of the blob to share.
         hash: Hash,
-        /// Options to configure the address information in the generated ticket.
-        ///
-        /// Use `relay-and-addresses` in networks with no internet connectivity.
-        #[clap(long, default_value_t = AddrInfoOptions::Id)]
-        addr_options: AddrInfoOptions,
         /// If the blob is a collection, the requester will also fetch the listed blobs.
         #[clap(long, default_value_t = false)]
         recursive: bool,
@@ -203,18 +198,22 @@ impl BlobCommands {
 
                         // create the node address with the appropriate overrides
                         let node_addr = {
-                            let NodeAddr { node_id, info } = node_addr;
+                            let NodeAddr {
+                                node_id,
+                                relay_url: original_relay_url,
+                                direct_addresses,
+                            } = node_addr;
                             let addresses = if override_addresses {
                                 // use only the cli supplied ones
                                 address
                             } else {
                                 // use both the cli supplied ones and the ticket ones
-                                address.extend(info.direct_addresses);
+                                address.extend(direct_addresses);
                                 address
                             };
 
                             // prefer direct arg over ticket
-                            let relay_url = relay_url.or(info.relay_url);
+                            let relay_url = relay_url.or(original_relay_url);
 
                             NodeAddr::from_parts(node_id, relay_url, addresses)
                         };
@@ -357,7 +356,6 @@ impl BlobCommands {
             } => add_with_opts(blobs, addr, path, options).await,
             Self::Share {
                 hash,
-                addr_options,
                 recursive,
                 debug,
             } => {
@@ -367,8 +365,6 @@ impl BlobCommands {
                     BlobFormat::Raw
                 };
                 let status = blobs.status(hash).await?;
-                let mut addr = addr;
-                addr.apply_options(addr_options);
                 let ticket = BlobTicket::new(addr, hash, format)?;
 
                 let (blob_status, size) = match (status, format) {
