@@ -268,10 +268,10 @@ where
             }
         });
         tokio::spawn(async move {
-            // TODO: Is it important to catch this error? It should also result in an error on the
-            // response stream. If we deem it important, we could one-shot send it into the
-            // BlobAddProgress and return from there. Not sure.
             if let Err(err) = sink.send_all(&mut input).await {
+                // if we get an error in send_all due to the connection being closed, this will just fail again.
+                // if we get an error due to something else (serialization or size limit), tell the remote to abort.
+                sink.send(AddStreamUpdate::Abort).await.ok();
                 warn!("Failed to send input stream to remote: {err:?}");
             }
         });
@@ -281,7 +281,7 @@ where
 
     /// Write a blob by passing bytes.
     pub async fn add_bytes(&self, bytes: impl Into<Bytes>) -> anyhow::Result<AddOutcome> {
-        let input = futures_lite::stream::once(Ok(bytes.into()));
+        let input = chunked_bytes_stream(bytes.into(), 1024 * 64).map(Ok);
         self.add_stream(input, SetTagOption::Auto).await?.await
     }
 
@@ -291,7 +291,7 @@ where
         bytes: impl Into<Bytes>,
         name: impl Into<Tag>,
     ) -> anyhow::Result<AddOutcome> {
-        let input = futures_lite::stream::once(Ok(bytes.into()));
+        let input = chunked_bytes_stream(bytes.into(), 1024 * 64).map(Ok);
         self.add_stream(input, SetTagOption::Named(name.into()))
             .await?
             .await
@@ -985,6 +985,12 @@ pub struct DownloadOptions {
     pub tag: SetTagOption,
     /// Whether to directly start the download or add it to the download queue.
     pub mode: DownloadMode,
+}
+
+fn chunked_bytes_stream(mut b: Bytes, c: usize) -> impl Stream<Item = Bytes> {
+    futures_lite::stream::iter(std::iter::from_fn(move || {
+        Some(b.split_to(b.len().min(c))).filter(|x| !x.is_empty())
+    }))
 }
 
 #[cfg(test)]
