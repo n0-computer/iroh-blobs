@@ -26,13 +26,11 @@
 //! [iroh]: https://docs.rs/iroh
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![recursion_limit = "256"]
-#![cfg_attr(iroh_docsrs, feature(doc_cfg))]
+#![cfg_attr(iroh_docsrs, feature(doc_auto_cfg))]
 
 #[cfg(feature = "cli")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "cli")))]
 pub mod cli;
 #[cfg(feature = "downloader")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "downloader")))]
 pub mod downloader;
 pub mod export;
 pub mod format;
@@ -40,12 +38,10 @@ pub mod get;
 pub mod hashseq;
 pub mod metrics;
 #[cfg(feature = "net_protocol")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "net_protocol")))]
 pub mod net_protocol;
 pub mod protocol;
 pub mod provider;
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 pub mod rpc;
 pub mod store;
 pub mod ticket;
