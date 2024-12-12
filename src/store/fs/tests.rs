@@ -1,6 +1,7 @@
 use std::io::Cursor;
 
 use bao_tree::ChunkRanges;
+use bytes::BytesMut;
 use iroh_io::AsyncSliceReaderExt;
 
 use crate::{
@@ -8,9 +9,9 @@ use crate::{
         bao_file::test_support::{
             decode_response_into_batch, make_wire_data, random_test_data, simulate_remote, validate,
         },
-        Map as _, MapEntryMut, MapMut, ReadableStore, Store as _,
+        Map as _, MapEntry, MapEntryMut, MapMut, ReadableStore, Store as _, ValidateProgress,
     },
-    util::raw_outboard,
+    util::{progress::AsyncChannelProgressSender, raw_outboard},
     IROH_BLOCK_SIZE,
 };
 
@@ -808,4 +809,35 @@ async fn actor_store_smoke() {
     db.insert_complete(handle).await.unwrap();
     db.sync().await.unwrap();
     db.dump().await.unwrap();
+}
+
+#[tokio::test]
+async fn verifiable_stream_smoke() -> testresult::TestResult {
+    let db1 = crate::store::mem::Store::new();
+    let db2 = crate::store::mem::Store::new();
+
+    const SIZE: usize = 16 * 1024 * 1024;
+    let data = random_test_data(SIZE);
+    let tag = db1.import_bytes(Bytes::from(data), BlobFormat::Raw).await?;
+    let mut buffer = BytesMut::with_capacity(SIZE + 1024 * 1024);
+    let entry = db1.get(tag.hash()).await?.expect("We just wrote this hash");
+
+    entry.write_verifiable_stream(0, &mut buffer).await?;
+
+    db2.import_verifiable_stream(*tag.hash(), SIZE as u64, 0, buffer.freeze())
+        .await?;
+
+    let (tx, rx) = async_channel::bounded(128);
+    let handle = tokio::spawn(async move {
+        while let Ok(progress) = rx.recv().await {
+            if let ValidateProgress::Abort(err) = progress {
+                panic!("Got an error: {err}");
+            }
+        }
+    });
+    db2.validate(false, AsyncChannelProgressSender::new(tx).boxed())
+        .await?;
+    handle.await?;
+
+    Ok(())
 }
