@@ -48,15 +48,19 @@ pub mod provider;
 #[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 pub mod rpc;
 pub mod store;
+pub mod ticket;
 pub mod util;
 
+mod hash;
+
 use bao_tree::BlockSize;
-pub use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
-
-pub use crate::util::{Tag, TempTag};
-
-/// Block size used by iroh, 2^4*1024 = 16KiB
-pub const IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(4);
 
 #[doc(inline)]
 pub use crate::protocol::ALPN;
+pub use crate::{
+    hash::{BlobFormat, Hash, HashAndFormat},
+    util::{Tag, TempTag},
+};
+
+/// Block size used by iroh, 2^4*1024 = 16KiB
+pub const IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(4);

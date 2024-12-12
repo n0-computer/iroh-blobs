@@ -79,7 +79,6 @@ use bao_tree::io::{
 use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use genawaiter::rc::{Co, Gen};
-use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 use iroh_io::AsyncSliceReader;
 use redb::{AccessGuard, DatabaseError, ReadableTable, StorageError};
 use serde::{Deserialize, Serialize};
@@ -120,7 +119,7 @@ use crate::{
         },
         raw_outboard_size, MemOrFile, TagCounter, TagDrop,
     },
-    Tag, TempTag,
+    BlobFormat, Hash, HashAndFormat, Tag, TempTag,
 };
 
 /// Location of the data.
@@ -1333,7 +1332,7 @@ impl super::Store for Store {
     async fn import_bytes(
         &self,
         data: bytes::Bytes,
-        format: iroh_base::hash::BlobFormat,
+        format: crate::BlobFormat,
     ) -> io::Result<crate::TempTag> {
         let this = self.0.clone();
         Ok(tokio::task::spawn_blocking(move || this.import_bytes_sync(data, format)).await??)

@@ -2,10 +2,10 @@ use std::{path::PathBuf, str::FromStr};
 
 use anyhow::Result;
 use iroh::{protocol::Router, Endpoint};
-use iroh_base::ticket::BlobTicket;
 use iroh_blobs::{
     net_protocol::Blobs,
     rpc::client::blobs::{ReadAtLen, WrapOption},
+    ticket::BlobTicket,
     util::{local_pool::LocalPool, SetTagOption},
 };
 

@@ -17,7 +17,6 @@ use futures_lite::StreamExt;
 use futures_util::{FutureExt, Stream};
 use genawaiter::sync::{Co, Gen};
 use iroh::{Endpoint, NodeAddr};
-use iroh_base::hash::{BlobFormat, HashAndFormat};
 use iroh_io::AsyncSliceReader;
 use proto::{
     blobs::{
@@ -58,7 +57,7 @@ use crate::{
         progress::{AsyncChannelProgressSender, ProgressSender},
         SetTagOption,
     },
-    Tag,
+    BlobFormat, HashAndFormat, Tag,
 };
 pub mod client;
 pub mod proto;
@@ -985,7 +984,7 @@ impl<D: crate::store::Store> Handler<D> {
         let mut any_added = false;
         for node in nodes {
             node_ids.push(node.node_id);
-            if !node.info.is_empty() {
+            if !node.is_empty() {
                 endpoint.add_node_addr_with_source(node, BLOB_DOWNLOAD_SOURCE_NAME)?;
                 any_added = true;
             }

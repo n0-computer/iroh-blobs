@@ -46,7 +46,6 @@ use anyhow::anyhow;
 use futures_lite::{future::BoxedLocal, Stream, StreamExt};
 use hashlink::LinkedHashSet;
 use iroh::{endpoint, Endpoint, NodeAddr, NodeId};
-use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 use iroh_metrics::inc;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -60,6 +59,7 @@ use crate::{
     metrics::Metrics,
     store::Store,
     util::{local_pool::LocalPoolHandle, progress::ProgressSender},
+    BlobFormat, Hash, HashAndFormat,
 };
 
 mod get;

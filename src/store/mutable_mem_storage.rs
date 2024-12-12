@@ -63,10 +63,7 @@ impl SizeInfo {
 
 impl MutableMemStorage {
     /// Create a new mutable mem storage from the given data
-    pub fn complete(
-        bytes: Bytes,
-        cb: impl Fn(u64) + Send + Sync + 'static,
-    ) -> (Self, iroh_base::hash::Hash) {
+    pub fn complete(bytes: Bytes, cb: impl Fn(u64) + Send + Sync + 'static) -> (Self, crate::Hash) {
         let (hash, outboard) = compute_outboard(&bytes[..], bytes.len() as u64, move |offset| {
             cb(offset);
             Ok(())

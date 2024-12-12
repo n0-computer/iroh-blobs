@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::anyhow;
 use futures_util::future::FutureExt;
-use iroh::key::SecretKey;
+use iroh::SecretKey;
 
 use super::*;
 use crate::{
