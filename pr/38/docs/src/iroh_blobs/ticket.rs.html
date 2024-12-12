@@ -213,18 +213,12 @@
 <a href="#212" id="212">212</a>
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
-<a href="#215" id="215">215</a>
-<a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a>
-<a href="#218" id="218">218</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tickets for blobs.
+<a href="#215" id="215">215</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tickets for blobs.
 </span><span class="kw">use </span>std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>iroh::{NodeId, RelayUrl};
-<span class="kw">use </span>iroh_base::{
-    node_addr::NodeAddr,
-    ticket::{<span class="self">self</span>, Ticket},
-};
+<span class="kw">use </span>iroh::{NodeAddr, NodeId, RelayUrl};
+<span class="kw">use </span>iroh_base::ticket::{<span class="self">self</span>, Ticket};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use crate</span>::{BlobFormat, Hash};
@@ -374,7 +368,7 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::net::SocketAddr;
 
-    <span class="kw">use </span>iroh::key::{PublicKey, SecretKey};
+    <span class="kw">use </span>iroh::{PublicKey, SecretKey};
     <span class="kw">use </span>iroh_base::base32;
     <span class="kw">use </span>iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 

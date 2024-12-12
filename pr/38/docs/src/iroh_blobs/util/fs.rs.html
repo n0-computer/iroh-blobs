@@ -572,20 +572,20 @@
     canonicalized_path_to_string(path, <span class="bool-val">true</span>)
 }
 
-<span class="doccomment">/// Loads a [`iroh::key::SecretKey`] from the provided file, or stores a newly generated one
+<span class="doccomment">/// Loads a [`iroh::SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
 </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
 #[cfg_attr(iroh_docsrs, doc(cfg(feature = <span class="string">"rpc"</span>)))]
-</span><span class="kw">pub async fn </span>load_secret_key(key_path: PathBuf) -&gt; anyhow::Result&lt;iroh::key::SecretKey&gt; {
+</span><span class="kw">pub async fn </span>load_secret_key(key_path: PathBuf) -&gt; anyhow::Result&lt;iroh::SecretKey&gt; {
+    <span class="kw">use </span>iroh::SecretKey;
     <span class="kw">use </span>tokio::io::AsyncWriteExt;
 
     <span class="kw">if </span>key_path.exists() {
         <span class="kw">let </span>keystr = tokio::fs::read(key_path).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>secret_key =
-            iroh::key::SecretKey::try_from_openssh(keystr).context(<span class="string">"invalid keyfile"</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>secret_key = SecretKey::try_from_openssh(keystr).context(<span class="string">"invalid keyfile"</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(secret_key)
     } <span class="kw">else </span>{
-        <span class="kw">let </span>secret_key = iroh::key::SecretKey::generate();
+        <span class="kw">let </span>secret_key = SecretKey::generate();
         <span class="kw">let </span>ser_key = secret_key.to_openssh()<span class="question-mark">?</span>;
 
         <span class="comment">// Try to canonicalize if possible
