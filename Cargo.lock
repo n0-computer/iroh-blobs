@@ -1954,7 +1954,7 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 [[package]]
 name = "iroh"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#cf0f8cc4f7d842a41aed0a22cb5687315ca8f967"
+source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2036,7 +2036,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#cf0f8cc4f7d842a41aed0a22cb5687315ca8f967"
+source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
 dependencies = [
  "aead",
  "anyhow",
@@ -2172,7 +2172,7 @@ dependencies = [
 [[package]]
 name = "iroh-net-report"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#cf0f8cc4f7d842a41aed0a22cb5687315ca8f967"
+source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2249,7 +2249,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#cf0f8cc4f7d842a41aed0a22cb5687315ca8f967"
+source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
 dependencies = [
  "anyhow",
  "base64",
