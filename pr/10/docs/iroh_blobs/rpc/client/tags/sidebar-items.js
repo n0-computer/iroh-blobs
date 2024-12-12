@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Client","TagInfo"]};
+window.SIDEBAR_ITEMS = {"struct":["Client","TagInfo"],"type":["MemClient"]};

@@ -1,4 +1,5 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/rpc/client/blobs.rs`."><title>blobs.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-b21aa549bf6d91ff.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.0-nightly (c987ad527 2024-05-01)" data-channel="nightly" data-search-js="search-bf21c90c8c1d92b1.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../../static.files/storage-e32f0c247825364d.js"></script><script defer src="../../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-09095024cf37855e.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../../../iroh_blobs/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type ‘S’ or ‘/’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../../../settings.html" title="settings">Settings</a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/rpc/client/blobs.rs`."><title>blobs.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-dbdb5eec.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0-nightly (d10a6823f 2024-11-29)" data-channel="nightly" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iroh_blobs/rpc/client/</div>blobs.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -1794,7 +1795,148 @@
 <a href="#1794" id="1794">1794</a>
 <a href="#1795" id="1795">1795</a>
 <a href="#1796" id="1796">1796</a>
-</pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1797" id="1797">1797</a>
+<a href="#1798" id="1798">1798</a>
+<a href="#1799" id="1799">1799</a>
+<a href="#1800" id="1800">1800</a>
+<a href="#1801" id="1801">1801</a>
+<a href="#1802" id="1802">1802</a>
+<a href="#1803" id="1803">1803</a>
+<a href="#1804" id="1804">1804</a>
+<a href="#1805" id="1805">1805</a>
+<a href="#1806" id="1806">1806</a>
+<a href="#1807" id="1807">1807</a>
+<a href="#1808" id="1808">1808</a>
+<a href="#1809" id="1809">1809</a>
+<a href="#1810" id="1810">1810</a>
+<a href="#1811" id="1811">1811</a>
+<a href="#1812" id="1812">1812</a>
+<a href="#1813" id="1813">1813</a>
+<a href="#1814" id="1814">1814</a>
+<a href="#1815" id="1815">1815</a>
+<a href="#1816" id="1816">1816</a>
+<a href="#1817" id="1817">1817</a>
+<a href="#1818" id="1818">1818</a>
+<a href="#1819" id="1819">1819</a>
+<a href="#1820" id="1820">1820</a>
+<a href="#1821" id="1821">1821</a>
+<a href="#1822" id="1822">1822</a>
+<a href="#1823" id="1823">1823</a>
+<a href="#1824" id="1824">1824</a>
+<a href="#1825" id="1825">1825</a>
+<a href="#1826" id="1826">1826</a>
+<a href="#1827" id="1827">1827</a>
+<a href="#1828" id="1828">1828</a>
+<a href="#1829" id="1829">1829</a>
+<a href="#1830" id="1830">1830</a>
+<a href="#1831" id="1831">1831</a>
+<a href="#1832" id="1832">1832</a>
+<a href="#1833" id="1833">1833</a>
+<a href="#1834" id="1834">1834</a>
+<a href="#1835" id="1835">1835</a>
+<a href="#1836" id="1836">1836</a>
+<a href="#1837" id="1837">1837</a>
+<a href="#1838" id="1838">1838</a>
+<a href="#1839" id="1839">1839</a>
+<a href="#1840" id="1840">1840</a>
+<a href="#1841" id="1841">1841</a>
+<a href="#1842" id="1842">1842</a>
+<a href="#1843" id="1843">1843</a>
+<a href="#1844" id="1844">1844</a>
+<a href="#1845" id="1845">1845</a>
+<a href="#1846" id="1846">1846</a>
+<a href="#1847" id="1847">1847</a>
+<a href="#1848" id="1848">1848</a>
+<a href="#1849" id="1849">1849</a>
+<a href="#1850" id="1850">1850</a>
+<a href="#1851" id="1851">1851</a>
+<a href="#1852" id="1852">1852</a>
+<a href="#1853" id="1853">1853</a>
+<a href="#1854" id="1854">1854</a>
+<a href="#1855" id="1855">1855</a>
+<a href="#1856" id="1856">1856</a>
+<a href="#1857" id="1857">1857</a>
+<a href="#1858" id="1858">1858</a>
+<a href="#1859" id="1859">1859</a>
+<a href="#1860" id="1860">1860</a>
+<a href="#1861" id="1861">1861</a>
+<a href="#1862" id="1862">1862</a>
+<a href="#1863" id="1863">1863</a>
+<a href="#1864" id="1864">1864</a>
+<a href="#1865" id="1865">1865</a>
+<a href="#1866" id="1866">1866</a>
+<a href="#1867" id="1867">1867</a>
+<a href="#1868" id="1868">1868</a>
+<a href="#1869" id="1869">1869</a>
+<a href="#1870" id="1870">1870</a>
+<a href="#1871" id="1871">1871</a>
+<a href="#1872" id="1872">1872</a>
+<a href="#1873" id="1873">1873</a>
+<a href="#1874" id="1874">1874</a>
+<a href="#1875" id="1875">1875</a>
+<a href="#1876" id="1876">1876</a>
+<a href="#1877" id="1877">1877</a>
+<a href="#1878" id="1878">1878</a>
+<a href="#1879" id="1879">1879</a>
+<a href="#1880" id="1880">1880</a>
+<a href="#1881" id="1881">1881</a>
+<a href="#1882" id="1882">1882</a>
+<a href="#1883" id="1883">1883</a>
+<a href="#1884" id="1884">1884</a>
+<a href="#1885" id="1885">1885</a>
+<a href="#1886" id="1886">1886</a>
+<a href="#1887" id="1887">1887</a>
+<a href="#1888" id="1888">1888</a>
+<a href="#1889" id="1889">1889</a>
+<a href="#1890" id="1890">1890</a>
+<a href="#1891" id="1891">1891</a>
+<a href="#1892" id="1892">1892</a>
+<a href="#1893" id="1893">1893</a>
+<a href="#1894" id="1894">1894</a>
+<a href="#1895" id="1895">1895</a>
+<a href="#1896" id="1896">1896</a>
+<a href="#1897" id="1897">1897</a>
+<a href="#1898" id="1898">1898</a>
+<a href="#1899" id="1899">1899</a>
+<a href="#1900" id="1900">1900</a>
+<a href="#1901" id="1901">1901</a>
+<a href="#1902" id="1902">1902</a>
+<a href="#1903" id="1903">1903</a>
+<a href="#1904" id="1904">1904</a>
+<a href="#1905" id="1905">1905</a>
+<a href="#1906" id="1906">1906</a>
+<a href="#1907" id="1907">1907</a>
+<a href="#1908" id="1908">1908</a>
+<a href="#1909" id="1909">1909</a>
+<a href="#1910" id="1910">1910</a>
+<a href="#1911" id="1911">1911</a>
+<a href="#1912" id="1912">1912</a>
+<a href="#1913" id="1913">1913</a>
+<a href="#1914" id="1914">1914</a>
+<a href="#1915" id="1915">1915</a>
+<a href="#1916" id="1916">1916</a>
+<a href="#1917" id="1917">1917</a>
+<a href="#1918" id="1918">1918</a>
+<a href="#1919" id="1919">1919</a>
+<a href="#1920" id="1920">1920</a>
+<a href="#1921" id="1921">1921</a>
+<a href="#1922" id="1922">1922</a>
+<a href="#1923" id="1923">1923</a>
+<a href="#1924" id="1924">1924</a>
+<a href="#1925" id="1925">1925</a>
+<a href="#1926" id="1926">1926</a>
+<a href="#1927" id="1927">1927</a>
+<a href="#1928" id="1928">1928</a>
+<a href="#1929" id="1929">1929</a>
+<a href="#1930" id="1930">1930</a>
+<a href="#1931" id="1931">1931</a>
+<a href="#1932" id="1932">1932</a>
+<a href="#1933" id="1933">1933</a>
+<a href="#1934" id="1934">1934</a>
+<a href="#1935" id="1935">1935</a>
+<a href="#1936" id="1936">1936</a>
+<a href="#1937" id="1937">1937</a>
+<a href="#1938" id="1938">1938</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -1866,7 +2008,7 @@
 <span class="kw">use </span>futures_lite::{Stream, StreamExt};
 <span class="kw">use </span>futures_util::SinkExt;
 <span class="kw">use </span>genawaiter::sync::{Co, Gen};
-<span class="kw">use </span>iroh_net::NodeAddr;
+<span class="kw">use </span>iroh::NodeAddr;
 <span class="kw">use </span>portable_atomic::{AtomicU64, Ordering};
 <span class="kw">use </span>quic_rpc::{
     client::{BoxStreamSync, BoxedConnector},
@@ -1907,6 +2049,9 @@
     <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
+<span class="doccomment">/// Type alias for a memory-backed client.
+</span><span class="kw">pub type </span>MemClient = Client&lt;<span class="kw">crate</span>::rpc::MemConnector&gt;;
+
 <span class="kw">impl</span>&lt;C&gt; Client&lt;C&gt;
 <span class="kw">where
     </span>C: Connector&lt;RpcService&gt;,
@@ -1914,6 +2059,11 @@
     <span class="doccomment">/// Create a new client
     </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ rpc }
+    }
+
+    <span class="doccomment">/// Get a tags client.
+    </span><span class="kw">pub fn </span>tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tags::Client&lt;C&gt; {
+        tags::Client::new(<span class="self">self</span>.rpc.clone())
     }
 
     <span class="doccomment">/// Check if a blob is completely stored on the node.
@@ -2056,10 +2206,10 @@
             }
         });
         tokio::spawn(<span class="kw">async move </span>{
-            <span class="comment">// TODO: Is it important to catch this error? It should also result in an error on the
-            // response stream. If we deem it important, we could one-shot send it into the
-            // BlobAddProgress and return from there. Not sure.
-            </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = sink.send_all(<span class="kw-2">&amp;mut </span>input).<span class="kw">await </span>{
+            <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = sink.send_all(<span class="kw-2">&amp;mut </span>input).<span class="kw">await </span>{
+                <span class="comment">// if we get an error in send_all due to the connection being closed, this will just fail again.
+                // if we get an error due to something else (serialization or size limit), tell the remote to abort.
+                </span>sink.send(AddStreamUpdate::Abort).<span class="kw">await</span>.ok();
                 <span class="macro">warn!</span>(<span class="string">"Failed to send input stream to remote: {err:?}"</span>);
             }
         });
@@ -2069,7 +2219,7 @@
 
     <span class="doccomment">/// Write a blob by passing bytes.
     </span><span class="kw">pub async fn </span>add_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>, bytes: <span class="kw">impl </span>Into&lt;Bytes&gt;) -&gt; anyhow::Result&lt;AddOutcome&gt; {
-        <span class="kw">let </span>input = futures_lite::stream::once(<span class="prelude-val">Ok</span>(bytes.into()));
+        <span class="kw">let </span>input = chunked_bytes_stream(bytes.into(), <span class="number">1024 </span>* <span class="number">64</span>).map(<span class="prelude-val">Ok</span>);
         <span class="self">self</span>.add_stream(input, SetTagOption::Auto).<span class="kw">await</span><span class="question-mark">?</span>.<span class="kw">await
     </span>}
 
@@ -2079,7 +2229,7 @@
         bytes: <span class="kw">impl </span>Into&lt;Bytes&gt;,
         name: <span class="kw">impl </span>Into&lt;Tag&gt;,
     ) -&gt; anyhow::Result&lt;AddOutcome&gt; {
-        <span class="kw">let </span>input = futures_lite::stream::once(<span class="prelude-val">Ok</span>(bytes.into()));
+        <span class="kw">let </span>input = chunked_bytes_stream(bytes.into(), <span class="number">1024 </span>* <span class="number">64</span>).map(<span class="prelude-val">Ok</span>);
         <span class="self">self</span>.add_stream(input, SetTagOption::Named(name.into()))
             .<span class="kw">await</span><span class="question-mark">?
             </span>.<span class="kw">await
@@ -2775,26 +2925,36 @@
     </span><span class="kw">pub </span>mode: DownloadMode,
 }
 
+<span class="kw">fn </span>chunked_bytes_stream(<span class="kw-2">mut </span>b: Bytes, c: usize) -&gt; <span class="kw">impl </span>Stream&lt;Item = Bytes&gt; {
+    futures_lite::stream::iter(std::iter::from_fn(<span class="kw">move </span>|| {
+        <span class="prelude-val">Some</span>(b.split_to(b.len().min(c))).filter(|x| !x.is_empty())
+    }))
+}
+
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
-    <span class="kw">use </span>iroh_net::NodeId;
+    <span class="kw">use </span>std::{path::Path, time::Duration};
+
+    <span class="kw">use </span>iroh::{test_utils::DnsPkarrServer, NodeId, RelayMode, SecretKey};
+    <span class="kw">use </span>node::Node;
     <span class="kw">use </span>rand::RngCore;
     <span class="kw">use </span>testresult::TestResult;
     <span class="kw">use </span>tokio::{io::AsyncWriteExt, sync::mpsc};
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
-    <span class="kw">use </span><span class="kw">crate</span>::hashseq::HashSeq;
+    <span class="kw">use crate</span>::{hashseq::HashSeq, ticket::BlobTicket};
 
     <span class="kw">mod </span>node {
         <span class="doccomment">//! An iroh node that just has the blobs transport
-        </span><span class="kw">use </span>std::{path::Path, sync::Arc};
+        </span><span class="kw">use </span>std::path::Path;
 
-        <span class="kw">use </span>iroh_net::{NodeAddr, NodeId};
-        <span class="kw">use </span>quic_rpc::transport::{Connector, Listener};
+        <span class="kw">use </span>iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
         <span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
 
         <span class="kw">use </span><span class="kw">super</span>::RpcService;
         <span class="kw">use crate</span>::{
+            downloader::Downloader,
+            net_protocol::Blobs,
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
             util::local_pool::LocalPool,
@@ -2805,7 +2965,7 @@
         <span class="doccomment">/// An iroh node that just has the blobs transport
         </span><span class="attr">#[derive(Debug)]
         </span><span class="kw">pub struct </span>Node {
-            router: iroh_router::Router,
+            router: iroh::protocol::Router,
             client: RpcClient,
             _local_pool: LocalPool,
             _rpc_task: AbortOnDropHandle&lt;()&gt;,
@@ -2816,26 +2976,65 @@
         </span><span class="kw">pub struct </span>Builder&lt;S&gt; {
             store: S,
             events: EventSender,
+            endpoint: <span class="prelude-ty">Option</span>&lt;iroh::endpoint::Builder&gt;,
         }
 
         <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Builder&lt;S&gt; {
             <span class="doccomment">/// Sets the event sender
             </span><span class="kw">pub fn </span>blobs_events(<span class="self">self</span>, events: <span class="kw">impl </span>CustomEventSender) -&gt; <span class="self">Self </span>{
-                Builder {
-                    store: <span class="self">self</span>.store,
+                <span class="self">Self </span>{
                     events: events.into(),
-                }
+                    ..<span class="self">self
+                </span>}
+            }
+
+            <span class="doccomment">/// Set an endpoint builder
+            </span><span class="kw">pub fn </span>endpoint(<span class="self">self</span>, endpoint: iroh::endpoint::Builder) -&gt; <span class="self">Self </span>{
+                <span class="self">Self </span>{
+                    endpoint: <span class="prelude-val">Some</span>(endpoint),
+                    ..<span class="self">self
+                </span>}
             }
 
             <span class="doccomment">/// Spawns the node
             </span><span class="kw">pub async fn </span>spawn(<span class="self">self</span>) -&gt; anyhow::Result&lt;Node&gt; {
-                <span class="kw">let </span>(client, router, rpc_task, _local_pool) =
-                    setup_router(<span class="self">self</span>.store, <span class="self">self</span>.events).<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="kw">let </span>store = <span class="self">self</span>.store;
+                <span class="kw">let </span>events = <span class="self">self</span>.events;
+                <span class="kw">let </span>endpoint = <span class="self">self
+                    </span>.endpoint
+                    .unwrap_or_else(|| Endpoint::builder().discovery_n0())
+                    .bind()
+                    .<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="kw">let </span>local_pool = LocalPool::single();
+                <span class="kw">let </span><span class="kw-2">mut </span>router = Router::builder(endpoint.clone());
+
+                <span class="comment">// Setup blobs
+                </span><span class="kw">let </span>downloader =
+                    Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
+                <span class="kw">let </span>blobs = Blobs::new(
+                    store.clone(),
+                    local_pool.handle().clone(),
+                    events,
+                    downloader,
+                    endpoint.clone(),
+                );
+                router = router.accept(<span class="kw">crate</span>::ALPN, blobs.clone());
+
+                <span class="comment">// Build the router
+                </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+
+                <span class="comment">// Setup RPC
+                </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
+                <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc).boxed();
+                <span class="kw">let </span>_rpc_task = internal_rpc.spawn_accept_loop(<span class="kw">move </span>|msg, chan| {
+                    blobs.clone().handle_rpc_request(msg, chan)
+                });
+                <span class="kw">let </span>client = quic_rpc::RpcClient::new(controller).boxed();
                 <span class="prelude-val">Ok</span>(Node {
                     router,
                     client,
-                    _rpc_task: AbortOnDropHandle::new(rpc_task),
-                    _local_pool,
+                    _rpc_task,
+                    _local_pool: local_pool,
                 })
             }
         }
@@ -2846,6 +3045,7 @@
                 Builder {
                     store: <span class="kw">crate</span>::store::mem::Store::new(),
                     events: Default::default(),
+                    endpoint: <span class="prelude-val">None</span>,
                 }
             }
 
@@ -2856,6 +3056,7 @@
                 <span class="prelude-val">Ok</span>(Builder {
                     store: <span class="kw">crate</span>::store::fs::Store::load(path).<span class="kw">await</span><span class="question-mark">?</span>,
                     events: Default::default(),
+                    endpoint: <span class="prelude-val">None</span>,
                 })
             }
 
@@ -2883,66 +3084,6 @@
             </span><span class="kw">pub fn </span>tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tags::Client {
                 tags::Client::new(<span class="self">self</span>.client.clone())
             }
-        }
-
-        <span class="kw">async fn </span>setup_router&lt;S: <span class="kw">crate</span>::store::Store&gt;(
-            store: S,
-            events: EventSender,
-        ) -&gt; anyhow::Result&lt;(
-            RpcClient,
-            iroh_router::Router,
-            tokio::task::JoinHandle&lt;()&gt;,
-            LocalPool,
-        )&gt; {
-            <span class="kw">let </span>endpoint = iroh_net::Endpoint::builder().discovery_n0().bind().<span class="kw">await</span><span class="question-mark">?</span>;
-            <span class="kw">let </span>local_pool = LocalPool::single();
-            <span class="kw">let </span><span class="kw-2">mut </span>router = iroh_router::Router::builder(endpoint.clone());
-
-            <span class="comment">// Setup blobs
-            </span><span class="kw">let </span>downloader = <span class="kw">crate</span>::downloader::Downloader::new(
-                store.clone(),
-                endpoint.clone(),
-                local_pool.handle().clone(),
-            );
-            <span class="kw">let </span>blobs = Arc::new(<span class="kw">crate</span>::net_protocol::Blobs::new_with_events(
-                store.clone(),
-                local_pool.handle().clone(),
-                events,
-                downloader,
-                endpoint.clone(),
-            ));
-            router = router.accept(<span class="kw">crate</span>::protocol::ALPN.to_vec(), blobs.clone());
-
-            <span class="comment">// Build the router
-            </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
-
-            <span class="comment">// Setup RPC
-            </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
-            <span class="kw">let </span>controller = controller.boxed();
-            <span class="kw">let </span>internal_rpc = internal_rpc.boxed();
-            <span class="kw">let </span>internal_rpc = quic_rpc::RpcServer::new(internal_rpc);
-
-            <span class="kw">let </span>rpc_server_task: tokio::task::JoinHandle&lt;()&gt; = tokio::task::spawn(<span class="kw">async move </span>{
-                <span class="kw">loop </span>{
-                    <span class="kw">let </span>request = internal_rpc.accept().<span class="kw">await</span>;
-                    <span class="kw">match </span>request {
-                        <span class="prelude-val">Ok</span>(accepting) =&gt; {
-                            <span class="kw">let </span>blobs = blobs.clone();
-                            tokio::task::spawn(<span class="kw">async move </span>{
-                                <span class="kw">let </span>(msg, chan) = accepting.read_first().<span class="kw">await</span>.unwrap();
-                                blobs.handle_rpc_request(msg, chan).<span class="kw">await</span>.unwrap();
-                            });
-                        }
-                        <span class="prelude-val">Err</span>(err) =&gt; {
-                            <span class="macro">tracing::warn!</span>(<span class="string">"rpc error: {:?}"</span>, err);
-                        }
-                    }
-                }
-            });
-
-            <span class="kw">let </span>client = quic_rpc::RpcClient::new(controller);
-
-            <span class="prelude-val">Ok</span>((client, router, rpc_server_task, local_pool))
         }
     }
 
@@ -3587,6 +3728,149 @@
         <span class="kw">let </span>hashes: Vec&lt;<span class="kw">_</span>&gt; = node.blobs().list().<span class="kw">await</span><span class="question-mark">?</span>.try_collect().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="macro">assert!</span>(hashes.is_empty());
 
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_ticket_multiple_addrs() -&gt; TestResult&lt;()&gt; {
+        <span class="kw">let </span>_guard = iroh_test::logging::setup();
+
+        <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>hash = node
+            .blobs()
+            .add_bytes(Bytes::from_static(<span class="string">b"hello"</span>))
+            .<span class="kw">await</span><span class="question-mark">?
+            </span>.hash;
+
+        <span class="kw">let </span>addr = node.node_addr().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>ticket = BlobTicket::new(addr, hash, BlobFormat::Raw)<span class="question-mark">?</span>;
+        <span class="macro">println!</span>(<span class="string">"addrs: {:?}"</span>, ticket.node_addr());
+        <span class="macro">assert!</span>(!ticket.node_addr().direct_addresses.is_empty());
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_node_add_blob_stream() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>_guard = iroh_test::logging::setup();
+
+        <span class="kw">use </span>std::io::Cursor;
+        <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>blobs = node.blobs();
+        <span class="kw">let </span>input = <span class="macro">vec!</span>[<span class="number">2u8</span>; <span class="number">1024 </span>* <span class="number">256</span>]; <span class="comment">// 265kb so actually streaming, chunk size is 64kb
+        </span><span class="kw">let </span>reader = Cursor::new(input.clone());
+        <span class="kw">let </span>progress = blobs.add_reader(reader, SetTagOption::Auto).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>outcome = progress.finish().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>hash = outcome.hash;
+        <span class="kw">let </span>output = blobs.read_to_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="macro">assert_eq!</span>(input, output.to_vec());
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_node_add_tagged_blob_event() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>_guard = iroh_test::logging::setup();
+
+        <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>_got_hash = tokio::time::timeout(Duration::from_secs(<span class="number">10</span>), <span class="kw">async move </span>{
+            <span class="kw">let </span><span class="kw-2">mut </span>stream = node
+                .blobs()
+                .add_from_path(
+                    Path::new(<span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>)).join(<span class="string">"README.md"</span>),
+                    <span class="bool-val">false</span>,
+                    SetTagOption::Auto,
+                    WrapOption::NoWrap,
+                )
+                .<span class="kw">await</span><span class="question-mark">?</span>;
+
+            <span class="kw">while let </span><span class="prelude-val">Some</span>(progress) = stream.next().<span class="kw">await </span>{
+                <span class="kw">match </span>progress<span class="question-mark">? </span>{
+                    <span class="kw">crate</span>::provider::AddProgress::AllDone { hash, .. } =&gt; {
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(hash);
+                    }
+                    <span class="kw">crate</span>::provider::AddProgress::Abort(e) =&gt; {
+                        <span class="macro">anyhow::bail!</span>(<span class="string">"Error while adding data: {e}"</span>);
+                    }
+                    <span class="kw">_ </span>=&gt; {}
+                }
+            }
+            <span class="macro">anyhow::bail!</span>(<span class="string">"stream ended without providing data"</span>);
+        })
+        .<span class="kw">await
+        </span>.context(<span class="string">"timeout"</span>)<span class="question-mark">?
+        </span>.context(<span class="string">"get failed"</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    </span><span class="kw">async fn </span>test_download_via_relay() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>_guard = iroh_test::logging::setup();
+        <span class="kw">let </span>(relay_map, relay_url, _guard) = iroh::test_utils::run_relay_server().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>endpoint1 = iroh::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>);
+        <span class="kw">let </span>node1 = Node::memory().endpoint(endpoint1).spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>endpoint2 = iroh::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>);
+        <span class="kw">let </span>node2 = Node::memory().endpoint(endpoint2).spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>AddOutcome { hash, .. } = node1.blobs().add_bytes(<span class="string">b"foo"</span>.to_vec()).<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="comment">// create a node addr with only a relay URL, no direct addresses
+        </span><span class="kw">let </span>addr = NodeAddr::new(node1.node_id()).with_relay_url(relay_url);
+        node2.blobs().download(hash, addr).<span class="kw">await</span><span class="question-mark">?</span>.<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="macro">assert_eq!</span>(
+            node2
+                .blobs()
+                .read_to_bytes(hash)
+                .<span class="kw">await
+                </span>.context(<span class="string">"get"</span>)<span class="question-mark">?
+                </span>.as_ref(),
+            <span class="string">b"foo"
+        </span>);
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="attr">#[tokio::test]
+    #[ignore = <span class="string">"flaky"</span>]
+    </span><span class="kw">async fn </span>test_download_via_relay_with_discovery() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>_guard = iroh_test::logging::setup();
+        <span class="kw">let </span>(relay_map, _relay_url, _guard) = iroh::test_utils::run_relay_server().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>dns_pkarr_server = DnsPkarrServer::run().<span class="kw">await</span><span class="question-mark">?</span>;
+
+        <span class="kw">let </span>secret1 = SecretKey::generate();
+        <span class="kw">let </span>endpoint1 = iroh::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
+            .dns_resolver(dns_pkarr_server.dns_resolver())
+            .secret_key(secret1.clone())
+            .discovery(dns_pkarr_server.discovery(secret1));
+        <span class="kw">let </span>node1 = Node::memory().endpoint(endpoint1).spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>secret2 = SecretKey::generate();
+        <span class="kw">let </span>endpoint2 = iroh::Endpoint::builder()
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
+            .dns_resolver(dns_pkarr_server.dns_resolver())
+            .secret_key(secret2.clone())
+            .discovery(dns_pkarr_server.discovery(secret2));
+        <span class="kw">let </span>node2 = Node::memory().endpoint(endpoint2).spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>hash = node1.blobs().add_bytes(<span class="string">b"foo"</span>.to_vec()).<span class="kw">await</span><span class="question-mark">?</span>.hash;
+
+        <span class="comment">// create a node addr with node id only
+        </span><span class="kw">let </span>addr = NodeAddr::new(node1.node_id());
+        node2.blobs().download(hash, addr).<span class="kw">await</span><span class="question-mark">?</span>.<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="macro">assert_eq!</span>(
+            node2
+                .blobs()
+                .read_to_bytes(hash)
+                .<span class="kw">await
+                </span>.context(<span class="string">"get"</span>)<span class="question-mark">?
+                </span>.as_ref(),
+            <span class="string">b"foo"
+        </span>);
         <span class="prelude-val">Ok</span>(())
     }
 }

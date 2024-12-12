@@ -1,4 +1,5 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/net_protocol.rs`."><title>net_protocol.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-b21aa549bf6d91ff.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.0-nightly (c987ad527 2024-05-01)" data-channel="nightly" data-search-js="search-bf21c90c8c1d92b1.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-e32f0c247825364d.js"></script><script defer src="../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-09095024cf37855e.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../iroh_blobs/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type ‘S’ or ‘/’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../settings.html" title="settings">Settings</a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/net_protocol.rs`."><title>net_protocol.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-dbdb5eec.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0-nightly (d10a6823f 2024-11-29)" data-channel="nightly" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iroh_blobs/</div>net_protocol.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -312,73 +313,88 @@
 <a href="#312" id="312">312</a>
 <a href="#313" id="313">313</a>
 <a href="#314" id="314">314</a>
-<a href="#315" id="315">315</a>
-<a href="#316" id="316">316</a>
-<a href="#317" id="317">317</a>
-<a href="#318" id="318">318</a>
-<a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a>
-<a href="#321" id="321">321</a>
-</pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+<a href="#315" id="315">315</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
 </span><span class="attr">#![allow(missing_docs)]
 
-</span><span class="kw">use </span>std::{collections::BTreeMap, sync::Arc};
+</span><span class="kw">use </span>std::{collections::BTreeSet, fmt::Debug, ops::DerefMut, sync::Arc};
 
-<span class="kw">use </span>anyhow::{anyhow, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>futures_lite::future::Boxed <span class="kw">as </span>BoxedFuture;
-<span class="kw">use </span>iroh_base::hash::{BlobFormat, Hash};
-<span class="kw">use </span>iroh_net::{endpoint::Connecting, Endpoint, NodeAddr};
-<span class="kw">use </span>iroh_router::ProtocolHandler;
+<span class="kw">use </span>futures_util::future::BoxFuture;
+<span class="kw">use </span>iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
-<span class="kw">use </span>tracing::{debug, warn};
+<span class="kw">use </span>tracing::debug;
 
 <span class="kw">use crate</span>::{
-    downloader::{DownloadRequest, Downloader},
-    get::{
-        db::{DownloadProgress, GetState},
-        Stats,
-    },
+    downloader::Downloader,
     provider::EventSender,
+    store::GcConfig,
     util::{
-        local_pool::LocalPoolHandle,
-        progress::{AsyncChannelProgressSender, ProgressSender},
+        local_pool::{<span class="self">self</span>, LocalPoolHandle},
         SetTagOption,
     },
-    HashAndFormat, TempTag,
+    BlobFormat, Hash,
 };
 
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>Blobs&lt;S&gt; {
-    rt: LocalPoolHandle,
-    store: S,
-    events: EventSender,
-    downloader: Downloader,
-    batches: tokio::sync::Mutex&lt;BlobBatches&gt;,
-    endpoint: Endpoint,
+<span class="doccomment">/// A callback that blobs can ask about a set of hashes that should not be garbage collected.
+</span><span class="kw">pub type </span>ProtectCb = Box&lt;<span class="kw">dyn </span>Fn(<span class="kw-2">&amp;mut </span>BTreeSet&lt;Hash&gt;) -&gt; BoxFuture&lt;()&gt; + Send + Sync&gt;;
+
+<span class="doccomment">/// The state of the gc loop.
+</span><span class="attr">#[derive(derive_more::Debug)]
+</span><span class="kw">enum </span>GcState {
+    <span class="comment">// Gc loop is not yet running. Other protocols can add protect callbacks
+    </span>Initial(<span class="attr">#[debug(skip)] </span>Vec&lt;ProtectCb&gt;),
+    <span class="comment">// Gc loop is running. No more protect callbacks can be added.
+    </span>Started(<span class="attr">#[allow(dead_code)] </span><span class="prelude-ty">Option</span>&lt;local_pool::Run&lt;()&gt;&gt;),
 }
 
-<span class="doccomment">/// Name used for logging when new node addresses are added from gossip.
-</span><span class="kw">const </span>BLOB_DOWNLOAD_SOURCE_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"blob_download"</span>;
+<span class="kw">impl </span>Default <span class="kw">for </span>GcState {
+    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::Initial(Vec::new())
+    }
+}
+
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BlobsInner&lt;S&gt; {
+    <span class="kw">pub</span>(<span class="kw">crate</span>) rt: LocalPoolHandle,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) store: S,
+    events: EventSender,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) downloader: Downloader,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) endpoint: Endpoint,
+    gc_state: std::sync::Mutex&lt;GcState&gt;,
+    <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) batches: tokio::sync::Mutex&lt;BlobBatches&gt;,
+}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub struct </span>Blobs&lt;S&gt; {
+    <span class="kw">pub</span>(<span class="kw">crate</span>) inner: Arc&lt;BlobsInner&lt;S&gt;&gt;,
+    <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) rpc_handler: Arc&lt;std::sync::OnceLock&lt;<span class="kw">crate</span>::rpc::RpcHandler&gt;&gt;,
+}
 
 <span class="doccomment">/// Keeps track of all the currently active batch operations of the blobs api.
-</span><span class="attr">#[derive(Debug, Default)]
+</span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+#[derive(Debug, Default)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BlobBatches {
     <span class="doccomment">/// Currently active batches
-    </span>batches: BTreeMap&lt;BatchId, BlobBatch&gt;,
+    </span>batches: std::collections::BTreeMap&lt;BatchId, BlobBatch&gt;,
     <span class="doccomment">/// Used to generate new batch ids.
     </span>max: u64,
 }
 
 <span class="doccomment">/// A single batch of blob operations
-</span><span class="attr">#[derive(Debug, Default)]
+</span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+#[derive(Debug, Default)]
 </span><span class="kw">struct </span>BlobBatch {
     <span class="doccomment">/// The tags in this batch.
-    </span>tags: BTreeMap&lt;HashAndFormat, Vec&lt;TempTag&gt;&gt;,
+    </span>tags: std::collections::BTreeMap&lt;<span class="kw">crate</span>::HashAndFormat, Vec&lt;<span class="kw">crate</span>::TempTag&gt;&gt;,
 }
 
-<span class="kw">impl </span>BlobBatches {
+<span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+</span><span class="kw">impl </span>BlobBatches {
     <span class="doccomment">/// Create a new unique batch id.
     </span><span class="kw">pub fn </span>create(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; BatchId {
         <span class="kw">let </span>id = <span class="self">self</span>.max;
@@ -387,13 +403,13 @@
     }
 
     <span class="doccomment">/// Store a temp tag in a batch identified by a batch id.
-    </span><span class="kw">pub fn </span>store(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, tt: TempTag) {
+    </span><span class="kw">pub fn </span>store(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, tt: <span class="kw">crate</span>::TempTag) {
         <span class="kw">let </span>entry = <span class="self">self</span>.batches.entry(batch).or_default();
         entry.tags.entry(tt.hash_and_format()).or_default().push(tt);
     }
 
     <span class="doccomment">/// Remove a tag from a batch.
-    </span><span class="kw">pub fn </span>remove_one(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, content: <span class="kw-2">&amp;</span>HashAndFormat) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    </span><span class="kw">pub fn </span>remove_one(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, content: <span class="kw-2">&amp;</span><span class="kw">crate</span>::HashAndFormat) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(batch) = <span class="self">self</span>.batches.get_mut(<span class="kw-2">&amp;</span>batch) {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(tags) = batch.tags.get_mut(content) {
                 tags.pop();
@@ -413,8 +429,62 @@
     }
 }
 
+<span class="doccomment">/// Builder for the Blobs protocol handler
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>Builder&lt;S&gt; {
+    store: S,
+    events: <span class="prelude-ty">Option</span>&lt;EventSender&gt;,
+}
+
+<span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Builder&lt;S&gt; {
+    <span class="doccomment">/// Set the event sender for the blobs protocol.
+    </span><span class="kw">pub fn </span>events(<span class="kw-2">mut </span><span class="self">self</span>, value: EventSender) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.events = <span class="prelude-val">Some</span>(value);
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Build the Blobs protocol handler.
+    /// You need to provide a local pool handle and an endpoint.
+    </span><span class="kw">pub fn </span>build(<span class="self">self</span>, rt: <span class="kw-2">&amp;</span>LocalPoolHandle, endpoint: <span class="kw-2">&amp;</span>Endpoint) -&gt; Blobs&lt;S&gt; {
+        <span class="kw">let </span>downloader = Downloader::new(<span class="self">self</span>.store.clone(), endpoint.clone(), rt.clone());
+        Blobs::new(
+            <span class="self">self</span>.store,
+            rt.clone(),
+            <span class="self">self</span>.events.unwrap_or_default(),
+            downloader,
+            endpoint.clone(),
+        )
+    }
+}
+
+<span class="kw">impl</span>&lt;S&gt; Blobs&lt;S&gt; {
+    <span class="doccomment">/// Create a new Blobs protocol handler builder, given a store.
+    </span><span class="kw">pub fn </span>builder(store: S) -&gt; Builder&lt;S&gt; {
+        Builder {
+            store,
+            events: <span class="prelude-val">None</span>,
+        }
+    }
+}
+
+<span class="kw">impl </span>Blobs&lt;<span class="kw">crate</span>::store::mem::Store&gt; {
+    <span class="doccomment">/// Create a new memory-backed Blobs protocol handler.
+    </span><span class="kw">pub fn </span>memory() -&gt; Builder&lt;<span class="kw">crate</span>::store::mem::Store&gt; {
+        <span class="self">Self</span>::builder(<span class="kw">crate</span>::store::mem::Store::new())
+    }
+}
+
+<span class="kw">impl </span>Blobs&lt;<span class="kw">crate</span>::store::fs::Store&gt; {
+    <span class="doccomment">/// Load a persistent Blobs protocol handler from a path.
+    </span><span class="kw">pub async fn </span>persistent(
+        path: <span class="kw">impl </span>AsRef&lt;std::path::Path&gt;,
+    ) -&gt; anyhow::Result&lt;Builder&lt;<span class="kw">crate</span>::store::fs::Store&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">Self</span>::builder(<span class="kw">crate</span>::store::fs::Store::load(path).<span class="kw">await</span><span class="question-mark">?</span>))
+    }
+}
+
 <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;S&gt; {
-    <span class="kw">pub fn </span>new_with_events(
+    <span class="kw">pub fn </span>new(
         store: S,
         rt: LocalPoolHandle,
         events: EventSender,
@@ -422,182 +492,100 @@
         endpoint: Endpoint,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            rt,
-            store,
-            events,
-            downloader,
-            endpoint,
-            batches: Default::default(),
+            inner: Arc::new(BlobsInner {
+                rt,
+                store,
+                events,
+                downloader,
+                endpoint,
+                <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+                </span>batches: Default::default(),
+                gc_state: Default::default(),
+            }),
+            <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+            </span>rpc_handler: Default::default(),
         }
     }
 
     <span class="kw">pub fn </span>store(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>S {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.store
+        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.store
+    }
+
+    <span class="kw">pub fn </span>events(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EventSender {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.events
     }
 
     <span class="kw">pub fn </span>rt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>LocalPoolHandle {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.rt
+        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.rt
+    }
+
+    <span class="kw">pub fn </span>downloader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Downloader {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.downloader
     }
 
     <span class="kw">pub fn </span>endpoint(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Endpoint {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.endpoint
+        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.endpoint
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>batches(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tokio::sync::MutexGuard&lt;<span class="lifetime">'_</span>, BlobBatches&gt; {
-        <span class="self">self</span>.batches.lock().<span class="kw">await
-    </span>}
-
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>download(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        endpoint: Endpoint,
-        req: BlobDownloadRequest,
-        progress: AsyncChannelProgressSender&lt;DownloadProgress&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>BlobDownloadRequest {
-            hash,
-            format,
-            nodes,
-            tag,
-            mode,
-        } = req;
-        <span class="kw">let </span>hash_and_format = HashAndFormat { hash, format };
-        <span class="kw">let </span>temp_tag = <span class="self">self</span>.store.temp_tag(hash_and_format);
-        <span class="kw">let </span>stats = <span class="kw">match </span>mode {
-            DownloadMode::Queued =&gt; {
-                <span class="self">self</span>.download_queued(endpoint, hash_and_format, nodes, progress.clone())
-                    .<span class="kw">await</span><span class="question-mark">?
-            </span>}
-            DownloadMode::Direct =&gt; {
-                <span class="self">self</span>.download_direct_from_nodes(endpoint, hash_and_format, nodes, progress.clone())
-                    .<span class="kw">await</span><span class="question-mark">?
-            </span>}
-        };
-
-        progress.send(DownloadProgress::AllDone(stats)).<span class="kw">await</span>.ok();
-        <span class="kw">match </span>tag {
-            SetTagOption::Named(tag) =&gt; {
-                <span class="self">self</span>.store.set_tag(tag, <span class="prelude-val">Some</span>(hash_and_format)).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="doccomment">/// Add a callback that will be called before the garbage collector runs.
+    ///
+    /// This can only be called before the garbage collector has started, otherwise it will return an error.
+    </span><span class="kw">pub fn </span>add_protected(<span class="kw-2">&amp;</span><span class="self">self</span>, cb: ProtectCb) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>state = <span class="self">self</span>.inner.gc_state.lock().unwrap();
+        <span class="kw">match </span><span class="kw-2">&amp;mut *</span>state {
+            GcState::Initial(cbs) =&gt; {
+                cbs.push(cb);
             }
-            SetTagOption::Auto =&gt; {
-                <span class="self">self</span>.store.create_tag(hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>;
+            GcState::Started(<span class="kw">_</span>) =&gt; {
+                <span class="macro">anyhow::bail!</span>(<span class="string">"cannot add protected blobs after gc has started"</span>);
             }
         }
-        drop(temp_tag);
-
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">async fn </span>download_queued(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        endpoint: Endpoint,
-        hash_and_format: HashAndFormat,
-        nodes: Vec&lt;NodeAddr&gt;,
-        progress: AsyncChannelProgressSender&lt;DownloadProgress&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Stats&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>node_ids = Vec::with_capacity(nodes.len());
-        <span class="kw">let </span><span class="kw-2">mut </span>any_added = <span class="bool-val">false</span>;
-        <span class="kw">for </span>node <span class="kw">in </span>nodes {
-            node_ids.push(node.node_id);
-            <span class="kw">if </span>!node.info.is_empty() {
-                endpoint.add_node_addr_with_source(node, BLOB_DOWNLOAD_SOURCE_NAME)<span class="question-mark">?</span>;
-                any_added = <span class="bool-val">true</span>;
-            }
-        }
-        <span class="kw">let </span>can_download = !node_ids.is_empty() &amp;&amp; (any_added || endpoint.discovery().is_some());
-        <span class="macro">anyhow::ensure!</span>(can_download, <span class="string">"no way to reach a node for download"</span>);
-        <span class="kw">let </span>req = DownloadRequest::new(hash_and_format, node_ids).progress_sender(progress);
-        <span class="kw">let </span>handle = <span class="self">self</span>.downloader.queue(req).<span class="kw">await</span>;
-        <span class="kw">let </span>stats = handle.<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(stats)
-    }
-
-    <span class="attr">#[tracing::instrument(<span class="string">"download_direct"</span>, skip_all, fields(hash=%hash_and_format.hash.fmt_short()))]
-    </span><span class="kw">async fn </span>download_direct_from_nodes(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        endpoint: Endpoint,
-        hash_and_format: HashAndFormat,
-        nodes: Vec&lt;NodeAddr&gt;,
-        progress: AsyncChannelProgressSender&lt;DownloadProgress&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Stats&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>last_err = <span class="prelude-val">None</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>remaining_nodes = nodes.len();
-        <span class="kw">let </span><span class="kw-2">mut </span>nodes_iter = nodes.into_iter();
-        <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
-            <span class="kw">match </span><span class="kw">crate</span>::get::db::get_to_db_in_steps(
-                <span class="self">self</span>.store.clone(),
-                hash_and_format,
-                progress.clone(),
-            )
-            .<span class="kw">await</span><span class="question-mark">?
-            </span>{
-                GetState::Complete(stats) =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(stats),
-                GetState::NeedsConn(needs_conn) =&gt; {
-                    <span class="kw">let </span>(conn, node_id) = <span class="lifetime">'inner</span>: <span class="kw">loop </span>{
-                        <span class="kw">match </span>nodes_iter.next() {
-                            <span class="prelude-val">None </span>=&gt; <span class="kw">break </span><span class="lifetime">'outer</span>,
-                            <span class="prelude-val">Some</span>(node) =&gt; {
-                                remaining_nodes -= <span class="number">1</span>;
-                                <span class="kw">let </span>node_id = node.node_id;
-                                <span class="kw">if </span>node_id == endpoint.node_id() {
-                                    <span class="macro">debug!</span>(
-                                        <span class="question-mark">?</span>remaining_nodes,
-                                        <span class="string">"skip node {} (it is the node id of ourselves)"</span>,
-                                        node_id.fmt_short()
-                                    );
-                                    <span class="kw">continue </span><span class="lifetime">'inner</span>;
-                                }
-                                <span class="kw">match </span>endpoint.connect(node, <span class="kw">crate</span>::protocol::ALPN).<span class="kw">await </span>{
-                                    <span class="prelude-val">Ok</span>(conn) =&gt; <span class="kw">break </span><span class="lifetime">'inner </span>(conn, node_id),
-                                    <span class="prelude-val">Err</span>(err) =&gt; {
-                                        <span class="macro">debug!</span>(
-                                            <span class="question-mark">?</span>remaining_nodes,
-                                            <span class="string">"failed to connect to {}: {err}"</span>,
-                                            node_id.fmt_short()
-                                        );
-                                        <span class="kw">continue </span><span class="lifetime">'inner</span>;
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    <span class="kw">match </span>needs_conn.proceed(conn).<span class="kw">await </span>{
-                        <span class="prelude-val">Ok</span>(stats) =&gt; <span class="kw">return </span><span class="prelude-val">Ok</span>(stats),
-                        <span class="prelude-val">Err</span>(err) =&gt; {
-                            <span class="macro">warn!</span>(
-                                <span class="question-mark">?</span>remaining_nodes,
-                                <span class="string">"failed to download from {}: {err}"</span>,
-                                node_id.fmt_short()
-                            );
-                            last_err = <span class="prelude-val">Some</span>(err);
-                        }
-                    }
+    <span class="doccomment">/// Start garbage collection with the given settings.
+    </span><span class="kw">pub fn </span>start_gc(<span class="kw-2">&amp;</span><span class="self">self</span>, config: GcConfig) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>state = <span class="self">self</span>.inner.gc_state.lock().unwrap();
+        <span class="kw">let </span>protected = <span class="kw">match </span>state.deref_mut() {
+            GcState::Initial(items) =&gt; std::mem::take(items),
+            GcState::Started(<span class="kw">_</span>) =&gt; <span class="macro">bail!</span>(<span class="string">"gc already started"</span>),
+        };
+        <span class="kw">let </span>protected = Arc::new(protected);
+        <span class="kw">let </span>protected_cb = <span class="kw">move </span>|| {
+            <span class="kw">let </span>protected = protected.clone();
+            <span class="kw">async move </span>{
+                <span class="kw">let </span><span class="kw-2">mut </span>set = BTreeSet::new();
+                <span class="kw">for </span>cb <span class="kw">in </span>protected.iter() {
+                    cb(<span class="kw-2">&amp;mut </span>set).<span class="kw">await</span>;
                 }
+                set
             }
-        }
-        <span class="kw">match </span>last_err {
-            <span class="prelude-val">Some</span>(err) =&gt; <span class="prelude-val">Err</span>(err.into()),
-            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">anyhow!</span>(<span class="string">"No nodes to download from provided"</span>)),
-        }
+        };
+        <span class="kw">let </span>store = <span class="self">self</span>.store().clone();
+        <span class="kw">let </span>run = <span class="self">self
+            </span>.rt()
+            .spawn(<span class="kw">move </span>|| <span class="kw">async move </span>{ store.gc_run(config, protected_cb).<span class="kw">await </span>});
+        <span class="kw-2">*</span>state = GcState::Started(<span class="prelude-val">Some</span>(run));
+        <span class="prelude-val">Ok</span>(())
     }
 }
 
 <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; ProtocolHandler <span class="kw">for </span>Blobs&lt;S&gt; {
-    <span class="kw">fn </span>accept(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;, conn: Connecting) -&gt; BoxedFuture&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt; {
+    <span class="kw">fn </span>accept(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connecting) -&gt; BoxedFuture&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt; {
+        <span class="kw">let </span>db = <span class="self">self</span>.store().clone();
+        <span class="kw">let </span>events = <span class="self">self</span>.events().clone();
+        <span class="kw">let </span>rt = <span class="self">self</span>.rt().clone();
+
         Box::pin(<span class="kw">async move </span>{
-            <span class="kw">crate</span>::provider::handle_connection(
-                conn.<span class="kw">await</span><span class="question-mark">?</span>,
-                <span class="self">self</span>.store.clone(),
-                <span class="self">self</span>.events.clone(),
-                <span class="self">self</span>.rt.clone(),
-            )
-            .<span class="kw">await</span>;
+            <span class="kw">crate</span>::provider::handle_connection(conn.<span class="kw">await</span><span class="question-mark">?</span>, db, events, rt).<span class="kw">await</span>;
             <span class="prelude-val">Ok</span>(())
         })
     }
 
-    <span class="kw">fn </span>shutdown(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; BoxedFuture&lt;()&gt; {
+    <span class="kw">fn </span>shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BoxedFuture&lt;()&gt; {
+        <span class="kw">let </span>store = <span class="self">self</span>.store().clone();
         Box::pin(<span class="kw">async move </span>{
-            <span class="self">self</span>.store.shutdown().<span class="kw">await</span>;
+            store.shutdown().<span class="kw">await</span>;
         })
     }
 }
