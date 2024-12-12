@@ -10,8 +10,10 @@ use std::path::PathBuf;
 use anyhow::ensure;
 use clap::{Parser, Subcommand};
 use iroh::{
-    discovery::local_swarm_discovery::LocalSwarmDiscovery, key::PublicKey, key::SecretKey,
-    protocol::Router, Endpoint, NodeAddr, RelayMode,
+    discovery::local_swarm_discovery::LocalSwarmDiscovery,
+    key::{PublicKey, SecretKey},
+    protocol::Router,
+    Endpoint, NodeAddr, RelayMode,
 };
 use iroh_blobs::{
     net_protocol::Blobs, rpc::client::blobs::WrapOption, util::local_pool::LocalPool, Hash,
