@@ -54,7 +54,7 @@ postcard = { version = "1", default-features = false, features = [
     "use-std",
     "experimental-derive",
 ] }
-quic-rpc = { version = "0.17", optional = true }
+quic-rpc = { version = "0.17.1", optional = true }
 quic-rpc-derive = { version = "0.17", optional = true }
 quinn = { package = "iroh-quinn", version = "0.12", features = ["ring"] }
 rand = "0.8"
@@ -119,6 +119,7 @@ example-iroh = [
   "dep:console",
   "iroh/discovery-local-network"
 ]
+test = ["quic-rpc/quinn-transport"]
 
 [package.metadata.docs.rs]
 all-features = true
