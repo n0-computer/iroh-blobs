@@ -1954,7 +1954,7 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 [[package]]
 name = "iroh"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
+source = "git+https://github.com/n0-computer/iroh#ee72f6da7caed23c24d34c611b5de222898dcbd0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1995,7 +1995,6 @@ dependencies = [
  "netwatch",
  "num_enum",
  "once_cell",
- "parking_lot",
  "pin-project",
  "pkarr",
  "portmapper",
@@ -2036,7 +2035,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
+source = "git+https://github.com/n0-computer/iroh#ee72f6da7caed23c24d34c611b5de222898dcbd0"
 dependencies = [
  "aead",
  "anyhow",
@@ -2046,12 +2045,10 @@ dependencies = [
  "ed25519-dalek",
  "getrandom",
  "hex",
- "iroh-blake3",
  "once_cell",
  "postcard",
  "rand",
  "rand_core",
- "redb",
  "serde",
  "ssh-key",
  "thiserror 2.0.6",
@@ -2172,7 +2169,7 @@ dependencies = [
 [[package]]
 name = "iroh-net-report"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
+source = "git+https://github.com/n0-computer/iroh#ee72f6da7caed23c24d34c611b5de222898dcbd0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2249,7 +2246,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#6e009a8bc874ead210b9e00e2598c27b5a8d7df4"
+source = "git+https://github.com/n0-computer/iroh#ee72f6da7caed23c24d34c611b5de222898dcbd0"
 dependencies = [
  "anyhow",
  "base64",
@@ -2276,7 +2273,6 @@ dependencies = [
  "libc",
  "num_enum",
  "once_cell",
- "parking_lot",
  "pin-project",
  "postcard",
  "rand",

@@ -2,11 +2,8 @@
 use std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 use anyhow::Result;
-use iroh::{NodeId, RelayUrl};
-use iroh_base::{
-    node_addr::NodeAddr,
-    ticket::{self, Ticket},
-};
+use iroh::{NodeAddr, NodeId, RelayUrl};
+use iroh_base::ticket::{self, Ticket};
 use serde::{Deserialize, Serialize};
 
 use crate::{BlobFormat, Hash};
@@ -156,7 +153,7 @@ impl<'de> Deserialize<'de> for BlobTicket {
 mod tests {
     use std::net::SocketAddr;
 
-    use iroh::key::{PublicKey, SecretKey};
+    use iroh::{PublicKey, SecretKey};
     use iroh_base::base32;
     use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 

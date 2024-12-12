@@ -15,7 +15,7 @@ use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState,
     ProgressStyle,
 };
-use iroh::{key::PublicKey, relay::RelayUrl, NodeAddr};
+use iroh::{NodeAddr, PublicKey, RelayUrl};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
