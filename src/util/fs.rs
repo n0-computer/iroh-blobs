@@ -75,14 +75,12 @@ pub fn scan_path(
 }
 
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 fn file_name(path: &Path) -> anyhow::Result<String> {
     relative_canonicalized_path_to_string(path.file_name().context("path is invalid")?)
 }
 
 /// Create data sources from a directory.
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 pub fn scan_dir(
     root: PathBuf,
     wrap: crate::rpc::client::blobs::WrapOption,
@@ -129,7 +127,6 @@ pub fn relative_canonicalized_path_to_string(path: impl AsRef<Path>) -> anyhow::
 /// Loads a [`iroh::SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<iroh::SecretKey> {
     use iroh::SecretKey;
     use tokio::io::AsyncWriteExt;
