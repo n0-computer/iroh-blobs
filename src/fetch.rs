@@ -13,7 +13,6 @@
 //!
 //! [iroh-net]: https://docs.rs/iroh-net
 use std::{
-    error::Error,
     fmt::{self, Debug},
     time::{Duration, Instant},
 };
@@ -30,8 +29,9 @@ use crate::{
     Hash, IROH_BLOCK_SIZE,
 };
 
+mod error;
+pub use error::GetError;
 pub mod db;
-pub mod error;
 pub mod progress;
 pub mod request;
 
@@ -880,66 +880,5 @@ pub mod fsm {
         bytes_written: u64,
         /// iterator over the ranges of the collection and the children
         ranges_iter: RangesIter,
-    }
-}
-
-/// Error when processing a response
-#[derive(thiserror::Error, Debug)]
-pub enum GetResponseError {
-    /// Error when opening a stream
-    #[error("connection: {0}")]
-    Connection(#[from] endpoint::ConnectionError),
-    /// Error when writing the handshake or request to the stream
-    #[error("write: {0}")]
-    Write(#[from] endpoint::WriteError),
-    /// Error when reading from the stream
-    #[error("read: {0}")]
-    Read(#[from] endpoint::ReadError),
-    /// Error when decoding, e.g. hash mismatch
-    #[error("decode: {0}")]
-    Decode(bao_tree::io::DecodeError),
-    /// A generic error
-    #[error("generic: {0}")]
-    Generic(anyhow::Error),
-}
-
-impl From<postcard::Error> for GetResponseError {
-    fn from(cause: postcard::Error) -> Self {
-        Self::Generic(cause.into())
-    }
-}
-
-impl From<bao_tree::io::DecodeError> for GetResponseError {
-    fn from(cause: bao_tree::io::DecodeError) -> Self {
-        match cause {
-            bao_tree::io::DecodeError::Io(cause) => {
-                // try to downcast to specific quinn errors
-                if let Some(source) = cause.source() {
-                    if let Some(error) = source.downcast_ref::<endpoint::ConnectionError>() {
-                        return Self::Connection(error.clone());
-                    }
-                    if let Some(error) = source.downcast_ref::<endpoint::ReadError>() {
-                        return Self::Read(error.clone());
-                    }
-                    if let Some(error) = source.downcast_ref::<endpoint::WriteError>() {
-                        return Self::Write(error.clone());
-                    }
-                }
-                Self::Generic(cause.into())
-            }
-            _ => Self::Decode(cause),
-        }
-    }
-}
-
-impl From<anyhow::Error> for GetResponseError {
-    fn from(cause: anyhow::Error) -> Self {
-        Self::Generic(cause)
-    }
-}
-
-impl From<GetResponseError> for std::io::Error {
-    fn from(cause: GetResponseError) -> Self {
-        Self::new(std::io::ErrorKind::Other, cause)
     }
 }

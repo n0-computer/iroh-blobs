@@ -45,7 +45,7 @@ use crate::{
     downloader::{DownloadRequest, Downloader},
     export::ExportProgress,
     format::collection::Collection,
-    get::{
+    fetch::{
         db::{DownloadProgress, GetState},
         Stats,
     },
@@ -1009,7 +1009,7 @@ impl<D: crate::store::Store> Handler<D> {
         let mut remaining_nodes = nodes.len();
         let mut nodes_iter = nodes.into_iter();
         'outer: loop {
-            match crate::get::db::get_to_db_in_steps(
+            match crate::fetch::db::get_to_db_in_steps(
                 self.store().clone(),
                 hash_and_format,
                 progress.clone(),

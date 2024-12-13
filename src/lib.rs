@@ -34,7 +34,7 @@ pub mod cli;
 pub mod downloader;
 pub mod export;
 pub mod format;
-pub mod get;
+pub mod fetch;
 pub mod hashseq;
 pub mod metrics;
 #[cfg(feature = "net_protocol")]

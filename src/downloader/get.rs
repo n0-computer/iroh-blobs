@@ -7,7 +7,7 @@ use iroh::endpoint;
 
 use super::{progress::BroadcastProgressSender, DownloadKind, FailureAction, GetStartFut, Getter};
 use crate::{
-    get::{db::get_to_db_in_steps, error::GetError},
+    fetch::{db::get_to_db_in_steps, GetError},
     store::Store,
 };
 
@@ -34,7 +34,7 @@ pub(crate) struct IoGetter<S: Store> {
 
 impl<S: Store> Getter for IoGetter<S> {
     type Connection = endpoint::Connection;
-    type NeedsConn = crate::get::db::GetStateNeedsConn;
+    type NeedsConn = crate::fetch::db::GetStateNeedsConn;
 
     fn get(
         &mut self,
@@ -45,10 +45,10 @@ impl<S: Store> Getter for IoGetter<S> {
         async move {
             match get_to_db_in_steps(store, kind.hash_and_format(), progress_sender).await {
                 Err(err) => Err(err.into()),
-                Ok(crate::get::db::GetState::Complete(stats)) => {
+                Ok(crate::fetch::db::GetState::Complete(stats)) => {
                     Ok(super::GetOutput::Complete(stats))
                 }
-                Ok(crate::get::db::GetState::NeedsConn(needs_conn)) => {
+                Ok(crate::fetch::db::GetState::NeedsConn(needs_conn)) => {
                     Ok(super::GetOutput::NeedsConn(needs_conn))
                 }
             }
@@ -57,7 +57,7 @@ impl<S: Store> Getter for IoGetter<S> {
     }
 }
 
-impl super::NeedsConn<endpoint::Connection> for crate::get::db::GetStateNeedsConn {
+impl super::NeedsConn<endpoint::Connection> for crate::fetch::db::GetStateNeedsConn {
     fn proceed(self, conn: endpoint::Connection) -> super::GetProceedFut {
         async move {
             let res = self.proceed(conn).await;
@@ -73,13 +73,13 @@ impl super::NeedsConn<endpoint::Connection> for crate::get::db::GetStateNeedsCon
 }
 
 #[cfg(feature = "metrics")]
-fn track_metrics(res: &Result<crate::get::Stats, GetError>) {
+fn track_metrics(res: &Result<crate::fetch::Stats, GetError>) {
     use iroh_metrics::{inc, inc_by};
 
     use crate::metrics::Metrics;
     match res {
         Ok(stats) => {
-            let crate::get::Stats {
+            let crate::fetch::Stats {
                 bytes_written,
                 bytes_read: _,
                 elapsed,

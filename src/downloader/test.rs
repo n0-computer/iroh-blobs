@@ -10,7 +10,7 @@ use iroh::SecretKey;
 
 use super::*;
 use crate::{
-    get::{
+    fetch::{
         db::BlobId,
         progress::{BlobProgress, TransferState},
     },

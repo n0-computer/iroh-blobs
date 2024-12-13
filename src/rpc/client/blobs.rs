@@ -85,7 +85,7 @@ pub use crate::net_protocol::DownloadMode;
 use crate::{
     export::ExportProgress as BytesExportProgress,
     format::collection::{Collection, SimpleStore},
-    get::db::DownloadProgress as BytesDownloadProgress,
+    fetch::db::DownloadProgress as BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
     rpc::proto::RpcService,
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
@@ -675,7 +675,7 @@ pub struct DownloadOutcome {
     /// The size of the data we downloaded from the network
     pub downloaded_size: u64,
     /// Statistics about the download
-    pub stats: crate::get::Stats,
+    pub stats: crate::fetch::Stats,
 }
 
 /// Progress stream for blob download operations.

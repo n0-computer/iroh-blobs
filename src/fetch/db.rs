@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    get::{
+    fetch::{
         self,
         error::GetError,
         fsm::{AtBlobHeader, AtEndBlob, ConnectedNext, EndBlobNext},
@@ -196,7 +196,7 @@ async fn get_blob<D: BaoStore>(
             let request = GetRequest::new(*hash, RangeSpecSeq::from_ranges([required_ranges]));
             // full request
             let conn = co.get_conn().await;
-            let request = get::fsm::start(conn, request);
+            let request = fetch::fsm::start(conn, request);
             // create a new bidi stream
             let connected = request.next().await?;
             // next step. we have requested a single hash, so this must be StartRoot
@@ -212,7 +212,7 @@ async fn get_blob<D: BaoStore>(
         None => {
             // full request
             let conn = co.get_conn().await;
-            let request = get::fsm::start(conn, GetRequest::single(*hash));
+            let request = fetch::fsm::start(conn, GetRequest::single(*hash));
             // create a new bidi stream
             let connected = request.next().await?;
             // next step. we have requested a single hash, so this must be StartRoot
@@ -454,7 +454,7 @@ async fn get_hash_seq<D: BaoStore>(
             log!("requesting chunks {:?}", missing_iter);
             let request = GetRequest::new(*root_hash, RangeSpecSeq::from_ranges(missing_iter));
             let conn = co.get_conn().await;
-            let request = get::fsm::start(conn, request);
+            let request = fetch::fsm::start(conn, request);
             // create a new bidi stream
             let connected = request.next().await?;
             log!("connected");
@@ -500,7 +500,7 @@ async fn get_hash_seq<D: BaoStore>(
             tracing::debug!("don't have collection - doing full download");
             // don't have the collection, so probably got nothing
             let conn = co.get_conn().await;
-            let request = get::fsm::start(conn, GetRequest::all(*root_hash));
+            let request = fetch::fsm::start(conn, GetRequest::all(*root_hash));
             // create a new bidi stream
             let connected = request.next().await?;
             // next step. we have requested a single hash, so this must be StartRoot
