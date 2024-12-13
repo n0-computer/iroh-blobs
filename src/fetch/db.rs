@@ -18,7 +18,7 @@ use tracing::trace;
 use crate::{
     fetch::{
         self,
-        error::GetError,
+        error::Error,
         fsm::{AtBlobHeader, AtEndBlob, ConnectedNext, EndBlobNext},
         progress::TransferState,
         Stats,
@@ -33,8 +33,8 @@ use crate::{
     BlobFormat, Hash, HashAndFormat,
 };
 
-type GetGenerator = Gen<Yield, (), Pin<Box<dyn Future<Output = Result<Stats, GetError>>>>>;
-type GetFuture = Pin<Box<dyn Future<Output = Result<Stats, GetError>> + 'static>>;
+type GetGenerator = Gen<Yield, (), Pin<Box<dyn Future<Output = Result<Stats, Error>>>>>;
+type GetFuture = Pin<Box<dyn Future<Output = Result<Stats, Error>> + 'static>>;
 
 /// Get a blob or collection into a store.
 ///
@@ -44,7 +44,7 @@ type GetFuture = Pin<Box<dyn Future<Output = Result<Stats, GetError>> + 'static>
 /// Progress is reported as [`DownloadProgress`] through a [`ProgressSender`]. Note that the
 /// [`DownloadProgress::AllDone`] event is not emitted from here, but left to an upper layer to send,
 /// if desired.
-pub async fn get_to_db<
+pub async fn fetch_to_db<
     D: BaoStore,
     C: FnOnce() -> F,
     F: Future<Output = anyhow::Result<Connection>>,
@@ -53,11 +53,11 @@ pub async fn get_to_db<
     get_conn: C,
     hash_and_format: &HashAndFormat,
     progress_sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
-) -> Result<Stats, GetError> {
-    match get_to_db_in_steps(db.clone(), *hash_and_format, progress_sender).await? {
-        GetState::Complete(res) => Ok(res),
-        GetState::NeedsConn(state) => {
-            let conn = get_conn().await.map_err(GetError::Io)?;
+) -> Result<Stats, Error> {
+    match fetch_to_db_in_steps(db.clone(), *hash_and_format, progress_sender).await? {
+        FetchState::Complete(res) => Ok(res),
+        FetchState::NeedsConn(state) => {
+            let conn = get_conn().await.map_err(Error::Io)?;
             state.proceed(conn).await
         }
     }
@@ -65,22 +65,22 @@ pub async fn get_to_db<
 
 /// Get a blob or collection into a store, yielding if a connection is needed.
 ///
-/// This checks a get request against a local store, and returns [`GetState`],
+/// This checks a get request against a local store, and returns [`FetchState`],
 /// which is either `Complete` in case the requested data is fully available in the local store, or
 /// `NeedsConn`, once a connection is needed to proceed downloading the missing data.
 ///
-/// In the latter case, call [`GetStateNeedsConn::proceed`] with a connection to a provider to
+/// In the latter case, call [`FetchStateNeedsConn::proceed`] with a connection to a provider to
 /// proceed with the download.
 ///
-/// Progress reporting works in the same way as documented in [`get_to_db`].
-pub async fn get_to_db_in_steps<
+/// Progress reporting works in the same way as documented in [`fetch_to_db`].
+pub async fn fetch_to_db_in_steps<
     D: BaoStore,
     P: ProgressSender<Msg = DownloadProgress> + IdGenerator,
 >(
     db: D,
     hash_and_format: HashAndFormat,
     progress_sender: P,
-) -> Result<GetState, GetError> {
+) -> Result<FetchState, Error> {
     let mut gen: GetGenerator = genawaiter::rc::Gen::new(move |co| {
         let fut = async move { producer(co, &db, &hash_and_format, progress_sender).await };
         let fut: GetFuture = Box::pin(fut);
@@ -88,21 +88,21 @@ pub async fn get_to_db_in_steps<
     });
     match gen.async_resume().await {
         GeneratorState::Yielded(Yield::NeedConn(reply)) => {
-            Ok(GetState::NeedsConn(GetStateNeedsConn(gen, reply)))
+            Ok(FetchState::NeedsConn(FetchStateNeedsConn(gen, reply)))
         }
-        GeneratorState::Complete(res) => res.map(GetState::Complete),
+        GeneratorState::Complete(res) => res.map(FetchState::Complete),
     }
 }
 
-/// Intermediary state returned from [`get_to_db_in_steps`] for a download request that needs a
+/// Intermediary state returned from [`fetch_to_db_in_steps`] for a download request that needs a
 /// connection to proceed.
 #[derive(derive_more::Debug)]
-#[debug("GetStateNeedsConn")]
-pub struct GetStateNeedsConn(GetGenerator, oneshot::Sender<Connection>);
+#[debug("FetchStateNeedsConn")]
+pub struct FetchStateNeedsConn(GetGenerator, oneshot::Sender<Connection>);
 
-impl GetStateNeedsConn {
+impl FetchStateNeedsConn {
     /// Proceed with the download by providing a connection to a provider.
-    pub async fn proceed(mut self, conn: Connection) -> Result<Stats, GetError> {
+    pub async fn proceed(mut self, conn: Connection) -> Result<Stats, Error> {
         self.1.send(conn).expect("receiver is not dropped");
         match self.0.async_resume().await {
             GeneratorState::Yielded(y) => match y {
@@ -113,17 +113,17 @@ impl GetStateNeedsConn {
     }
 }
 
-/// Output of [`get_to_db_in_steps`].
+/// Output of [`fetch_to_db_in_steps`].
 #[derive(Debug)]
-pub enum GetState {
+pub enum FetchState {
     /// The requested data is completely available in the local store, no network requests are
     /// needed.
     Complete(Stats),
     /// The requested data is not fully available in the local store, we need a connection to
     /// proceed.
     ///
-    /// Once a connection is available, call [`GetStateNeedsConn::proceed`] to continue.
-    NeedsConn(GetStateNeedsConn),
+    /// Once a connection is available, call [`FetchStateNeedsConn::proceed`] to continue.
+    NeedsConn(FetchStateNeedsConn),
 }
 
 struct GetCo(Co<Yield>);
@@ -145,7 +145,7 @@ async fn producer<D: BaoStore>(
     db: &D,
     hash_and_format: &HashAndFormat,
     progress: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
-) -> Result<Stats, GetError> {
+) -> Result<Stats, Error> {
     let HashAndFormat { hash, format } = hash_and_format;
     let co = GetCo(co);
     match format {
@@ -163,7 +163,7 @@ async fn get_blob<D: BaoStore>(
     co: GetCo,
     hash: &Hash,
     progress: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
-) -> Result<Stats, GetError> {
+) -> Result<Stats, Error> {
     let end = match db.get_mut(hash).await? {
         Some(entry) if entry.is_complete() => {
             tracing::info!("already got entire blob");
@@ -201,7 +201,7 @@ async fn get_blob<D: BaoStore>(
             let connected = request.next().await?;
             // next step. we have requested a single hash, so this must be StartRoot
             let ConnectedNext::StartRoot(start) = connected.next().await? else {
-                return Err(GetError::NoncompliantNode(anyhow!("expected StartRoot")));
+                return Err(Error::NoncompliantNode(anyhow!("expected StartRoot")));
             };
             // move to the header
             let header = start.next();
@@ -217,7 +217,7 @@ async fn get_blob<D: BaoStore>(
             let connected = request.next().await?;
             // next step. we have requested a single hash, so this must be StartRoot
             let ConnectedNext::StartRoot(start) = connected.next().await? else {
-                return Err(GetError::NoncompliantNode(anyhow!("expected StartRoot")));
+                return Err(Error::NoncompliantNode(anyhow!("expected StartRoot")));
             };
             // move to the header
             let header = start.next();
@@ -228,7 +228,7 @@ async fn get_blob<D: BaoStore>(
 
     // we have requested a single hash, so we must be at closing
     let EndBlobNext::Closing(end) = end.next() else {
-        return Err(GetError::NoncompliantNode(anyhow!("expected StartRoot")));
+        return Err(Error::NoncompliantNode(anyhow!("expected StartRoot")));
     };
     // this closes the bidi stream. Do something with the stats?
     let stats = end.next().await?;
@@ -264,7 +264,7 @@ async fn get_blob_inner<D: BaoStore>(
     db: &D,
     at_header: AtBlobHeader,
     sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
-) -> Result<AtEndBlob, GetError> {
+) -> Result<AtEndBlob, Error> {
     // read the size. The size we get here is not verified, but since we use
     // it for the tree traversal we are guaranteed not to get more than size.
     let (at_content, size) = at_header.next().await?;
@@ -316,7 +316,7 @@ async fn get_blob_inner_partial<D: BaoStore>(
     at_header: AtBlobHeader,
     entry: D::EntryMut,
     sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
-) -> Result<AtEndBlob, GetError> {
+) -> Result<AtEndBlob, Error> {
     // read the size. The size we get here is not verified, but since we use
     // it for the tree traversal we are guaranteed not to get more than size.
     let (at_content, size) = at_header.next().await?;
@@ -397,7 +397,7 @@ async fn get_hash_seq<D: BaoStore>(
     co: GetCo,
     root_hash: &Hash,
     sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
-) -> Result<Stats, GetError> {
+) -> Result<Stats, Error> {
     use tracing::info as log;
     let finishing = match db.get_mut(root_hash).await? {
         Some(entry) if entry.is_complete() => {
@@ -414,7 +414,7 @@ async fn get_hash_seq<D: BaoStore>(
             // got the collection
             let reader = entry.data_reader().await?;
             let (mut hash_seq, children) = parse_hash_seq(reader).await.map_err(|err| {
-                GetError::NoncompliantNode(anyhow!("Failed to parse downloaded HashSeq: {err}"))
+                Error::NoncompliantNode(anyhow!("Failed to parse downloaded HashSeq: {err}"))
             })?;
             sender
                 .send(DownloadProgress::FoundHashSeq {
@@ -460,7 +460,7 @@ async fn get_hash_seq<D: BaoStore>(
             log!("connected");
             // we have not requested the root, so this must be StartChild
             let ConnectedNext::StartChild(start) = connected.next().await? else {
-                return Err(GetError::NoncompliantNode(anyhow!("expected StartChild")));
+                return Err(Error::NoncompliantNode(anyhow!("expected StartChild")));
             };
             let mut next = EndBlobNext::MoreChildren(start);
             // read all the children
@@ -470,7 +470,7 @@ async fn get_hash_seq<D: BaoStore>(
                     EndBlobNext::Closing(finish) => break finish,
                 };
                 let child_offset = usize::try_from(start.child_offset())
-                    .map_err(|_| GetError::NoncompliantNode(anyhow!("child offset too large")))?;
+                    .map_err(|_| Error::NoncompliantNode(anyhow!("child offset too large")))?;
                 let (child_hash, info) =
                     match (children.get(child_offset), missing_info.get(child_offset)) {
                         (Some(blob), Some(info)) => (*blob, info),
@@ -488,7 +488,7 @@ async fn get_hash_seq<D: BaoStore>(
                         get_blob_inner_partial(db, header, entry.clone(), sender.clone()).await?
                     }
                     BlobInfo::Complete { .. } => {
-                        return Err(GetError::NoncompliantNode(anyhow!(
+                        return Err(Error::NoncompliantNode(anyhow!(
                             "got data we have not requested"
                         )));
                     }
@@ -505,7 +505,7 @@ async fn get_hash_seq<D: BaoStore>(
             let connected = request.next().await?;
             // next step. we have requested a single hash, so this must be StartRoot
             let ConnectedNext::StartRoot(start) = connected.next().await? else {
-                return Err(GetError::NoncompliantNode(anyhow!("expected StartRoot")));
+                return Err(Error::NoncompliantNode(anyhow!("expected StartRoot")));
             };
             // move to the header
             let header = start.next();
@@ -515,10 +515,10 @@ async fn get_hash_seq<D: BaoStore>(
             let entry = db
                 .get(root_hash)
                 .await?
-                .ok_or_else(|| GetError::LocalFailure(anyhow!("just downloaded but not in db")))?;
+                .ok_or_else(|| Error::LocalFailure(anyhow!("just downloaded but not in db")))?;
             let reader = entry.data_reader().await?;
             let (mut collection, count) = parse_hash_seq(reader).await.map_err(|err| {
-                GetError::NoncompliantNode(anyhow!("Failed to parse downloaded HashSeq: {err}"))
+                Error::NoncompliantNode(anyhow!("Failed to parse downloaded HashSeq: {err}"))
             })?;
             sender
                 .send(DownloadProgress::FoundHashSeq {
@@ -538,7 +538,7 @@ async fn get_hash_seq<D: BaoStore>(
                     EndBlobNext::Closing(finish) => break finish,
                 };
                 let child_offset = usize::try_from(start.child_offset())
-                    .map_err(|_| GetError::NoncompliantNode(anyhow!("child offset too large")))?;
+                    .map_err(|_| Error::NoncompliantNode(anyhow!("child offset too large")))?;
 
                 let child_hash = match children.get(child_offset) {
                     Some(blob) => *blob,

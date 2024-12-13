@@ -1,12 +1,11 @@
 //! Error returned from get operations
-
 use iroh::endpoint;
 
 use crate::util::progress::ProgressSendError;
 
-/// Failures for a get operation
+/// Failures for a fetch operation
 #[derive(Debug, thiserror::Error)]
-pub enum GetError {
+pub enum Error {
     /// Hash not found.
     #[error("Hash not found")]
     NotFound(#[source] anyhow::Error),
@@ -29,13 +28,13 @@ pub enum GetError {
     LocalFailure(#[source] anyhow::Error),
 }
 
-impl From<ProgressSendError> for GetError {
+impl From<ProgressSendError> for Error {
     fn from(value: ProgressSendError) -> Self {
         Self::LocalFailure(value.into())
     }
 }
 
-impl From<endpoint::ConnectionError> for GetError {
+impl From<endpoint::ConnectionError> for Error {
     fn from(value: endpoint::ConnectionError) -> Self {
         // explicit match just to be sure we are taking everything into account
         use endpoint::ConnectionError;
@@ -43,137 +42,137 @@ impl From<endpoint::ConnectionError> for GetError {
             e @ ConnectionError::VersionMismatch => {
                 // > The peer doesn't implement any supported version
                 // unsupported version is likely a long time error, so this peer is not usable
-                GetError::NoncompliantNode(e.into())
+                Error::NoncompliantNode(e.into())
             }
             e @ ConnectionError::TransportError(_) => {
                 // > The peer violated the QUIC specification as understood by this implementation
                 // bad peer we don't want to keep around
-                GetError::NoncompliantNode(e.into())
+                Error::NoncompliantNode(e.into())
             }
             e @ ConnectionError::ConnectionClosed(_) => {
                 // > The peer's QUIC stack aborted the connection automatically
                 // peer might be disconnecting or otherwise unavailable, drop it
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
             e @ ConnectionError::ApplicationClosed(_) => {
                 // > The peer closed the connection
                 // peer might be disconnecting or otherwise unavailable, drop it
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
             e @ ConnectionError::Reset => {
                 // > The peer is unable to continue processing this connection, usually due to having restarted
-                GetError::RemoteReset(e.into())
+                Error::RemoteReset(e.into())
             }
             e @ ConnectionError::TimedOut => {
                 // > Communication with the peer has lapsed for longer than the negotiated idle timeout
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
             e @ ConnectionError::LocallyClosed => {
                 // > The local application closed the connection
                 // TODO(@divma): don't see how this is reachable but let's just not use the peer
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
             e @ quinn::ConnectionError::CidsExhausted => {
                 // > The connection could not be created because not enough of the CID space
                 // > is available
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
         }
     }
 }
 
-impl From<endpoint::ReadError> for GetError {
+impl From<endpoint::ReadError> for Error {
     fn from(value: endpoint::ReadError) -> Self {
         use endpoint::ReadError;
         match value {
-            e @ ReadError::Reset(_) => GetError::RemoteReset(e.into()),
+            e @ ReadError::Reset(_) => Error::RemoteReset(e.into()),
             ReadError::ConnectionLost(conn_error) => conn_error.into(),
             ReadError::ClosedStream
             | ReadError::IllegalOrderedRead
             | ReadError::ZeroRttRejected => {
                 // all these errors indicate the peer is not usable at this moment
-                GetError::Io(value.into())
+                Error::Io(value.into())
             }
         }
     }
 }
-impl From<quinn::ClosedStream> for GetError {
+impl From<quinn::ClosedStream> for Error {
     fn from(value: quinn::ClosedStream) -> Self {
-        GetError::Io(value.into())
+        Error::Io(value.into())
     }
 }
 
-impl From<endpoint::WriteError> for GetError {
+impl From<endpoint::WriteError> for Error {
     fn from(value: endpoint::WriteError) -> Self {
         use endpoint::WriteError;
         match value {
-            e @ WriteError::Stopped(_) => GetError::RemoteReset(e.into()),
+            e @ WriteError::Stopped(_) => Error::RemoteReset(e.into()),
             WriteError::ConnectionLost(conn_error) => conn_error.into(),
             WriteError::ClosedStream | WriteError::ZeroRttRejected => {
                 // all these errors indicate the peer is not usable at this moment
-                GetError::Io(value.into())
+                Error::Io(value.into())
             }
         }
     }
 }
 
-impl From<crate::fetch::fsm::ConnectedNextError> for GetError {
+impl From<crate::fetch::fsm::ConnectedNextError> for Error {
     fn from(value: crate::fetch::fsm::ConnectedNextError) -> Self {
         use crate::fetch::fsm::ConnectedNextError::*;
         match value {
             e @ PostcardSer(_) => {
                 // serialization errors indicate something wrong with the request itself
-                GetError::BadRequest(e.into())
+                Error::BadRequest(e.into())
             }
             e @ RequestTooBig => {
                 // request will never be sent, drop it
-                GetError::BadRequest(e.into())
+                Error::BadRequest(e.into())
             }
             Write(e) => e.into(),
             Closed(e) => e.into(),
             e @ Io(_) => {
                 // io errors are likely recoverable
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
         }
     }
 }
 
-impl From<crate::fetch::fsm::AtBlobHeaderNextError> for GetError {
+impl From<crate::fetch::fsm::AtBlobHeaderNextError> for Error {
     fn from(value: crate::fetch::fsm::AtBlobHeaderNextError) -> Self {
         use crate::fetch::fsm::AtBlobHeaderNextError::*;
         match value {
             e @ NotFound => {
                 // > This indicates that the provider does not have the requested data.
                 // peer might have the data later, simply retry it
-                GetError::NotFound(e.into())
+                Error::NotFound(e.into())
             }
             Read(e) => e.into(),
             e @ Io(_) => {
                 // io errors are likely recoverable
-                GetError::Io(e.into())
+                Error::Io(e.into())
             }
         }
     }
 }
 
-impl From<crate::fetch::fsm::DecodeError> for GetError {
+impl From<crate::fetch::fsm::DecodeError> for Error {
     fn from(value: crate::fetch::fsm::DecodeError) -> Self {
         use crate::fetch::fsm::DecodeError::*;
 
         match value {
-            e @ NotFound => GetError::NotFound(e.into()),
-            e @ ParentNotFound(_) => GetError::NotFound(e.into()),
-            e @ LeafNotFound(_) => GetError::NotFound(e.into()),
+            e @ NotFound => Error::NotFound(e.into()),
+            e @ ParentNotFound(_) => Error::NotFound(e.into()),
+            e @ LeafNotFound(_) => Error::NotFound(e.into()),
             e @ ParentHashMismatch(_) => {
                 // TODO(@divma): did the peer sent wrong data? is it corrupted? did we sent a wrong
                 // request?
-                GetError::NoncompliantNode(e.into())
+                Error::NoncompliantNode(e.into())
             }
             e @ LeafHashMismatch(_) => {
                 // TODO(@divma): did the peer sent wrong data? is it corrupted? did we sent a wrong
                 // request?
-                GetError::NoncompliantNode(e.into())
+                Error::NoncompliantNode(e.into())
             }
             Read(e) => e.into(),
             Io(e) => e.into(),
@@ -181,10 +180,10 @@ impl From<crate::fetch::fsm::DecodeError> for GetError {
     }
 }
 
-impl From<std::io::Error> for GetError {
+impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         // generally consider io errors recoverable
         // we might want to revisit this at some point
-        GetError::Io(value.into())
+        Error::Io(value.into())
     }
 }

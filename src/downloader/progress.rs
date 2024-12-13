@@ -21,7 +21,7 @@ pub type ProgressSubscriber = AsyncChannelProgressSender<DownloadProgress>;
 /// Track the progress of downloads.
 ///
 /// This struct allows to create [`ProgressSender`] structs to be passed to
-/// [`crate::get::db::get_to_db`]. Each progress sender can be subscribed to by any number of
+/// [`crate::fetch::db::fetch_to_db`]. Each progress sender can be subscribed to by any number of
 /// [`ProgressSubscriber`] channel senders, which will receive each progress update (if they have
 /// capacity). Additionally, the [`ProgressTracker`] maintains a [`TransferState`] for each
 /// transfer, applying each progress update to update this state. When subscribing to an already

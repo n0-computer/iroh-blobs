@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::{RpcError, RpcResult, RpcService};
 use crate::{
     export::ExportProgress,
-    format::collection::Collection,
     fetch::db::DownloadProgress,
+    format::collection::Collection,
     net_protocol::{BatchId, BlobDownloadRequest},
     provider::{AddProgress, BatchAddPathProgress},
     rpc::client::blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, ReadAtLen, WrapOption},

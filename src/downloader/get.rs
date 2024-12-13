@@ -7,20 +7,20 @@ use iroh::endpoint;
 
 use super::{progress::BroadcastProgressSender, DownloadKind, FailureAction, GetStartFut, Getter};
 use crate::{
-    fetch::{db::get_to_db_in_steps, GetError},
+    fetch::{db::fetch_to_db_in_steps, Error},
     store::Store,
 };
 
-impl From<GetError> for FailureAction {
-    fn from(e: GetError) -> Self {
+impl From<Error> for FailureAction {
+    fn from(e: Error) -> Self {
         match e {
-            e @ GetError::NotFound(_) => FailureAction::AbortRequest(e.into()),
-            e @ GetError::RemoteReset(_) => FailureAction::RetryLater(e.into()),
-            e @ GetError::NoncompliantNode(_) => FailureAction::DropPeer(e.into()),
-            e @ GetError::Io(_) => FailureAction::RetryLater(e.into()),
-            e @ GetError::BadRequest(_) => FailureAction::AbortRequest(e.into()),
+            e @ Error::NotFound(_) => FailureAction::AbortRequest(e.into()),
+            e @ Error::RemoteReset(_) => FailureAction::RetryLater(e.into()),
+            e @ Error::NoncompliantNode(_) => FailureAction::DropPeer(e.into()),
+            e @ Error::Io(_) => FailureAction::RetryLater(e.into()),
+            e @ Error::BadRequest(_) => FailureAction::AbortRequest(e.into()),
             // TODO: what do we want to do on local failures?
-            e @ GetError::LocalFailure(_) => FailureAction::AbortRequest(e.into()),
+            e @ Error::LocalFailure(_) => FailureAction::AbortRequest(e.into()),
         }
     }
 }
@@ -34,7 +34,7 @@ pub(crate) struct IoGetter<S: Store> {
 
 impl<S: Store> Getter for IoGetter<S> {
     type Connection = endpoint::Connection;
-    type NeedsConn = crate::fetch::db::GetStateNeedsConn;
+    type NeedsConn = crate::fetch::db::FetchStateNeedsConn;
 
     fn get(
         &mut self,
@@ -43,12 +43,12 @@ impl<S: Store> Getter for IoGetter<S> {
     ) -> GetStartFut<Self::NeedsConn> {
         let store = self.store.clone();
         async move {
-            match get_to_db_in_steps(store, kind.hash_and_format(), progress_sender).await {
+            match fetch_to_db_in_steps(store, kind.hash_and_format(), progress_sender).await {
                 Err(err) => Err(err.into()),
-                Ok(crate::fetch::db::GetState::Complete(stats)) => {
+                Ok(crate::fetch::db::FetchState::Complete(stats)) => {
                     Ok(super::GetOutput::Complete(stats))
                 }
-                Ok(crate::fetch::db::GetState::NeedsConn(needs_conn)) => {
+                Ok(crate::fetch::db::FetchState::NeedsConn(needs_conn)) => {
                     Ok(super::GetOutput::NeedsConn(needs_conn))
                 }
             }
@@ -57,7 +57,7 @@ impl<S: Store> Getter for IoGetter<S> {
     }
 }
 
-impl super::NeedsConn<endpoint::Connection> for crate::fetch::db::GetStateNeedsConn {
+impl super::NeedsConn<endpoint::Connection> for crate::fetch::db::FetchStateNeedsConn {
     fn proceed(self, conn: endpoint::Connection) -> super::GetProceedFut {
         async move {
             let res = self.proceed(conn).await;
@@ -73,7 +73,7 @@ impl super::NeedsConn<endpoint::Connection> for crate::fetch::db::GetStateNeedsC
 }
 
 #[cfg(feature = "metrics")]
-fn track_metrics(res: &Result<crate::fetch::Stats, GetError>) {
+fn track_metrics(res: &Result<crate::fetch::Stats, Error>) {
     use iroh_metrics::{inc, inc_by};
 
     use crate::metrics::Metrics;
@@ -90,7 +90,7 @@ fn track_metrics(res: &Result<crate::fetch::Stats, GetError>) {
             inc_by!(Metrics, download_time_total, elapsed.as_millis() as u64);
         }
         Err(e) => match &e {
-            GetError::NotFound(_) => inc!(Metrics, downloads_notfound),
+            Error::NotFound(_) => inc!(Metrics, downloads_notfound),
             _ => inc!(Metrics, downloads_error),
         },
     }

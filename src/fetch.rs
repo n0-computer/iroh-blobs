@@ -30,7 +30,7 @@ use crate::{
 };
 
 mod error;
-pub use error::GetError;
+pub use error::Error;
 pub mod db;
 pub mod progress;
 pub mod request;

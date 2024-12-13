@@ -44,11 +44,11 @@ use tracing::{debug, warn};
 use crate::{
     downloader::{DownloadRequest, Downloader},
     export::ExportProgress,
-    format::collection::Collection,
     fetch::{
-        db::{DownloadProgress, GetState},
+        db::{DownloadProgress, FetchState},
         Stats,
     },
+    format::collection::Collection,
     net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{ConsistencyCheckProgress, ImportProgress, MapEntry, ValidateProgress},
@@ -1009,15 +1009,15 @@ impl<D: crate::store::Store> Handler<D> {
         let mut remaining_nodes = nodes.len();
         let mut nodes_iter = nodes.into_iter();
         'outer: loop {
-            match crate::fetch::db::get_to_db_in_steps(
+            match crate::fetch::db::fetch_to_db_in_steps(
                 self.store().clone(),
                 hash_and_format,
                 progress.clone(),
             )
             .await?
             {
-                GetState::Complete(stats) => return Ok(stats),
-                GetState::NeedsConn(needs_conn) => {
+                FetchState::Complete(stats) => return Ok(stats),
+                FetchState::NeedsConn(needs_conn) => {
                     let (conn, node_id) = 'inner: loop {
                         match nodes_iter.next() {
                             None => break 'outer,

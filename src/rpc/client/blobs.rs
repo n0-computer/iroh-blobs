@@ -84,8 +84,8 @@ use tracing::warn;
 pub use crate::net_protocol::DownloadMode;
 use crate::{
     export::ExportProgress as BytesExportProgress,
-    format::collection::{Collection, SimpleStore},
     fetch::db::DownloadProgress as BytesDownloadProgress,
+    format::collection::{Collection, SimpleStore},
     net_protocol::BlobDownloadRequest,
     rpc::proto::RpcService,
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
