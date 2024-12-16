@@ -2004,8 +2004,9 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 
 [[package]]
 name = "iroh"
-version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#dcd0b401b1738a4ea6be66cdbfe48a0a7ed1aadc"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a59352a43dc4199fc804e1a7f3729bd14baff496fd3efbba98763e204bc4af0"
 dependencies = [
  "aead",
  "anyhow",
@@ -2086,8 +2087,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#dcd0b401b1738a4ea6be66cdbfe48a0a7ed1aadc"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdd4101e3f0732d901beb5461cb9bc415feeda8d21281ab5bf5c0c3458eebde2"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -2212,8 +2214,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-net-report"
-version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#dcd0b401b1738a4ea6be66cdbfe48a0a7ed1aadc"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ee04b3b957169e3833f08791802e6bd9878213655d1adbcd9191ea78b8d671a"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2289,8 +2292,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.29.0"
-source = "git+https://github.com/n0-computer/iroh#dcd0b401b1738a4ea6be66cdbfe48a0a7ed1aadc"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa0080c8d0720009dc5fa109ef2ead96c5aeb8bb8e4534de8f13865520818207"
 dependencies = [
  "anyhow",
  "base64",
@@ -2352,9 +2356,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-test"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87d03fbecae1752f869cfe768306d1ab25921df976818e87c7ad624743b4fa8f"
+checksum = "858814e2810a29cca50e5489f67dd417f38124315d466bf5420b1bedc6923703"
 dependencies = [
  "anyhow",
  "tokio",
