@@ -56,8 +56,7 @@ async fn main() -> Result<()> {
         "node relay server url: {:?}",
         node.endpoint()
             .home_relay()
-            .initialized()
-            .await
+            .get()?
             .expect("a default relay url should be provided")
             .to_string()
     );
