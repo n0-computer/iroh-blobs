@@ -1903,7 +1903,9 @@ mod tests {
         let (relay_map, _relay_url, _guard) = iroh::test_utils::run_relay_server().await?;
         let dns_pkarr_server = DnsPkarrServer::run().await?;
 
-        let secret1 = SecretKey::generate();
+        let mut rng = rand::thread_rng();
+
+        let secret1 = SecretKey::generate(&mut rng);
         let endpoint1 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)
@@ -1911,7 +1913,7 @@ mod tests {
             .secret_key(secret1.clone())
             .discovery(dns_pkarr_server.discovery(secret1));
         let node1 = Node::memory().endpoint(endpoint1).spawn().await?;
-        let secret2 = SecretKey::generate();
+        let secret2 = SecretKey::generate(&mut rng);
         let endpoint2 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(true)

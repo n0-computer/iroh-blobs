@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     setup_logging();
     let cli = Cli::parse();
 
-    let key = SecretKey::generate();
+    let key = SecretKey::generate(rand::rngs::OsRng);
     let discovery = LocalSwarmDiscovery::new(key.public())?;
 
     println!("Starting iroh node with local node discovery...");

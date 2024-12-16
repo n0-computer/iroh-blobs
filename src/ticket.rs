@@ -154,14 +154,13 @@ mod tests {
     use std::net::SocketAddr;
 
     use iroh::{PublicKey, SecretKey};
-    use iroh_base::base32;
     use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     use super::*;
 
     fn make_ticket() -> BlobTicket {
         let hash = Hash::new(b"hi there");
-        let peer = SecretKey::generate().public();
+        let peer = SecretKey::generate(rand::thread_rng()).public();
         let addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
         let relay_url = None;
         BlobTicket {
@@ -201,7 +200,11 @@ mod tests {
             format: BlobFormat::Raw,
             hash,
         };
-        let base32 = base32::parse_vec(ticket.to_string().strip_prefix("blob").unwrap()).unwrap();
+        let encoded = ticket.to_string();
+        let stripped = encoded.strip_prefix("blob").unwrap();
+        let base32 = data_encoding::BASE32_NOPAD
+            .decode(stripped.to_ascii_uppercase().as_bytes())
+            .unwrap();
         let expected = parse_hexdump("
             00 # discriminator for variant 0
             ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6 # node id, 32 bytes, see above

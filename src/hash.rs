@@ -2,7 +2,6 @@
 
 use std::{borrow::Borrow, fmt, str::FromStr};
 
-use iroh_base::base32::{self, parse_array_hex_or_base32, HexOrBase32ParseError};
 use postcard::experimental::max_size::MaxSize;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -52,10 +51,10 @@ impl Hash {
         self.0.to_hex().to_string()
     }
 
-    /// Convert to a base32 string limited to the first 10 bytes for a friendly string
+    /// Convert to a hex string limited to the first 5bytes for a friendly string
     /// representation of the hash.
     pub fn fmt_short(&self) -> String {
-        base32::fmt_short(self.as_bytes())
+        data_encoding::HEXLOWER.encode(&self.as_bytes()[..5])
     }
 }
 
@@ -134,11 +133,35 @@ impl fmt::Display for Hash {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum HexOrBase32ParseError {
+    #[error("Invalid length")]
+    DecodeInvalidLength,
+    #[error("Failed to decode {0}")]
+    Decode(#[from] data_encoding::DecodeError),
+}
+
 impl FromStr for Hash {
     type Err = HexOrBase32ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_array_hex_or_base32(s).map(Hash::from)
+        let mut bytes = [0u8; 32];
+
+        let res = if s.len() == 64 {
+            // hex
+            data_encoding::HEXLOWER.decode_mut(s.as_bytes(), &mut bytes)
+        } else {
+            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), &mut bytes)
+        };
+        match res {
+            Ok(len) => {
+                if len != 32 {
+                    return Err(HexOrBase32ParseError::DecodeInvalidLength);
+                }
+            }
+            Err(partial) => return Err(partial.error.into()),
+        }
+        Ok(Self(blake3::Hash::from_bytes(bytes)))
     }
 }
 
