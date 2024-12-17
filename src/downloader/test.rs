@@ -76,7 +76,7 @@ async fn smoke_test() {
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
 
     // send a request and make sure the peer is requested the corresponding download
-    let peer = SecretKey::generate().public();
+    let peer = SecretKey::generate(rand::thread_rng()).public();
     let kind: DownloadKind = HashAndFormat::raw(Hash::new([0u8; 32])).into();
     let req = DownloadRequest::new(kind, vec![peer]);
     let handle = downloader.queue(req).await;
@@ -101,7 +101,7 @@ async fn deduplication() {
     let (downloader, _lp) =
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
 
-    let peer = SecretKey::generate().public();
+    let peer = SecretKey::generate(rand::thread_rng()).public();
     let kind: DownloadKind = HashAndFormat::raw(Hash::new([0u8; 32])).into();
     let mut handles = Vec::with_capacity(10);
     for _ in 0..10 {
@@ -134,7 +134,7 @@ async fn cancellation() {
     let (downloader, _lp) =
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
 
-    let peer = SecretKey::generate().public();
+    let peer = SecretKey::generate(rand::thread_rng()).public();
     let kind_1: DownloadKind = HashAndFormat::raw(Hash::new([0u8; 32])).into();
     let req = DownloadRequest::new(kind_1, vec![peer]);
     let handle_a = downloader.queue(req.clone()).await;
@@ -175,7 +175,7 @@ async fn max_concurrent_requests_total() {
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
 
     // send the downloads
-    let peer = SecretKey::generate().public();
+    let peer = SecretKey::generate(rand::thread_rng()).public();
     let mut handles = Vec::with_capacity(5);
     let mut expected_history = Vec::with_capacity(5);
     for i in 0..5 {
@@ -219,7 +219,7 @@ async fn max_concurrent_requests_per_peer() {
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
 
     // send the downloads
-    let peer = SecretKey::generate().public();
+    let peer = SecretKey::generate(rand::thread_rng()).public();
     let mut handles = Vec::with_capacity(5);
     for i in 0..5 {
         let kind = HashAndFormat::raw(Hash::new([i; 32]));
@@ -275,7 +275,7 @@ async fn concurrent_progress() {
     let (downloader, _lp) =
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), Default::default());
 
-    let peer = SecretKey::generate().public();
+    let peer = SecretKey::generate(rand::thread_rng()).public();
     let hash = Hash::new([0u8; 32]);
     let kind_1 = HashAndFormat::raw(hash);
 
@@ -369,11 +369,12 @@ async fn long_queue() {
 
     let (downloader, _lp) =
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
+    let mut rng = rand::thread_rng();
     // send the downloads
     let nodes = [
-        SecretKey::generate().public(),
-        SecretKey::generate().public(),
-        SecretKey::generate().public(),
+        SecretKey::generate(&mut rng).public(),
+        SecretKey::generate(&mut rng).public(),
+        SecretKey::generate(&mut rng).public(),
     ];
     let mut handles = vec![];
     for i in 0..100usize {
@@ -417,7 +418,7 @@ async fn fail_while_running() {
         .boxed()
     }));
 
-    let node = SecretKey::generate().public();
+    let node = SecretKey::generate(rand::thread_rng()).public();
     let req_success = DownloadRequest::new(blob_success, vec![node]);
     let req_fail = DownloadRequest::new(blob_fail, vec![node]);
     let handle_success = downloader.queue(req_success).await;
@@ -437,7 +438,7 @@ async fn retry_nodes_simple() {
     let getter = getter::TestingGetter::default();
     let (downloader, _lp) =
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), Default::default());
-    let node = SecretKey::generate().public();
+    let node = SecretKey::generate(rand::thread_rng()).public();
     let dial_attempts = Arc::new(AtomicUsize::new(0));
     let dial_attempts2 = dial_attempts.clone();
     // fail on first dial, then succeed
@@ -467,7 +468,7 @@ async fn retry_nodes_fail() {
         Default::default(),
         config,
     );
-    let node = SecretKey::generate().public();
+    let node = SecretKey::generate(rand::thread_rng()).public();
     // fail always
     dialer.set_dial_outcome(move |_node| false);
 
@@ -504,8 +505,9 @@ async fn retry_nodes_jump_queue() {
     let (downloader, _lp) =
         Downloader::spawn_for_test(dialer.clone(), getter.clone(), concurrency_limits);
 
-    let good_node = SecretKey::generate().public();
-    let bad_node = SecretKey::generate().public();
+    let mut rng = rand::thread_rng();
+    let good_node = SecretKey::generate(&mut rng).public();
+    let bad_node = SecretKey::generate(&mut rng).public();
 
     dialer.set_dial_outcome(move |node| node == good_node);
     let kind1 = HashAndFormat::raw(Hash::new([0u8; 32]));
