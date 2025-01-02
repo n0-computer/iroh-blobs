@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 
 use super::DownloadKind;
 use crate::{
-    fetch::{db::DownloadProgress, progress::TransferState},
+    fetch::progress::{DownloadProgress, TransferState},
     util::progress::{AsyncChannelProgressSender, IdGenerator, ProgressSendError, ProgressSender},
 };
 

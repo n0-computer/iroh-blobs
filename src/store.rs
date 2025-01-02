@@ -10,6 +10,11 @@ pub mod readonly_mem;
 #[cfg(feature = "fs-store")]
 pub mod fs;
 
+mod fetch_to_db;
+pub use fetch_to_db::{fetch_to_db, fetch_to_db_in_steps, FetchState, FetchStateNeedsConn};
+mod export;
+pub use export::{export, export_blob, export_collection, ExportProgress};
+
 mod traits;
 use tracing::warn;
 pub use traits::*;

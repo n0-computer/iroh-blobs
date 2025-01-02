@@ -8,12 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{RpcError, RpcResult, RpcService};
 use crate::{
-    export::ExportProgress,
-    fetch::db::DownloadProgress,
     format::collection::Collection,
     net_protocol::{BatchId, BlobDownloadRequest},
     provider::{AddProgress, BatchAddPathProgress},
     rpc::client::blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, ReadAtLen, WrapOption},
+    store::ExportProgress,
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ImportMode,
         ValidateProgress,
@@ -111,7 +110,7 @@ pub struct AddPathResponse(pub AddProgress);
 
 /// Progress response for [`BlobDownloadRequest`]
 #[derive(Debug, Clone, Serialize, Deserialize, derive_more::From, derive_more::Into)]
-pub struct DownloadResponse(pub DownloadProgress);
+pub struct DownloadResponse(pub crate::fetch::progress::DownloadProgress);
 
 /// A request to the node to download and share the data specified by the hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]

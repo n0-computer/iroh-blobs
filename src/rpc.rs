@@ -43,15 +43,14 @@ use tracing::{debug, warn};
 
 use crate::{
     downloader::{DownloadRequest, Downloader},
-    export::ExportProgress,
-    fetch::{
-        db::{DownloadProgress, FetchState},
-        Stats,
-    },
+    fetch::{progress::DownloadProgress, Stats},
     format::collection::Collection,
     net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
-    store::{ConsistencyCheckProgress, ImportProgress, MapEntry, ValidateProgress},
+    store::{
+        ConsistencyCheckProgress, ExportProgress, FetchState, ImportProgress, MapEntry,
+        ValidateProgress,
+    },
     util::{
         local_pool::LocalPoolHandle,
         progress::{AsyncChannelProgressSender, ProgressSender},
@@ -451,7 +450,7 @@ impl<D: crate::store::Store> Handler<D> {
         let progress = AsyncChannelProgressSender::new(tx);
         let rt = self.rt().clone();
         rt.spawn_detached(move || async move {
-            let res = crate::export::export(
+            let res = crate::store::export(
                 self.store(),
                 msg.hash,
                 msg.path,
@@ -1009,7 +1008,7 @@ impl<D: crate::store::Store> Handler<D> {
         let mut remaining_nodes = nodes.len();
         let mut nodes_iter = nodes.into_iter();
         'outer: loop {
-            match crate::fetch::db::fetch_to_db_in_steps(
+            match crate::store::fetch_to_db_in_steps(
                 self.store().clone(),
                 hash_and_format,
                 progress.clone(),

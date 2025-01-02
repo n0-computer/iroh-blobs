@@ -10,10 +10,7 @@ use iroh::SecretKey;
 
 use super::*;
 use crate::{
-    fetch::{
-        db::BlobId,
-        progress::{BlobProgress, TransferState},
-    },
+    fetch::progress::{BlobId, BlobProgress, TransferState},
     util::{
         local_pool::LocalPool,
         progress::{AsyncChannelProgressSender, IdGenerator},

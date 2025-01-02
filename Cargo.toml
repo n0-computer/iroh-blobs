@@ -95,7 +95,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "net_protocol"]
+default = ["fs-store", "net_protocol", "formats-collection"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader", "dep:futures-util"]
 fs-store = ["dep:reflink-copy", "redb", "dep:tempfile"]
@@ -112,6 +112,8 @@ rpc = [
     "dep:walkdir",
     "downloader",
 ]
+formats = []
+formats-collection = ["formats"]
 
 example-iroh = [
   "dep:clap",

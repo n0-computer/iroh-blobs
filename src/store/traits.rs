@@ -822,28 +822,6 @@ pub enum ExportFormat {
     Collection,
 }
 
-#[allow(missing_docs)]
-#[derive(Debug)]
-pub enum ExportProgress {
-    /// Starting to export to a file
-    ///
-    /// This will be the first message for an id
-    Start {
-        id: u64,
-        hash: Hash,
-        path: PathBuf,
-        stable: bool,
-    },
-    /// Progress when copying the file to the target
-    ///
-    /// This will be omitted if the store can move the file or use copy on write
-    ///
-    /// There will be multiple of these messages for an id
-    Progress { id: u64, offset: u64 },
-    /// Done exporting
-    Done { id: u64 },
-}
-
 /// Level for generic validation messages
 #[derive(
     Debug, Clone, Copy, derive_more::Display, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq,

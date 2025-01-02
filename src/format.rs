@@ -13,4 +13,5 @@
 //! n-1 items, where n is the number of blobs in the HashSeq.
 //!
 //! [postcard]: https://docs.rs/postcard/latest/postcard/
+#[cfg(feature = "formats-collection")]
 pub mod collection;

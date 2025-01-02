@@ -5,7 +5,7 @@ use std::{collections::HashMap, num::NonZeroU64};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::db::{BlobId, DownloadProgress};
+use super::Stats;
 use crate::{protocol::RangeSpec, store::BaoBlobSize, Hash};
 
 /// The identifier for progress events.
@@ -180,6 +180,93 @@ impl TransferState {
                 }
             }
             DownloadProgress::AllDone(_) | DownloadProgress::Abort(_) => {}
+        }
+    }
+}
+
+/// Progress updates for the get operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadProgress {
+    /// Initial state if subscribing to a running or queued transfer.
+    InitialState(TransferState),
+    /// Data was found locally.
+    FoundLocal {
+        /// child offset
+        child: BlobId,
+        /// The hash of the entry.
+        hash: Hash,
+        /// The size of the entry in bytes.
+        size: BaoBlobSize,
+        /// The ranges that are available locally.
+        valid_ranges: RangeSpec,
+    },
+    /// A new connection was established.
+    Connected,
+    /// An item was found with hash `hash`, from now on referred to via `id`.
+    Found {
+        /// A new unique progress id for this entry.
+        id: u64,
+        /// Identifier for this blob within this download.
+        ///
+        /// Will always be [`BlobId::Root`] unless a hashseq is downloaded, in which case this
+        /// allows to identify the children by their offset in the hashseq.
+        child: BlobId,
+        /// The hash of the entry.
+        hash: Hash,
+        /// The size of the entry in bytes.
+        size: u64,
+    },
+    /// An item was found with hash `hash`, from now on referred to via `id`.
+    FoundHashSeq {
+        /// The name of the entry.
+        hash: Hash,
+        /// Number of children in the collection, if known.
+        children: u64,
+    },
+    /// We got progress ingesting item `id`.
+    Progress {
+        /// The unique id of the entry.
+        id: u64,
+        /// The offset of the progress, in bytes.
+        offset: u64,
+    },
+    /// We are done with `id`.
+    Done {
+        /// The unique id of the entry.
+        id: u64,
+    },
+    /// All operations finished.
+    ///
+    /// This will be the last message in the stream.
+    AllDone(Stats),
+    /// We got an error and need to abort.
+    ///
+    /// This will be the last message in the stream.
+    Abort(serde_error::Error),
+}
+
+/// The id of a blob in a transfer
+#[derive(
+    Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, std::hash::Hash, Serialize, Deserialize,
+)]
+pub enum BlobId {
+    /// The root blob (child id 0)
+    Root,
+    /// A child blob (child id > 0)
+    Child(NonZeroU64),
+}
+
+impl BlobId {
+    pub(crate) fn from_offset(id: u64) -> Self {
+        NonZeroU64::new(id).map(Self::Child).unwrap_or(Self::Root)
+    }
+}
+
+impl From<BlobId> for u64 {
+    fn from(value: BlobId) -> Self {
+        match value {
+            BlobId::Root => 0,
+            BlobId::Child(id) => id.into(),
         }
     }
 }

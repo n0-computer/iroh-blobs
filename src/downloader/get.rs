@@ -7,8 +7,8 @@ use iroh::endpoint;
 
 use super::{progress::BroadcastProgressSender, DownloadKind, FailureAction, GetStartFut, Getter};
 use crate::{
-    fetch::{db::fetch_to_db_in_steps, Error},
-    store::Store,
+    fetch::Error,
+    store::{fetch_to_db_in_steps, FetchState, FetchStateNeedsConn, Store},
 };
 
 impl From<Error> for FailureAction {
@@ -34,7 +34,7 @@ pub(crate) struct IoGetter<S: Store> {
 
 impl<S: Store> Getter for IoGetter<S> {
     type Connection = endpoint::Connection;
-    type NeedsConn = crate::fetch::db::FetchStateNeedsConn;
+    type NeedsConn = FetchStateNeedsConn;
 
     fn get(
         &mut self,
@@ -45,10 +45,8 @@ impl<S: Store> Getter for IoGetter<S> {
         async move {
             match fetch_to_db_in_steps(store, kind.hash_and_format(), progress_sender).await {
                 Err(err) => Err(err.into()),
-                Ok(crate::fetch::db::FetchState::Complete(stats)) => {
-                    Ok(super::GetOutput::Complete(stats))
-                }
-                Ok(crate::fetch::db::FetchState::NeedsConn(needs_conn)) => {
+                Ok(FetchState::Complete(stats)) => Ok(super::GetOutput::Complete(stats)),
+                Ok(FetchState::NeedsConn(needs_conn)) => {
                     Ok(super::GetOutput::NeedsConn(needs_conn))
                 }
             }
@@ -57,7 +55,7 @@ impl<S: Store> Getter for IoGetter<S> {
     }
 }
 
-impl super::NeedsConn<endpoint::Connection> for crate::fetch::db::FetchStateNeedsConn {
+impl super::NeedsConn<endpoint::Connection> for FetchStateNeedsConn {
     fn proceed(self, conn: endpoint::Connection) -> super::GetProceedFut {
         async move {
             let res = self.proceed(conn).await;
