@@ -1938,7 +1938,9 @@
 <a href="#1937" id="1937">1937</a>
 <a href="#1938" id="1938">1938</a>
 <a href="#1939" id="1939">1939</a>
-<a href="#1940" id="1940">1940</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1940" id="1940">1940</a>
+<a href="#1941" id="1941">1941</a>
+<a href="#1942" id="1942">1942</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -2027,8 +2029,10 @@
     format::collection::{Collection, SimpleStore},
     net_protocol::BlobDownloadRequest,
     rpc::proto::RpcService,
-    store::ExportProgress <span class="kw">as </span>BytesExportProgress,
-    store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
+    store::{
+        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
+        ExportProgress <span class="kw">as </span>BytesExportProgress, ValidateProgress,
+    },
     util::SetTagOption,
     BlobFormat, Hash, Tag,
 };
