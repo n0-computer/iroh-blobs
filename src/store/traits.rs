@@ -819,6 +819,7 @@ pub enum ExportFormat {
     /// destination path.
     ///
     /// If the blob cannot be parsed as a collection, the operation will fail.
+    #[cfg(feature = "formats-collection")]
     Collection,
 }
 

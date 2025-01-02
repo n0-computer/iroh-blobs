@@ -129,6 +129,7 @@ rustdoc-args = ["--cfg", "iroh_docsrs"]
 
 [[example]]
 name = "provide-bytes"
+required-features = ["formats-collection"]
 
 [[example]]
 name = "fetch-fsm"

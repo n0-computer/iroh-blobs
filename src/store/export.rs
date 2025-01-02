@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use tracing::trace;
 
 use crate::{
-    format::collection::Collection,
     store::{BaoBlobSize, ExportFormat, ExportMode, MapEntry, Store as BaoStore},
     util::progress::{IdGenerator, ProgressSender},
     Hash,
@@ -32,11 +31,13 @@ pub async fn export<D: BaoStore>(
 ) -> anyhow::Result<()> {
     match format {
         ExportFormat::Blob => export_blob(db, hash, outpath, mode, progress).await,
+        #[cfg(feature = "formats-collection")]
         ExportFormat::Collection => export_collection(db, hash, outpath, mode, progress).await,
     }
 }
 
 /// Export all entries of a collection, recursively, to files on the local filesystem.
+#[cfg(feature = "formats-collection")]
 pub async fn export_collection<D: BaoStore>(
     db: &D,
     hash: Hash,
@@ -45,7 +46,7 @@ pub async fn export_collection<D: BaoStore>(
     progress: impl ProgressSender<Msg = ExportProgress> + IdGenerator,
 ) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(&outpath).await?;
-    let collection = Collection::load_db(db, &hash).await?;
+    let collection = crate::format::collection::Collection::load_db(db, &hash).await?;
     for (name, hash) in collection.into_iter() {
         #[allow(clippy::needless_borrow)]
         let path = outpath.join(pathbuf_from_name(&name));
@@ -126,6 +127,7 @@ pub enum ExportProgress {
     Abort(serde_error::Error),
 }
 
+#[cfg(feature = "formats-collection")]
 fn pathbuf_from_name(name: &str) -> PathBuf {
     let mut path = PathBuf::new();
     for part in name.split('/') {
