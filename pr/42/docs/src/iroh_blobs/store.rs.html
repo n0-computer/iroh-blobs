@@ -99,7 +99,9 @@
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a></pre></div><pre class="rust"><code><span class="doccomment">//! Implementations of blob stores
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a></pre></div><pre class="rust"><code><span class="doccomment">//! Implementations of blob stores
 </span><span class="kw">use crate</span>::{BlobFormat, Hash, HashAndFormat};
 
 <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
@@ -114,7 +116,9 @@
 <span class="kw">mod </span>fetch_to_db;
 <span class="kw">pub use </span>fetch_to_db::{fetch_to_db, fetch_to_db_in_steps, FetchState, FetchStateNeedsConn};
 <span class="kw">mod </span>export;
-<span class="kw">pub use </span>export::{export, export_blob, export_collection, ExportProgress};
+<span class="attr">#[cfg(feature = <span class="string">"formats-collection"</span>)]
+</span><span class="kw">pub use </span>export::export_collection;
+<span class="kw">pub use </span>export::{export, export_blob, ExportProgress};
 
 <span class="kw">mod </span>traits;
 <span class="kw">use </span>tracing::warn;

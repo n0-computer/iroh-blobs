@@ -133,7 +133,9 @@
 <a href="#132" id="132">132</a>
 <a href="#133" id="133">133</a>
 <a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a></pre></div><pre class="rust"><code><span class="doccomment">//! Functions to export data from a store
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a></pre></div><pre class="rust"><code><span class="doccomment">//! Functions to export data from a store
 
 </span><span class="kw">use </span>std::path::PathBuf;
 
@@ -143,7 +145,6 @@
 <span class="kw">use </span>tracing::trace;
 
 <span class="kw">use crate</span>::{
-    format::collection::Collection,
     store::{BaoBlobSize, ExportFormat, ExportMode, MapEntry, Store <span class="kw">as </span>BaoStore},
     util::progress::{IdGenerator, ProgressSender},
     Hash,
@@ -167,11 +168,13 @@
 ) -&gt; anyhow::Result&lt;()&gt; {
     <span class="kw">match </span>format {
         ExportFormat::Blob =&gt; export_blob(db, hash, outpath, mode, progress).<span class="kw">await</span>,
-        ExportFormat::Collection =&gt; export_collection(db, hash, outpath, mode, progress).<span class="kw">await</span>,
+        <span class="attr">#[cfg(feature = <span class="string">"formats-collection"</span>)]
+        </span>ExportFormat::Collection =&gt; export_collection(db, hash, outpath, mode, progress).<span class="kw">await</span>,
     }
 }
 
 <span class="doccomment">/// Export all entries of a collection, recursively, to files on the local filesystem.
+</span><span class="attr">#[cfg(feature = <span class="string">"formats-collection"</span>)]
 </span><span class="kw">pub async fn </span>export_collection&lt;D: BaoStore&gt;(
     db: <span class="kw-2">&amp;</span>D,
     hash: Hash,
@@ -180,7 +183,7 @@
     progress: <span class="kw">impl </span>ProgressSender&lt;Msg = ExportProgress&gt; + IdGenerator,
 ) -&gt; anyhow::Result&lt;()&gt; {
     tokio::fs::create_dir_all(<span class="kw-2">&amp;</span>outpath).<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="kw">let </span>collection = Collection::load_db(db, <span class="kw-2">&amp;</span>hash).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span>collection = <span class="kw">crate</span>::format::collection::Collection::load_db(db, <span class="kw-2">&amp;</span>hash).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="kw">for </span>(name, hash) <span class="kw">in </span>collection.into_iter() {
         <span class="attr">#[allow(clippy::needless_borrow)]
         </span><span class="kw">let </span>path = outpath.join(pathbuf_from_name(<span class="kw-2">&amp;</span>name));
@@ -261,7 +264,8 @@
     </span>Abort(serde_error::Error),
 }
 
-<span class="kw">fn </span>pathbuf_from_name(name: <span class="kw-2">&amp;</span>str) -&gt; PathBuf {
+<span class="attr">#[cfg(feature = <span class="string">"formats-collection"</span>)]
+</span><span class="kw">fn </span>pathbuf_from_name(name: <span class="kw-2">&amp;</span>str) -&gt; PathBuf {
     <span class="kw">let </span><span class="kw-2">mut </span>path = PathBuf::new();
     <span class="kw">for </span>part <span class="kw">in </span>name.split(<span class="string">'/'</span>) {
         path.push(part);

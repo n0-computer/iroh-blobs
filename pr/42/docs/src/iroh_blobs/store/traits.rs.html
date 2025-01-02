@@ -935,7 +935,8 @@
 <a href="#934" id="934">934</a>
 <a href="#935" id="935">935</a>
 <a href="#936" id="936">936</a>
-<a href="#937" id="937">937</a></pre></div><pre class="rust"><code><span class="doccomment">//! Traits for in-memory or persistent maps of blob with bao encoded outboards.
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a></pre></div><pre class="rust"><code><span class="doccomment">//! Traits for in-memory or persistent maps of blob with bao encoded outboards.
 </span><span class="kw">use </span>std::{collections::BTreeSet, future::Future, io, path::PathBuf, time::Duration};
 
 <span class="kw">pub use </span>bao_tree;
@@ -1756,6 +1757,7 @@
     /// destination path.
     ///
     /// If the blob cannot be parsed as a collection, the operation will fail.
+    </span><span class="attr">#[cfg(feature = <span class="string">"formats-collection"</span>)]
     </span>Collection,
 }
 
