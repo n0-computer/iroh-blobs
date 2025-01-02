@@ -12,10 +12,9 @@ use crate::{
     net_protocol::{BatchId, BlobDownloadRequest},
     provider::{AddProgress, BatchAddPathProgress},
     rpc::client::blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, ReadAtLen, WrapOption},
-    store::ExportProgress,
     store::{
-        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ImportMode,
-        ValidateProgress,
+        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ExportProgress,
+        ImportMode, ValidateProgress,
     },
     util::SetTagOption,
     BlobFormat, Hash, HashAndFormat, Tag,

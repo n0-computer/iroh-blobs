@@ -87,8 +87,10 @@ use crate::{
     format::collection::{Collection, SimpleStore},
     net_protocol::BlobDownloadRequest,
     rpc::proto::RpcService,
-    store::ExportProgress as BytesExportProgress,
-    store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
+    store::{
+        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
+        ExportProgress as BytesExportProgress, ValidateProgress,
+    },
     util::SetTagOption,
     BlobFormat, Hash, Tag,
 };
