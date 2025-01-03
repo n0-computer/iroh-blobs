@@ -25,7 +25,8 @@ use crate::{
     },
     provider::AddProgress,
     rpc::client::blobs::{
-        self, BlobInfo, BlobStatus, CollectionInfo, DownloadOptions, IncompleteBlobInfo, WrapOption,
+        self, BlobInfo, BlobStatus, CollectionInfo, DownloadMode, DownloadOptions,
+        IncompleteBlobInfo, WrapOption,
     },
     store::{ConsistencyCheckProgress, ExportFormat, ExportMode, ReportLevel, ValidateProgress},
     ticket::BlobTicket,
