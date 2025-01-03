@@ -1,11 +1,10 @@
 //! Table definitions and accessors for the redb database.
 use std::collections::BTreeSet;
 
-use iroh_base::hash::{Hash, HashAndFormat};
 use redb::{ReadableTable, TableDefinition, TableError};
 
 use super::{EntryState, PathOptions};
-use crate::util::Tag;
+use crate::{util::Tag, Hash, HashAndFormat};
 
 pub(super) const BLOBS_TABLE: TableDefinition<Hash, EntryState> = TableDefinition::new("blobs-0");
 
@@ -83,8 +82,8 @@ pub(super) struct ReadOnlyTables {
     pub inline_outboard: redb::ReadOnlyTable<Hash, &'static [u8]>,
 }
 
-impl<'txn> ReadOnlyTables {
-    pub fn new(tx: &'txn redb::ReadTransaction) -> std::result::Result<Self, TableError> {
+impl ReadOnlyTables {
+    pub fn new(tx: &redb::ReadTransaction) -> std::result::Result<Self, TableError> {
         Ok(Self {
             blobs: tx.open_table(BLOBS_TABLE)?,
             tags: tx.open_table(TAGS_TABLE)?,

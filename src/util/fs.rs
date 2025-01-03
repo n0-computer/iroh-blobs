@@ -75,14 +75,12 @@ pub fn scan_path(
 }
 
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 fn file_name(path: &Path) -> anyhow::Result<String> {
     relative_canonicalized_path_to_string(path.file_name().context("path is invalid")?)
 }
 
 /// Create data sources from a directory.
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
 pub fn scan_dir(
     root: PathBuf,
     wrap: crate::rpc::client::blobs::WrapOption,
@@ -126,21 +124,30 @@ pub fn relative_canonicalized_path_to_string(path: impl AsRef<Path>) -> anyhow::
     canonicalized_path_to_string(path, true)
 }
 
-/// Loads a [`iroh_net::key::SecretKey`] from the provided file, or stores a newly generated one
+/// Loads a [`iroh::SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
 #[cfg(feature = "rpc")]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = "rpc")))]
-pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<iroh_net::key::SecretKey> {
+pub async fn load_secret_key(key_path: PathBuf) -> anyhow::Result<iroh::SecretKey> {
+    use iroh::SecretKey;
     use tokio::io::AsyncWriteExt;
 
     if key_path.exists() {
         let keystr = tokio::fs::read(key_path).await?;
-        let secret_key =
-            iroh_net::key::SecretKey::try_from_openssh(keystr).context("invalid keyfile")?;
+
+        let ser_key = ssh_key::private::PrivateKey::from_openssh(keystr)?;
+        let ssh_key::private::KeypairData::Ed25519(kp) = ser_key.key_data() else {
+            bail!("invalid key format");
+        };
+        let secret_key = SecretKey::from_bytes(&kp.private.to_bytes());
         Ok(secret_key)
     } else {
-        let secret_key = iroh_net::key::SecretKey::generate();
-        let ser_key = secret_key.to_openssh()?;
+        let secret_key = SecretKey::generate(rand::rngs::OsRng);
+        let ckey = ssh_key::private::Ed25519Keypair {
+            public: secret_key.public().public().into(),
+            private: secret_key.secret().into(),
+        };
+        let ser_key =
+            ssh_key::private::PrivateKey::from(ckey).to_openssh(ssh_key::LineEnding::default())?;
 
         // Try to canonicalize if possible
         let key_path = key_path.canonicalize().unwrap_or(key_path);
@@ -179,7 +186,6 @@ pub struct PathContent {
 }
 
 /// Walks the directory to get the total size and number of files in directory or file
-///
 // TODO: possible combine with `scan_dir`
 pub fn path_content_info(path: impl AsRef<Path>) -> anyhow::Result<PathContent> {
     path_content_info0(path)

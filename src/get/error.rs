@@ -1,6 +1,6 @@
 //! Error returned from get operations
 
-use iroh_net::endpoint;
+use iroh::endpoint;
 
 use crate::util::progress::ProgressSendError;
 

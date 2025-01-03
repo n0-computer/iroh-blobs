@@ -79,7 +79,6 @@ use bao_tree::io::{
 use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use genawaiter::rc::{Co, Gen};
-use iroh_base::hash::{BlobFormat, Hash, HashAndFormat};
 use iroh_io::AsyncSliceReader;
 use redb::{AccessGuard, DatabaseError, ReadableTable, StorageError};
 use serde::{Deserialize, Serialize};
@@ -87,7 +86,6 @@ use smallvec::SmallVec;
 use tokio::io::AsyncWriteExt;
 use tracing::trace_span;
 
-mod migrate_redb_v1_v2;
 mod tables;
 #[doc(hidden)]
 pub mod test_support;
@@ -121,7 +119,7 @@ use crate::{
         },
         raw_outboard_size, MemOrFile, TagCounter, TagDrop,
     },
-    Tag, TempTag,
+    BlobFormat, Hash, HashAndFormat, Tag, TempTag,
 };
 
 /// Location of the data.
@@ -1334,7 +1332,7 @@ impl super::Store for Store {
     async fn import_bytes(
         &self,
         data: bytes::Bytes,
-        format: iroh_base::hash::BlobFormat,
+        format: crate::BlobFormat,
     ) -> io::Result<crate::TempTag> {
         let this = self.0.clone();
         Ok(tokio::task::spawn_blocking(move || this.import_bytes_sync(data, format)).await??)
@@ -1510,7 +1508,9 @@ impl Actor {
         let db = match redb::Database::create(path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
-                migrate_redb_v1_v2::run(path).map_err(ActorError::Migration)?
+                return Err(ActorError::Migration(anyhow::anyhow!(
+                    "migration from v1 no longer supported"
+                )))
             }
             Err(err) => return Err(err.into()),
         };

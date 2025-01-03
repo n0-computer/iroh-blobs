@@ -1,9 +1,9 @@
 //! [`Getter`] implementation that performs requests over [`Connection`]s.
 //!
-//! [`Connection`]: iroh_net::endpoint::Connection
+//! [`Connection`]: iroh::endpoint::Connection
 
 use futures_lite::FutureExt;
-use iroh_net::endpoint;
+use iroh::endpoint;
 
 use super::{progress::BroadcastProgressSender, DownloadKind, FailureAction, GetStartFut, Getter};
 use crate::{
@@ -27,7 +27,7 @@ impl From<GetError> for FailureAction {
 
 /// [`Getter`] implementation that performs requests over [`Connection`]s.
 ///
-/// [`Connection`]: iroh_net::endpoint::Connection
+/// [`Connection`]: iroh::endpoint::Connection
 pub(crate) struct IoGetter<S: Store> {
     pub store: S,
 }

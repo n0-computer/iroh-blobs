@@ -148,7 +148,8 @@
 //! # use bao_tree::{ChunkNum, ChunkRanges};
 //! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let ranges = &ChunkRanges::from(..ChunkNum(10)) | &ChunkRanges::from(ChunkNum(100)..ChunkNum(110));
+//! let ranges =
+//!     &ChunkRanges::from(..ChunkNum(10)) | &ChunkRanges::from(ChunkNum(100)..ChunkNum(110));
 //! let spec = RangeSpecSeq::from_ranges([ranges]);
 //! let request = GetRequest::new(hash, spec);
 //! ```
@@ -236,8 +237,8 @@
 //! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
 //! let spec = RangeSpecSeq::from_ranges_infinite([
-//!   ChunkRanges::all(), // the collection itself
-//!   ChunkRanges::from(..ChunkNum(1)), // the first chunk of each child
+//!     ChunkRanges::all(),               // the collection itself
+//!     ChunkRanges::from(..ChunkNum(1)), // the first chunk of each child
 //! ]);
 //! let request = GetRequest::new(hash, spec);
 //! ```
@@ -252,9 +253,9 @@
 //! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
 //! let spec = RangeSpecSeq::from_ranges([
-//!   ChunkRanges::empty(), // we don't need the collection itself
-//!   ChunkRanges::empty(), // we don't need the first child either
-//!   ChunkRanges::all(), // we need the second child completely
+//!     ChunkRanges::empty(), // we don't need the collection itself
+//!     ChunkRanges::empty(), // we don't need the first child either
+//!     ChunkRanges::all(),   // we need the second child completely
 //! ]);
 //! let request = GetRequest::new(hash, spec);
 //! ```
@@ -338,7 +339,7 @@
 //! keep a connection open and reuse it for multiple requests.
 use bao_tree::{ChunkNum, ChunkRanges};
 use derive_more::From;
-use iroh_net::endpoint::VarInt;
+use iroh::endpoint::VarInt;
 use serde::{Deserialize, Serialize};
 mod range_spec;
 pub use range_spec::{NonEmptyRequestRangeSpecIter, RangeSpec, RangeSpecSeq};
@@ -431,8 +432,8 @@ pub enum Closed {
     /// [`RecvStream::stop`].  We don't use this explicitly but this is here as
     /// documentation as to what happened to `0`.
     ///
-    /// [`RecvStream`]: iroh_net::endpoint::RecvStream
-    /// [`RecvStream::stop`]: iroh_net::endpoint::RecvStream::stop
+    /// [`RecvStream`]: iroh::endpoint::RecvStream
+    /// [`RecvStream::stop`]: iroh::endpoint::RecvStream::stop
     StreamDropped = 0,
     /// The provider is terminating.
     ///
