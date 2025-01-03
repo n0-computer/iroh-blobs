@@ -43,8 +43,8 @@ use tracing::{debug, warn};
 
 use crate::{
     downloader::{DownloadRequest, Downloader},
-    fetch::{progress::DownloadProgress, Stats},
     format::collection::Collection,
+    get::{progress::DownloadProgress, Stats},
     net_protocol::{Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{
@@ -1008,7 +1008,7 @@ impl<D: crate::store::Store> Handler<D> {
         let mut remaining_nodes = nodes.len();
         let mut nodes_iter = nodes.into_iter();
         'outer: loop {
-            match crate::store::fetch_to_db_in_steps(
+            match crate::store::get_to_db_in_steps(
                 self.store().clone(),
                 hash_and_format,
                 progress.clone(),

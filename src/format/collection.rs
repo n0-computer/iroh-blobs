@@ -8,7 +8,7 @@ use iroh_io::AsyncSliceReaderExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    fetch::{fsm, Stats},
+    get::{fsm, Stats},
     hashseq::HashSeq,
     store::MapEntry,
     util::TempTag,
@@ -142,7 +142,7 @@ impl Collection {
     ///
     /// Returns the collection, a map from blob offsets to bytes, and the stats.
     pub async fn read_fsm_all(
-        fsm_at_start_root: crate::fetch::fsm::AtStartRoot,
+        fsm_at_start_root: crate::get::fsm::AtStartRoot,
     ) -> anyhow::Result<(Collection, BTreeMap<u64, Bytes>, Stats)> {
         let (next, links, collection) = Self::read_fsm(fsm_at_start_root).await?;
         let mut res = BTreeMap::new();

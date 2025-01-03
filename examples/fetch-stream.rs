@@ -11,7 +11,7 @@ use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use genawaiter::sync::{Co, Gen};
 use iroh_blobs::{
-    fetch::fsm::{AtInitial, BlobContentNext, ConnectedNext, EndBlobNext},
+    get::fsm::{AtInitial, BlobContentNext, ConnectedNext, EndBlobNext},
     hashseq::HashSeq,
     protocol::GetRequest,
     Hash,
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
         let request = GetRequest::all(hash);
 
         // create the initial state of the finite state machine
-        let initial = iroh_blobs::fetch::fsm::start(connection, request);
+        let initial = iroh_blobs::get::fsm::start(connection, request);
 
         // create a stream that yields all the data of the blob
         stream_children(initial).boxed_local()
@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
         let request = GetRequest::single(hash);
 
         // create the initial state of the finite state machine
-        let initial = iroh_blobs::fetch::fsm::start(connection, request);
+        let initial = iroh_blobs::get::fsm::start(connection, request);
 
         // create a stream that yields all the data of the blob
         stream_blob(initial).boxed_local()
@@ -166,7 +166,7 @@ fn stream_children(initial: AtInitial) -> impl Stream<Item = io::Result<Bytes>> 
             ));
         }
         // move to the header
-        let header: iroh_blobs::fetch::fsm::AtBlobHeader = start_root.next();
+        let header: iroh_blobs::get::fsm::AtBlobHeader = start_root.next();
         let (root_end, hashes_bytes) = header.concatenate_into_vec().await?;
 
         // parse the hashes from the hash sequence bytes

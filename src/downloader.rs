@@ -55,7 +55,7 @@ use tokio_util::{either::Either, sync::CancellationToken, time::delay_queue};
 use tracing::{debug, error, error_span, trace, warn, Instrument};
 
 use crate::{
-    fetch::{progress::DownloadProgress, Stats},
+    get::{progress::DownloadProgress, Stats},
     metrics::Metrics,
     store::Store,
     util::{local_pool::LocalPoolHandle, progress::ProgressSender},

@@ -7,8 +7,8 @@ use iroh::endpoint;
 
 use super::{progress::BroadcastProgressSender, DownloadKind, FailureAction, GetStartFut, Getter};
 use crate::{
-    fetch::Error,
-    store::{fetch_to_db_in_steps, FetchState, FetchStateNeedsConn, Store},
+    get::Error,
+    store::{get_to_db_in_steps, FetchState, FetchStateNeedsConn, Store},
 };
 
 impl From<Error> for FailureAction {
@@ -43,7 +43,7 @@ impl<S: Store> Getter for IoGetter<S> {
     ) -> GetStartFut<Self::NeedsConn> {
         let store = self.store.clone();
         async move {
-            match fetch_to_db_in_steps(store, kind.hash_and_format(), progress_sender).await {
+            match get_to_db_in_steps(store, kind.hash_and_format(), progress_sender).await {
                 Err(err) => Err(err.into()),
                 Ok(FetchState::Complete(stats)) => Ok(super::GetOutput::Complete(stats)),
                 Ok(FetchState::NeedsConn(needs_conn)) => {
@@ -71,13 +71,13 @@ impl super::NeedsConn<endpoint::Connection> for FetchStateNeedsConn {
 }
 
 #[cfg(feature = "metrics")]
-fn track_metrics(res: &Result<crate::fetch::Stats, Error>) {
+fn track_metrics(res: &Result<crate::get::Stats, Error>) {
     use iroh_metrics::{inc, inc_by};
 
     use crate::metrics::Metrics;
     match res {
         Ok(stats) => {
-            let crate::fetch::Stats {
+            let crate::get::Stats {
                 bytes_written,
                 bytes_read: _,
                 elapsed,

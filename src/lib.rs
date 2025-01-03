@@ -32,9 +32,9 @@
 pub mod cli;
 #[cfg(feature = "downloader")]
 pub mod downloader;
-pub mod fetch;
 #[cfg(feature = "formats")]
 pub mod format;
+pub mod get;
 pub mod hashseq;
 pub mod metrics;
 #[cfg(feature = "net_protocol")]

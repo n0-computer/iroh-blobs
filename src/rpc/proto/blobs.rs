@@ -112,7 +112,7 @@ pub struct AddPathResponse(pub AddProgress);
 
 /// Progress response for [`BlobDownloadRequest`]
 #[derive(Debug, Clone, Serialize, Deserialize, derive_more::From, derive_more::Into)]
-pub struct DownloadResponse(pub crate::fetch::progress::DownloadProgress);
+pub struct DownloadResponse(pub crate::get::progress::DownloadProgress);
 
 /// A request to the node to download and share the data specified by the hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]

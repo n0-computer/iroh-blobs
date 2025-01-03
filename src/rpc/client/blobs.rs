@@ -82,8 +82,8 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::warn;
 
 use crate::{
-    fetch::progress::DownloadProgress as BytesDownloadProgress,
     format::collection::{Collection, SimpleStore},
+    get::progress::DownloadProgress as BytesDownloadProgress,
     rpc::proto::{blobs::BlobDownloadRequest, RpcService},
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
@@ -675,7 +675,7 @@ pub struct DownloadOutcome {
     /// The size of the data we downloaded from the network
     pub downloaded_size: u64,
     /// Statistics about the download
-    pub stats: crate::fetch::Stats,
+    pub stats: crate::get::Stats,
 }
 
 /// Progress stream for blob download operations.

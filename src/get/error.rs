@@ -116,9 +116,9 @@ impl From<endpoint::WriteError> for Error {
     }
 }
 
-impl From<crate::fetch::fsm::ConnectedNextError> for Error {
-    fn from(value: crate::fetch::fsm::ConnectedNextError) -> Self {
-        use crate::fetch::fsm::ConnectedNextError::*;
+impl From<crate::get::fsm::ConnectedNextError> for Error {
+    fn from(value: crate::get::fsm::ConnectedNextError) -> Self {
+        use crate::get::fsm::ConnectedNextError::*;
         match value {
             e @ PostcardSer(_) => {
                 // serialization errors indicate something wrong with the request itself
@@ -138,9 +138,9 @@ impl From<crate::fetch::fsm::ConnectedNextError> for Error {
     }
 }
 
-impl From<crate::fetch::fsm::AtBlobHeaderNextError> for Error {
-    fn from(value: crate::fetch::fsm::AtBlobHeaderNextError) -> Self {
-        use crate::fetch::fsm::AtBlobHeaderNextError::*;
+impl From<crate::get::fsm::AtBlobHeaderNextError> for Error {
+    fn from(value: crate::get::fsm::AtBlobHeaderNextError) -> Self {
+        use crate::get::fsm::AtBlobHeaderNextError::*;
         match value {
             e @ NotFound => {
                 // > This indicates that the provider does not have the requested data.
@@ -156,9 +156,9 @@ impl From<crate::fetch::fsm::AtBlobHeaderNextError> for Error {
     }
 }
 
-impl From<crate::fetch::fsm::DecodeError> for Error {
-    fn from(value: crate::fetch::fsm::DecodeError) -> Self {
-        use crate::fetch::fsm::DecodeError::*;
+impl From<crate::get::fsm::DecodeError> for Error {
+    fn from(value: crate::get::fsm::DecodeError) -> Self {
+        use crate::get::fsm::DecodeError::*;
 
         match value {
             e @ NotFound => Error::NotFound(e.into()),

@@ -140,7 +140,7 @@ mod progress {
         ProgressStyle,
     };
     use iroh_blobs::{
-        fetch::{
+        get::{
             progress::{BlobProgress, DownloadProgress},
             Stats,
         },
