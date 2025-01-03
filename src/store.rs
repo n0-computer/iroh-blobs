@@ -11,7 +11,9 @@ pub mod readonly_mem;
 pub mod fs;
 
 mod get_to_db;
-pub use get_to_db::{get_to_db, get_to_db_in_steps, FetchState, FetchStateNeedsConn};
+pub use get_to_db::{
+    blob_info, get_to_db, get_to_db_in_steps, valid_ranges, FetchState, FetchStateNeedsConn,
+};
 mod export;
 #[cfg(feature = "formats-collection")]
 pub use export::export_collection;
