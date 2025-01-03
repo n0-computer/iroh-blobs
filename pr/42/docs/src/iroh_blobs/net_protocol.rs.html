@@ -289,53 +289,25 @@
 <a href="#288" id="288">288</a>
 <a href="#289" id="289">289</a>
 <a href="#290" id="290">290</a>
-<a href="#291" id="291">291</a>
-<a href="#292" id="292">292</a>
-<a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a>
-<a href="#302" id="302">302</a>
-<a href="#303" id="303">303</a>
-<a href="#304" id="304">304</a>
-<a href="#305" id="305">305</a>
-<a href="#306" id="306">306</a>
-<a href="#307" id="307">307</a>
-<a href="#308" id="308">308</a>
-<a href="#309" id="309">309</a>
-<a href="#310" id="310">310</a>
-<a href="#311" id="311">311</a>
-<a href="#312" id="312">312</a>
-<a href="#313" id="313">313</a>
-<a href="#314" id="314">314</a>
-<a href="#315" id="315">315</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
-
-</span><span class="comment">// TODO: reduce API surface and add documentation
-</span><span class="attr">#![allow(missing_docs)]
-
+<a href="#291" id="291">291</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+//!
+//! A blobs protocol handler wraps a store, so you must first create a store.
+//!
+//! The entry point to create a blobs protocol handler is [`Blobs::builder`].
 </span><span class="kw">use </span>std::{collections::BTreeSet, fmt::Debug, ops::DerefMut, sync::Arc};
 
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>futures_lite::future::Boxed <span class="kw">as </span>BoxedFuture;
 <span class="kw">use </span>futures_util::future::BoxFuture;
-<span class="kw">use </span>iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
-<span class="kw">use </span>serde::{Deserialize, Serialize};
+<span class="kw">use </span>iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint};
 <span class="kw">use </span>tracing::debug;
 
 <span class="kw">use crate</span>::{
     downloader::Downloader,
     provider::EventSender,
     store::GcConfig,
-    util::{
-        local_pool::{<span class="self">self</span>, LocalPoolHandle},
-        SetTagOption,
-    },
-    BlobFormat, Hash,
+    util::local_pool::{<span class="self">self</span>, LocalPoolHandle},
+    Hash,
 };
 
 <span class="doccomment">/// A callback that blobs can ask about a set of hashes that should not be garbage collected.
@@ -365,67 +337,77 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) endpoint: Endpoint,
     gc_state: std::sync::Mutex&lt;GcState&gt;,
     <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) batches: tokio::sync::Mutex&lt;BlobBatches&gt;,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) batches: tokio::sync::Mutex&lt;batches::BlobBatches&gt;,
 }
 
-<span class="attr">#[derive(Debug, Clone)]
+<span class="doccomment">/// Blobs protocol handler.
+</span><span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>Blobs&lt;S&gt; {
     <span class="kw">pub</span>(<span class="kw">crate</span>) inner: Arc&lt;BlobsInner&lt;S&gt;&gt;,
     <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) rpc_handler: Arc&lt;std::sync::OnceLock&lt;<span class="kw">crate</span>::rpc::RpcHandler&gt;&gt;,
 }
 
-<span class="doccomment">/// Keeps track of all the currently active batch operations of the blobs api.
-</span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-#[derive(Debug, Default)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BlobBatches {
-    <span class="doccomment">/// Currently active batches
-    </span>batches: std::collections::BTreeMap&lt;BatchId, BlobBatch&gt;,
-    <span class="doccomment">/// Used to generate new batch ids.
-    </span>max: u64,
-}
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>batches {
+    <span class="kw">use </span>anyhow::Result;
+    <span class="kw">use </span>serde::{Deserialize, Serialize};
 
-<span class="doccomment">/// A single batch of blob operations
-</span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-#[derive(Debug, Default)]
-</span><span class="kw">struct </span>BlobBatch {
-    <span class="doccomment">/// The tags in this batch.
-    </span>tags: std::collections::BTreeMap&lt;<span class="kw">crate</span>::HashAndFormat, Vec&lt;<span class="kw">crate</span>::TempTag&gt;&gt;,
-}
+    <span class="doccomment">/// Newtype for a batch id
+    </span><span class="attr">#[derive(Debug, PartialEq, Eq, PartialOrd, Serialize, Deserialize, Ord, Clone, Copy, Hash)]
+    </span><span class="kw">pub struct </span>BatchId(<span class="kw">pub </span>u64);
 
-<span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-</span><span class="kw">impl </span>BlobBatches {
-    <span class="doccomment">/// Create a new unique batch id.
-    </span><span class="kw">pub fn </span>create(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; BatchId {
-        <span class="kw">let </span>id = <span class="self">self</span>.max;
-        <span class="self">self</span>.max += <span class="number">1</span>;
-        BatchId(id)
+    <span class="doccomment">/// Keeps track of all the currently active batch operations of the blobs api.
+    </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+    #[derive(Debug, Default)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BlobBatches {
+        <span class="doccomment">/// Currently active batches
+        </span>batches: std::collections::BTreeMap&lt;BatchId, BlobBatch&gt;,
+        <span class="doccomment">/// Used to generate new batch ids.
+        </span>max: u64,
     }
 
-    <span class="doccomment">/// Store a temp tag in a batch identified by a batch id.
-    </span><span class="kw">pub fn </span>store(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, tt: <span class="kw">crate</span>::TempTag) {
-        <span class="kw">let </span>entry = <span class="self">self</span>.batches.entry(batch).or_default();
-        entry.tags.entry(tt.hash_and_format()).or_default().push(tt);
+    <span class="doccomment">/// A single batch of blob operations
+    </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+    #[derive(Debug, Default)]
+    </span><span class="kw">struct </span>BlobBatch {
+        <span class="doccomment">/// The tags in this batch.
+        </span>tags: std::collections::BTreeMap&lt;<span class="kw">crate</span>::HashAndFormat, Vec&lt;<span class="kw">crate</span>::TempTag&gt;&gt;,
     }
 
-    <span class="doccomment">/// Remove a tag from a batch.
-    </span><span class="kw">pub fn </span>remove_one(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, content: <span class="kw-2">&amp;</span><span class="kw">crate</span>::HashAndFormat) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(batch) = <span class="self">self</span>.batches.get_mut(<span class="kw-2">&amp;</span>batch) {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(tags) = batch.tags.get_mut(content) {
-                tags.pop();
-                <span class="kw">if </span>tags.is_empty() {
-                    batch.tags.remove(content);
-                }
-                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-            }
+    <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
+    </span><span class="kw">impl </span>BlobBatches {
+        <span class="doccomment">/// Create a new unique batch id.
+        </span><span class="kw">pub fn </span>create(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; BatchId {
+            <span class="kw">let </span>id = <span class="self">self</span>.max;
+            <span class="self">self</span>.max += <span class="number">1</span>;
+            BatchId(id)
         }
-        <span class="comment">// this can happen if we try to upgrade a tag from an expired batch
-        </span><span class="macro">anyhow::bail!</span>(<span class="string">"tag not found in batch"</span>);
-    }
 
-    <span class="doccomment">/// Remove an entire batch.
-    </span><span class="kw">pub fn </span>remove(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId) {
-        <span class="self">self</span>.batches.remove(<span class="kw-2">&amp;</span>batch);
+        <span class="doccomment">/// Store a temp tag in a batch identified by a batch id.
+        </span><span class="kw">pub fn </span>store(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, tt: <span class="kw">crate</span>::TempTag) {
+            <span class="kw">let </span>entry = <span class="self">self</span>.batches.entry(batch).or_default();
+            entry.tags.entry(tt.hash_and_format()).or_default().push(tt);
+        }
+
+        <span class="doccomment">/// Remove a tag from a batch.
+        </span><span class="kw">pub fn </span>remove_one(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, content: <span class="kw-2">&amp;</span><span class="kw">crate</span>::HashAndFormat) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(batch) = <span class="self">self</span>.batches.get_mut(<span class="kw-2">&amp;</span>batch) {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(tags) = batch.tags.get_mut(content) {
+                    tags.pop();
+                    <span class="kw">if </span>tags.is_empty() {
+                        batch.tags.remove(content);
+                    }
+                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+                }
+            }
+            <span class="comment">// this can happen if we try to upgrade a tag from an expired batch
+            </span><span class="macro">anyhow::bail!</span>(<span class="string">"tag not found in batch"</span>);
+        }
+
+        <span class="doccomment">/// Remove an entire batch.
+        </span><span class="kw">pub fn </span>remove(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId) {
+            <span class="self">self</span>.batches.remove(<span class="kw-2">&amp;</span>batch);
+        }
     }
 }
 
@@ -484,7 +466,11 @@
 }
 
 <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;S&gt; {
-    <span class="kw">pub fn </span>new(
+    <span class="doccomment">/// Create a new Blobs protocol handler.
+    ///
+    /// This is the low-level constructor that allows you to customize
+    /// everything. If you don't need that, consider using [`Blobs::builder`].
+    </span><span class="kw">pub fn </span>new(
         store: S,
         rt: LocalPoolHandle,
         events: EventSender,
@@ -507,23 +493,28 @@
         }
     }
 
-    <span class="kw">pub fn </span>store(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>S {
+    <span class="doccomment">/// Get the store.
+    </span><span class="kw">pub fn </span>store(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>S {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.store
     }
 
-    <span class="kw">pub fn </span>events(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EventSender {
+    <span class="doccomment">/// Get the event sender.
+    </span><span class="kw">pub fn </span>events(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EventSender {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.events
     }
 
-    <span class="kw">pub fn </span>rt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>LocalPoolHandle {
+    <span class="doccomment">/// Get the local pool handle.
+    </span><span class="kw">pub fn </span>rt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>LocalPoolHandle {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.rt
     }
 
-    <span class="kw">pub fn </span>downloader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Downloader {
+    <span class="doccomment">/// Get the downloader.
+    </span><span class="kw">pub fn </span>downloader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Downloader {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.downloader
     }
 
-    <span class="kw">pub fn </span>endpoint(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Endpoint {
+    <span class="doccomment">/// Get the endpoint.
+    </span><span class="kw">pub fn </span>endpoint(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Endpoint {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.endpoint
     }
 
@@ -589,43 +580,4 @@
         })
     }
 }
-
-<span class="doccomment">/// A request to the node to download and share the data specified by the hash.
-</span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-</span><span class="kw">pub struct </span>BlobDownloadRequest {
-    <span class="doccomment">/// This mandatory field contains the hash of the data to download and share.
-    </span><span class="kw">pub </span>hash: Hash,
-    <span class="doccomment">/// If the format is [`BlobFormat::HashSeq`], all children are downloaded and shared as
-    /// well.
-    </span><span class="kw">pub </span>format: BlobFormat,
-    <span class="doccomment">/// This mandatory field specifies the nodes to download the data from.
-    ///
-    /// If set to more than a single node, they will all be tried. If `mode` is set to
-    /// [`DownloadMode::Direct`], they will be tried sequentially until a download succeeds.
-    /// If `mode` is set to [`DownloadMode::Queued`], the nodes may be dialed in parallel,
-    /// if the concurrency limits permit.
-    </span><span class="kw">pub </span>nodes: Vec&lt;NodeAddr&gt;,
-    <span class="doccomment">/// Optional tag to tag the data with.
-    </span><span class="kw">pub </span>tag: SetTagOption,
-    <span class="doccomment">/// Whether to directly start the download or add it to the download queue.
-    </span><span class="kw">pub </span>mode: DownloadMode,
-}
-
-<span class="doccomment">/// Set the mode for whether to directly start the download or add it to the download queue.
-</span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>DownloadMode {
-    <span class="doccomment">/// Start the download right away.
-    ///
-    /// No concurrency limits or queuing will be applied. It is up to the user to manage download
-    /// concurrency.
-    </span>Direct,
-    <span class="doccomment">/// Queue the download.
-    ///
-    /// The download queue will be processed in-order, while respecting the downloader concurrency limits.
-    </span>Queued,
-}
-
-<span class="doccomment">/// Newtype for a batch id
-</span><span class="attr">#[derive(Debug, PartialEq, Eq, PartialOrd, Serialize, Deserialize, Ord, Clone, Copy, Hash)]
-</span><span class="kw">pub struct </span>BatchId(<span class="kw">pub </span>u64);
 </code></pre></div></section></main></body></html>

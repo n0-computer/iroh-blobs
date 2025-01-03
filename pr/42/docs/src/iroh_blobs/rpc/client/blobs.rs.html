@@ -1940,7 +1940,19 @@
 <a href="#1939" id="1939">1939</a>
 <a href="#1940" id="1940">1940</a>
 <a href="#1941" id="1941">1941</a>
-<a href="#1942" id="1942">1942</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1942" id="1942">1942</a>
+<a href="#1943" id="1943">1943</a>
+<a href="#1944" id="1944">1944</a>
+<a href="#1945" id="1945">1945</a>
+<a href="#1946" id="1946">1946</a>
+<a href="#1947" id="1947">1947</a>
+<a href="#1948" id="1948">1948</a>
+<a href="#1949" id="1949">1949</a>
+<a href="#1950" id="1950">1950</a>
+<a href="#1951" id="1951">1951</a>
+<a href="#1952" id="1952">1952</a>
+<a href="#1953" id="1953">1953</a>
+<a href="#1954" id="1954">1954</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -2023,12 +2035,10 @@
 <span class="kw">use </span>tokio_util::io::{ReaderStream, StreamReader};
 <span class="kw">use </span>tracing::warn;
 
-<span class="kw">pub use </span><span class="kw">crate</span>::net_protocol::DownloadMode;
 <span class="kw">use crate</span>::{
     fetch::progress::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     format::collection::{Collection, SimpleStore},
-    net_protocol::BlobDownloadRequest,
-    rpc::proto::RpcService,
+    rpc::proto::{blobs::BlobDownloadRequest, RpcService},
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
         ExportProgress <span class="kw">as </span>BytesExportProgress, ValidateProgress,
@@ -2801,6 +2811,20 @@
             }
         }
     }
+}
+
+<span class="doccomment">/// Set the mode for whether to directly start the download or add it to the download queue.
+</span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+</span><span class="kw">pub enum </span>DownloadMode {
+    <span class="doccomment">/// Start the download right away.
+    ///
+    /// No concurrency limits or queuing will be applied. It is up to the user to manage download
+    /// concurrency.
+    </span>Direct,
+    <span class="doccomment">/// Queue the download.
+    ///
+    /// The download queue will be processed in-order, while respecting the downloader concurrency limits.
+    </span>Queued,
 }
 
 <span class="doccomment">/// Data reader for a single blob.

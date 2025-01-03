@@ -113,7 +113,7 @@
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use super</span>::{RpcResult, RpcService};
-<span class="kw">use crate</span>::{net_protocol::BatchId, rpc::client::tags::TagInfo, HashAndFormat, Tag};
+<span class="kw">use crate</span>::{net_protocol::batches::BatchId, rpc::client::tags::TagInfo, HashAndFormat, Tag};
 
 <span class="attr">#[allow(missing_docs)]
 #[derive(strum::Display, Debug, Serialize, Deserialize)]

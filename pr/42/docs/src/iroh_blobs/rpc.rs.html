@@ -1128,10 +1128,10 @@
         AddPathRequest, AddPathResponse, AddStreamRequest, AddStreamResponse, AddStreamUpdate,
         BatchAddPathRequest, BatchAddPathResponse, BatchAddStreamRequest, BatchAddStreamResponse,
         BatchAddStreamUpdate, BatchCreateRequest, BatchCreateResponse, BatchCreateTempTagRequest,
-        BatchUpdate, BlobStatusRequest, BlobStatusResponse, ConsistencyCheckRequest,
-        CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
-        ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
-        ReadAtResponse, ValidateRequest,
+        BatchUpdate, BlobDownloadRequest, BlobStatusRequest, BlobStatusResponse,
+        ConsistencyCheckRequest, CreateCollectionRequest, CreateCollectionResponse, DeleteRequest,
+        DownloadResponse, ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest,
+        ReadAtRequest, ReadAtResponse, ValidateRequest,
     },
     tags::{
         CreateRequest <span class="kw">as </span>TagsCreateRequest, DeleteRequest <span class="kw">as </span>TagDeleteRequest,
@@ -1150,7 +1150,7 @@
     downloader::{DownloadRequest, Downloader},
     fetch::{progress::DownloadProgress, Stats},
     format::collection::Collection,
-    net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
+    net_protocol::{Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{
         ConsistencyCheckProgress, ExportProgress, FetchState, ImportProgress, MapEntry,
@@ -1228,7 +1228,7 @@
     <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>batches(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-    ) -&gt; tokio::sync::MutexGuard&lt;<span class="lifetime">'_</span>, <span class="kw">crate</span>::net_protocol::BlobBatches&gt; {
+    ) -&gt; tokio::sync::MutexGuard&lt;<span class="lifetime">'_</span>, <span class="kw">crate</span>::net_protocol::batches::BlobBatches&gt; {
         <span class="self">self</span>.<span class="number">0</span>.batches.lock().<span class="kw">await
     </span>}
 
