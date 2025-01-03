@@ -1209,7 +1209,8 @@
 <a href="#1208" id="1208">1208</a>
 <a href="#1209" id="1209">1209</a>
 <a href="#1210" id="1210">1210</a>
-<a href="#1211" id="1211">1211</a></pre></div><pre class="rust"><code><span class="doccomment">//! Define blob-related commands.
+<a href="#1211" id="1211">1211</a>
+<a href="#1212" id="1212">1212</a></pre></div><pre class="rust"><code><span class="doccomment">//! Define blob-related commands.
 </span><span class="attr">#![allow(missing_docs)]
 </span><span class="kw">use </span>std::{
     collections::{BTreeMap, HashMap},
@@ -1236,7 +1237,8 @@
     },
     provider::AddProgress,
     rpc::client::blobs::{
-        <span class="self">self</span>, BlobInfo, BlobStatus, CollectionInfo, DownloadOptions, IncompleteBlobInfo, WrapOption,
+        <span class="self">self</span>, BlobInfo, BlobStatus, CollectionInfo, DownloadMode, DownloadOptions,
+        IncompleteBlobInfo, WrapOption,
     },
     store::{ConsistencyCheckProgress, ExportFormat, ExportMode, ReportLevel, ValidateProgress},
     ticket::BlobTicket,
