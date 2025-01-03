@@ -205,7 +205,7 @@
 
 <span class="kw">use </span><span class="kw">super</span>::DownloadKind;
 <span class="kw">use crate</span>::{
-    fetch::progress::{DownloadProgress, TransferState},
+    get::progress::{DownloadProgress, TransferState},
     util::progress::{AsyncChannelProgressSender, IdGenerator, ProgressSendError, ProgressSender},
 };
 
@@ -215,7 +215,7 @@
 <span class="doccomment">/// Track the progress of downloads.
 ///
 /// This struct allows to create [`ProgressSender`] structs to be passed to
-/// [`crate::store::fetch_to_db`]. Each progress sender can be subscribed to by any number of
+/// [`crate::store::get_to_db`]. Each progress sender can be subscribed to by any number of
 /// [`ProgressSubscriber`] channel senders, which will receive each progress update (if they have
 /// capacity). Additionally, the [`ProgressTracker`] maintains a [`TransferState`] for each
 /// transfer, applying each progress update to update this state. When subscribing to an already

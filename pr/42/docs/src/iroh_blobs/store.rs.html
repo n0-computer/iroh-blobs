@@ -101,7 +101,9 @@
 <a href="#100" id="100">100</a>
 <a href="#101" id="101">101</a>
 <a href="#102" id="102">102</a>
-<a href="#103" id="103">103</a></pre></div><pre class="rust"><code><span class="doccomment">//! Implementations of blob stores
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a></pre></div><pre class="rust"><code><span class="doccomment">//! Implementations of blob stores
 </span><span class="kw">use crate</span>::{BlobFormat, Hash, HashAndFormat};
 
 <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
@@ -113,8 +115,10 @@
 <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
 </span><span class="kw">pub mod </span>fs;
 
-<span class="kw">mod </span>fetch_to_db;
-<span class="kw">pub use </span>fetch_to_db::{fetch_to_db, fetch_to_db_in_steps, FetchState, FetchStateNeedsConn};
+<span class="kw">mod </span>get_to_db;
+<span class="kw">pub use </span>get_to_db::{
+    blob_info, get_to_db, get_to_db_in_steps, valid_ranges, FetchState, FetchStateNeedsConn,
+};
 <span class="kw">mod </span>export;
 <span class="attr">#[cfg(feature = <span class="string">"formats-collection"</span>)]
 </span><span class="kw">pub use </span>export::export_collection;

@@ -1148,8 +1148,8 @@
 
 <span class="kw">use crate</span>::{
     downloader::{DownloadRequest, Downloader},
-    fetch::{progress::DownloadProgress, Stats},
     format::collection::Collection,
+    get::{progress::DownloadProgress, Stats},
     net_protocol::{Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{
@@ -2113,7 +2113,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>remaining_nodes = nodes.len();
         <span class="kw">let </span><span class="kw-2">mut </span>nodes_iter = nodes.into_iter();
         <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
-            <span class="kw">match </span><span class="kw">crate</span>::store::fetch_to_db_in_steps(
+            <span class="kw">match </span><span class="kw">crate</span>::store::get_to_db_in_steps(
                 <span class="self">self</span>.store().clone(),
                 hash_and_format,
                 progress.clone(),

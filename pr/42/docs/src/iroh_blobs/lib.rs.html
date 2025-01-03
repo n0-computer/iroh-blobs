@@ -77,7 +77,7 @@
 //! To implement a server, the [provider] module provides helpers for handling
 //! connections and individual requests given a store.
 //!
-//! To perform get requests, the [fetch] module provides utilities to perform
+//! To perform get requests, the [get] module provides utilities to perform
 //! requests and store the result in a store, as well as a low level state
 //! machine for executing requests.
 //!
@@ -94,9 +94,9 @@
 </span><span class="kw">pub mod </span>cli;
 <span class="attr">#[cfg(feature = <span class="string">"downloader"</span>)]
 </span><span class="kw">pub mod </span>downloader;
-<span class="kw">pub mod </span>fetch;
 <span class="attr">#[cfg(feature = <span class="string">"formats"</span>)]
 </span><span class="kw">pub mod </span>format;
+<span class="kw">pub mod </span>get;
 <span class="kw">pub mod </span>hashseq;
 <span class="kw">pub mod </span>metrics;
 <span class="attr">#[cfg(feature = <span class="string">"net_protocol"</span>)]

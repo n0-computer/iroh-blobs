@@ -2036,8 +2036,8 @@
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
-    fetch::progress::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     format::collection::{Collection, SimpleStore},
+    get::progress::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     rpc::proto::{blobs::BlobDownloadRequest, RpcService},
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
@@ -2629,7 +2629,7 @@
     <span class="doccomment">/// The size of the data we downloaded from the network
     </span><span class="kw">pub </span>downloaded_size: u64,
     <span class="doccomment">/// Statistics about the download
-    </span><span class="kw">pub </span>stats: <span class="kw">crate</span>::fetch::Stats,
+    </span><span class="kw">pub </span>stats: <span class="kw">crate</span>::get::Stats,
 }
 
 <span class="doccomment">/// Progress stream for blob download operations.
