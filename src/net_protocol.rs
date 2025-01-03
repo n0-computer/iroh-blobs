@@ -58,7 +58,6 @@ pub struct Blobs<S> {
 }
 
 pub(crate) mod batches {
-    use anyhow::Result;
     use serde::{Deserialize, Serialize};
 
     /// Newtype for a batch id
@@ -99,7 +98,11 @@ pub(crate) mod batches {
         }
 
         /// Remove a tag from a batch.
-        pub fn remove_one(&mut self, batch: BatchId, content: &crate::HashAndFormat) -> Result<()> {
+        pub fn remove_one(
+            &mut self,
+            batch: BatchId,
+            content: &crate::HashAndFormat,
+        ) -> anyhow::Result<()> {
             if let Some(batch) = self.batches.get_mut(&batch) {
                 if let Some(tags) = batch.tags.get_mut(content) {
                     tags.pop();
