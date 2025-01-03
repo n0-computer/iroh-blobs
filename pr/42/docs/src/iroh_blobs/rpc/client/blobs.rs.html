@@ -1952,7 +1952,10 @@
 <a href="#1951" id="1951">1951</a>
 <a href="#1952" id="1952">1952</a>
 <a href="#1953" id="1953">1953</a>
-<a href="#1954" id="1954">1954</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1954" id="1954">1954</a>
+<a href="#1955" id="1955">1955</a>
+<a href="#1956" id="1956">1956</a>
+<a href="#1957" id="1957">1957</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -2037,7 +2040,6 @@
 
 <span class="kw">use crate</span>::{
     format::collection::{Collection, SimpleStore},
-    get::progress::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     rpc::proto::{blobs::BlobDownloadRequest, RpcService},
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
@@ -2045,6 +2047,12 @@
     },
     util::SetTagOption,
     BlobFormat, Hash, Tag,
+};
+<span class="kw">pub use crate</span>::{
+    get::progress::{
+        BlobId, BlobProgressEvent, BlobState, DownloadProgressEvent, ProgressId, TransferState,
+    },
+    rpc::proto::blobs::{AddProgressEvent, BatchAddPathProgressEvent},
 };
 
 <span class="kw">mod </span>batch;
@@ -2541,16 +2549,14 @@
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">pub struct </span>AddProgress {
     <span class="attr">#[debug(skip)]
-    </span>stream:
-        Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;<span class="kw">crate</span>::provider::AddProgress&gt;&gt; + Send + Unpin + <span class="lifetime">'static</span>&gt;&gt;,
+    </span>stream: Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;AddProgressEvent&gt;&gt; + Send + Unpin + <span class="lifetime">'static</span>&gt;&gt;,
     current_total_size: Arc&lt;AtomicU64&gt;,
 }
 
 <span class="kw">impl </span>AddProgress {
     <span class="kw">fn </span>new(
-        stream: (<span class="kw">impl </span>Stream&lt;
-            Item = <span class="prelude-ty">Result</span>&lt;<span class="kw">impl </span>Into&lt;<span class="kw">crate</span>::provider::AddProgress&gt;, <span class="kw">impl </span>Into&lt;anyhow::Error&gt;&gt;,
-        &gt; + Send
+        stream: (<span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;<span class="kw">impl </span>Into&lt;AddProgressEvent&gt;, <span class="kw">impl </span>Into&lt;anyhow::Error&gt;&gt;&gt;
+             + Send
              + Unpin
              + <span class="lifetime">'static</span>),
     ) -&gt; <span class="self">Self </span>{
@@ -2559,7 +2565,7 @@
         <span class="kw">let </span>stream = stream.map(<span class="kw">move </span>|item| <span class="kw">match </span>item {
             <span class="prelude-val">Ok</span>(item) =&gt; {
                 <span class="kw">let </span>item = item.into();
-                <span class="kw">if let </span><span class="kw">crate</span>::provider::AddProgress::Found { size, .. } = <span class="kw-2">&amp;</span>item {
+                <span class="kw">if let </span>AddProgressEvent::Found { size, .. } = <span class="kw-2">&amp;</span>item {
                     total_size.fetch_add(<span class="kw-2">*</span>size, Ordering::Relaxed);
                 }
                 <span class="prelude-val">Ok</span>(item)
@@ -2584,7 +2590,7 @@
 }
 
 <span class="kw">impl </span>Stream <span class="kw">for </span>AddProgress {
-    <span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;<span class="kw">crate</span>::provider::AddProgress&gt;;
+    <span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;AddProgressEvent&gt;;
     <span class="kw">fn </span>poll_next(<span class="kw-2">mut </span><span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt;&gt; {
         Pin::new(<span class="kw-2">&amp;mut </span><span class="self">self</span>.stream).poll_next(cx)
     }
@@ -2602,7 +2608,7 @@
                 }
                 Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(err))) =&gt; <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Err</span>(err)),
                 Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(msg))) =&gt; <span class="kw">match </span>msg {
-                    <span class="kw">crate</span>::provider::AddProgress::AllDone { hash, format, tag } =&gt; {
+                    AddProgressEvent::AllDone { hash, format, tag } =&gt; {
                         <span class="kw">let </span>outcome = AddOutcome {
                             hash,
                             format,
@@ -2611,7 +2617,7 @@
                         };
                         <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Ok</span>(outcome));
                     }
-                    <span class="kw">crate</span>::provider::AddProgress::Abort(err) =&gt; {
+                    AddProgressEvent::Abort(err) =&gt; {
                         <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Err</span>(err.into()));
                     }
                     <span class="kw">_ </span>=&gt; {}
@@ -2636,15 +2642,15 @@
 </span><span class="attr">#[derive(derive_more::Debug)]
 </span><span class="kw">pub struct </span>DownloadProgress {
     <span class="attr">#[debug(skip)]
-    </span>stream: Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;BytesDownloadProgress&gt;&gt; + Send + Unpin + <span class="lifetime">'static</span>&gt;&gt;,
+    </span>stream: Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;DownloadProgressEvent&gt;&gt; + Send + Unpin + <span class="lifetime">'static</span>&gt;&gt;,
     current_local_size: Arc&lt;AtomicU64&gt;,
     current_network_size: Arc&lt;AtomicU64&gt;,
 }
 
 <span class="kw">impl </span>DownloadProgress {
-    <span class="doccomment">/// Create a [`DownloadProgress`] that can help you easily poll the [`BytesDownloadProgress`] stream from your download until it is finished or errors.
+    <span class="doccomment">/// Create a [`DownloadProgress`] that can help you easily poll the [`DownloadProgressEvent`] stream from your download until it is finished or errors.
     </span><span class="kw">pub fn </span>new(
-        stream: (<span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;<span class="kw">impl </span>Into&lt;BytesDownloadProgress&gt;, <span class="kw">impl </span>Into&lt;anyhow::Error&gt;&gt;&gt;
+        stream: (<span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;<span class="kw">impl </span>Into&lt;DownloadProgressEvent&gt;, <span class="kw">impl </span>Into&lt;anyhow::Error&gt;&gt;&gt;
              + Send
              + Unpin
              + <span class="lifetime">'static</span>),
@@ -2659,10 +2665,10 @@
             <span class="prelude-val">Ok</span>(item) =&gt; {
                 <span class="kw">let </span>item = item.into();
                 <span class="kw">match </span><span class="kw-2">&amp;</span>item {
-                    BytesDownloadProgress::FoundLocal { size, .. } =&gt; {
+                    DownloadProgressEvent::FoundLocal { size, .. } =&gt; {
                         local_size.fetch_add(size.value(), Ordering::Relaxed);
                     }
-                    BytesDownloadProgress::Found { size, .. } =&gt; {
+                    DownloadProgressEvent::Found { size, .. } =&gt; {
                         network_size.fetch_add(<span class="kw-2">*</span>size, Ordering::Relaxed);
                     }
                     <span class="kw">_ </span>=&gt; {}
@@ -2690,7 +2696,7 @@
 }
 
 <span class="kw">impl </span>Stream <span class="kw">for </span>DownloadProgress {
-    <span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;BytesDownloadProgress&gt;;
+    <span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;DownloadProgressEvent&gt;;
     <span class="kw">fn </span>poll_next(<span class="kw-2">mut </span><span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt;&gt; {
         Pin::new(<span class="kw-2">&amp;mut </span><span class="self">self</span>.stream).poll_next(cx)
     }
@@ -2708,7 +2714,7 @@
                 }
                 Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(err))) =&gt; <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Err</span>(err)),
                 Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(msg))) =&gt; <span class="kw">match </span>msg {
-                    BytesDownloadProgress::AllDone(stats) =&gt; {
+                    DownloadProgressEvent::AllDone(stats) =&gt; {
                         <span class="kw">let </span>outcome = DownloadOutcome {
                             local_size: <span class="self">self</span>.current_local_size.load(Ordering::Relaxed),
                             downloaded_size: <span class="self">self</span>.current_network_size.load(Ordering::Relaxed),
@@ -2716,7 +2722,7 @@
                         };
                         <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Ok</span>(outcome));
                     }
-                    BytesDownloadProgress::Abort(err) =&gt; {
+                    DownloadProgressEvent::Abort(err) =&gt; {
                         <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Err</span>(err.into()));
                     }
                     <span class="kw">_ </span>=&gt; {}
@@ -3816,10 +3822,10 @@
 
             <span class="kw">while let </span><span class="prelude-val">Some</span>(progress) = stream.next().<span class="kw">await </span>{
                 <span class="kw">match </span>progress<span class="question-mark">? </span>{
-                    <span class="kw">crate</span>::provider::AddProgress::AllDone { hash, .. } =&gt; {
+                    AddProgressEvent::AllDone { hash, .. } =&gt; {
                         <span class="kw">return </span><span class="prelude-val">Ok</span>(hash);
                     }
-                    <span class="kw">crate</span>::provider::AddProgress::Abort(e) =&gt; {
+                    AddProgressEvent::Abort(e) =&gt; {
                         <span class="macro">anyhow::bail!</span>(<span class="string">"Error while adding data: {e}"</span>);
                     }
                     <span class="kw">_ </span>=&gt; {}

@@ -320,7 +320,7 @@
     /// received the size from the remote.
     </span><span class="kw">pub </span>size: <span class="prelude-ty">Option</span>&lt;BaoBlobSize&gt;,
     <span class="doccomment">/// The current state of the blob transfer.
-    </span><span class="kw">pub </span>progress: BlobProgress,
+    </span><span class="kw">pub </span>progress: BlobProgressEvent,
     <span class="doccomment">/// Ranges already available locally at the time of starting the transfer.
     </span><span class="kw">pub </span>local_ranges: <span class="prelude-ty">Option</span>&lt;RangeSpec&gt;,
     <span class="doccomment">/// Number of children (only applies to hashseqs, None for raw blobs).
@@ -329,7 +329,7 @@
 
 <span class="doccomment">/// Progress state for a single blob
 </span><span class="attr">#[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
-</span><span class="kw">pub enum </span>BlobProgress {
+</span><span class="kw">pub enum </span>BlobProgressEvent {
     <span class="doccomment">/// Download is pending
     </span><span class="attr">#[default]
     </span>Pending,
@@ -347,7 +347,7 @@
             size: <span class="prelude-val">None</span>,
             local_ranges: <span class="prelude-val">None</span>,
             child_count: <span class="prelude-val">None</span>,
-            progress: BlobProgress::default(),
+            progress: BlobProgressEvent::default(),
         }
     }
 }
@@ -392,13 +392,13 @@
         <span class="self">self</span>.get_blob_mut(<span class="kw-2">&amp;</span>blob_id)
     }
 
-    <span class="doccomment">/// Update the state with a new [`DownloadProgress`] event for this transfer.
-    </span><span class="kw">pub fn </span>on_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, event: DownloadProgress) {
+    <span class="doccomment">/// Update the state with a new [`DownloadProgressEvent`] for this transfer.
+    </span><span class="kw">pub fn </span>on_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, event: DownloadProgressEvent) {
         <span class="kw">match </span>event {
-            DownloadProgress::InitialState(s) =&gt; {
+            DownloadProgressEvent::InitialState(s) =&gt; {
                 <span class="kw-2">*</span><span class="self">self </span>= s;
             }
-            DownloadProgress::FoundLocal {
+            DownloadProgressEvent::FoundLocal {
                 child,
                 hash,
                 size,
@@ -408,8 +408,8 @@
                 blob.size = <span class="prelude-val">Some</span>(size);
                 blob.local_ranges = <span class="prelude-val">Some</span>(valid_ranges);
             }
-            DownloadProgress::Connected =&gt; <span class="self">self</span>.connected = <span class="bool-val">true</span>,
-            DownloadProgress::Found {
+            DownloadProgressEvent::Connected =&gt; <span class="self">self</span>.connected = <span class="bool-val">true</span>,
+            DownloadProgressEvent::Found {
                 id: progress_id,
                 child: blob_id,
                 hash,
@@ -423,11 +423,11 @@
                     <span class="comment">// Otherwise, keep the existing verified size.
                     </span>value @ <span class="prelude-val">Some</span>(BaoBlobSize::Verified(<span class="kw">_</span>)) =&gt; value,
                 };
-                blob.progress = BlobProgress::Progressing(<span class="number">0</span>);
+                blob.progress = BlobProgressEvent::Progressing(<span class="number">0</span>);
                 <span class="self">self</span>.progress_id_to_blob.insert(progress_id, blob_id);
                 <span class="self">self</span>.current = <span class="prelude-val">Some</span>(blob_id);
             }
-            DownloadProgress::FoundHashSeq { hash, children } =&gt; {
+            DownloadProgressEvent::FoundHashSeq { hash, children } =&gt; {
                 <span class="kw">if </span>hash == <span class="self">self</span>.root.hash {
                     <span class="self">self</span>.root.child_count = <span class="prelude-val">Some</span>(children);
                 } <span class="kw">else </span>{
@@ -436,29 +436,29 @@
                     </span><span class="macro">warn!</span>(<span class="string">"Received `FoundHashSeq` event for a hash which is not the download's root hash."</span>)
                 }
             }
-            DownloadProgress::Progress { id, offset } =&gt; {
+            DownloadProgressEvent::Progress { id, offset } =&gt; {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(blob) = <span class="self">self</span>.get_by_progress_id(id) {
-                    blob.progress = BlobProgress::Progressing(offset);
+                    blob.progress = BlobProgressEvent::Progressing(offset);
                 } <span class="kw">else </span>{
                     <span class="macro">warn!</span>(%id, <span class="string">"Received `Progress` event for unknown progress id."</span>)
                 }
             }
-            DownloadProgress::Done { id } =&gt; {
+            DownloadProgressEvent::Done { id } =&gt; {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(blob) = <span class="self">self</span>.get_by_progress_id(id) {
-                    blob.progress = BlobProgress::Done;
+                    blob.progress = BlobProgressEvent::Done;
                     <span class="self">self</span>.progress_id_to_blob.remove(<span class="kw-2">&amp;</span>id);
                 } <span class="kw">else </span>{
                     <span class="macro">warn!</span>(%id, <span class="string">"Received `Done` event for unknown progress id."</span>)
                 }
             }
-            DownloadProgress::AllDone(<span class="kw">_</span>) | DownloadProgress::Abort(<span class="kw">_</span>) =&gt; {}
+            DownloadProgressEvent::AllDone(<span class="kw">_</span>) | DownloadProgressEvent::Abort(<span class="kw">_</span>) =&gt; {}
         }
     }
 }
 
 <span class="doccomment">/// Progress updates for the get operation.
 </span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>DownloadProgress {
+</span><span class="kw">pub enum </span>DownloadProgressEvent {
     <span class="doccomment">/// Initial state if subscribing to a running or queued transfer.
     </span>InitialState(TransferState),
     <span class="doccomment">/// Data was found locally.

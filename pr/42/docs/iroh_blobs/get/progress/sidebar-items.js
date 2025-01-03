@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["BlobId","BlobProgress","DownloadProgress"],"struct":["BlobState","TransferState"],"type":["ProgressId"]};

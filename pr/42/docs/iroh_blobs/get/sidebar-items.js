@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Error"],"mod":["fsm","progress","request"],"struct":["Stats"]};
+window.SIDEBAR_ITEMS = {"enum":["Error"],"mod":["fsm","request"],"struct":["Stats"]};

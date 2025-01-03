@@ -308,7 +308,7 @@
 <span class="kw">use crate</span>::{
     downloader::Downloader,
     provider::EventSender,
-    store::GcConfig,
+    store::{GcConfig, Store},
     util::local_pool::{<span class="self">self</span>, LocalPoolHandle},
     Hash,
 };
@@ -424,7 +424,7 @@
     events: <span class="prelude-ty">Option</span>&lt;EventSender&gt;,
 }
 
-<span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Builder&lt;S&gt; {
+<span class="kw">impl</span>&lt;S: Store&gt; Builder&lt;S&gt; {
     <span class="doccomment">/// Set the event sender for the blobs protocol.
     </span><span class="kw">pub fn </span>events(<span class="kw-2">mut </span><span class="self">self</span>, value: EventSender) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.events = <span class="prelude-val">Some</span>(value);
@@ -471,7 +471,7 @@
     }
 }
 
-<span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; Blobs&lt;S&gt; {
+<span class="kw">impl</span>&lt;S: Store&gt; Blobs&lt;S&gt; {
     <span class="doccomment">/// Create a new Blobs protocol handler.
     ///
     /// This is the low-level constructor that allows you to customize
@@ -567,7 +567,7 @@
     }
 }
 
-<span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; ProtocolHandler <span class="kw">for </span>Blobs&lt;S&gt; {
+<span class="kw">impl</span>&lt;S: Store&gt; ProtocolHandler <span class="kw">for </span>Blobs&lt;S&gt; {
     <span class="kw">fn </span>accept(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connecting) -&gt; BoxedFuture&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt; {
         <span class="kw">let </span>db = <span class="self">self</span>.store().clone();
         <span class="kw">let </span>events = <span class="self">self</span>.events().clone();

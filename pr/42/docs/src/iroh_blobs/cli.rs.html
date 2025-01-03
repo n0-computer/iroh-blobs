@@ -1206,11 +1206,7 @@
 <a href="#1205" id="1205">1205</a>
 <a href="#1206" id="1206">1206</a>
 <a href="#1207" id="1207">1207</a>
-<a href="#1208" id="1208">1208</a>
-<a href="#1209" id="1209">1209</a>
-<a href="#1210" id="1210">1210</a>
-<a href="#1211" id="1211">1211</a>
-<a href="#1212" id="1212">1212</a></pre></div><pre class="rust"><code><span class="doccomment">//! Define blob-related commands.
+<a href="#1208" id="1208">1208</a></pre></div><pre class="rust"><code><span class="doccomment">//! Define blob-related commands.
 </span><span class="attr">#![allow(missing_docs)]
 </span><span class="kw">use </span>std::{
     collections::{BTreeMap, HashMap},
@@ -1231,14 +1227,10 @@
 <span class="kw">use </span>tokio::io::AsyncWriteExt;
 
 <span class="kw">use crate</span>::{
-    get::{
-        progress::{BlobProgress, DownloadProgress},
-        Stats,
-    },
-    provider::AddProgress,
+    get::Stats,
     rpc::client::blobs::{
-        <span class="self">self</span>, BlobInfo, BlobStatus, CollectionInfo, DownloadMode, DownloadOptions,
-        IncompleteBlobInfo, WrapOption,
+        <span class="self">self</span>, AddProgressEvent, BlobInfo, BlobProgressEvent, BlobStatus, CollectionInfo,
+        DownloadMode, DownloadOptions, DownloadProgressEvent, IncompleteBlobInfo, WrapOption,
     },
     store::{ConsistencyCheckProgress, ExportFormat, ExportMode, ReportLevel, ValidateProgress},
     ticket::BlobTicket,
@@ -2110,29 +2102,29 @@
     <span class="kw">pub </span>hash: Hash,
 }
 
-<span class="doccomment">/// Combines the [`AddProgress`] outputs from a [`Stream`] into a single tuple.
+<span class="doccomment">/// Combines the [`AddProgressEvent`] outputs from a [`Stream`] into a single tuple.
 </span><span class="kw">pub async fn </span>aggregate_add_response(
-    <span class="kw-2">mut </span>stream: <span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;AddProgress&gt;&gt; + Unpin,
+    <span class="kw-2">mut </span>stream: <span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;AddProgressEvent&gt;&gt; + Unpin,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;(Hash, BlobFormat, Vec&lt;ProvideResponseEntry&gt;)&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>hash_and_format = <span class="prelude-val">None</span>;
     <span class="kw">let </span><span class="kw-2">mut </span>collections = BTreeMap::&lt;u64, (String, u64, <span class="prelude-ty">Option</span>&lt;Hash&gt;)&gt;::new();
     <span class="kw">let </span><span class="kw-2">mut </span>mp = <span class="prelude-val">Some</span>(ProvideProgressState::new());
     <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{
         <span class="kw">match </span>item<span class="question-mark">? </span>{
-            AddProgress::Found { name, id, size } =&gt; {
+            AddProgressEvent::Found { name, id, size } =&gt; {
                 <span class="macro">tracing::trace!</span>(<span class="string">"Found({id},{name},{size})"</span>);
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(mp) = mp.as_mut() {
                     mp.found(name.clone(), id, size);
                 }
                 collections.insert(id, (name, size, <span class="prelude-val">None</span>));
             }
-            AddProgress::Progress { id, offset } =&gt; {
+            AddProgressEvent::Progress { id, offset } =&gt; {
                 <span class="macro">tracing::trace!</span>(<span class="string">"Progress({id}, {offset})"</span>);
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(mp) = mp.as_mut() {
                     mp.progress(id, offset);
                 }
             }
-            AddProgress::Done { hash, id } =&gt; {
+            AddProgressEvent::Done { hash, id } =&gt; {
                 <span class="macro">tracing::trace!</span>(<span class="string">"Done({id},{hash:?})"</span>);
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(mp) = mp.as_mut() {
                     mp.done(id, hash);
@@ -2146,7 +2138,7 @@
                     }
                 }
             }
-            AddProgress::AllDone { hash, format, .. } =&gt; {
+            AddProgressEvent::AllDone { hash, format, .. } =&gt; {
                 <span class="macro">tracing::trace!</span>(<span class="string">"AllDone({hash:?})"</span>);
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(mp) = mp.take() {
                     mp.all_done();
@@ -2154,7 +2146,7 @@
                 hash_and_format = <span class="prelude-val">Some</span>(HashAndFormat { hash, format });
                 <span class="kw">break</span>;
             }
-            AddProgress::Abort(e) =&gt; {
+            AddProgressEvent::Abort(e) =&gt; {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(mp) = mp.take() {
                     mp.error();
                 }
@@ -2247,7 +2239,7 @@
 <span class="doccomment">/// Displays the download progress for a given stream.
 </span><span class="kw">pub async fn </span>show_download_progress(
     hash: Hash,
-    <span class="kw-2">mut </span>stream: <span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;DownloadProgress&gt;&gt; + Unpin,
+    <span class="kw-2">mut </span>stream: <span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;DownloadProgressEvent&gt;&gt; + Unpin,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="macro">eprintln!</span>(<span class="string">"Fetching: {}"</span>, hash);
     <span class="kw">let </span>mp = MultiProgress::new();
@@ -2258,7 +2250,7 @@
     <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="bool-val">false</span>;
     <span class="kw">while let </span><span class="prelude-val">Some</span>(x) = stream.next().<span class="kw">await </span>{
         <span class="kw">match </span>x<span class="question-mark">? </span>{
-            DownloadProgress::InitialState(state) =&gt; {
+            DownloadProgressEvent::InitialState(state) =&gt; {
                 <span class="kw">if </span>state.connected {
                     op.set_message(<span class="macro">format!</span>(<span class="string">"{} Requesting ...\n"</span>, style(<span class="string">"[2/3]"</span>).bold().dim()));
                 }
@@ -2278,9 +2270,9 @@
                         ip.set_length(size.value());
                         ip.reset();
                         <span class="kw">match </span>blob.progress {
-                            BlobProgress::Pending =&gt; {}
-                            BlobProgress::Progressing(offset) =&gt; ip.set_position(offset),
-                            BlobProgress::Done =&gt; ip.finish_and_clear(),
+                            BlobProgressEvent::Pending =&gt; {}
+                            BlobProgressEvent::Progressing(offset) =&gt; ip.set_position(offset),
+                            BlobProgressEvent::Done =&gt; ip.finish_and_clear(),
                         }
                         <span class="kw">if </span>!seq {
                             op.finish_and_clear();
@@ -2288,11 +2280,11 @@
                     }
                 }
             }
-            DownloadProgress::FoundLocal { .. } =&gt; {}
-            DownloadProgress::Connected =&gt; {
+            DownloadProgressEvent::FoundLocal { .. } =&gt; {}
+            DownloadProgressEvent::Connected =&gt; {
                 op.set_message(<span class="macro">format!</span>(<span class="string">"{} Requesting ...\n"</span>, style(<span class="string">"[2/3]"</span>).bold().dim()));
             }
-            DownloadProgress::FoundHashSeq { children, .. } =&gt; {
+            DownloadProgressEvent::FoundHashSeq { children, .. } =&gt; {
                 op.set_message(<span class="macro">format!</span>(
                     <span class="string">"{} Downloading {} blob(s)\n"</span>,
                     style(<span class="string">"[3/3]"</span>).bold().dim(),
@@ -2302,7 +2294,7 @@
                 op.reset();
                 seq = <span class="bool-val">true</span>;
             }
-            DownloadProgress::Found { size, child, .. } =&gt; {
+            DownloadProgressEvent::Found { size, child, .. } =&gt; {
                 <span class="kw">if </span>seq {
                     op.set_position(child.into());
                 } <span class="kw">else </span>{
@@ -2311,13 +2303,13 @@
                 ip.set_length(size);
                 ip.reset();
             }
-            DownloadProgress::Progress { offset, .. } =&gt; {
+            DownloadProgressEvent::Progress { offset, .. } =&gt; {
                 ip.set_position(offset);
             }
-            DownloadProgress::Done { .. } =&gt; {
+            DownloadProgressEvent::Done { .. } =&gt; {
                 ip.finish_and_clear();
             }
-            DownloadProgress::AllDone(Stats {
+            DownloadProgressEvent::AllDone(Stats {
                 bytes_read,
                 elapsed,
                 ..
@@ -2331,7 +2323,7 @@
                 );
                 <span class="kw">break</span>;
             }
-            DownloadProgress::Abort(e) =&gt; {
+            DownloadProgressEvent::Abort(e) =&gt; {
                 <span class="macro">bail!</span>(<span class="string">"download aborted: {}"</span>, e);
             }
         }

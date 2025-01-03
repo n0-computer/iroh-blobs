@@ -1648,7 +1648,7 @@
 <span class="kw">use </span>tracing::{debug, error, error_span, trace, warn, Instrument};
 
 <span class="kw">use crate</span>::{
-    get::{progress::DownloadProgress, Stats},
+    get::{progress::DownloadProgressEvent, Stats},
     metrics::Metrics,
     store::Store,
     util::{local_pool::LocalPoolHandle, progress::ProgressSender},
@@ -2390,7 +2390,7 @@
             <span class="kw">if let </span><span class="prelude-val">Some</span>(sender) = handlers.on_progress {
                 <span class="self">self</span>.progress_tracker.unsubscribe(<span class="kw-2">&amp;</span>kind, <span class="kw-2">&amp;</span>sender);
                 sender
-                    .send(DownloadProgress::Abort(serde_error::Error::new(
+                    .send(DownloadProgressEvent::Abort(serde_error::Error::new(
                         <span class="kw-2">&amp;*</span>anyhow::Error::from(DownloadError::Cancelled),
                     )))
                     .<span class="kw">await

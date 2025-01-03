@@ -626,7 +626,7 @@
     get::{
         <span class="self">self</span>,
         fsm::{AtBlobHeader, AtEndBlob, ConnectedNext, EndBlobNext},
-        progress::{BlobId, DownloadProgress},
+        progress::{BlobId, DownloadProgressEvent},
         Error, Stats,
     },
     hashseq::parse_hash_seq,
@@ -647,8 +647,8 @@
 /// This considers data that is already in the store, and will only request
 /// the remaining data.
 ///
-/// Progress is reported as [`DownloadProgress`] through a [`ProgressSender`]. Note that the
-/// [`DownloadProgress::AllDone`] event is not emitted from here, but left to an upper layer to send,
+/// Progress is reported as [`DownloadProgressEvent`] through a [`ProgressSender`]. Note that the
+/// [`DownloadProgressEvent::AllDone`] event is not emitted from here, but left to an upper layer to send,
 /// if desired.
 </span><span class="kw">pub async fn </span>get_to_db&lt;
     D: BaoStore,
@@ -658,7 +658,7 @@
     db: <span class="kw-2">&amp;</span>D,
     get_conn: C,
     hash_and_format: <span class="kw-2">&amp;</span>HashAndFormat,
-    progress_sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    progress_sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Stats, Error&gt; {
     <span class="kw">match </span>get_to_db_in_steps(db.clone(), <span class="kw-2">*</span>hash_and_format, progress_sender).<span class="kw">await</span><span class="question-mark">? </span>{
         FetchState::Complete(res) =&gt; <span class="prelude-val">Ok</span>(res),
@@ -681,7 +681,7 @@
 /// Progress reporting works in the same way as documented in [`get_to_db`].
 </span><span class="kw">pub async fn </span>get_to_db_in_steps&lt;
     D: BaoStore,
-    P: ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    P: ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 &gt;(
     db: D,
     hash_and_format: HashAndFormat,
@@ -750,7 +750,7 @@
     co: Co&lt;Yield, ()&gt;,
     db: <span class="kw-2">&amp;</span>D,
     hash_and_format: <span class="kw-2">&amp;</span>HashAndFormat,
-    progress: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    progress: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Stats, Error&gt; {
     <span class="kw">let </span>HashAndFormat { hash, format } = hash_and_format;
     <span class="kw">let </span>co = GetCo(co);
@@ -768,13 +768,13 @@
     db: <span class="kw-2">&amp;</span>D,
     co: GetCo,
     hash: <span class="kw-2">&amp;</span>Hash,
-    progress: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    progress: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Stats, Error&gt; {
     <span class="kw">let </span>end = <span class="kw">match </span>db.get_mut(hash).<span class="kw">await</span><span class="question-mark">? </span>{
         <span class="prelude-val">Some</span>(entry) <span class="kw">if </span>entry.is_complete() =&gt; {
             <span class="macro">tracing::info!</span>(<span class="string">"already got entire blob"</span>);
             progress
-                .send(DownloadProgress::FoundLocal {
+                .send(DownloadProgressEvent::FoundLocal {
                     child: BlobId::Root,
                     hash: <span class="kw-2">*</span>hash,
                     size: entry.size(),
@@ -790,7 +790,7 @@
                 </span>.ok()
                 .unwrap_or_else(ChunkRanges::all);
             progress
-                .send(DownloadProgress::FoundLocal {
+                .send(DownloadProgressEvent::FoundLocal {
                     child: BlobId::Root,
                     hash: <span class="kw-2">*</span>hash,
                     size: entry.size(),
@@ -869,7 +869,7 @@
 </span><span class="kw">async fn </span>get_blob_inner&lt;D: BaoStore&gt;(
     db: <span class="kw-2">&amp;</span>D,
     at_header: AtBlobHeader,
-    sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;AtEndBlob, Error&gt; {
     <span class="comment">// read the size. The size we get here is not verified, but since we use
     // it for the tree traversal we are guaranteed not to get more than size.
@@ -883,7 +883,7 @@
     <span class="comment">// allocate a new id for progress reports for this transfer
     </span><span class="kw">let </span>id = sender.new_id();
     sender
-        .send(DownloadProgress::Found {
+        .send(DownloadProgressEvent::Found {
             id,
             hash,
             size,
@@ -895,7 +895,7 @@
         <span class="comment">// if try send fails it means that the receiver has been dropped.
         // in that case we want to abort the write_all_with_outboard.
         </span>sender2
-            .try_send(DownloadProgress::Progress { id, offset })
+            .try_send(DownloadProgressEvent::Progress { id, offset })
             .inspect_err(|<span class="kw">_</span>| {
                 <span class="macro">tracing::info!</span>(<span class="string">"aborting download of {}"</span>, hash);
             })<span class="question-mark">?</span>;
@@ -909,7 +909,7 @@
     drop(bw);
     db.insert_complete(entry).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="comment">// notify that we are done
-    </span>sender.send(DownloadProgress::Done { id }).<span class="kw">await</span><span class="question-mark">?</span>;
+    </span>sender.send(DownloadProgressEvent::Done { id }).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(end)
 }
 
@@ -921,7 +921,7 @@
     db: <span class="kw-2">&amp;</span>D,
     at_header: AtBlobHeader,
     entry: D::EntryMut,
-    sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;AtEndBlob, Error&gt; {
     <span class="comment">// read the size. The size we get here is not verified, but since we use
     // it for the tree traversal we are guaranteed not to get more than size.
@@ -933,7 +933,7 @@
     <span class="kw">let </span>hash = at_content.hash();
     <span class="kw">let </span>child_offset = at_content.offset();
     sender
-        .send(DownloadProgress::Found {
+        .send(DownloadProgressEvent::Found {
             id,
             hash,
             size,
@@ -945,7 +945,7 @@
         <span class="comment">// if try send fails it means that the receiver has been dropped.
         // in that case we want to abort the write_all_with_outboard.
         </span>sender2
-            .try_send(DownloadProgress::Progress { id, offset })
+            .try_send(DownloadProgressEvent::Progress { id, offset })
             .inspect_err(|<span class="kw">_</span>| {
                 <span class="macro">tracing::info!</span>(<span class="string">"aborting download of {}"</span>, hash);
             })<span class="question-mark">?</span>;
@@ -963,7 +963,7 @@
     // data. We can't re-check this here since that would be very expensive.
     </span>db.insert_complete(entry).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="comment">// notify that we are done
-    </span>sender.send(DownloadProgress::Done { id }).<span class="kw">await</span><span class="question-mark">?</span>;
+    </span>sender.send(DownloadProgressEvent::Done { id }).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(at_end)
 }
 
@@ -1002,7 +1002,7 @@
     db: <span class="kw-2">&amp;</span>D,
     co: GetCo,
     root_hash: <span class="kw-2">&amp;</span>Hash,
-    sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgress&gt; + IdGenerator,
+    sender: <span class="kw">impl </span>ProgressSender&lt;Msg = DownloadProgressEvent&gt; + IdGenerator,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Stats, Error&gt; {
     <span class="kw">use </span>tracing::info <span class="kw">as </span>log;
     <span class="kw">let </span>finishing = <span class="kw">match </span>db.get_mut(root_hash).<span class="kw">await</span><span class="question-mark">? </span>{
@@ -1010,7 +1010,7 @@
             <span class="macro">log!</span>(<span class="string">"already got collection - doing partial download"</span>);
             <span class="comment">// send info that we have the hashseq itself entirely
             </span>sender
-                .send(DownloadProgress::FoundLocal {
+                .send(DownloadProgressEvent::FoundLocal {
                     child: BlobId::Root,
                     hash: <span class="kw-2">*</span>root_hash,
                     size: entry.size(),
@@ -1023,7 +1023,7 @@
                 Error::NoncompliantNode(<span class="macro">anyhow!</span>(<span class="string">"Failed to parse downloaded HashSeq: {err}"</span>))
             })<span class="question-mark">?</span>;
             sender
-                .send(DownloadProgress::FoundHashSeq {
+                .send(DownloadProgressEvent::FoundHashSeq {
                     hash: <span class="kw-2">*</span>root_hash,
                     children,
                 })
@@ -1037,7 +1037,7 @@
             </span><span class="kw">for </span>(i, info) <span class="kw">in </span>missing_info.iter().enumerate() {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(size) = info.size() {
                     sender
-                        .send(DownloadProgress::FoundLocal {
+                        .send(DownloadProgressEvent::FoundLocal {
                             child: BlobId::from_offset((i <span class="kw">as </span>u64) + <span class="number">1</span>),
                             hash: children[i],
                             size,
@@ -1127,7 +1127,7 @@
                 Error::NoncompliantNode(<span class="macro">anyhow!</span>(<span class="string">"Failed to parse downloaded HashSeq: {err}"</span>))
             })<span class="question-mark">?</span>;
             sender
-                .send(DownloadProgress::FoundHashSeq {
+                .send(DownloadProgressEvent::FoundHashSeq {
                     hash: <span class="kw-2">*</span>root_hash,
                     children: count,
                 })

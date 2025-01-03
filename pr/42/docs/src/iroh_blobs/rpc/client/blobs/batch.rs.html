@@ -470,7 +470,9 @@
 <a href="#469" id="469">469</a>
 <a href="#470" id="470">470</a>
 <a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -490,14 +492,16 @@
 <span class="kw">use crate</span>::{
     format::collection::Collection,
     net_protocol::batches::BatchId,
-    provider::BatchAddPathProgress,
-    rpc::proto::{
-        blobs::{
-            BatchAddPathRequest, BatchAddStreamRequest, BatchAddStreamResponse,
-            BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
+    rpc::{
+        client::blobs::BatchAddPathProgressEvent,
+        proto::{
+            blobs::{
+                BatchAddPathRequest, BatchAddStreamRequest, BatchAddStreamResponse,
+                BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
+            },
+            tags::{<span class="self">self</span>, SyncMode},
+            RpcService,
         },
-        tags::{<span class="self">self</span>, SyncMode},
-        RpcService,
     },
     store::ImportMode,
     util::{SetTagOption, TagDrop},
@@ -738,13 +742,13 @@
         <span class="kw">let </span><span class="kw-2">mut </span>res_size = <span class="prelude-val">None</span>;
         <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{
             <span class="kw">match </span>item<span class="question-mark">?</span>.<span class="number">0 </span>{
-                BatchAddPathProgress::Abort(cause) =&gt; {
+                BatchAddPathProgressEvent::Abort(cause) =&gt; {
                     <span class="prelude-val">Err</span>(cause)<span class="question-mark">?</span>;
                 }
-                BatchAddPathProgress::Done { hash } =&gt; {
+                BatchAddPathProgressEvent::Done { hash } =&gt; {
                     res_hash = <span class="prelude-val">Some</span>(hash);
                 }
-                BatchAddPathProgress::Found { size } =&gt; {
+                BatchAddPathProgressEvent::Found { size } =&gt; {
                     res_size = <span class="prelude-val">Some</span>(size);
                 }
                 <span class="kw">_ </span>=&gt; {}

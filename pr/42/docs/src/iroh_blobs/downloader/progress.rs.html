@@ -205,12 +205,12 @@
 
 <span class="kw">use </span><span class="kw">super</span>::DownloadKind;
 <span class="kw">use crate</span>::{
-    get::progress::{DownloadProgress, TransferState},
+    get::progress::{DownloadProgressEvent, TransferState},
     util::progress::{AsyncChannelProgressSender, IdGenerator, ProgressSendError, ProgressSender},
 };
 
 <span class="doccomment">/// The channel that can be used to subscribe to progress updates.
-</span><span class="kw">pub type </span>ProgressSubscriber = AsyncChannelProgressSender&lt;DownloadProgress&gt;;
+</span><span class="kw">pub type </span>ProgressSubscriber = AsyncChannelProgressSender&lt;DownloadProgressEvent&gt;;
 
 <span class="doccomment">/// Track the progress of downloads.
 ///
@@ -295,8 +295,8 @@
 }
 
 <span class="kw">impl </span>Inner {
-    <span class="kw">fn </span>subscribe(<span class="kw-2">&amp;mut </span><span class="self">self</span>, subscriber: ProgressSubscriber) -&gt; DownloadProgress {
-        <span class="kw">let </span>msg = DownloadProgress::InitialState(<span class="self">self</span>.state.clone());
+    <span class="kw">fn </span>subscribe(<span class="kw-2">&amp;mut </span><span class="self">self</span>, subscriber: ProgressSubscriber) -&gt; DownloadProgressEvent {
+        <span class="kw">let </span>msg = DownloadProgressEvent::InitialState(<span class="self">self</span>.state.clone());
         <span class="self">self</span>.subscribers.push(subscriber);
         msg
     }
@@ -305,7 +305,7 @@
         <span class="self">self</span>.subscribers.retain(|s| !s.same_channel(sender));
     }
 
-    <span class="kw">fn </span>on_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, progress: DownloadProgress) {
+    <span class="kw">fn </span>on_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, progress: DownloadProgressEvent) {
         <span class="self">self</span>.state.on_progress(progress);
     }
 }
@@ -323,7 +323,7 @@
 }
 
 <span class="kw">impl </span>ProgressSender <span class="kw">for </span>BroadcastProgressSender {
-    <span class="kw">type </span>Msg = DownloadProgress;
+    <span class="kw">type </span>Msg = DownloadProgressEvent;
 
     <span class="kw">async fn </span>send(<span class="kw-2">&amp;</span><span class="self">self</span>, msg: <span class="self">Self</span>::Msg) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProgressSendError&gt; {
         <span class="comment">// making sure that the lock is not held across an await point.

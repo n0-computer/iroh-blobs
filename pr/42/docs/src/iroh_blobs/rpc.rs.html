@@ -1103,7 +1103,20 @@
 <a href="#1102" id="1102">1102</a>
 <a href="#1103" id="1103">1103</a>
 <a href="#1104" id="1104">1104</a>
-<a href="#1105" id="1105">1105</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
+<a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a>
+<a href="#1109" id="1109">1109</a>
+<a href="#1110" id="1110">1110</a>
+<a href="#1111" id="1111">1111</a>
+<a href="#1112" id="1112">1112</a>
+<a href="#1113" id="1113">1113</a>
+<a href="#1114" id="1114">1114</a>
+<a href="#1115" id="1115">1115</a>
+<a href="#1116" id="1116">1116</a>
+<a href="#1117" id="1117">1117</a>
+<a href="#1118" id="1118">1118</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
     io,
@@ -1113,7 +1126,10 @@
 
 <span class="kw">use </span>anyhow::anyhow;
 <span class="kw">use </span>client::{
-    blobs::{<span class="self">self</span>, BlobInfo, BlobStatus, DownloadMode, IncompleteBlobInfo, MemClient, WrapOption},
+    blobs::{
+        <span class="self">self</span>, AddProgressEvent, BatchAddPathProgressEvent, BlobInfo, BlobStatus, DownloadMode,
+        IncompleteBlobInfo, MemClient, WrapOption,
+    },
     tags::TagInfo,
     MemConnector,
 };
@@ -1149,9 +1165,8 @@
 <span class="kw">use crate</span>::{
     downloader::{DownloadRequest, Downloader},
     format::collection::Collection,
-    get::{progress::DownloadProgress, Stats},
+    get::{progress::DownloadProgressEvent, Stats},
     net_protocol::{Blobs, BlobsInner},
-    provider::{AddProgress, BatchAddPathProgress},
     store::{
         ConsistencyCheckProgress, ExportProgress, FetchState, ImportProgress, MapEntry,
         ValidateProgress,
@@ -1480,7 +1495,9 @@
         <span class="kw">let </span>rt = <span class="self">self</span>.rt().clone();
         rt.spawn_detached(|| <span class="kw">async move </span>{
             <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="self">self</span>.blob_add_from_path0(msg, tx).<span class="kw">await </span>{
-                tx2.send(AddProgress::Abort(RpcError::new(<span class="kw-2">&amp;*</span>e))).<span class="kw">await</span>.ok();
+                tx2.send(AddProgressEvent::Abort(RpcError::new(<span class="kw-2">&amp;*</span>e)))
+                    .<span class="kw">await
+                    </span>.ok();
             }
         });
         rx.map(AddPathResponse)
@@ -1541,7 +1558,7 @@
                 .<span class="kw">await
             </span>{
                 progress
-                    .send(DownloadProgress::Abort(RpcError::new(<span class="kw-2">&amp;*</span>err)))
+                    .send(DownloadProgressEvent::Abort(RpcError::new(<span class="kw-2">&amp;*</span>err)))
                     .<span class="kw">await
                     </span>.ok();
             }
@@ -1578,7 +1595,7 @@
     <span class="kw">async fn </span>blob_add_from_path0(
         <span class="self">self</span>,
         msg: AddPathRequest,
-        progress: async_channel::Sender&lt;AddProgress&gt;,
+        progress: async_channel::Sender&lt;AddProgressEvent&gt;,
     ) -&gt; anyhow::Result&lt;()&gt; {
         <span class="kw">use </span>std::collections::BTreeMap;
 
@@ -1595,12 +1612,12 @@
             </span>}
             ImportProgress::Size { id, size } =&gt; {
                 <span class="kw">let </span>name = names.lock().unwrap().remove(<span class="kw-2">&amp;</span>id)<span class="question-mark">?</span>;
-                <span class="prelude-val">Some</span>(AddProgress::Found { id, name, size })
+                <span class="prelude-val">Some</span>(AddProgressEvent::Found { id, name, size })
             }
             ImportProgress::OutboardProgress { id, offset } =&gt; {
-                <span class="prelude-val">Some</span>(AddProgress::Progress { id, offset })
+                <span class="prelude-val">Some</span>(AddProgressEvent::Progress { id, offset })
             }
-            ImportProgress::OutboardDone { hash, id } =&gt; <span class="prelude-val">Some</span>(AddProgress::Done { hash, id }),
+            ImportProgress::OutboardDone { hash, id } =&gt; <span class="prelude-val">Some</span>(AddProgressEvent::Done { hash, id }),
             <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
         });
         <span class="kw">let </span>AddPathRequest {
@@ -1685,7 +1702,7 @@
             SetTagOption::Auto =&gt; blobs.store().create_tag(<span class="kw-2">*</span>hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>,
         };
         progress
-            .send(AddProgress::AllDone {
+            .send(AddProgressEvent::AllDone {
                 hash,
                 format,
                 tag: tag.clone(),
@@ -1729,7 +1746,7 @@
         <span class="kw">let </span>this = <span class="self">self</span>.clone();
         <span class="self">self</span>.rt().spawn_detached(|| <span class="kw">async move </span>{
             <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = this.batch_add_from_path0(msg, tx).<span class="kw">await </span>{
-                tx2.send(BatchAddPathProgress::Abort(RpcError::new(<span class="kw-2">&amp;*</span>e)))
+                tx2.send(BatchAddPathProgressEvent::Abort(RpcError::new(<span class="kw-2">&amp;*</span>e)))
                     .<span class="kw">await
                     </span>.ok();
             }
@@ -1774,16 +1791,18 @@
     <span class="kw">async fn </span>batch_add_from_path0(
         <span class="self">self</span>,
         msg: BatchAddPathRequest,
-        progress: async_channel::Sender&lt;BatchAddPathProgress&gt;,
+        progress: async_channel::Sender&lt;BatchAddPathProgressEvent&gt;,
     ) -&gt; anyhow::Result&lt;()&gt; {
         <span class="kw">let </span>progress = AsyncChannelProgressSender::new(progress);
         <span class="comment">// convert import progress to provide progress
         </span><span class="kw">let </span>import_progress = progress.clone().with_filter_map(<span class="kw">move </span>|x| <span class="kw">match </span>x {
-            ImportProgress::Size { size, .. } =&gt; <span class="prelude-val">Some</span>(BatchAddPathProgress::Found { size }),
+            ImportProgress::Size { size, .. } =&gt; <span class="prelude-val">Some</span>(BatchAddPathProgressEvent::Found { size }),
             ImportProgress::OutboardProgress { offset, .. } =&gt; {
-                <span class="prelude-val">Some</span>(BatchAddPathProgress::Progress { offset })
+                <span class="prelude-val">Some</span>(BatchAddPathProgressEvent::Progress { offset })
             }
-            ImportProgress::OutboardDone { hash, .. } =&gt; <span class="prelude-val">Some</span>(BatchAddPathProgress::Done { hash }),
+            ImportProgress::OutboardDone { hash, .. } =&gt; {
+                <span class="prelude-val">Some</span>(BatchAddPathProgressEvent::Done { hash })
+            }
             <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
         });
         <span class="kw">let </span>BatchAddPathRequest {
@@ -1807,7 +1826,9 @@
         <span class="kw">let </span>hash = <span class="kw-2">*</span>tag.hash();
         blobs.batches().<span class="kw">await</span>.store(batch, tag);
 
-        progress.send(BatchAddPathProgress::Done { hash }).<span class="kw">await</span><span class="question-mark">?</span>;
+        progress
+            .send(BatchAddPathProgressEvent::Done { hash })
+            .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
     }
 
@@ -1821,7 +1842,9 @@
 
         <span class="self">self</span>.rt().spawn_detached(|| <span class="kw">async move </span>{
             <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = this.blob_add_stream0(msg, stream, tx.clone()).<span class="kw">await </span>{
-                tx.send(AddProgress::Abort(RpcError::new(<span class="kw-2">&amp;*</span>err))).<span class="kw">await</span>.ok();
+                tx.send(AddProgressEvent::Abort(RpcError::new(<span class="kw-2">&amp;*</span>err)))
+                    .<span class="kw">await
+                    </span>.ok();
             }
         });
 
@@ -1832,7 +1855,7 @@
         <span class="self">self</span>,
         msg: AddStreamRequest,
         stream: <span class="kw">impl </span>Stream&lt;Item = AddStreamUpdate&gt; + Send + Unpin + <span class="lifetime">'static</span>,
-        progress: async_channel::Sender&lt;AddProgress&gt;,
+        progress: async_channel::Sender&lt;AddProgressEvent&gt;,
     ) -&gt; anyhow::Result&lt;()&gt; {
         <span class="kw">let </span>progress = AsyncChannelProgressSender::new(progress);
 
@@ -1851,12 +1874,12 @@
             </span>}
             ImportProgress::Size { id, size } =&gt; {
                 <span class="kw">let </span>name = name_cache.lock().unwrap().take()<span class="question-mark">?</span>;
-                <span class="prelude-val">Some</span>(AddProgress::Found { id, name, size })
+                <span class="prelude-val">Some</span>(AddProgressEvent::Found { id, name, size })
             }
             ImportProgress::OutboardProgress { id, offset } =&gt; {
-                <span class="prelude-val">Some</span>(AddProgress::Progress { id, offset })
+                <span class="prelude-val">Some</span>(AddProgressEvent::Progress { id, offset })
             }
-            ImportProgress::OutboardDone { hash, id } =&gt; <span class="prelude-val">Some</span>(AddProgress::Done { hash, id }),
+            ImportProgress::OutboardDone { hash, id } =&gt; <span class="prelude-val">Some</span>(AddProgressEvent::Done { hash, id }),
             <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
         });
         <span class="kw">let </span>blobs = <span class="self">self</span>;
@@ -1877,7 +1900,7 @@
             SetTagOption::Auto =&gt; blobs.store().create_tag(hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>,
         };
         progress
-            .send(AddProgress::AllDone { hash, tag, format })
+            .send(AddProgressEvent::AllDone { hash, tag, format })
             .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
     }
@@ -2038,7 +2061,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         endpoint: Endpoint,
         req: BlobDownloadRequest,
-        progress: AsyncChannelProgressSender&lt;DownloadProgress&gt;,
+        progress: AsyncChannelProgressSender&lt;DownloadProgressEvent&gt;,
     ) -&gt; anyhow::Result&lt;()&gt; {
         <span class="kw">let </span>BlobDownloadRequest {
             hash,
@@ -2060,7 +2083,10 @@
             </span>}
         };
 
-        progress.send(DownloadProgress::AllDone(stats)).<span class="kw">await</span>.ok();
+        progress
+            .send(DownloadProgressEvent::AllDone(stats))
+            .<span class="kw">await
+            </span>.ok();
         <span class="kw">match </span>tag {
             SetTagOption::Named(tag) =&gt; {
                 <span class="self">self</span>.store().set_tag(tag, <span class="prelude-val">Some</span>(hash_and_format)).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -2079,7 +2105,7 @@
         endpoint: Endpoint,
         hash_and_format: HashAndFormat,
         nodes: Vec&lt;NodeAddr&gt;,
-        progress: AsyncChannelProgressSender&lt;DownloadProgress&gt;,
+        progress: AsyncChannelProgressSender&lt;DownloadProgressEvent&gt;,
     ) -&gt; anyhow::Result&lt;Stats&gt; {
         <span class="doccomment">/// Name used for logging when new node addresses are added from gossip.
         </span><span class="kw">const </span>BLOB_DOWNLOAD_SOURCE_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"blob_download"</span>;
@@ -2107,7 +2133,7 @@
         endpoint: Endpoint,
         hash_and_format: HashAndFormat,
         nodes: Vec&lt;NodeAddr&gt;,
-        progress: AsyncChannelProgressSender&lt;DownloadProgress&gt;,
+        progress: AsyncChannelProgressSender&lt;DownloadProgressEvent&gt;,
     ) -&gt; anyhow::Result&lt;Stats&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>last_err = <span class="prelude-val">None</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>remaining_nodes = nodes.len();

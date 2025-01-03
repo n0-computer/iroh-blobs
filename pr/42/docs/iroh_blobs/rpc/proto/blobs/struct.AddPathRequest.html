@@ -4,7 +4,7 @@
     pub tag: <a class="enum" href="../../../util/enum.SetTagOption.html" title="enum iroh_blobs::util::SetTagOption">SetTagOption</a>,
     pub wrap: <a class="enum" href="../../client/blobs/enum.WrapOption.html" title="enum iroh_blobs::rpc::client::blobs::WrapOption">WrapOption</a>,
 }</code></pre><span class="item-info"><div class="stab portability">Available on <strong>crate feature <code>rpc</code></strong> only.</div></span><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A request to the node to provide the data at the given path</p>
-<p>Will produce a stream of <a href="../../../provider/enum.AddProgress.html" title="enum iroh_blobs::provider::AddProgress"><code>AddProgress</code></a> messages.</p>
+<p>Will produce a stream of <a href="enum.AddProgressEvent.html" title="enum iroh_blobs::rpc::proto::blobs::AddProgressEvent"><code>AddProgressEvent</code></a> messages.</p>
 </div></details><h2 id="fields" class="fields section-header">Fields<a href="#fields" class="anchor">§</a></h2><span id="structfield.path" class="structfield section-header"><a href="#structfield.path" class="anchor field">§</a><code>path: <a class="struct" href="https://doc.rust-lang.org/nightly/std/path/struct.PathBuf.html" title="struct std::path::PathBuf">PathBuf</a></code></span><div class="docblock"><p>The path to the data to provide.</p>
 <p>This should be an absolute path valid for the file system on which
 the node runs. Usually the cli will run on the same machine as the
