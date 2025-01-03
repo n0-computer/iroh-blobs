@@ -140,16 +140,14 @@ mod progress {
         ProgressStyle,
     };
     use iroh_blobs::{
-        get::{
-            progress::{BlobProgress, DownloadProgress},
-            Stats,
-        },
+        get::Stats,
+        rpc::client::blobs::{BlobProgressEvent, DownloadProgressEvent},
         Hash,
     };
 
     pub async fn show_download_progress(
         hash: Hash,
-        mut stream: impl Stream<Item = Result<DownloadProgress>> + Unpin,
+        mut stream: impl Stream<Item = Result<DownloadProgressEvent>> + Unpin,
     ) -> Result<()> {
         eprintln!("Fetching: {}", hash);
         let mp = MultiProgress::new();
@@ -160,7 +158,7 @@ mod progress {
         let mut seq = false;
         while let Some(x) = stream.next().await {
             match x? {
-                DownloadProgress::InitialState(state) => {
+                DownloadProgressEvent::InitialState(state) => {
                     if state.connected {
                         op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
                     }
@@ -180,9 +178,9 @@ mod progress {
                             ip.set_length(size.value());
                             ip.reset();
                             match blob.progress {
-                                BlobProgress::Pending => {}
-                                BlobProgress::Progressing(offset) => ip.set_position(offset),
-                                BlobProgress::Done => ip.finish_and_clear(),
+                                BlobProgressEvent::Pending => {}
+                                BlobProgressEvent::Progressing(offset) => ip.set_position(offset),
+                                BlobProgressEvent::Done => ip.finish_and_clear(),
                             }
                             if !seq {
                                 op.finish_and_clear();
@@ -190,11 +188,11 @@ mod progress {
                         }
                     }
                 }
-                DownloadProgress::FoundLocal { .. } => {}
-                DownloadProgress::Connected => {
+                DownloadProgressEvent::FoundLocal { .. } => {}
+                DownloadProgressEvent::Connected => {
                     op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
                 }
-                DownloadProgress::FoundHashSeq { children, .. } => {
+                DownloadProgressEvent::FoundHashSeq { children, .. } => {
                     op.set_message(format!(
                         "{} Downloading {} blob(s)\n",
                         style("[3/3]").bold().dim(),
@@ -204,7 +202,7 @@ mod progress {
                     op.reset();
                     seq = true;
                 }
-                DownloadProgress::Found { size, child, .. } => {
+                DownloadProgressEvent::Found { size, child, .. } => {
                     if seq {
                         op.set_position(child.into());
                     } else {
@@ -213,13 +211,13 @@ mod progress {
                     ip.set_length(size);
                     ip.reset();
                 }
-                DownloadProgress::Progress { offset, .. } => {
+                DownloadProgressEvent::Progress { offset, .. } => {
                     ip.set_position(offset);
                 }
-                DownloadProgress::Done { .. } => {
+                DownloadProgressEvent::Done { .. } => {
                     ip.finish_and_clear();
                 }
-                DownloadProgress::AllDone(Stats {
+                DownloadProgressEvent::AllDone(Stats {
                     bytes_read,
                     elapsed,
                     ..
@@ -233,7 +231,7 @@ mod progress {
                     );
                     break;
                 }
-                DownloadProgress::Abort(e) => {
+                DownloadProgressEvent::Abort(e) => {
                     bail!("download aborted: {}", e);
                 }
             }

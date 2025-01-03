@@ -12,7 +12,6 @@ use iroh_io::{
     stats::{SliceReaderStats, StreamWriterStats, TrackingSliceReader, TrackingStreamWriter},
     AsyncSliceReader, AsyncStreamWriter, TokioStreamWriter,
 };
-use serde::{Deserialize, Serialize};
 use tracing::{debug, debug_span, info, trace, warn};
 use tracing_futures::Instrument;
 
@@ -116,71 +115,6 @@ pub struct TransferStats {
     pub read: SliceReaderStats,
     /// The total duration of the transfer.
     pub duration: Duration,
-}
-
-/// Progress updates for the add operation.
-#[derive(Debug, Serialize, Deserialize)]
-pub enum AddProgress {
-    /// An item was found with name `name`, from now on referred to via `id`
-    Found {
-        /// A new unique id for this entry.
-        id: u64,
-        /// The name of the entry.
-        name: String,
-        /// The size of the entry in bytes.
-        size: u64,
-    },
-    /// We got progress ingesting item `id`.
-    Progress {
-        /// The unique id of the entry.
-        id: u64,
-        /// The offset of the progress, in bytes.
-        offset: u64,
-    },
-    /// We are done with `id`, and the hash is `hash`.
-    Done {
-        /// The unique id of the entry.
-        id: u64,
-        /// The hash of the entry.
-        hash: Hash,
-    },
-    /// We are done with the whole operation.
-    AllDone {
-        /// The hash of the created data.
-        hash: Hash,
-        /// The format of the added data.
-        format: BlobFormat,
-        /// The tag of the added data.
-        tag: Tag,
-    },
-    /// We got an error and need to abort.
-    ///
-    /// This will be the last message in the stream.
-    Abort(serde_error::Error),
-}
-
-/// Progress updates for the batch add operation.
-#[derive(Debug, Serialize, Deserialize)]
-pub enum BatchAddPathProgress {
-    /// An item was found with the given size
-    Found {
-        /// The size of the entry in bytes.
-        size: u64,
-    },
-    /// We got progress ingesting the item.
-    Progress {
-        /// The offset of the progress, in bytes.
-        offset: u64,
-    },
-    /// We are done, and the hash is `hash`.
-    Done {
-        /// The hash of the entry.
-        hash: Hash,
-    },
-    /// We got an error and need to abort.
-    ///
-    /// This will be the last message in the stream.
-    Abort(serde_error::Error),
 }
 
 /// Read the request from the getter.

@@ -32,7 +32,7 @@ use crate::{
 
 mod error;
 pub use error::Error;
-pub mod progress;
+pub(crate) mod progress;
 pub mod request;
 
 /// Stats about the transfer.

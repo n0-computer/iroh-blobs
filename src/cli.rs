@@ -19,14 +19,10 @@ use iroh::{NodeAddr, PublicKey, RelayUrl};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    get::{
-        progress::{BlobProgress, DownloadProgress},
-        Stats,
-    },
-    provider::AddProgress,
+    get::Stats,
     rpc::client::blobs::{
-        self, BlobInfo, BlobStatus, CollectionInfo, DownloadMode, DownloadOptions,
-        IncompleteBlobInfo, WrapOption,
+        self, AddProgressEvent, BlobInfo, BlobProgressEvent, BlobStatus, CollectionInfo,
+        DownloadMode, DownloadOptions, DownloadProgressEvent, IncompleteBlobInfo, WrapOption,
     },
     store::{ConsistencyCheckProgress, ExportFormat, ExportMode, ReportLevel, ValidateProgress},
     ticket::BlobTicket,
@@ -898,29 +894,29 @@ pub struct ProvideResponseEntry {
     pub hash: Hash,
 }
 
-/// Combines the [`AddProgress`] outputs from a [`Stream`] into a single tuple.
+/// Combines the [`AddProgressEvent`] outputs from a [`Stream`] into a single tuple.
 pub async fn aggregate_add_response(
-    mut stream: impl Stream<Item = Result<AddProgress>> + Unpin,
+    mut stream: impl Stream<Item = Result<AddProgressEvent>> + Unpin,
 ) -> Result<(Hash, BlobFormat, Vec<ProvideResponseEntry>)> {
     let mut hash_and_format = None;
     let mut collections = BTreeMap::<u64, (String, u64, Option<Hash>)>::new();
     let mut mp = Some(ProvideProgressState::new());
     while let Some(item) = stream.next().await {
         match item? {
-            AddProgress::Found { name, id, size } => {
+            AddProgressEvent::Found { name, id, size } => {
                 tracing::trace!("Found({id},{name},{size})");
                 if let Some(mp) = mp.as_mut() {
                     mp.found(name.clone(), id, size);
                 }
                 collections.insert(id, (name, size, None));
             }
-            AddProgress::Progress { id, offset } => {
+            AddProgressEvent::Progress { id, offset } => {
                 tracing::trace!("Progress({id}, {offset})");
                 if let Some(mp) = mp.as_mut() {
                     mp.progress(id, offset);
                 }
             }
-            AddProgress::Done { hash, id } => {
+            AddProgressEvent::Done { hash, id } => {
                 tracing::trace!("Done({id},{hash:?})");
                 if let Some(mp) = mp.as_mut() {
                     mp.done(id, hash);
@@ -934,7 +930,7 @@ pub async fn aggregate_add_response(
                     }
                 }
             }
-            AddProgress::AllDone { hash, format, .. } => {
+            AddProgressEvent::AllDone { hash, format, .. } => {
                 tracing::trace!("AllDone({hash:?})");
                 if let Some(mp) = mp.take() {
                     mp.all_done();
@@ -942,7 +938,7 @@ pub async fn aggregate_add_response(
                 hash_and_format = Some(HashAndFormat { hash, format });
                 break;
             }
-            AddProgress::Abort(e) => {
+            AddProgressEvent::Abort(e) => {
                 if let Some(mp) = mp.take() {
                     mp.error();
                 }
@@ -1035,7 +1031,7 @@ impl ProvideProgressState {
 /// Displays the download progress for a given stream.
 pub async fn show_download_progress(
     hash: Hash,
-    mut stream: impl Stream<Item = Result<DownloadProgress>> + Unpin,
+    mut stream: impl Stream<Item = Result<DownloadProgressEvent>> + Unpin,
 ) -> Result<()> {
     eprintln!("Fetching: {}", hash);
     let mp = MultiProgress::new();
@@ -1046,7 +1042,7 @@ pub async fn show_download_progress(
     let mut seq = false;
     while let Some(x) = stream.next().await {
         match x? {
-            DownloadProgress::InitialState(state) => {
+            DownloadProgressEvent::InitialState(state) => {
                 if state.connected {
                     op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
                 }
@@ -1066,9 +1062,9 @@ pub async fn show_download_progress(
                         ip.set_length(size.value());
                         ip.reset();
                         match blob.progress {
-                            BlobProgress::Pending => {}
-                            BlobProgress::Progressing(offset) => ip.set_position(offset),
-                            BlobProgress::Done => ip.finish_and_clear(),
+                            BlobProgressEvent::Pending => {}
+                            BlobProgressEvent::Progressing(offset) => ip.set_position(offset),
+                            BlobProgressEvent::Done => ip.finish_and_clear(),
                         }
                         if !seq {
                             op.finish_and_clear();
@@ -1076,11 +1072,11 @@ pub async fn show_download_progress(
                     }
                 }
             }
-            DownloadProgress::FoundLocal { .. } => {}
-            DownloadProgress::Connected => {
+            DownloadProgressEvent::FoundLocal { .. } => {}
+            DownloadProgressEvent::Connected => {
                 op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
             }
-            DownloadProgress::FoundHashSeq { children, .. } => {
+            DownloadProgressEvent::FoundHashSeq { children, .. } => {
                 op.set_message(format!(
                     "{} Downloading {} blob(s)\n",
                     style("[3/3]").bold().dim(),
@@ -1090,7 +1086,7 @@ pub async fn show_download_progress(
                 op.reset();
                 seq = true;
             }
-            DownloadProgress::Found { size, child, .. } => {
+            DownloadProgressEvent::Found { size, child, .. } => {
                 if seq {
                     op.set_position(child.into());
                 } else {
@@ -1099,13 +1095,13 @@ pub async fn show_download_progress(
                 ip.set_length(size);
                 ip.reset();
             }
-            DownloadProgress::Progress { offset, .. } => {
+            DownloadProgressEvent::Progress { offset, .. } => {
                 ip.set_position(offset);
             }
-            DownloadProgress::Done { .. } => {
+            DownloadProgressEvent::Done { .. } => {
                 ip.finish_and_clear();
             }
-            DownloadProgress::AllDone(Stats {
+            DownloadProgressEvent::AllDone(Stats {
                 bytes_read,
                 elapsed,
                 ..
@@ -1119,7 +1115,7 @@ pub async fn show_download_progress(
                 );
                 break;
             }
-            DownloadProgress::Abort(e) => {
+            DownloadProgressEvent::Abort(e) => {
                 bail!("download aborted: {}", e);
             }
         }

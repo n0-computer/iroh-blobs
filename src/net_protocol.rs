@@ -14,7 +14,7 @@ use tracing::debug;
 use crate::{
     downloader::Downloader,
     provider::EventSender,
-    store::GcConfig,
+    store::{GcConfig, Store},
     util::local_pool::{self, LocalPoolHandle},
     Hash,
 };
@@ -130,7 +130,7 @@ pub struct Builder<S> {
     events: Option<EventSender>,
 }
 
-impl<S: crate::store::Store> Builder<S> {
+impl<S: Store> Builder<S> {
     /// Set the event sender for the blobs protocol.
     pub fn events(mut self, value: EventSender) -> Self {
         self.events = Some(value);
@@ -177,7 +177,7 @@ impl Blobs<crate::store::fs::Store> {
     }
 }
 
-impl<S: crate::store::Store> Blobs<S> {
+impl<S: Store> Blobs<S> {
     /// Create a new Blobs protocol handler.
     ///
     /// This is the low-level constructor that allows you to customize
@@ -273,7 +273,7 @@ impl<S: crate::store::Store> Blobs<S> {
     }
 }
 
-impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
+impl<S: Store> ProtocolHandler for Blobs<S> {
     fn accept(&self, conn: Connecting) -> BoxedFuture<Result<()>> {
         let db = self.store().clone();
         let events = self.events().clone();

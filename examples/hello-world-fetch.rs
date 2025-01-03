@@ -66,13 +66,13 @@ async fn main() -> Result<()> {
         "'Hello World' example expects to fetch a single blob, but the ticket indicates a collection.",
     );
 
-    // `download` returns a stream of `DownloadProgress` events. You can iterate through these updates to get progress
+    // `download` returns a stream of `DownloadProgressEvent`. You can iterate through these updates to get progress
     // on the state of your download.
     let download_stream = blobs_client
         .download(ticket.hash(), ticket.node_addr().clone())
         .await?;
 
-    // You can also just `await` the stream, which will poll the `DownloadProgress` stream for you.
+    // You can also just `await` the stream, which will poll the `DownloadProgressEvent` stream for you.
     let outcome = download_stream.await.context("unable to download hash")?;
 
     println!(

@@ -83,7 +83,6 @@ use tracing::warn;
 
 use crate::{
     format::collection::{Collection, SimpleStore},
-    get::progress::DownloadProgress as BytesDownloadProgress,
     rpc::proto::{blobs::BlobDownloadRequest, RpcService},
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
@@ -91,6 +90,12 @@ use crate::{
     },
     util::SetTagOption,
     BlobFormat, Hash, Tag,
+};
+pub use crate::{
+    get::progress::{
+        BlobId, BlobProgressEvent, BlobState, DownloadProgressEvent, ProgressId, TransferState,
+    },
+    rpc::proto::blobs::{AddProgressEvent, BatchAddPathProgressEvent},
 };
 
 mod batch;
@@ -587,16 +592,14 @@ pub struct IncompleteBlobInfo {
 #[derive(derive_more::Debug)]
 pub struct AddProgress {
     #[debug(skip)]
-    stream:
-        Pin<Box<dyn Stream<Item = Result<crate::provider::AddProgress>> + Send + Unpin + 'static>>,
+    stream: Pin<Box<dyn Stream<Item = Result<AddProgressEvent>> + Send + Unpin + 'static>>,
     current_total_size: Arc<AtomicU64>,
 }
 
 impl AddProgress {
     fn new(
-        stream: (impl Stream<
-            Item = Result<impl Into<crate::provider::AddProgress>, impl Into<anyhow::Error>>,
-        > + Send
+        stream: (impl Stream<Item = Result<impl Into<AddProgressEvent>, impl Into<anyhow::Error>>>
+             + Send
              + Unpin
              + 'static),
     ) -> Self {
@@ -605,7 +608,7 @@ impl AddProgress {
         let stream = stream.map(move |item| match item {
             Ok(item) => {
                 let item = item.into();
-                if let crate::provider::AddProgress::Found { size, .. } = &item {
+                if let AddProgressEvent::Found { size, .. } = &item {
                     total_size.fetch_add(*size, Ordering::Relaxed);
                 }
                 Ok(item)
@@ -630,7 +633,7 @@ impl AddProgress {
 }
 
 impl Stream for AddProgress {
-    type Item = Result<crate::provider::AddProgress>;
+    type Item = Result<AddProgressEvent>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.stream).poll_next(cx)
     }
@@ -648,7 +651,7 @@ impl Future for AddProgress {
                 }
                 Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(err)),
                 Poll::Ready(Some(Ok(msg))) => match msg {
-                    crate::provider::AddProgress::AllDone { hash, format, tag } => {
+                    AddProgressEvent::AllDone { hash, format, tag } => {
                         let outcome = AddOutcome {
                             hash,
                             format,
@@ -657,7 +660,7 @@ impl Future for AddProgress {
                         };
                         return Poll::Ready(Ok(outcome));
                     }
-                    crate::provider::AddProgress::Abort(err) => {
+                    AddProgressEvent::Abort(err) => {
                         return Poll::Ready(Err(err.into()));
                     }
                     _ => {}
@@ -682,15 +685,15 @@ pub struct DownloadOutcome {
 #[derive(derive_more::Debug)]
 pub struct DownloadProgress {
     #[debug(skip)]
-    stream: Pin<Box<dyn Stream<Item = Result<BytesDownloadProgress>> + Send + Unpin + 'static>>,
+    stream: Pin<Box<dyn Stream<Item = Result<DownloadProgressEvent>> + Send + Unpin + 'static>>,
     current_local_size: Arc<AtomicU64>,
     current_network_size: Arc<AtomicU64>,
 }
 
 impl DownloadProgress {
-    /// Create a [`DownloadProgress`] that can help you easily poll the [`BytesDownloadProgress`] stream from your download until it is finished or errors.
+    /// Create a [`DownloadProgress`] that can help you easily poll the [`DownloadProgressEvent`] stream from your download until it is finished or errors.
     pub fn new(
-        stream: (impl Stream<Item = Result<impl Into<BytesDownloadProgress>, impl Into<anyhow::Error>>>
+        stream: (impl Stream<Item = Result<impl Into<DownloadProgressEvent>, impl Into<anyhow::Error>>>
              + Send
              + Unpin
              + 'static),
@@ -705,10 +708,10 @@ impl DownloadProgress {
             Ok(item) => {
                 let item = item.into();
                 match &item {
-                    BytesDownloadProgress::FoundLocal { size, .. } => {
+                    DownloadProgressEvent::FoundLocal { size, .. } => {
                         local_size.fetch_add(size.value(), Ordering::Relaxed);
                     }
-                    BytesDownloadProgress::Found { size, .. } => {
+                    DownloadProgressEvent::Found { size, .. } => {
                         network_size.fetch_add(*size, Ordering::Relaxed);
                     }
                     _ => {}
@@ -736,7 +739,7 @@ impl DownloadProgress {
 }
 
 impl Stream for DownloadProgress {
-    type Item = Result<BytesDownloadProgress>;
+    type Item = Result<DownloadProgressEvent>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.stream).poll_next(cx)
     }
@@ -754,7 +757,7 @@ impl Future for DownloadProgress {
                 }
                 Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(err)),
                 Poll::Ready(Some(Ok(msg))) => match msg {
-                    BytesDownloadProgress::AllDone(stats) => {
+                    DownloadProgressEvent::AllDone(stats) => {
                         let outcome = DownloadOutcome {
                             local_size: self.current_local_size.load(Ordering::Relaxed),
                             downloaded_size: self.current_network_size.load(Ordering::Relaxed),
@@ -762,7 +765,7 @@ impl Future for DownloadProgress {
                         };
                         return Poll::Ready(Ok(outcome));
                     }
-                    BytesDownloadProgress::Abort(err) => {
+                    DownloadProgressEvent::Abort(err) => {
                         return Poll::Ready(Err(err.into()));
                     }
                     _ => {}
@@ -1862,10 +1865,10 @@ mod tests {
 
             while let Some(progress) = stream.next().await {
                 match progress? {
-                    crate::provider::AddProgress::AllDone { hash, .. } => {
+                    AddProgressEvent::AllDone { hash, .. } => {
                         return Ok(hash);
                     }
-                    crate::provider::AddProgress::Abort(e) => {
+                    AddProgressEvent::Abort(e) => {
                         anyhow::bail!("Error while adding data: {e}");
                     }
                     _ => {}

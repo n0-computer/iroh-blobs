@@ -48,7 +48,7 @@ pub struct BlobState {
     /// received the size from the remote.
     pub size: Option<BaoBlobSize>,
     /// The current state of the blob transfer.
-    pub progress: BlobProgress,
+    pub progress: BlobProgressEvent,
     /// Ranges already available locally at the time of starting the transfer.
     pub local_ranges: Option<RangeSpec>,
     /// Number of children (only applies to hashseqs, None for raw blobs).
@@ -57,7 +57,7 @@ pub struct BlobState {
 
 /// Progress state for a single blob
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub enum BlobProgress {
+pub enum BlobProgressEvent {
     /// Download is pending
     #[default]
     Pending,
@@ -75,7 +75,7 @@ impl BlobState {
             size: None,
             local_ranges: None,
             child_count: None,
-            progress: BlobProgress::default(),
+            progress: BlobProgressEvent::default(),
         }
     }
 }
@@ -120,13 +120,13 @@ impl TransferState {
         self.get_blob_mut(&blob_id)
     }
 
-    /// Update the state with a new [`DownloadProgress`] event for this transfer.
-    pub fn on_progress(&mut self, event: DownloadProgress) {
+    /// Update the state with a new [`DownloadProgressEvent`] for this transfer.
+    pub fn on_progress(&mut self, event: DownloadProgressEvent) {
         match event {
-            DownloadProgress::InitialState(s) => {
+            DownloadProgressEvent::InitialState(s) => {
                 *self = s;
             }
-            DownloadProgress::FoundLocal {
+            DownloadProgressEvent::FoundLocal {
                 child,
                 hash,
                 size,
@@ -136,8 +136,8 @@ impl TransferState {
                 blob.size = Some(size);
                 blob.local_ranges = Some(valid_ranges);
             }
-            DownloadProgress::Connected => self.connected = true,
-            DownloadProgress::Found {
+            DownloadProgressEvent::Connected => self.connected = true,
+            DownloadProgressEvent::Found {
                 id: progress_id,
                 child: blob_id,
                 hash,
@@ -151,11 +151,11 @@ impl TransferState {
                     // Otherwise, keep the existing verified size.
                     value @ Some(BaoBlobSize::Verified(_)) => value,
                 };
-                blob.progress = BlobProgress::Progressing(0);
+                blob.progress = BlobProgressEvent::Progressing(0);
                 self.progress_id_to_blob.insert(progress_id, blob_id);
                 self.current = Some(blob_id);
             }
-            DownloadProgress::FoundHashSeq { hash, children } => {
+            DownloadProgressEvent::FoundHashSeq { hash, children } => {
                 if hash == self.root.hash {
                     self.root.child_count = Some(children);
                 } else {
@@ -164,29 +164,29 @@ impl TransferState {
                     warn!("Received `FoundHashSeq` event for a hash which is not the download's root hash.")
                 }
             }
-            DownloadProgress::Progress { id, offset } => {
+            DownloadProgressEvent::Progress { id, offset } => {
                 if let Some(blob) = self.get_by_progress_id(id) {
-                    blob.progress = BlobProgress::Progressing(offset);
+                    blob.progress = BlobProgressEvent::Progressing(offset);
                 } else {
                     warn!(%id, "Received `Progress` event for unknown progress id.")
                 }
             }
-            DownloadProgress::Done { id } => {
+            DownloadProgressEvent::Done { id } => {
                 if let Some(blob) = self.get_by_progress_id(id) {
-                    blob.progress = BlobProgress::Done;
+                    blob.progress = BlobProgressEvent::Done;
                     self.progress_id_to_blob.remove(&id);
                 } else {
                     warn!(%id, "Received `Done` event for unknown progress id.")
                 }
             }
-            DownloadProgress::AllDone(_) | DownloadProgress::Abort(_) => {}
+            DownloadProgressEvent::AllDone(_) | DownloadProgressEvent::Abort(_) => {}
         }
     }
 }
 
 /// Progress updates for the get operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DownloadProgress {
+pub enum DownloadProgressEvent {
     /// Initial state if subscribing to a running or queued transfer.
     InitialState(TransferState),
     /// Data was found locally.

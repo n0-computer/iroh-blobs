@@ -18,7 +18,7 @@ use crate::{
     get::{
         self,
         fsm::{AtBlobHeader, AtEndBlob, ConnectedNext, EndBlobNext},
-        progress::{BlobId, DownloadProgress},
+        progress::{BlobId, DownloadProgressEvent},
         Error, Stats,
     },
     hashseq::parse_hash_seq,
@@ -39,8 +39,8 @@ type GetFuture = Pin<Box<dyn Future<Output = Result<Stats, Error>> + 'static>>;
 /// This considers data that is already in the store, and will only request
 /// the remaining data.
 ///
-/// Progress is reported as [`DownloadProgress`] through a [`ProgressSender`]. Note that the
-/// [`DownloadProgress::AllDone`] event is not emitted from here, but left to an upper layer to send,
+/// Progress is reported as [`DownloadProgressEvent`] through a [`ProgressSender`]. Note that the
+/// [`DownloadProgressEvent::AllDone`] event is not emitted from here, but left to an upper layer to send,
 /// if desired.
 pub async fn get_to_db<
     D: BaoStore,
@@ -50,7 +50,7 @@ pub async fn get_to_db<
     db: &D,
     get_conn: C,
     hash_and_format: &HashAndFormat,
-    progress_sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    progress_sender: impl ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 ) -> Result<Stats, Error> {
     match get_to_db_in_steps(db.clone(), *hash_and_format, progress_sender).await? {
         FetchState::Complete(res) => Ok(res),
@@ -73,7 +73,7 @@ pub async fn get_to_db<
 /// Progress reporting works in the same way as documented in [`get_to_db`].
 pub async fn get_to_db_in_steps<
     D: BaoStore,
-    P: ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    P: ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 >(
     db: D,
     hash_and_format: HashAndFormat,
@@ -142,7 +142,7 @@ async fn producer<D: BaoStore>(
     co: Co<Yield, ()>,
     db: &D,
     hash_and_format: &HashAndFormat,
-    progress: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    progress: impl ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 ) -> Result<Stats, Error> {
     let HashAndFormat { hash, format } = hash_and_format;
     let co = GetCo(co);
@@ -160,13 +160,13 @@ async fn get_blob<D: BaoStore>(
     db: &D,
     co: GetCo,
     hash: &Hash,
-    progress: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    progress: impl ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 ) -> Result<Stats, Error> {
     let end = match db.get_mut(hash).await? {
         Some(entry) if entry.is_complete() => {
             tracing::info!("already got entire blob");
             progress
-                .send(DownloadProgress::FoundLocal {
+                .send(DownloadProgressEvent::FoundLocal {
                     child: BlobId::Root,
                     hash: *hash,
                     size: entry.size(),
@@ -182,7 +182,7 @@ async fn get_blob<D: BaoStore>(
                 .ok()
                 .unwrap_or_else(ChunkRanges::all);
             progress
-                .send(DownloadProgress::FoundLocal {
+                .send(DownloadProgressEvent::FoundLocal {
                     child: BlobId::Root,
                     hash: *hash,
                     size: entry.size(),
@@ -261,7 +261,7 @@ pub async fn valid_ranges<D: MapMut>(entry: &D::EntryMut) -> anyhow::Result<Chun
 async fn get_blob_inner<D: BaoStore>(
     db: &D,
     at_header: AtBlobHeader,
-    sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    sender: impl ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 ) -> Result<AtEndBlob, Error> {
     // read the size. The size we get here is not verified, but since we use
     // it for the tree traversal we are guaranteed not to get more than size.
@@ -275,7 +275,7 @@ async fn get_blob_inner<D: BaoStore>(
     // allocate a new id for progress reports for this transfer
     let id = sender.new_id();
     sender
-        .send(DownloadProgress::Found {
+        .send(DownloadProgressEvent::Found {
             id,
             hash,
             size,
@@ -287,7 +287,7 @@ async fn get_blob_inner<D: BaoStore>(
         // if try send fails it means that the receiver has been dropped.
         // in that case we want to abort the write_all_with_outboard.
         sender2
-            .try_send(DownloadProgress::Progress { id, offset })
+            .try_send(DownloadProgressEvent::Progress { id, offset })
             .inspect_err(|_| {
                 tracing::info!("aborting download of {}", hash);
             })?;
@@ -301,7 +301,7 @@ async fn get_blob_inner<D: BaoStore>(
     drop(bw);
     db.insert_complete(entry).await?;
     // notify that we are done
-    sender.send(DownloadProgress::Done { id }).await?;
+    sender.send(DownloadProgressEvent::Done { id }).await?;
     Ok(end)
 }
 
@@ -313,7 +313,7 @@ async fn get_blob_inner_partial<D: BaoStore>(
     db: &D,
     at_header: AtBlobHeader,
     entry: D::EntryMut,
-    sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    sender: impl ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 ) -> Result<AtEndBlob, Error> {
     // read the size. The size we get here is not verified, but since we use
     // it for the tree traversal we are guaranteed not to get more than size.
@@ -325,7 +325,7 @@ async fn get_blob_inner_partial<D: BaoStore>(
     let hash = at_content.hash();
     let child_offset = at_content.offset();
     sender
-        .send(DownloadProgress::Found {
+        .send(DownloadProgressEvent::Found {
             id,
             hash,
             size,
@@ -337,7 +337,7 @@ async fn get_blob_inner_partial<D: BaoStore>(
         // if try send fails it means that the receiver has been dropped.
         // in that case we want to abort the write_all_with_outboard.
         sender2
-            .try_send(DownloadProgress::Progress { id, offset })
+            .try_send(DownloadProgressEvent::Progress { id, offset })
             .inspect_err(|_| {
                 tracing::info!("aborting download of {}", hash);
             })?;
@@ -355,7 +355,7 @@ async fn get_blob_inner_partial<D: BaoStore>(
     // data. We can't re-check this here since that would be very expensive.
     db.insert_complete(entry).await?;
     // notify that we are done
-    sender.send(DownloadProgress::Done { id }).await?;
+    sender.send(DownloadProgressEvent::Done { id }).await?;
     Ok(at_end)
 }
 
@@ -394,7 +394,7 @@ async fn get_hash_seq<D: BaoStore>(
     db: &D,
     co: GetCo,
     root_hash: &Hash,
-    sender: impl ProgressSender<Msg = DownloadProgress> + IdGenerator,
+    sender: impl ProgressSender<Msg = DownloadProgressEvent> + IdGenerator,
 ) -> Result<Stats, Error> {
     use tracing::info as log;
     let finishing = match db.get_mut(root_hash).await? {
@@ -402,7 +402,7 @@ async fn get_hash_seq<D: BaoStore>(
             log!("already got collection - doing partial download");
             // send info that we have the hashseq itself entirely
             sender
-                .send(DownloadProgress::FoundLocal {
+                .send(DownloadProgressEvent::FoundLocal {
                     child: BlobId::Root,
                     hash: *root_hash,
                     size: entry.size(),
@@ -415,7 +415,7 @@ async fn get_hash_seq<D: BaoStore>(
                 Error::NoncompliantNode(anyhow!("Failed to parse downloaded HashSeq: {err}"))
             })?;
             sender
-                .send(DownloadProgress::FoundHashSeq {
+                .send(DownloadProgressEvent::FoundHashSeq {
                     hash: *root_hash,
                     children,
                 })
@@ -429,7 +429,7 @@ async fn get_hash_seq<D: BaoStore>(
             for (i, info) in missing_info.iter().enumerate() {
                 if let Some(size) = info.size() {
                     sender
-                        .send(DownloadProgress::FoundLocal {
+                        .send(DownloadProgressEvent::FoundLocal {
                             child: BlobId::from_offset((i as u64) + 1),
                             hash: children[i],
                             size,
@@ -519,7 +519,7 @@ async fn get_hash_seq<D: BaoStore>(
                 Error::NoncompliantNode(anyhow!("Failed to parse downloaded HashSeq: {err}"))
             })?;
             sender
-                .send(DownloadProgress::FoundHashSeq {
+                .send(DownloadProgressEvent::FoundHashSeq {
                     hash: *root_hash,
                     children: count,
                 })

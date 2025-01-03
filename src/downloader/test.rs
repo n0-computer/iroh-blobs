@@ -10,7 +10,7 @@ use iroh::SecretKey;
 
 use super::*;
 use crate::{
-    get::progress::{BlobId, BlobProgress, TransferState},
+    get::progress::{BlobId, BlobProgressEvent, DownloadProgressEvent, TransferState},
     util::{
         local_pool::LocalPool,
         progress::{AsyncChannelProgressSender, IdGenerator},
@@ -255,7 +255,7 @@ async fn concurrent_progress() {
             start_rx.await.unwrap();
             let id = progress.new_id();
             progress
-                .send(DownloadProgress::Found {
+                .send(DownloadProgressEvent::Found {
                     id,
                     child: BlobId::Root,
                     hash,
@@ -264,7 +264,10 @@ async fn concurrent_progress() {
                 .await
                 .unwrap();
             done_rx.await.unwrap();
-            progress.send(DownloadProgress::Done { id }).await.unwrap();
+            progress
+                .send(DownloadProgressEvent::Done { id })
+                .await
+                .unwrap();
             Ok(Stats::default())
         }
         .boxed()
@@ -293,7 +296,7 @@ async fn concurrent_progress() {
     let prog0_b = prog_b_rx.recv().await.unwrap();
     assert!(matches!(
         prog0_b,
-        DownloadProgress::InitialState(state) if state.root.hash == hash && state.root.progress == BlobProgress::Pending,
+        DownloadProgressEvent::InitialState(state) if state.root.hash == hash && state.root.progress == BlobProgressEvent::Pending,
     ));
 
     start_tx.send(()).unwrap();
@@ -301,10 +304,10 @@ async fn concurrent_progress() {
     let prog1_a = prog_a_rx.recv().await.unwrap();
     let prog1_b = prog_b_rx.recv().await.unwrap();
     assert!(
-        matches!(prog1_a, DownloadProgress::Found { hash: found_hash, size: 100, ..} if found_hash == hash)
+        matches!(prog1_a, DownloadProgressEvent::Found { hash: found_hash, size: 100, ..} if found_hash == hash)
     );
     assert!(
-        matches!(prog1_b, DownloadProgress::Found { hash: found_hash, size: 100, ..} if found_hash == hash)
+        matches!(prog1_b, DownloadProgressEvent::Found { hash: found_hash, size: 100, ..} if found_hash == hash)
     );
 
     state_a.on_progress(prog1_a);
@@ -317,7 +320,7 @@ async fn concurrent_progress() {
     let handle_c = downloader.queue(req).await;
 
     let prog1_c = prog_c_rx.recv().await.unwrap();
-    assert!(matches!(&prog1_c, DownloadProgress::InitialState(state) if state == &state_a));
+    assert!(matches!(&prog1_c, DownloadProgressEvent::InitialState(state) if state == &state_a));
     state_c.on_progress(prog1_c);
 
     done_tx.send(()).unwrap();
@@ -335,9 +338,9 @@ async fn concurrent_progress() {
     assert_eq!(prog_b.len(), 1);
     assert_eq!(prog_c.len(), 1);
 
-    assert!(matches!(prog_a[0], DownloadProgress::Done { .. }));
-    assert!(matches!(prog_b[0], DownloadProgress::Done { .. }));
-    assert!(matches!(prog_c[0], DownloadProgress::Done { .. }));
+    assert!(matches!(prog_a[0], DownloadProgressEvent::Done { .. }));
+    assert!(matches!(prog_b[0], DownloadProgressEvent::Done { .. }));
+    assert!(matches!(prog_c[0], DownloadProgressEvent::Done { .. }));
 
     for p in prog_a {
         state_a.on_progress(p);

@@ -11,12 +11,12 @@ use parking_lot::Mutex;
 
 use super::DownloadKind;
 use crate::{
-    get::progress::{DownloadProgress, TransferState},
+    get::progress::{DownloadProgressEvent, TransferState},
     util::progress::{AsyncChannelProgressSender, IdGenerator, ProgressSendError, ProgressSender},
 };
 
 /// The channel that can be used to subscribe to progress updates.
-pub type ProgressSubscriber = AsyncChannelProgressSender<DownloadProgress>;
+pub type ProgressSubscriber = AsyncChannelProgressSender<DownloadProgressEvent>;
 
 /// Track the progress of downloads.
 ///
@@ -101,8 +101,8 @@ struct Inner {
 }
 
 impl Inner {
-    fn subscribe(&mut self, subscriber: ProgressSubscriber) -> DownloadProgress {
-        let msg = DownloadProgress::InitialState(self.state.clone());
+    fn subscribe(&mut self, subscriber: ProgressSubscriber) -> DownloadProgressEvent {
+        let msg = DownloadProgressEvent::InitialState(self.state.clone());
         self.subscribers.push(subscriber);
         msg
     }
@@ -111,7 +111,7 @@ impl Inner {
         self.subscribers.retain(|s| !s.same_channel(sender));
     }
 
-    fn on_progress(&mut self, progress: DownloadProgress) {
+    fn on_progress(&mut self, progress: DownloadProgressEvent) {
         self.state.on_progress(progress);
     }
 }
@@ -129,7 +129,7 @@ impl IdGenerator for BroadcastProgressSender {
 }
 
 impl ProgressSender for BroadcastProgressSender {
-    type Msg = DownloadProgress;
+    type Msg = DownloadProgressEvent;
 
     async fn send(&self, msg: Self::Msg) -> Result<(), ProgressSendError> {
         // making sure that the lock is not held across an await point.

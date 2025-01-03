@@ -55,7 +55,7 @@ use tokio_util::{either::Either, sync::CancellationToken, time::delay_queue};
 use tracing::{debug, error, error_span, trace, warn, Instrument};
 
 use crate::{
-    get::{progress::DownloadProgress, Stats},
+    get::{progress::DownloadProgressEvent, Stats},
     metrics::Metrics,
     store::Store,
     util::{local_pool::LocalPoolHandle, progress::ProgressSender},
@@ -797,7 +797,7 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
             if let Some(sender) = handlers.on_progress {
                 self.progress_tracker.unsubscribe(&kind, &sender);
                 sender
-                    .send(DownloadProgress::Abort(serde_error::Error::new(
+                    .send(DownloadProgressEvent::Abort(serde_error::Error::new(
                         &*anyhow::Error::from(DownloadError::Cancelled),
                     )))
                     .await
