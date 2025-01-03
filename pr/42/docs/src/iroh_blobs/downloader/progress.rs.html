@@ -219,7 +219,7 @@
 /// [`ProgressSubscriber`] channel senders, which will receive each progress update (if they have
 /// capacity). Additionally, the [`ProgressTracker`] maintains a [`TransferState`] for each
 /// transfer, applying each progress update to update this state. When subscribing to an already
-/// running transfer, the subscriber will receive a [`DownloadProgress::InitialState`] message
+/// running transfer, the subscriber will receive a [`DownloadProgressEvent::InitialState`] message
 /// containing the state at the time of the subscription, and then receive all further progress
 /// events directly.
 </span><span class="attr">#[derive(Debug, Default)]
