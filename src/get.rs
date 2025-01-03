@@ -1,6 +1,6 @@
 //! The client side API
 //!
-//! To get data, create a connection using [iroh-net] or use any quinn
+//! To get data, create a connection using [iroh] or use any [iroh-quinn]
 //! connection that was obtained in another way.
 //!
 //! Create a request describing the data you want to get.
@@ -11,7 +11,8 @@
 //! For some states you have to provide additional arguments when calling next,
 //! or you can choose to finish early.
 //!
-//! [iroh-net]: https://docs.rs/iroh-net
+//! [iroh-net]: https://docs.rs/iroh
+//! [iroh-quinn]: https://docs.rs/iroh-quinn
 use std::{
     fmt::{self, Debug},
     time::{Duration, Instant},

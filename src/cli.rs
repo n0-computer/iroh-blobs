@@ -19,7 +19,7 @@ use iroh::{NodeAddr, PublicKey, RelayUrl};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    fetch::{
+    get::{
         progress::{BlobProgress, DownloadProgress},
         Stats,
     },

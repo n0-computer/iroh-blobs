@@ -70,7 +70,7 @@ pub async fn get_to_db<
 /// In the latter case, call [`FetchStateNeedsConn::proceed`] with a connection to a provider to
 /// proceed with the download.
 ///
-/// Progress reporting works in the same way as documented in [`fetch_to_db`].
+/// Progress reporting works in the same way as documented in [`get_to_db`].
 pub async fn get_to_db_in_steps<
     D: BaoStore,
     P: ProgressSender<Msg = DownloadProgress> + IdGenerator,
@@ -92,7 +92,7 @@ pub async fn get_to_db_in_steps<
     }
 }
 
-/// Intermediary state returned from [`fetch_to_db_in_steps`] for a download request that needs a
+/// Intermediary state returned from [`get_to_db_in_steps`] for a download request that needs a
 /// connection to proceed.
 #[derive(derive_more::Debug)]
 #[debug("FetchStateNeedsConn")]
@@ -111,7 +111,7 @@ impl FetchStateNeedsConn {
     }
 }
 
-/// Output of [`fetch_to_db_in_steps`].
+/// Output of [`get_to_db_in_steps`].
 #[derive(Debug)]
 pub enum FetchState {
     /// The requested data is completely available in the local store, no network requests are

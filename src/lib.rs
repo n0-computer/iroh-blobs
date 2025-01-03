@@ -15,7 +15,7 @@
 //! To implement a server, the [provider] module provides helpers for handling
 //! connections and individual requests given a store.
 //!
-//! To perform get requests, the [fetch] module provides utilities to perform
+//! To perform get requests, the [get] module provides utilities to perform
 //! requests and store the result in a store, as well as a low level state
 //! machine for executing requests.
 //!
