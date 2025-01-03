@@ -289,7 +289,10 @@
 <a href="#288" id="288">288</a>
 <a href="#289" id="289">289</a>
 <a href="#290" id="290">290</a>
-<a href="#291" id="291">291</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 //!
 //! A blobs protocol handler wraps a store, so you must first create a store.
 //!
@@ -349,7 +352,6 @@
 }
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>batches {
-    <span class="kw">use </span>anyhow::Result;
     <span class="kw">use </span>serde::{Deserialize, Serialize};
 
     <span class="doccomment">/// Newtype for a batch id
@@ -390,7 +392,11 @@
         }
 
         <span class="doccomment">/// Remove a tag from a batch.
-        </span><span class="kw">pub fn </span>remove_one(<span class="kw-2">&amp;mut </span><span class="self">self</span>, batch: BatchId, content: <span class="kw-2">&amp;</span><span class="kw">crate</span>::HashAndFormat) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        </span><span class="kw">pub fn </span>remove_one(
+            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+            batch: BatchId,
+            content: <span class="kw-2">&amp;</span><span class="kw">crate</span>::HashAndFormat,
+        ) -&gt; anyhow::Result&lt;()&gt; {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(batch) = <span class="self">self</span>.batches.get_mut(<span class="kw-2">&amp;</span>batch) {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(tags) = batch.tags.get_mut(content) {
                     tags.pop();
