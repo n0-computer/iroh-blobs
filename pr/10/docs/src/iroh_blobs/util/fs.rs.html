@@ -444,7 +444,14 @@
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
-<a href="#446" id="446">446</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for filesystem operations.
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for filesystem operations.
 </span><span class="kw">use </span>std::{
     borrow::Cow,
     fs::read_dir,
@@ -521,14 +528,12 @@
 }
 
 <span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = <span class="string">"rpc"</span>)))]
 </span><span class="kw">fn </span>file_name(path: <span class="kw-2">&amp;</span>Path) -&gt; anyhow::Result&lt;String&gt; {
     relative_canonicalized_path_to_string(path.file_name().context(<span class="string">"path is invalid"</span>)<span class="question-mark">?</span>)
 }
 
 <span class="doccomment">/// Create data sources from a directory.
 </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = <span class="string">"rpc"</span>)))]
 </span><span class="kw">pub fn </span>scan_dir(
     root: PathBuf,
     wrap: <span class="kw">crate</span>::rpc::client::blobs::WrapOption,
@@ -575,18 +580,27 @@
 <span class="doccomment">/// Loads a [`iroh::SecretKey`] from the provided file, or stores a newly generated one
 /// at the given location.
 </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
-#[cfg_attr(iroh_docsrs, doc(cfg(feature = <span class="string">"rpc"</span>)))]
 </span><span class="kw">pub async fn </span>load_secret_key(key_path: PathBuf) -&gt; anyhow::Result&lt;iroh::SecretKey&gt; {
     <span class="kw">use </span>iroh::SecretKey;
     <span class="kw">use </span>tokio::io::AsyncWriteExt;
 
     <span class="kw">if </span>key_path.exists() {
         <span class="kw">let </span>keystr = tokio::fs::read(key_path).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>secret_key = SecretKey::try_from_openssh(keystr).context(<span class="string">"invalid keyfile"</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>ser_key = ssh_key::private::PrivateKey::from_openssh(keystr)<span class="question-mark">?</span>;
+        <span class="kw">let </span>ssh_key::private::KeypairData::Ed25519(kp) = ser_key.key_data() <span class="kw">else </span>{
+            <span class="macro">bail!</span>(<span class="string">"invalid key format"</span>);
+        };
+        <span class="kw">let </span>secret_key = SecretKey::from_bytes(<span class="kw-2">&amp;</span>kp.private.to_bytes());
         <span class="prelude-val">Ok</span>(secret_key)
     } <span class="kw">else </span>{
-        <span class="kw">let </span>secret_key = SecretKey::generate();
-        <span class="kw">let </span>ser_key = secret_key.to_openssh()<span class="question-mark">?</span>;
+        <span class="kw">let </span>secret_key = SecretKey::generate(rand::rngs::OsRng);
+        <span class="kw">let </span>ckey = ssh_key::private::Ed25519Keypair {
+            public: secret_key.public().public().into(),
+            private: secret_key.secret().into(),
+        };
+        <span class="kw">let </span>ser_key =
+            ssh_key::private::PrivateKey::from(ckey).to_openssh(ssh_key::LineEnding::default())<span class="question-mark">?</span>;
 
         <span class="comment">// Try to canonicalize if possible
         </span><span class="kw">let </span>key_path = key_path.canonicalize().unwrap_or(key_path);

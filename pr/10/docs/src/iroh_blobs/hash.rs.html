@@ -562,11 +562,33 @@
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
 <a href="#563" id="563">563</a>
-<a href="#564" id="564">564</a></pre></div><pre class="rust"><code><span class="doccomment">//! The blake3 hash used in Iroh.
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a></pre></div><pre class="rust"><code><span class="doccomment">//! The blake3 hash used in Iroh.
 
 </span><span class="kw">use </span>std::{borrow::Borrow, fmt, str::FromStr};
 
-<span class="kw">use </span>iroh_base::base32::{<span class="self">self</span>, parse_array_hex_or_base32, HexOrBase32ParseError};
 <span class="kw">use </span>postcard::experimental::max_size::MaxSize;
 <span class="kw">use </span>serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -616,10 +638,10 @@
         <span class="self">self</span>.<span class="number">0</span>.to_hex().to_string()
     }
 
-    <span class="doccomment">/// Convert to a base32 string limited to the first 10 bytes for a friendly string
+    <span class="doccomment">/// Convert to a hex string limited to the first 5bytes for a friendly string
     /// representation of the hash.
     </span><span class="kw">pub fn </span>fmt_short(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        base32::fmt_short(<span class="self">self</span>.as_bytes())
+        data_encoding::HEXLOWER.encode(<span class="kw-2">&amp;</span><span class="self">self</span>.as_bytes()[..<span class="number">5</span>])
     }
 }
 
@@ -698,11 +720,35 @@
     }
 }
 
+<span class="attr">#[derive(Debug, thiserror::Error)]
+</span><span class="kw">pub enum </span>HexOrBase32ParseError {
+    <span class="attr">#[error(<span class="string">"Invalid length"</span>)]
+    </span>DecodeInvalidLength,
+    <span class="attr">#[error(<span class="string">"Failed to decode {0}"</span>)]
+    </span>Decode(<span class="attr">#[from] </span>data_encoding::DecodeError),
+}
+
 <span class="kw">impl </span>FromStr <span class="kw">for </span>Hash {
     <span class="kw">type </span><span class="prelude-val">Err </span>= HexOrBase32ParseError;
 
     <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
-        parse_array_hex_or_base32(s).map(Hash::from)
+        <span class="kw">let </span><span class="kw-2">mut </span>bytes = [<span class="number">0u8</span>; <span class="number">32</span>];
+
+        <span class="kw">let </span>res = <span class="kw">if </span>s.len() == <span class="number">64 </span>{
+            <span class="comment">// hex
+            </span>data_encoding::HEXLOWER.decode_mut(s.as_bytes(), <span class="kw-2">&amp;mut </span>bytes)
+        } <span class="kw">else </span>{
+            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), <span class="kw-2">&amp;mut </span>bytes)
+        };
+        <span class="kw">match </span>res {
+            <span class="prelude-val">Ok</span>(len) =&gt; {
+                <span class="kw">if </span>len != <span class="number">32 </span>{
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(HexOrBase32ParseError::DecodeInvalidLength);
+                }
+            }
+            <span class="prelude-val">Err</span>(partial) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(partial.error.into()),
+        }
+        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(blake3::Hash::from_bytes(bytes)))
     }
 }
 

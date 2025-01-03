@@ -1936,7 +1936,9 @@
 <a href="#1935" id="1935">1935</a>
 <a href="#1936" id="1936">1936</a>
 <a href="#1937" id="1937">1937</a>
-<a href="#1938" id="1938">1938</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1938" id="1938">1938</a>
+<a href="#1939" id="1939">1939</a>
+<a href="#1940" id="1940">1940</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -3841,7 +3843,9 @@
         <span class="kw">let </span>(relay_map, _relay_url, _guard) = iroh::test_utils::run_relay_server().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>dns_pkarr_server = DnsPkarrServer::run().<span class="kw">await</span><span class="question-mark">?</span>;
 
-        <span class="kw">let </span>secret1 = SecretKey::generate();
+        <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::thread_rng();
+
+        <span class="kw">let </span>secret1 = SecretKey::generate(<span class="kw-2">&amp;mut </span>rng);
         <span class="kw">let </span>endpoint1 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)
@@ -3849,7 +3853,7 @@
             .secret_key(secret1.clone())
             .discovery(dns_pkarr_server.discovery(secret1));
         <span class="kw">let </span>node1 = Node::memory().endpoint(endpoint1).spawn().<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>secret2 = SecretKey::generate();
+        <span class="kw">let </span>secret2 = SecretKey::generate(<span class="kw-2">&amp;mut </span>rng);
         <span class="kw">let </span>endpoint2 = iroh::Endpoint::builder()
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .insecure_skip_relay_cert_verify(<span class="bool-val">true</span>)

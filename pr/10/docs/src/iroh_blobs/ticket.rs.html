@@ -213,7 +213,10 @@
 <a href="#212" id="212">212</a>
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
-<a href="#215" id="215">215</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tickets for blobs.
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tickets for blobs.
 </span><span class="kw">use </span>std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -369,14 +372,13 @@
     <span class="kw">use </span>std::net::SocketAddr;
 
     <span class="kw">use </span>iroh::{PublicKey, SecretKey};
-    <span class="kw">use </span>iroh_base::base32;
     <span class="kw">use </span>iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
 
     <span class="kw">fn </span>make_ticket() -&gt; BlobTicket {
         <span class="kw">let </span>hash = Hash::new(<span class="string">b"hi there"</span>);
-        <span class="kw">let </span>peer = SecretKey::generate().public();
+        <span class="kw">let </span>peer = SecretKey::generate(rand::thread_rng()).public();
         <span class="kw">let </span>addr = SocketAddr::from_str(<span class="string">"127.0.0.1:1234"</span>).unwrap();
         <span class="kw">let </span>relay_url = <span class="prelude-val">None</span>;
         BlobTicket {
@@ -416,7 +418,11 @@
             format: BlobFormat::Raw,
             hash,
         };
-        <span class="kw">let </span>base32 = base32::parse_vec(ticket.to_string().strip_prefix(<span class="string">"blob"</span>).unwrap()).unwrap();
+        <span class="kw">let </span>encoded = ticket.to_string();
+        <span class="kw">let </span>stripped = encoded.strip_prefix(<span class="string">"blob"</span>).unwrap();
+        <span class="kw">let </span>base32 = data_encoding::BASE32_NOPAD
+            .decode(stripped.to_ascii_uppercase().as_bytes())
+            .unwrap();
         <span class="kw">let </span>expected = parse_hexdump(<span class="string">"
             00 # discriminator for variant 0
             ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6 # node id, 32 bytes, see above
