@@ -81,12 +81,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::warn;
 
-pub use crate::net_protocol::DownloadMode;
 use crate::{
     fetch::progress::DownloadProgress as BytesDownloadProgress,
     format::collection::{Collection, SimpleStore},
-    net_protocol::BlobDownloadRequest,
-    rpc::proto::RpcService,
+    rpc::proto::{blobs::BlobDownloadRequest, RpcService},
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode,
         ExportProgress as BytesExportProgress, ValidateProgress,
@@ -859,6 +857,20 @@ impl Future for ExportProgress {
             }
         }
     }
+}
+
+/// Set the mode for whether to directly start the download or add it to the download queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadMode {
+    /// Start the download right away.
+    ///
+    /// No concurrency limits or queuing will be applied. It is up to the user to manage download
+    /// concurrency.
+    Direct,
+    /// Queue the download.
+    ///
+    /// The download queue will be processed in-order, while respecting the downloader concurrency limits.
+    Queued,
 }
 
 /// Data reader for a single blob.

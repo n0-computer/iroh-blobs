@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use super::WrapOption;
 use crate::{
     format::collection::Collection,
-    net_protocol::BatchId,
+    net_protocol::batches::BatchId,
     provider::BatchAddPathProgress,
     rpc::proto::{
         blobs::{

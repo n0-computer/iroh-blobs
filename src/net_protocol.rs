@@ -1,26 +1,22 @@
 //! Adaptation of `iroh-blobs` as an `iroh` protocol.
-
-// TODO: reduce API surface and add documentation
-#![allow(missing_docs)]
-
+//!
+//! A blobs protocol handler wraps a store, so you must first create a store.
+//!
+//! The entry point to create a blobs protocol handler is [`Blobs::builder`].
 use std::{collections::BTreeSet, fmt::Debug, ops::DerefMut, sync::Arc};
 
 use anyhow::{bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_util::future::BoxFuture;
-use iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
-use serde::{Deserialize, Serialize};
+use iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint};
 use tracing::debug;
 
 use crate::{
     downloader::Downloader,
     provider::EventSender,
     store::GcConfig,
-    util::{
-        local_pool::{self, LocalPoolHandle},
-        SetTagOption,
-    },
-    BlobFormat, Hash,
+    util::local_pool::{self, LocalPoolHandle},
+    Hash,
 };
 
 /// A callback that blobs can ask about a set of hashes that should not be garbage collected.
@@ -50,9 +46,10 @@ pub(crate) struct BlobsInner<S> {
     pub(crate) endpoint: Endpoint,
     gc_state: std::sync::Mutex<GcState>,
     #[cfg(feature = "rpc")]
-    pub(crate) batches: tokio::sync::Mutex<BlobBatches>,
+    pub(crate) batches: tokio::sync::Mutex<batches::BlobBatches>,
 }
 
+/// Blobs protocol handler.
 #[derive(Debug, Clone)]
 pub struct Blobs<S> {
     pub(crate) inner: Arc<BlobsInner<S>>,
@@ -60,57 +57,66 @@ pub struct Blobs<S> {
     pub(crate) rpc_handler: Arc<std::sync::OnceLock<crate::rpc::RpcHandler>>,
 }
 
-/// Keeps track of all the currently active batch operations of the blobs api.
-#[cfg(feature = "rpc")]
-#[derive(Debug, Default)]
-pub(crate) struct BlobBatches {
-    /// Currently active batches
-    batches: std::collections::BTreeMap<BatchId, BlobBatch>,
-    /// Used to generate new batch ids.
-    max: u64,
-}
+pub(crate) mod batches {
+    use anyhow::Result;
+    use serde::{Deserialize, Serialize};
 
-/// A single batch of blob operations
-#[cfg(feature = "rpc")]
-#[derive(Debug, Default)]
-struct BlobBatch {
-    /// The tags in this batch.
-    tags: std::collections::BTreeMap<crate::HashAndFormat, Vec<crate::TempTag>>,
-}
+    /// Newtype for a batch id
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Serialize, Deserialize, Ord, Clone, Copy, Hash)]
+    pub struct BatchId(pub u64);
 
-#[cfg(feature = "rpc")]
-impl BlobBatches {
-    /// Create a new unique batch id.
-    pub fn create(&mut self) -> BatchId {
-        let id = self.max;
-        self.max += 1;
-        BatchId(id)
+    /// Keeps track of all the currently active batch operations of the blobs api.
+    #[cfg(feature = "rpc")]
+    #[derive(Debug, Default)]
+    pub(crate) struct BlobBatches {
+        /// Currently active batches
+        batches: std::collections::BTreeMap<BatchId, BlobBatch>,
+        /// Used to generate new batch ids.
+        max: u64,
     }
 
-    /// Store a temp tag in a batch identified by a batch id.
-    pub fn store(&mut self, batch: BatchId, tt: crate::TempTag) {
-        let entry = self.batches.entry(batch).or_default();
-        entry.tags.entry(tt.hash_and_format()).or_default().push(tt);
+    /// A single batch of blob operations
+    #[cfg(feature = "rpc")]
+    #[derive(Debug, Default)]
+    struct BlobBatch {
+        /// The tags in this batch.
+        tags: std::collections::BTreeMap<crate::HashAndFormat, Vec<crate::TempTag>>,
     }
 
-    /// Remove a tag from a batch.
-    pub fn remove_one(&mut self, batch: BatchId, content: &crate::HashAndFormat) -> Result<()> {
-        if let Some(batch) = self.batches.get_mut(&batch) {
-            if let Some(tags) = batch.tags.get_mut(content) {
-                tags.pop();
-                if tags.is_empty() {
-                    batch.tags.remove(content);
-                }
-                return Ok(());
-            }
+    #[cfg(feature = "rpc")]
+    impl BlobBatches {
+        /// Create a new unique batch id.
+        pub fn create(&mut self) -> BatchId {
+            let id = self.max;
+            self.max += 1;
+            BatchId(id)
         }
-        // this can happen if we try to upgrade a tag from an expired batch
-        anyhow::bail!("tag not found in batch");
-    }
 
-    /// Remove an entire batch.
-    pub fn remove(&mut self, batch: BatchId) {
-        self.batches.remove(&batch);
+        /// Store a temp tag in a batch identified by a batch id.
+        pub fn store(&mut self, batch: BatchId, tt: crate::TempTag) {
+            let entry = self.batches.entry(batch).or_default();
+            entry.tags.entry(tt.hash_and_format()).or_default().push(tt);
+        }
+
+        /// Remove a tag from a batch.
+        pub fn remove_one(&mut self, batch: BatchId, content: &crate::HashAndFormat) -> Result<()> {
+            if let Some(batch) = self.batches.get_mut(&batch) {
+                if let Some(tags) = batch.tags.get_mut(content) {
+                    tags.pop();
+                    if tags.is_empty() {
+                        batch.tags.remove(content);
+                    }
+                    return Ok(());
+                }
+            }
+            // this can happen if we try to upgrade a tag from an expired batch
+            anyhow::bail!("tag not found in batch");
+        }
+
+        /// Remove an entire batch.
+        pub fn remove(&mut self, batch: BatchId) {
+            self.batches.remove(&batch);
+        }
     }
 }
 
@@ -169,6 +175,10 @@ impl Blobs<crate::store::fs::Store> {
 }
 
 impl<S: crate::store::Store> Blobs<S> {
+    /// Create a new Blobs protocol handler.
+    ///
+    /// This is the low-level constructor that allows you to customize
+    /// everything. If you don't need that, consider using [`Blobs::builder`].
     pub fn new(
         store: S,
         rt: LocalPoolHandle,
@@ -192,22 +202,27 @@ impl<S: crate::store::Store> Blobs<S> {
         }
     }
 
+    /// Get the store.
     pub fn store(&self) -> &S {
         &self.inner.store
     }
 
+    /// Get the event sender.
     pub fn events(&self) -> &EventSender {
         &self.inner.events
     }
 
+    /// Get the local pool handle.
     pub fn rt(&self) -> &LocalPoolHandle {
         &self.inner.rt
     }
 
+    /// Get the downloader.
     pub fn downloader(&self) -> &Downloader {
         &self.inner.downloader
     }
 
+    /// Get the endpoint.
     pub fn endpoint(&self) -> &Endpoint {
         &self.inner.endpoint
     }
@@ -274,42 +289,3 @@ impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
         })
     }
 }
-
-/// A request to the node to download and share the data specified by the hash.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlobDownloadRequest {
-    /// This mandatory field contains the hash of the data to download and share.
-    pub hash: Hash,
-    /// If the format is [`BlobFormat::HashSeq`], all children are downloaded and shared as
-    /// well.
-    pub format: BlobFormat,
-    /// This mandatory field specifies the nodes to download the data from.
-    ///
-    /// If set to more than a single node, they will all be tried. If `mode` is set to
-    /// [`DownloadMode::Direct`], they will be tried sequentially until a download succeeds.
-    /// If `mode` is set to [`DownloadMode::Queued`], the nodes may be dialed in parallel,
-    /// if the concurrency limits permit.
-    pub nodes: Vec<NodeAddr>,
-    /// Optional tag to tag the data with.
-    pub tag: SetTagOption,
-    /// Whether to directly start the download or add it to the download queue.
-    pub mode: DownloadMode,
-}
-
-/// Set the mode for whether to directly start the download or add it to the download queue.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DownloadMode {
-    /// Start the download right away.
-    ///
-    /// No concurrency limits or queuing will be applied. It is up to the user to manage download
-    /// concurrency.
-    Direct,
-    /// Queue the download.
-    ///
-    /// The download queue will be processed in-order, while respecting the downloader concurrency limits.
-    Queued,
-}
-
-/// Newtype for a batch id
-#[derive(Debug, PartialEq, Eq, PartialOrd, Serialize, Deserialize, Ord, Clone, Copy, Hash)]
-pub struct BatchId(pub u64);

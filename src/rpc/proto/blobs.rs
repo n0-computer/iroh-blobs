@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
+use iroh::NodeAddr;
 use nested_enum_utils::enum_conversions;
 use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
@@ -9,9 +10,11 @@ use serde::{Deserialize, Serialize};
 use super::{RpcError, RpcResult, RpcService};
 use crate::{
     format::collection::Collection,
-    net_protocol::{BatchId, BlobDownloadRequest},
+    net_protocol::batches::BatchId,
     provider::{AddProgress, BatchAddPathProgress},
-    rpc::client::blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, ReadAtLen, WrapOption},
+    rpc::client::blobs::{
+        BlobInfo, BlobStatus, DownloadMode, IncompleteBlobInfo, ReadAtLen, WrapOption,
+    },
     store::{
         BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ExportProgress,
         ImportMode, ValidateProgress,
@@ -314,3 +317,24 @@ pub struct BatchAddPathRequest {
 /// Response to a batch add path request
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BatchAddPathResponse(pub BatchAddPathProgress);
+
+/// A request to the node to download and share the data specified by the hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobDownloadRequest {
+    /// This mandatory field contains the hash of the data to download and share.
+    pub hash: Hash,
+    /// If the format is [`BlobFormat::HashSeq`], all children are downloaded and shared as
+    /// well.
+    pub format: BlobFormat,
+    /// This mandatory field specifies the nodes to download the data from.
+    ///
+    /// If set to more than a single node, they will all be tried. If `mode` is set to
+    /// [`DownloadMode::Direct`], they will be tried sequentially until a download succeeds.
+    /// If `mode` is set to [`DownloadMode::Queued`], the nodes may be dialed in parallel,
+    /// if the concurrency limits permit.
+    pub nodes: Vec<NodeAddr>,
+    /// Optional tag to tag the data with.
+    pub tag: SetTagOption,
+    /// Whether to directly start the download or add it to the download queue.
+    pub mode: DownloadMode,
+}

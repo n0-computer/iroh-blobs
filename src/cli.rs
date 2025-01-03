@@ -23,7 +23,6 @@ use crate::{
         progress::{BlobProgress, DownloadProgress},
         Stats,
     },
-    net_protocol::DownloadMode,
     provider::AddProgress,
     rpc::client::blobs::{
         self, BlobInfo, BlobStatus, CollectionInfo, DownloadOptions, IncompleteBlobInfo, WrapOption,

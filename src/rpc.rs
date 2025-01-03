@@ -23,10 +23,10 @@ use proto::{
         AddPathRequest, AddPathResponse, AddStreamRequest, AddStreamResponse, AddStreamUpdate,
         BatchAddPathRequest, BatchAddPathResponse, BatchAddStreamRequest, BatchAddStreamResponse,
         BatchAddStreamUpdate, BatchCreateRequest, BatchCreateResponse, BatchCreateTempTagRequest,
-        BatchUpdate, BlobStatusRequest, BlobStatusResponse, ConsistencyCheckRequest,
-        CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
-        ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
-        ReadAtResponse, ValidateRequest,
+        BatchUpdate, BlobDownloadRequest, BlobStatusRequest, BlobStatusResponse,
+        ConsistencyCheckRequest, CreateCollectionRequest, CreateCollectionResponse, DeleteRequest,
+        DownloadResponse, ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest,
+        ReadAtRequest, ReadAtResponse, ValidateRequest,
     },
     tags::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
@@ -45,7 +45,7 @@ use crate::{
     downloader::{DownloadRequest, Downloader},
     fetch::{progress::DownloadProgress, Stats},
     format::collection::Collection,
-    net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
+    net_protocol::{Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
     store::{
         ConsistencyCheckProgress, ExportProgress, FetchState, ImportProgress, MapEntry,
@@ -123,7 +123,7 @@ impl<D: crate::store::Store> Handler<D> {
     #[cfg(feature = "rpc")]
     pub(crate) async fn batches(
         &self,
-    ) -> tokio::sync::MutexGuard<'_, crate::net_protocol::BlobBatches> {
+    ) -> tokio::sync::MutexGuard<'_, crate::net_protocol::batches::BlobBatches> {
         self.0.batches.lock().await
     }
 
