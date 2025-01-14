@@ -671,8 +671,8 @@ pub(super) async fn gc_mark_task<'a>(
     Ok(())
 }
 
-async fn gc_sweep_task<'a>(
-    store: &'a impl Store,
+async fn gc_sweep_task(
+    store: &impl Store,
     live: &BTreeSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> anyhow::Result<()> {

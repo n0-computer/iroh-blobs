@@ -334,9 +334,7 @@ impl<'a, R: AsyncSliceReader, F: Fn(u64) -> Event> SendingSliceReader<'a, R, F> 
     }
 }
 
-impl<'a, R: AsyncSliceReader, F: Fn(u64) -> Event> AsyncSliceReader
-    for SendingSliceReader<'a, R, F>
-{
+impl<R: AsyncSliceReader, F: Fn(u64) -> Event> AsyncSliceReader for SendingSliceReader<'_, R, F> {
     async fn read_at(&mut self, offset: u64, len: usize) -> std::io::Result<bytes::Bytes> {
         let res = self.inner.read_at(offset, len).await;
         if let Ok(res) = res.as_ref() {
