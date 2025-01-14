@@ -1630,8 +1630,8 @@
     <span class="prelude-val">Ok</span>(())
 }
 
-<span class="kw">async fn </span>gc_sweep_task&lt;<span class="lifetime">'a</span>&gt;(
-    store: <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw">impl </span>Store,
+<span class="kw">async fn </span>gc_sweep_task(
+    store: <span class="kw-2">&amp;</span><span class="kw">impl </span>Store,
     live: <span class="kw-2">&amp;</span>BTreeSet&lt;Hash&gt;,
     co: <span class="kw-2">&amp;</span>Co&lt;GcSweepEvent&gt;,
 ) -&gt; anyhow::Result&lt;()&gt; {

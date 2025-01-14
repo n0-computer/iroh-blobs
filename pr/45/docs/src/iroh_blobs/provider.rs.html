@@ -657,9 +657,7 @@
 <a href="#656" id="656">656</a>
 <a href="#657" id="657">657</a>
 <a href="#658" id="658">658</a>
-<a href="#659" id="659">659</a>
-<a href="#660" id="660">660</a>
-<a href="#661" id="661">661</a></pre></div><pre class="rust"><code><span class="doccomment">//! The server side API
+<a href="#659" id="659">659</a></pre></div><pre class="rust"><code><span class="doccomment">//! The server side API
 </span><span class="kw">use </span>std::{fmt::Debug, sync::Arc, time::Duration};
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -995,9 +993,7 @@
     }
 }
 
-<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, R: AsyncSliceReader, F: Fn(u64) -&gt; Event&gt; AsyncSliceReader
-    <span class="kw">for </span>SendingSliceReader&lt;<span class="lifetime">'a</span>, R, F&gt;
-{
+<span class="kw">impl</span>&lt;R: AsyncSliceReader, F: Fn(u64) -&gt; Event&gt; AsyncSliceReader <span class="kw">for </span>SendingSliceReader&lt;<span class="lifetime">'_</span>, R, F&gt; {
     <span class="kw">async fn </span>read_at(<span class="kw-2">&amp;mut </span><span class="self">self</span>, offset: u64, len: usize) -&gt; std::io::Result&lt;bytes::Bytes&gt; {
         <span class="kw">let </span>res = <span class="self">self</span>.inner.read_at(offset, len).<span class="kw">await</span>;
         <span class="kw">if let </span><span class="prelude-val">Ok</span>(res) = res.as_ref() {

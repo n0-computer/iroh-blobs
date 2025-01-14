@@ -964,7 +964,7 @@
                 hex::decode_to_slice(s, <span class="kw-2">&amp;mut </span>hash)<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(<span class="self">Self</span>::raw(hash.into()))
             }
-            <span class="number">65 </span><span class="kw">if </span>s[<span class="number">0</span>].to_ascii_lowercase() == <span class="string">b's' </span>=&gt; {
+            <span class="number">65 </span><span class="kw">if </span>s[<span class="number">0</span>].eq_ignore_ascii_case(<span class="kw-2">&amp;</span><span class="string">b's'</span>) =&gt; {
                 hex::decode_to_slice(<span class="kw-2">&amp;</span>s[<span class="number">1</span>..], <span class="kw-2">&amp;mut </span>hash)<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(<span class="self">Self</span>::hash_seq(hash.into()))
             }
