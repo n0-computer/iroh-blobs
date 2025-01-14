@@ -2,6 +2,15 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.31.0](https://github.com/n0-computer/iroh-blobs/compare/v0.30.0..0.31.0) - 2025-01-14
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump mozilla-actions/sccache-action ([#40](https://github.com/n0-computer/iroh-blobs/issues/40)) - ([57112e6](https://github.com/n0-computer/iroh-blobs/commit/57112e62618e07a833a261b0dbfd2f64cc22eb82))
+- Add project tracking ([#43](https://github.com/n0-computer/iroh-blobs/issues/43)) - ([a279ad1](https://github.com/n0-computer/iroh-blobs/commit/a279ad1bc0472fb4e47df466ab73ed9e0fa0a50a))
+- Pin nextest version ([#44](https://github.com/n0-computer/iroh-blobs/issues/44)) - ([b1de3b3](https://github.com/n0-computer/iroh-blobs/commit/b1de3b306135984e113d09531beff9ed6463a778))
+- Upgrade to `iroh@v0.31.0` ([#45](https://github.com/n0-computer/iroh-blobs/issues/45)) - ([2b800c9](https://github.com/n0-computer/iroh-blobs/commit/2b800c9264b21dfb73bfecbe9881bc6c07c7e0d1))
+
 ## [0.30.0](https://github.com/n0-computer/iroh-blobs/compare/v0.29.0..0.30.0) - 2024-12-17
 
 ### ⛰️  Features
