@@ -377,7 +377,7 @@ impl FromStr for HashAndFormat {
                 hex::decode_to_slice(s, &mut hash)?;
                 Ok(Self::raw(hash.into()))
             }
-            65 if s[0].to_ascii_lowercase() == b's' => {
+            65 if s[0].eq_ignore_ascii_case(&b's') => {
                 hex::decode_to_slice(&s[1..], &mut hash)?;
                 Ok(Self::hash_seq(hash.into()))
             }

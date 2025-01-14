@@ -1468,8 +1468,8 @@ impl super::Store for Store {
     }
 }
 
-pub(super) async fn gc_sweep_task<'a>(
-    store: &'a Store,
+pub(super) async fn gc_sweep_task(
+    store: &Store,
     live: &BTreeSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> anyhow::Result<()> {
