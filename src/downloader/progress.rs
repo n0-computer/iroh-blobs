@@ -11,21 +11,21 @@ use parking_lot::Mutex;
 
 use super::DownloadKind;
 use crate::{
-    get::{db::DownloadProgress, progress::TransferState},
+    get::progress::{DownloadProgressEvent, TransferState},
     util::progress::{AsyncChannelProgressSender, IdGenerator, ProgressSendError, ProgressSender},
 };
 
 /// The channel that can be used to subscribe to progress updates.
-pub type ProgressSubscriber = AsyncChannelProgressSender<DownloadProgress>;
+pub type ProgressSubscriber = AsyncChannelProgressSender<DownloadProgressEvent>;
 
 /// Track the progress of downloads.
 ///
 /// This struct allows to create [`ProgressSender`] structs to be passed to
-/// [`crate::get::db::get_to_db`]. Each progress sender can be subscribed to by any number of
+/// [`crate::store::get_to_db`]. Each progress sender can be subscribed to by any number of
 /// [`ProgressSubscriber`] channel senders, which will receive each progress update (if they have
 /// capacity). Additionally, the [`ProgressTracker`] maintains a [`TransferState`] for each
 /// transfer, applying each progress update to update this state. When subscribing to an already
-/// running transfer, the subscriber will receive a [`DownloadProgress::InitialState`] message
+/// running transfer, the subscriber will receive a [`DownloadProgressEvent::InitialState`] message
 /// containing the state at the time of the subscription, and then receive all further progress
 /// events directly.
 #[derive(Debug, Default)]
@@ -101,8 +101,8 @@ struct Inner {
 }
 
 impl Inner {
-    fn subscribe(&mut self, subscriber: ProgressSubscriber) -> DownloadProgress {
-        let msg = DownloadProgress::InitialState(self.state.clone());
+    fn subscribe(&mut self, subscriber: ProgressSubscriber) -> DownloadProgressEvent {
+        let msg = DownloadProgressEvent::InitialState(self.state.clone());
         self.subscribers.push(subscriber);
         msg
     }
@@ -111,7 +111,7 @@ impl Inner {
         self.subscribers.retain(|s| !s.same_channel(sender));
     }
 
-    fn on_progress(&mut self, progress: DownloadProgress) {
+    fn on_progress(&mut self, progress: DownloadProgressEvent) {
         self.state.on_progress(progress);
     }
 }
@@ -129,7 +129,7 @@ impl IdGenerator for BroadcastProgressSender {
 }
 
 impl ProgressSender for BroadcastProgressSender {
-    type Msg = DownloadProgress;
+    type Msg = DownloadProgressEvent;
 
     async fn send(&self, msg: Self::Msg) -> Result<(), ProgressSendError> {
         // making sure that the lock is not held across an await point.

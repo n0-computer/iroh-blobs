@@ -2,21 +2,22 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
+use iroh::NodeAddr;
 use nested_enum_utils::enum_conversions;
 use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
 
 use super::{RpcError, RpcResult, RpcService};
+pub use crate::get::progress::DownloadProgressEvent;
 use crate::{
-    export::ExportProgress,
     format::collection::Collection,
-    get::db::DownloadProgress,
-    net_protocol::{BatchId, BlobDownloadRequest},
-    provider::{AddProgress, BatchAddPathProgress},
-    rpc::client::blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, ReadAtLen, WrapOption},
+    net_protocol::batches::BatchId,
+    rpc::client::blobs::{
+        BlobInfo, BlobStatus, DownloadMode, IncompleteBlobInfo, ReadAtLen, WrapOption,
+    },
     store::{
-        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ImportMode,
-        ValidateProgress,
+        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ExportProgress,
+        ImportMode, ValidateProgress,
     },
     util::SetTagOption,
     BlobFormat, Hash, HashAndFormat, Tag,
@@ -87,7 +88,7 @@ pub enum Response {
 
 /// A request to the node to provide the data at the given path
 ///
-/// Will produce a stream of [`AddProgress`] messages.
+/// Will produce a stream of [`AddProgressEvent`] messages.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddPathRequest {
     /// The path to the data to provide.
@@ -105,13 +106,13 @@ pub struct AddPathRequest {
     pub wrap: WrapOption,
 }
 
-/// Wrapper around [`AddProgress`].
+/// Wrapper around [`AddProgressEvent`].
 #[derive(Debug, Serialize, Deserialize, derive_more::Into)]
-pub struct AddPathResponse(pub AddProgress);
+pub struct AddPathResponse(pub AddProgressEvent);
 
 /// Progress response for [`BlobDownloadRequest`]
 #[derive(Debug, Clone, Serialize, Deserialize, derive_more::From, derive_more::Into)]
-pub struct DownloadResponse(pub DownloadProgress);
+pub struct DownloadResponse(pub DownloadProgressEvent);
 
 /// A request to the node to download and share the data specified by the hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,9 +203,9 @@ pub enum AddStreamUpdate {
     Abort,
 }
 
-/// Wrapper around [`AddProgress`].
+/// Wrapper around [`AddProgressEvent`].
 #[derive(Debug, Serialize, Deserialize, derive_more::Into)]
-pub struct AddStreamResponse(pub AddProgress);
+pub struct AddStreamResponse(pub AddProgressEvent);
 
 /// Delete a blob
 #[derive(Debug, Serialize, Deserialize)]
@@ -291,7 +292,7 @@ pub enum BatchAddStreamUpdate {
     Abort,
 }
 
-/// Wrapper around [`AddProgress`].
+/// Wrapper around [`AddProgressEvent`].
 #[allow(missing_docs)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum BatchAddStreamResponse {
@@ -315,4 +316,90 @@ pub struct BatchAddPathRequest {
 
 /// Response to a batch add path request
 #[derive(Serialize, Deserialize, Debug)]
-pub struct BatchAddPathResponse(pub BatchAddPathProgress);
+pub struct BatchAddPathResponse(pub BatchAddPathProgressEvent);
+
+/// A request to the node to download and share the data specified by the hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobDownloadRequest {
+    /// This mandatory field contains the hash of the data to download and share.
+    pub hash: Hash,
+    /// If the format is [`BlobFormat::HashSeq`], all children are downloaded and shared as
+    /// well.
+    pub format: BlobFormat,
+    /// This mandatory field specifies the nodes to download the data from.
+    ///
+    /// If set to more than a single node, they will all be tried. If `mode` is set to
+    /// [`DownloadMode::Direct`], they will be tried sequentially until a download succeeds.
+    /// If `mode` is set to [`DownloadMode::Queued`], the nodes may be dialed in parallel,
+    /// if the concurrency limits permit.
+    pub nodes: Vec<NodeAddr>,
+    /// Optional tag to tag the data with.
+    pub tag: SetTagOption,
+    /// Whether to directly start the download or add it to the download queue.
+    pub mode: DownloadMode,
+}
+
+/// Progress updates for the add operation.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum AddProgressEvent {
+    /// An item was found with name `name`, from now on referred to via `id`
+    Found {
+        /// A new unique id for this entry.
+        id: u64,
+        /// The name of the entry.
+        name: String,
+        /// The size of the entry in bytes.
+        size: u64,
+    },
+    /// We got progress ingesting item `id`.
+    Progress {
+        /// The unique id of the entry.
+        id: u64,
+        /// The offset of the progress, in bytes.
+        offset: u64,
+    },
+    /// We are done with `id`, and the hash is `hash`.
+    Done {
+        /// The unique id of the entry.
+        id: u64,
+        /// The hash of the entry.
+        hash: Hash,
+    },
+    /// We are done with the whole operation.
+    AllDone {
+        /// The hash of the created data.
+        hash: Hash,
+        /// The format of the added data.
+        format: BlobFormat,
+        /// The tag of the added data.
+        tag: Tag,
+    },
+    /// We got an error and need to abort.
+    ///
+    /// This will be the last message in the stream.
+    Abort(serde_error::Error),
+}
+
+/// Progress updates for the batch add operation.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum BatchAddPathProgressEvent {
+    /// An item was found with the given size
+    Found {
+        /// The size of the entry in bytes.
+        size: u64,
+    },
+    /// We got progress ingesting the item.
+    Progress {
+        /// The offset of the progress, in bytes.
+        offset: u64,
+    },
+    /// We are done, and the hash is `hash`.
+    Done {
+        /// The hash of the entry.
+        hash: Hash,
+    },
+    /// We got an error and need to abort.
+    ///
+    /// This will be the last message in the stream.
+    Abort(serde_error::Error),
+}

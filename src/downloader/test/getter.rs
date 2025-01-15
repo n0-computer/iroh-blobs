@@ -36,14 +36,14 @@ impl Getter for TestingGetter {
     // since for testing we don't need a real connection, just keep track of what peer is the
     // request being sent to
     type Connection = NodeId;
-    type NeedsConn = GetStateNeedsConn;
+    type NeedsConn = FetchStateNeedsConn;
 
     fn get(
         &mut self,
         kind: DownloadKind,
         progress_sender: BroadcastProgressSender,
     ) -> GetStartFut<Self::NeedsConn> {
-        std::future::ready(Ok(downloader::GetOutput::NeedsConn(GetStateNeedsConn(
+        std::future::ready(Ok(downloader::GetOutput::NeedsConn(FetchStateNeedsConn(
             self.clone(),
             kind,
             progress_sender,
@@ -53,11 +53,11 @@ impl Getter for TestingGetter {
 }
 
 #[derive(Debug)]
-pub(super) struct GetStateNeedsConn(TestingGetter, DownloadKind, BroadcastProgressSender);
+pub(super) struct FetchStateNeedsConn(TestingGetter, DownloadKind, BroadcastProgressSender);
 
-impl downloader::NeedsConn<NodeId> for GetStateNeedsConn {
+impl downloader::NeedsConn<NodeId> for FetchStateNeedsConn {
     fn proceed(self, peer: NodeId) -> super::GetProceedFut {
-        let GetStateNeedsConn(getter, kind, progress_sender) = self;
+        let FetchStateNeedsConn(getter, kind, progress_sender) = self;
         let mut inner = getter.0.write();
         inner.request_history.push((kind, peer));
         let request_duration = inner.request_duration;

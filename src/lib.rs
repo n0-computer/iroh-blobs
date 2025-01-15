@@ -32,7 +32,7 @@
 pub mod cli;
 #[cfg(feature = "downloader")]
 pub mod downloader;
-pub mod export;
+#[cfg(feature = "formats")]
 pub mod format;
 pub mod get;
 pub mod hashseq;

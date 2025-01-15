@@ -5,7 +5,7 @@ use std::{collections::HashMap, num::NonZeroU64};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::db::{BlobId, DownloadProgress};
+use super::Stats;
 use crate::{protocol::RangeSpec, store::BaoBlobSize, Hash};
 
 /// The identifier for progress events.
@@ -48,7 +48,7 @@ pub struct BlobState {
     /// received the size from the remote.
     pub size: Option<BaoBlobSize>,
     /// The current state of the blob transfer.
-    pub progress: BlobProgress,
+    pub progress: BlobProgressEvent,
     /// Ranges already available locally at the time of starting the transfer.
     pub local_ranges: Option<RangeSpec>,
     /// Number of children (only applies to hashseqs, None for raw blobs).
@@ -57,7 +57,7 @@ pub struct BlobState {
 
 /// Progress state for a single blob
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub enum BlobProgress {
+pub enum BlobProgressEvent {
     /// Download is pending
     #[default]
     Pending,
@@ -75,7 +75,7 @@ impl BlobState {
             size: None,
             local_ranges: None,
             child_count: None,
-            progress: BlobProgress::default(),
+            progress: BlobProgressEvent::default(),
         }
     }
 }
@@ -120,13 +120,13 @@ impl TransferState {
         self.get_blob_mut(&blob_id)
     }
 
-    /// Update the state with a new [`DownloadProgress`] event for this transfer.
-    pub fn on_progress(&mut self, event: DownloadProgress) {
+    /// Update the state with a new [`DownloadProgressEvent`] for this transfer.
+    pub fn on_progress(&mut self, event: DownloadProgressEvent) {
         match event {
-            DownloadProgress::InitialState(s) => {
+            DownloadProgressEvent::InitialState(s) => {
                 *self = s;
             }
-            DownloadProgress::FoundLocal {
+            DownloadProgressEvent::FoundLocal {
                 child,
                 hash,
                 size,
@@ -136,8 +136,8 @@ impl TransferState {
                 blob.size = Some(size);
                 blob.local_ranges = Some(valid_ranges);
             }
-            DownloadProgress::Connected => self.connected = true,
-            DownloadProgress::Found {
+            DownloadProgressEvent::Connected => self.connected = true,
+            DownloadProgressEvent::Found {
                 id: progress_id,
                 child: blob_id,
                 hash,
@@ -151,11 +151,11 @@ impl TransferState {
                     // Otherwise, keep the existing verified size.
                     value @ Some(BaoBlobSize::Verified(_)) => value,
                 };
-                blob.progress = BlobProgress::Progressing(0);
+                blob.progress = BlobProgressEvent::Progressing(0);
                 self.progress_id_to_blob.insert(progress_id, blob_id);
                 self.current = Some(blob_id);
             }
-            DownloadProgress::FoundHashSeq { hash, children } => {
+            DownloadProgressEvent::FoundHashSeq { hash, children } => {
                 if hash == self.root.hash {
                     self.root.child_count = Some(children);
                 } else {
@@ -164,22 +164,109 @@ impl TransferState {
                     warn!("Received `FoundHashSeq` event for a hash which is not the download's root hash.")
                 }
             }
-            DownloadProgress::Progress { id, offset } => {
+            DownloadProgressEvent::Progress { id, offset } => {
                 if let Some(blob) = self.get_by_progress_id(id) {
-                    blob.progress = BlobProgress::Progressing(offset);
+                    blob.progress = BlobProgressEvent::Progressing(offset);
                 } else {
                     warn!(%id, "Received `Progress` event for unknown progress id.")
                 }
             }
-            DownloadProgress::Done { id } => {
+            DownloadProgressEvent::Done { id } => {
                 if let Some(blob) = self.get_by_progress_id(id) {
-                    blob.progress = BlobProgress::Done;
+                    blob.progress = BlobProgressEvent::Done;
                     self.progress_id_to_blob.remove(&id);
                 } else {
                     warn!(%id, "Received `Done` event for unknown progress id.")
                 }
             }
-            DownloadProgress::AllDone(_) | DownloadProgress::Abort(_) => {}
+            DownloadProgressEvent::AllDone(_) | DownloadProgressEvent::Abort(_) => {}
+        }
+    }
+}
+
+/// Progress updates for the get operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadProgressEvent {
+    /// Initial state if subscribing to a running or queued transfer.
+    InitialState(TransferState),
+    /// Data was found locally.
+    FoundLocal {
+        /// child offset
+        child: BlobId,
+        /// The hash of the entry.
+        hash: Hash,
+        /// The size of the entry in bytes.
+        size: BaoBlobSize,
+        /// The ranges that are available locally.
+        valid_ranges: RangeSpec,
+    },
+    /// A new connection was established.
+    Connected,
+    /// An item was found with hash `hash`, from now on referred to via `id`.
+    Found {
+        /// A new unique progress id for this entry.
+        id: u64,
+        /// Identifier for this blob within this download.
+        ///
+        /// Will always be [`BlobId::Root`] unless a hashseq is downloaded, in which case this
+        /// allows to identify the children by their offset in the hashseq.
+        child: BlobId,
+        /// The hash of the entry.
+        hash: Hash,
+        /// The size of the entry in bytes.
+        size: u64,
+    },
+    /// An item was found with hash `hash`, from now on referred to via `id`.
+    FoundHashSeq {
+        /// The name of the entry.
+        hash: Hash,
+        /// Number of children in the collection, if known.
+        children: u64,
+    },
+    /// We got progress ingesting item `id`.
+    Progress {
+        /// The unique id of the entry.
+        id: u64,
+        /// The offset of the progress, in bytes.
+        offset: u64,
+    },
+    /// We are done with `id`.
+    Done {
+        /// The unique id of the entry.
+        id: u64,
+    },
+    /// All operations finished.
+    ///
+    /// This will be the last message in the stream.
+    AllDone(Stats),
+    /// We got an error and need to abort.
+    ///
+    /// This will be the last message in the stream.
+    Abort(serde_error::Error),
+}
+
+/// The id of a blob in a transfer
+#[derive(
+    Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, std::hash::Hash, Serialize, Deserialize,
+)]
+pub enum BlobId {
+    /// The root blob (child id 0)
+    Root,
+    /// A child blob (child id > 0)
+    Child(NonZeroU64),
+}
+
+impl BlobId {
+    pub(crate) fn from_offset(id: u64) -> Self {
+        NonZeroU64::new(id).map(Self::Child).unwrap_or(Self::Root)
+    }
+}
+
+impl From<BlobId> for u64 {
+    fn from(value: BlobId) -> Self {
+        match value {
+            BlobId::Root => 0,
+            BlobId::Child(id) => id.into(),
         }
     }
 }

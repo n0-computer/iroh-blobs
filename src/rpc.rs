@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::anyhow;
 use client::{
-    blobs::{self, BlobInfo, BlobStatus, DownloadMode, IncompleteBlobInfo, MemClient, WrapOption},
+    blobs::{
+        self, AddProgressEvent, BatchAddPathProgressEvent, BlobInfo, BlobStatus, DownloadMode,
+        IncompleteBlobInfo, MemClient, WrapOption,
+    },
     tags::TagInfo,
     MemConnector,
 };
@@ -23,10 +26,10 @@ use proto::{
         AddPathRequest, AddPathResponse, AddStreamRequest, AddStreamResponse, AddStreamUpdate,
         BatchAddPathRequest, BatchAddPathResponse, BatchAddStreamRequest, BatchAddStreamResponse,
         BatchAddStreamUpdate, BatchCreateRequest, BatchCreateResponse, BatchCreateTempTagRequest,
-        BatchUpdate, BlobStatusRequest, BlobStatusResponse, ConsistencyCheckRequest,
-        CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
-        ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
-        ReadAtResponse, ValidateRequest,
+        BatchUpdate, BlobDownloadRequest, BlobStatusRequest, BlobStatusResponse,
+        ConsistencyCheckRequest, CreateCollectionRequest, CreateCollectionResponse, DeleteRequest,
+        DownloadResponse, ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest,
+        ReadAtRequest, ReadAtResponse, ValidateRequest,
     },
     tags::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
@@ -43,15 +46,13 @@ use tracing::{debug, warn};
 
 use crate::{
     downloader::{DownloadRequest, Downloader},
-    export::ExportProgress,
     format::collection::Collection,
-    get::{
-        db::{DownloadProgress, GetState},
-        Stats,
+    get::{progress::DownloadProgressEvent, Stats},
+    net_protocol::{Blobs, BlobsInner},
+    store::{
+        ConsistencyCheckProgress, ExportProgress, FetchState, ImportProgress, MapEntry,
+        ValidateProgress,
     },
-    net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
-    provider::{AddProgress, BatchAddPathProgress},
-    store::{ConsistencyCheckProgress, ImportProgress, MapEntry, ValidateProgress},
     util::{
         local_pool::LocalPoolHandle,
         progress::{AsyncChannelProgressSender, ProgressSender},
@@ -124,7 +125,7 @@ impl<D: crate::store::Store> Handler<D> {
     #[cfg(feature = "rpc")]
     pub(crate) async fn batches(
         &self,
-    ) -> tokio::sync::MutexGuard<'_, crate::net_protocol::BlobBatches> {
+    ) -> tokio::sync::MutexGuard<'_, crate::net_protocol::batches::BlobBatches> {
         self.0.batches.lock().await
     }
 
@@ -376,7 +377,9 @@ impl<D: crate::store::Store> Handler<D> {
         let rt = self.rt().clone();
         rt.spawn_detached(|| async move {
             if let Err(e) = self.blob_add_from_path0(msg, tx).await {
-                tx2.send(AddProgress::Abort(RpcError::new(&*e))).await.ok();
+                tx2.send(AddProgressEvent::Abort(RpcError::new(&*e)))
+                    .await
+                    .ok();
             }
         });
         rx.map(AddPathResponse)
@@ -437,7 +440,7 @@ impl<D: crate::store::Store> Handler<D> {
                 .await
             {
                 progress
-                    .send(DownloadProgress::Abort(RpcError::new(&*err)))
+                    .send(DownloadProgressEvent::Abort(RpcError::new(&*err)))
                     .await
                     .ok();
             }
@@ -451,7 +454,7 @@ impl<D: crate::store::Store> Handler<D> {
         let progress = AsyncChannelProgressSender::new(tx);
         let rt = self.rt().clone();
         rt.spawn_detached(move || async move {
-            let res = crate::export::export(
+            let res = crate::store::export(
                 self.store(),
                 msg.hash,
                 msg.path,
@@ -474,7 +477,7 @@ impl<D: crate::store::Store> Handler<D> {
     async fn blob_add_from_path0(
         self,
         msg: AddPathRequest,
-        progress: async_channel::Sender<AddProgress>,
+        progress: async_channel::Sender<AddProgressEvent>,
     ) -> anyhow::Result<()> {
         use std::collections::BTreeMap;
 
@@ -491,12 +494,12 @@ impl<D: crate::store::Store> Handler<D> {
             }
             ImportProgress::Size { id, size } => {
                 let name = names.lock().unwrap().remove(&id)?;
-                Some(AddProgress::Found { id, name, size })
+                Some(AddProgressEvent::Found { id, name, size })
             }
             ImportProgress::OutboardProgress { id, offset } => {
-                Some(AddProgress::Progress { id, offset })
+                Some(AddProgressEvent::Progress { id, offset })
             }
-            ImportProgress::OutboardDone { hash, id } => Some(AddProgress::Done { hash, id }),
+            ImportProgress::OutboardDone { hash, id } => Some(AddProgressEvent::Done { hash, id }),
             _ => None,
         });
         let AddPathRequest {
@@ -581,7 +584,7 @@ impl<D: crate::store::Store> Handler<D> {
             SetTagOption::Auto => blobs.store().create_tag(*hash_and_format).await?,
         };
         progress
-            .send(AddProgress::AllDone {
+            .send(AddProgressEvent::AllDone {
                 hash,
                 format,
                 tag: tag.clone(),
@@ -625,7 +628,7 @@ impl<D: crate::store::Store> Handler<D> {
         let this = self.clone();
         self.rt().spawn_detached(|| async move {
             if let Err(e) = this.batch_add_from_path0(msg, tx).await {
-                tx2.send(BatchAddPathProgress::Abort(RpcError::new(&*e)))
+                tx2.send(BatchAddPathProgressEvent::Abort(RpcError::new(&*e)))
                     .await
                     .ok();
             }
@@ -670,16 +673,18 @@ impl<D: crate::store::Store> Handler<D> {
     async fn batch_add_from_path0(
         self,
         msg: BatchAddPathRequest,
-        progress: async_channel::Sender<BatchAddPathProgress>,
+        progress: async_channel::Sender<BatchAddPathProgressEvent>,
     ) -> anyhow::Result<()> {
         let progress = AsyncChannelProgressSender::new(progress);
         // convert import progress to provide progress
         let import_progress = progress.clone().with_filter_map(move |x| match x {
-            ImportProgress::Size { size, .. } => Some(BatchAddPathProgress::Found { size }),
+            ImportProgress::Size { size, .. } => Some(BatchAddPathProgressEvent::Found { size }),
             ImportProgress::OutboardProgress { offset, .. } => {
-                Some(BatchAddPathProgress::Progress { offset })
+                Some(BatchAddPathProgressEvent::Progress { offset })
             }
-            ImportProgress::OutboardDone { hash, .. } => Some(BatchAddPathProgress::Done { hash }),
+            ImportProgress::OutboardDone { hash, .. } => {
+                Some(BatchAddPathProgressEvent::Done { hash })
+            }
             _ => None,
         });
         let BatchAddPathRequest {
@@ -703,7 +708,9 @@ impl<D: crate::store::Store> Handler<D> {
         let hash = *tag.hash();
         blobs.batches().await.store(batch, tag);
 
-        progress.send(BatchAddPathProgress::Done { hash }).await?;
+        progress
+            .send(BatchAddPathProgressEvent::Done { hash })
+            .await?;
         Ok(())
     }
 
@@ -717,7 +724,9 @@ impl<D: crate::store::Store> Handler<D> {
 
         self.rt().spawn_detached(|| async move {
             if let Err(err) = this.blob_add_stream0(msg, stream, tx.clone()).await {
-                tx.send(AddProgress::Abort(RpcError::new(&*err))).await.ok();
+                tx.send(AddProgressEvent::Abort(RpcError::new(&*err)))
+                    .await
+                    .ok();
             }
         });
 
@@ -728,7 +737,7 @@ impl<D: crate::store::Store> Handler<D> {
         self,
         msg: AddStreamRequest,
         stream: impl Stream<Item = AddStreamUpdate> + Send + Unpin + 'static,
-        progress: async_channel::Sender<AddProgress>,
+        progress: async_channel::Sender<AddProgressEvent>,
     ) -> anyhow::Result<()> {
         let progress = AsyncChannelProgressSender::new(progress);
 
@@ -747,12 +756,12 @@ impl<D: crate::store::Store> Handler<D> {
             }
             ImportProgress::Size { id, size } => {
                 let name = name_cache.lock().unwrap().take()?;
-                Some(AddProgress::Found { id, name, size })
+                Some(AddProgressEvent::Found { id, name, size })
             }
             ImportProgress::OutboardProgress { id, offset } => {
-                Some(AddProgress::Progress { id, offset })
+                Some(AddProgressEvent::Progress { id, offset })
             }
-            ImportProgress::OutboardDone { hash, id } => Some(AddProgress::Done { hash, id }),
+            ImportProgress::OutboardDone { hash, id } => Some(AddProgressEvent::Done { hash, id }),
             _ => None,
         });
         let blobs = self;
@@ -773,7 +782,7 @@ impl<D: crate::store::Store> Handler<D> {
             SetTagOption::Auto => blobs.store().create_tag(hash_and_format).await?,
         };
         progress
-            .send(AddProgress::AllDone { hash, tag, format })
+            .send(AddProgressEvent::AllDone { hash, tag, format })
             .await?;
         Ok(())
     }
@@ -934,7 +943,7 @@ impl<D: crate::store::Store> Handler<D> {
         &self,
         endpoint: Endpoint,
         req: BlobDownloadRequest,
-        progress: AsyncChannelProgressSender<DownloadProgress>,
+        progress: AsyncChannelProgressSender<DownloadProgressEvent>,
     ) -> anyhow::Result<()> {
         let BlobDownloadRequest {
             hash,
@@ -956,7 +965,10 @@ impl<D: crate::store::Store> Handler<D> {
             }
         };
 
-        progress.send(DownloadProgress::AllDone(stats)).await.ok();
+        progress
+            .send(DownloadProgressEvent::AllDone(stats))
+            .await
+            .ok();
         match tag {
             SetTagOption::Named(tag) => {
                 self.store().set_tag(tag, Some(hash_and_format)).await?;
@@ -975,7 +987,7 @@ impl<D: crate::store::Store> Handler<D> {
         endpoint: Endpoint,
         hash_and_format: HashAndFormat,
         nodes: Vec<NodeAddr>,
-        progress: AsyncChannelProgressSender<DownloadProgress>,
+        progress: AsyncChannelProgressSender<DownloadProgressEvent>,
     ) -> anyhow::Result<Stats> {
         /// Name used for logging when new node addresses are added from gossip.
         const BLOB_DOWNLOAD_SOURCE_NAME: &str = "blob_download";
@@ -1003,21 +1015,21 @@ impl<D: crate::store::Store> Handler<D> {
         endpoint: Endpoint,
         hash_and_format: HashAndFormat,
         nodes: Vec<NodeAddr>,
-        progress: AsyncChannelProgressSender<DownloadProgress>,
+        progress: AsyncChannelProgressSender<DownloadProgressEvent>,
     ) -> anyhow::Result<Stats> {
         let mut last_err = None;
         let mut remaining_nodes = nodes.len();
         let mut nodes_iter = nodes.into_iter();
         'outer: loop {
-            match crate::get::db::get_to_db_in_steps(
+            match crate::store::get_to_db_in_steps(
                 self.store().clone(),
                 hash_and_format,
                 progress.clone(),
             )
             .await?
             {
-                GetState::Complete(stats) => return Ok(stats),
-                GetState::NeedsConn(needs_conn) => {
+                FetchState::Complete(stats) => return Ok(stats),
+                FetchState::NeedsConn(needs_conn) => {
                     let (conn, node_id) = 'inner: loop {
                         match nodes_iter.next() {
                             None => break 'outer,

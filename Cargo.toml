@@ -96,7 +96,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "net_protocol"]
+default = ["fs-store", "net_protocol", "formats-collection"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader", "dep:futures-util"]
 fs-store = ["dep:reflink-copy", "redb", "dep:tempfile"]
@@ -114,6 +114,8 @@ rpc = [
   "dep:ssh-key",
   "downloader",
 ]
+formats = []
+formats-collection = ["formats"]
 
 example-iroh = [
   "dep:clap",
@@ -129,6 +131,7 @@ rustdoc-args = ["--cfg", "iroh_docsrs"]
 
 [[example]]
 name = "provide-bytes"
+required-features = ["formats-collection"]
 
 [[example]]
 name = "fetch-fsm"

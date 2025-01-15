@@ -17,15 +17,17 @@ use tracing::{debug, warn};
 use super::WrapOption;
 use crate::{
     format::collection::Collection,
-    net_protocol::BatchId,
-    provider::BatchAddPathProgress,
-    rpc::proto::{
-        blobs::{
-            BatchAddPathRequest, BatchAddStreamRequest, BatchAddStreamResponse,
-            BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
+    net_protocol::batches::BatchId,
+    rpc::{
+        client::blobs::BatchAddPathProgressEvent,
+        proto::{
+            blobs::{
+                BatchAddPathRequest, BatchAddStreamRequest, BatchAddStreamResponse,
+                BatchAddStreamUpdate, BatchCreateTempTagRequest, BatchUpdate,
+            },
+            tags::{self, SyncMode},
+            RpcService,
         },
-        tags::{self, SyncMode},
-        RpcService,
     },
     store::ImportMode,
     util::{SetTagOption, TagDrop},
@@ -266,13 +268,13 @@ where
         let mut res_size = None;
         while let Some(item) = stream.next().await {
             match item?.0 {
-                BatchAddPathProgress::Abort(cause) => {
+                BatchAddPathProgressEvent::Abort(cause) => {
                     Err(cause)?;
                 }
-                BatchAddPathProgress::Done { hash } => {
+                BatchAddPathProgressEvent::Done { hash } => {
                     res_hash = Some(hash);
                 }
-                BatchAddPathProgress::Found { size } => {
+                BatchAddPathProgressEvent::Found { size } => {
                     res_size = Some(size);
                 }
                 _ => {}
