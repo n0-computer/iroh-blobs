@@ -32,7 +32,7 @@ Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 
 ```rust
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
+use iroh_blobs::net_protocol::Blobs;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -40,14 +40,10 @@ async fn main() -> anyhow::Result<()> {
     // we've built at number0
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 
-    // spawn a local pool with one thread per CPU
-    // for a single threaded pool use `LocalPool::single`
-    let local_pool = LocalPool::default();
-
     // create an in-memory blob store
     // use `iroh_blobs::net_protocol::Blobs::persistent` to load or create a
     // persistent blob store from a path
-    let blobs = Blobs::memory().build(local_pool.handle(), &endpoint);
+    let blobs = Blobs::memory().build(&endpoint);
 
     // turn on the "rpc" feature if you need to create blobs and tags clients
     let blobs_client = blobs.client();
@@ -60,9 +56,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     // do fun stuff with the blobs protocol!
-    // make sure not to drop the local_pool before you are finished
     router.shutdown().await?;
-    drop(local_pool);
     drop(tags_client);
     Ok(())
 }
@@ -89,4 +83,3 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license,
 shall be dual licensed as above, without any additional terms or conditions.
-

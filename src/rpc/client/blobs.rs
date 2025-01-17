@@ -1015,11 +1015,9 @@ mod tests {
 
         use super::RpcService;
         use crate::{
-            downloader::Downloader,
             net_protocol::Blobs,
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
-            util::local_pool::LocalPool,
         };
 
         type RpcClient = quic_rpc::RpcClient<RpcService>;
@@ -1029,7 +1027,6 @@ mod tests {
         pub struct Node {
             router: iroh::protocol::Router,
             client: RpcClient,
-            _local_pool: LocalPool,
             _rpc_task: AbortOnDropHandle<()>,
         }
 
@@ -1067,19 +1064,12 @@ mod tests {
                     .unwrap_or_else(|| Endpoint::builder().discovery_n0())
                     .bind()
                     .await?;
-                let local_pool = LocalPool::single();
                 let mut router = Router::builder(endpoint.clone());
 
                 // Setup blobs
-                let downloader =
-                    Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
-                let blobs = Blobs::new(
-                    store.clone(),
-                    local_pool.handle().clone(),
-                    events,
-                    downloader,
-                    endpoint.clone(),
-                );
+                let blobs = Blobs::builder(store.clone())
+                    .events(events)
+                    .build(&endpoint);
                 router = router.accept(crate::ALPN, blobs.clone());
 
                 // Build the router
@@ -1096,7 +1086,6 @@ mod tests {
                     router,
                     client,
                     _rpc_task,
-                    _local_pool: local_pool,
                 })
             }
         }

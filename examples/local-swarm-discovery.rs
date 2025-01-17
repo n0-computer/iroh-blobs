@@ -13,9 +13,7 @@ use iroh::{
     discovery::local_swarm_discovery::LocalSwarmDiscovery, protocol::Router, Endpoint, NodeAddr,
     PublicKey, RelayMode, SecretKey,
 };
-use iroh_blobs::{
-    net_protocol::Blobs, rpc::client::blobs::WrapOption, util::local_pool::LocalPool, Hash,
-};
+use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::WrapOption, Hash};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 use self::progress::show_download_progress;
@@ -73,8 +71,7 @@ async fn main() -> anyhow::Result<()> {
         .bind()
         .await?;
     let builder = Router::builder(endpoint);
-    let local_pool = LocalPool::default();
-    let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
+    let blobs = Blobs::memory().build(builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn().await?;
     let blobs_client = blobs.client();

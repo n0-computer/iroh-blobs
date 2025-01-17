@@ -5,14 +5,13 @@ use std::{
 };
 
 use iroh::Endpoint;
-use iroh_blobs::{net_protocol::Blobs, store::GcConfig, util::local_pool::LocalPool};
+use iroh_blobs::{net_protocol::Blobs, store::GcConfig};
 use testresult::TestResult;
 
 #[tokio::test]
 async fn blobs_gc_smoke() -> TestResult<()> {
-    let pool = LocalPool::default();
     let endpoint = Endpoint::builder().bind().await?;
-    let blobs = Blobs::memory().build(pool.handle(), &endpoint);
+    let blobs = Blobs::memory().build(&endpoint);
     let client = blobs.client();
     blobs.start_gc(GcConfig {
         period: Duration::from_millis(1),
@@ -29,9 +28,8 @@ async fn blobs_gc_smoke() -> TestResult<()> {
 
 #[tokio::test]
 async fn blobs_gc_protected() -> TestResult<()> {
-    let pool = LocalPool::default();
     let endpoint = Endpoint::builder().bind().await?;
-    let blobs = Blobs::memory().build(pool.handle(), &endpoint);
+    let blobs = Blobs::memory().build(&endpoint);
     let client = blobs.client();
     let h1 = client.add_bytes(b"test".to_vec()).await?;
     let protected = Arc::new(Mutex::new(Vec::new()));

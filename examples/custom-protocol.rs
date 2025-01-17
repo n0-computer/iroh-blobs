@@ -48,9 +48,7 @@ use iroh::{
     protocol::{ProtocolHandler, Router},
     Endpoint, NodeId,
 };
-use iroh_blobs::{
-    net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool, Hash,
-};
+use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::MemClient, Hash};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -89,8 +87,7 @@ async fn main() -> Result<()> {
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
     let endpoint = Endpoint::builder().bind().await?;
     let builder = Router::builder(endpoint);
-    let local_pool = LocalPool::default();
-    let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
+    let blobs = Blobs::memory().build(builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let blobs_client = blobs.client();
 
