@@ -241,7 +241,7 @@ impl<S: crate::store::Store> Blobs<S> {
     }
 
     pub fn rt(&self) -> &LocalPoolHandle {
-        &self.inner.rt
+        self.inner.rt()
     }
 
     pub fn downloader(&self) -> &Downloader {
