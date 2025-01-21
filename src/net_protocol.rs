@@ -3,7 +3,12 @@
 // TODO: reduce API surface and add documentation
 #![allow(missing_docs)]
 
-use std::{collections::BTreeSet, fmt::Debug, ops::DerefMut, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use anyhow::{bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
@@ -17,7 +22,7 @@ use crate::{
     provider::EventSender,
     store::GcConfig,
     util::{
-        local_pool::{self, LocalPoolHandle},
+        local_pool::{self, LocalPool, LocalPoolHandle},
         SetTagOption,
     },
     BlobFormat, Hash,
@@ -42,8 +47,25 @@ impl Default for GcState {
 }
 
 #[derive(Debug)]
+enum Rt {
+    Handle(LocalPoolHandle),
+    Owned(LocalPool),
+}
+
+impl Deref for Rt {
+    type Target = LocalPoolHandle;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Handle(ref handle) => handle,
+            Self::Owned(ref pool) => pool.handle(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct BlobsInner<S> {
-    pub(crate) rt: LocalPoolHandle,
+    rt: Rt,
     pub(crate) store: S,
     events: EventSender,
     pub(crate) downloader: Downloader,
@@ -51,6 +73,12 @@ pub(crate) struct BlobsInner<S> {
     gc_state: std::sync::Mutex<GcState>,
     #[cfg(feature = "rpc")]
     pub(crate) batches: tokio::sync::Mutex<BlobBatches>,
+}
+
+impl<S> BlobsInner<S> {
+    pub(crate) fn rt(&self) -> &LocalPoolHandle {
+        &self.rt
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +147,7 @@ impl BlobBatches {
 pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
+    rt: Option<LocalPoolHandle>,
 }
 
 impl<S: crate::store::Store> Builder<S> {
@@ -128,13 +157,23 @@ impl<S: crate::store::Store> Builder<S> {
         self
     }
 
+    /// Set a custom `LocalPoolHandle` to use.
+    pub fn local_pool(mut self, rt: LocalPoolHandle) -> Self {
+        self.rt = Some(rt);
+        self
+    }
+
     /// Build the Blobs protocol handler.
-    /// You need to provide a local pool handle and an endpoint.
-    pub fn build(self, rt: &LocalPoolHandle, endpoint: &Endpoint) -> Blobs<S> {
+    /// You need to provide a the endpoint.
+    pub fn build(self, endpoint: &Endpoint) -> Blobs<S> {
+        let rt = self
+            .rt
+            .map(Rt::Handle)
+            .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
         let downloader = Downloader::new(self.store.clone(), endpoint.clone(), rt.clone());
         Blobs::new(
             self.store,
-            rt.clone(),
+            rt,
             self.events.unwrap_or_default(),
             downloader,
             endpoint.clone(),
@@ -148,6 +187,7 @@ impl<S> Blobs<S> {
         Builder {
             store,
             events: None,
+            rt: None,
         }
     }
 }
@@ -169,9 +209,9 @@ impl Blobs<crate::store::fs::Store> {
 }
 
 impl<S: crate::store::Store> Blobs<S> {
-    pub fn new(
+    fn new(
         store: S,
-        rt: LocalPoolHandle,
+        rt: Rt,
         events: EventSender,
         downloader: Downloader,
         endpoint: Endpoint,
@@ -201,7 +241,7 @@ impl<S: crate::store::Store> Blobs<S> {
     }
 
     pub fn rt(&self) -> &LocalPoolHandle {
-        &self.inner.rt
+        self.inner.rt()
     }
 
     pub fn downloader(&self) -> &Downloader {

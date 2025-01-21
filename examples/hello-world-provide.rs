@@ -4,7 +4,7 @@
 //! run this example from the project root:
 //!     $ cargo run --example hello-world-provide
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{net_protocol::Blobs, ticket::BlobTicket, util::local_pool::LocalPool};
+use iroh_blobs::{net_protocol::Blobs, ticket::BlobTicket};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
@@ -24,8 +24,7 @@ async fn main() -> anyhow::Result<()> {
     // create a new node
     let endpoint = Endpoint::builder().bind().await?;
     let builder = Router::builder(endpoint);
-    let local_pool = LocalPool::default();
-    let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
+    let blobs = Blobs::memory().build(builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let blobs_client = blobs.client();
     let node = builder.spawn().await?;

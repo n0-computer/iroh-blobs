@@ -26,7 +26,6 @@ use iroh_blobs::{
         MapMut, ReportLevel, Store,
     },
     util::{
-        local_pool::LocalPool,
         progress::{AsyncChannelProgressSender, ProgressSender as _},
         Tag,
     },
@@ -42,7 +41,6 @@ pub struct Node<S> {
     pub router: iroh::protocol::Router,
     pub blobs: Blobs<S>,
     pub store: S,
-    pub _local_pool: LocalPool,
 }
 
 impl<S: Store> Node<S> {
@@ -100,8 +98,7 @@ pub fn simulate_remote(data: &[u8]) -> (blake3::Hash, Cursor<Bytes>) {
 async fn node<S: Store>(store: S, gc_period: Duration) -> (Node<S>, async_channel::Receiver<()>) {
     let (gc_send, gc_recv) = async_channel::unbounded();
     let endpoint = Endpoint::builder().discovery_n0().bind().await.unwrap();
-    let local_pool = LocalPool::single();
-    let blobs = Blobs::builder(store.clone()).build(&local_pool, &endpoint);
+    let blobs = Blobs::builder(store.clone()).build(&endpoint);
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
         .spawn()
@@ -120,7 +117,6 @@ async fn node<S: Store>(store: S, gc_period: Duration) -> (Node<S>, async_channe
             store,
             router,
             blobs,
-            _local_pool: local_pool,
         },
         gc_recv,
     )

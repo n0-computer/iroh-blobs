@@ -110,7 +110,7 @@ impl<D: crate::store::Store> Handler<D> {
     }
 
     fn rt(&self) -> &LocalPoolHandle {
-        &self.0.rt
+        self.0.rt()
     }
 
     fn endpoint(&self) -> &Endpoint {
