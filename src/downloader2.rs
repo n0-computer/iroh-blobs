@@ -11,9 +11,9 @@ use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
 use crate::Hash;
 
-/// Identifier for a download intent.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, derive_more::Display)]
-pub struct IntentId(pub u64);
+type DownloadId = u64;
+type BitmapSubscriptionId = u64;
+type DiscoveryId = u64;
 
 /// Announce kind
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -49,8 +49,10 @@ struct PeerState {
 
 /// Information about one blob on one peer
 struct PeerBlobState {
-    /// 
-    subscription_id: u64,
+    /// The subscription id for the subscription
+    subscription_id: BitmapSubscriptionId,
+    /// The number of subscriptions this peer has
+    subscription_count: usize,
     /// chunk ranges this peer reports to have
     ranges: ChunkRanges,
 }
@@ -69,11 +71,20 @@ struct DownloadState {
 }
 
 struct DownloaderState {
-    peers: BTreeMap<NodeId, PeerState>,
-    bitmaps: BTreeMap<(NodeId, Hash), PeerBlobState>,
-    downloads: BTreeMap<IntentId, DownloadState>,
+    // my own node id
     me: NodeId,
-    next_subscription_id: u64,
+    // all peers I am tracking for any download
+    peers: BTreeMap<NodeId, PeerState>,
+    // all bitmaps I am tracking, both for myself and for remote peers
+    bitmaps: BTreeMap<(NodeId, Hash), PeerBlobState>,
+    // all active downloads
+    downloads: BTreeMap<DownloadId, DownloadState>,
+    // discovery tasks
+    discovery: BTreeMap<Hash, DiscoveryId>,
+    // the next subscription id
+    next_subscription_id: BitmapSubscriptionId,
+    // the next discovery id
+    next_discovery_id: u64,
 }
 
 impl DownloaderState {
@@ -83,7 +94,9 @@ impl DownloaderState {
             peers: BTreeMap::new(),
             downloads: BTreeMap::new(),
             bitmaps: BTreeMap::new(),
+            discovery: BTreeMap::new(),
             next_subscription_id: 0,
+            next_discovery_id: 0,
         }
     }
 }
@@ -94,11 +107,11 @@ enum Command {
         /// The download request
         request: DownloadRequest,
         /// The unique id, to be assigned by the caller
-        id: IntentId,
+        id: u64,
     },
     /// A request to abort a download.
     StopDownload {
-        id: IntentId,
+        id: u64,
     },
     /// A bitmap for a blob and a peer
     Bitmap {
@@ -133,6 +146,10 @@ enum Command {
         hash: Hash,
         /// The ranges that were added locally
         added: ChunkRanges,
+    },
+    /// Stop tracking a peer for all blobs, for whatever reason
+    DropPeer {
+        peer: NodeId,
     }
 }
 
@@ -140,10 +157,14 @@ enum Event {
     SubscribeBitmap {
         peer: NodeId,
         hash: Hash,
-        subscription_id: u64,
+        id: u64,
     },
     UnsubscribeBitmap {
-        subscription_id: u64,
+        id: u64,
+    },
+    StartDiscovery {
+        hash: Hash,
+        id: u64,
     },
     Error {
         message: String,
@@ -164,25 +185,71 @@ impl DownloaderState {
         id
     }
 
+    fn next_discovery_id(&mut self) -> u64 {
+        let id = self.next_discovery_id;
+        self.next_discovery_id += 1;
+        id
+    }
+
+    fn count_providers(&self, hash: Hash) -> usize {
+        self.bitmaps.iter().filter(|((peer, x), _)| *peer != self.me && *x == hash).count()
+    }
+
     fn apply0(&mut self, cmd: Command, events: &mut Vec<Event>) -> anyhow::Result<()> {
         match cmd {
             Command::StartDownload { request, id } => {
-                if self.downloads.contains_key(&id) {
-                    anyhow::bail!("duplicate download request {id}");
-                }
-                if !self.bitmaps.contains_key(&(self.me, request.hash)) {
+                // ids must be uniquely assigned by the caller!
+                anyhow::ensure!(!self.downloads.contains_key(&id), "duplicate download request {id}");
+                // either we have a subscription for this blob, or we have to create one
+                if let Some(state) = self.bitmaps.get_mut(&(self.me, request.hash)) {
+                    // just increment the count
+                    state.subscription_count += 1;
+                } else {
+                    // create a new subscription
                     let subscription_id = self.next_subscription_id();
                     events.push(Event::SubscribeBitmap {
                         peer: self.me,
                         hash: request.hash,
-                        subscription_id,
+                        id: subscription_id,
                     });
-                    self.bitmaps.insert((self.me, request.hash), PeerBlobState { subscription_id, ranges: ChunkRanges::empty() });
+                    self.bitmaps.insert((self.me, request.hash), PeerBlobState { subscription_id, subscription_count: 1, ranges: ChunkRanges::empty() });
+                }
+                if !self.discovery.contains_key(&request.hash) {
+                    // start a discovery task
+                    let discovery_id = self.next_discovery_id();
+                    events.push(Event::StartDiscovery {
+                        hash: request.hash,
+                        id: discovery_id,
+                    });
+                    self.discovery.insert(request.hash, discovery_id);
                 }
                 self.downloads.insert(id, DownloadState { request });
             }
             Command::StopDownload { id } => {
-                self.downloads.remove(&id);
+                let removed = self.downloads.remove(&id).context(format!("removed unknown download {id}"))?;
+                self.bitmaps.retain(|(_peer, hash), state| {
+                    if *hash == removed.request.hash {
+                        state.subscription_count -= 1;
+                        if state.subscription_count == 0 {
+                            events.push(Event::UnsubscribeBitmap { id: state.subscription_id });
+                            return false;
+                        }
+                    }
+                    true
+                });
+            }
+            Command::DropPeer { peer } => {
+                anyhow::ensure!(peer != self.me, "not a remote peer");
+                self.bitmaps.retain(|(p, _), state| {
+                    if *p == peer {
+                        // todo: should we emit unsubscribe events here?
+                        events.push(Event::UnsubscribeBitmap { id: state.subscription_id });
+                        return false;
+                    } else {
+                        return true;
+                    }
+                });
+                self.peers.remove(&peer);
             }
             Command::Bitmap { peer, hash, bitmap } => {
                 let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap for unknown peer {peer} and hash {hash}"))?;
@@ -217,4 +284,10 @@ fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
         }
     }
     Some(total)
+}
+
+#[cfg(test)]
+mod tests {
+
+    
 }
