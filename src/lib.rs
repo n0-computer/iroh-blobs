@@ -32,6 +32,8 @@
 pub mod cli;
 #[cfg(feature = "downloader")]
 pub mod downloader;
+#[cfg(feature = "downloader")]
+pub mod downloader2;
 pub mod export;
 pub mod format;
 pub mod get;
