@@ -30,7 +30,11 @@ use crate::{
     get::{
         fsm::{AtInitial, BlobContentNext, ConnectedNext, EndBlobNext},
         Stats,
-    }, protocol::{GetRequest, RangeSpec, RangeSpecSeq}, store::{BaoBatchWriter, MapEntryMut, Store}, util::local_pool::{self, LocalPool}, Hash
+    },
+    protocol::{GetRequest, RangeSpec, RangeSpecSeq},
+    store::{BaoBatchWriter, MapEntryMut, Store},
+    util::local_pool::{self, LocalPool},
+    Hash,
 };
 use anyhow::Context;
 use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
@@ -203,7 +207,7 @@ enum Command {
         removed: ChunkRanges,
     },
     /// A chunk was downloaded, but not yet stored
-    /// 
+    ///
     /// This can only be used for updating peer stats, not for completing downloads.
     ChunksDownloaded {
         /// Time when the download was received
@@ -384,7 +388,6 @@ impl DownloaderState {
                 let useful_downloaded = total_after - total_before;
                 let peer = self.peers.get_mut(&peer).context(format!("performing download before having peer state for {peer}"))?;
                 peer.download_history.push_back((time, (total_downloaded, useful_downloaded)));
-                self.rebalance_downloads(hash, evs)?;
             }
         }
         Ok(())
@@ -398,6 +401,7 @@ impl DownloaderState {
         let mut completed = vec![];
         for (id, download) in self.downloads.iter_mut().filter(|(_id, download)| download.request.hash == hash) {
             let remaining = &download.request.ranges - &self_state.ranges;
+            info!("Remaining chunks for download {id}: {remaining:?}");
             if remaining.is_empty() {
                 // cancel all downloads, if needed
                 for (_, peer_download) in &download.peer_downloads {
@@ -416,12 +420,15 @@ impl DownloaderState {
                     candidates.push((peer.unwrap(), intersection));
                 }
             }
+            info!("Stopping {} old peer downloads", download.peer_downloads.len());
             for (_, state) in &download.peer_downloads {
                 // stop all downloads
                 evs.push(Event::StopPeerDownload { id: state.id });
             }
+            info!("Creating {} new peer downloads", candidates.len());
             download.peer_downloads.clear();
             for (peer, ranges) in candidates {
+                info!("  Starting download from {peer} for {hash} {ranges:?}");
                 let id = self.next_peer_download_id;
                 self.next_peer_download_id += 1;
                 evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
@@ -551,7 +558,7 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
                         Command::Bitmap { peer: None, hash, bitmap: ChunkRanges::empty() }
                     } else {
                         // all peers have all the data, for now
-                        Command::Bitmap { peer, hash, bitmap: ChunkRanges::from(ChunkNum(0)..ChunkNum(16)) }
+                        Command::Bitmap { peer, hash, bitmap: ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)) }
                     };
                     send.send(cmd).await.ok();
                     futures_lite::future::pending().await
@@ -580,12 +587,13 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
                 let store = self.store.clone();
                 let task = self.local_pool.spawn(move || async move {
                     info!("Connecting to peer {peer}");
-                    let conn = endpoint.connect(peer, crate::ALPN).await;
-                    info!("Got connection to peer {peer} {}", conn.is_err());
-                    println!("{conn:?}");
-                    let conn = conn?;
+                    let conn = endpoint.connect(peer, crate::ALPN).await?;
+                    info!("Got connection to peer {peer}");
                     let spec = RangeSpec::new(ranges);
-                    let initial = crate::get::fsm::start(conn, GetRequest { hash, ranges: RangeSpecSeq::new([spec]) });
+                    let ranges = RangeSpecSeq::new([spec, RangeSpec::EMPTY]);
+                    info!("starting download from {peer} for {hash} {ranges:?}");
+                    let request = GetRequest::new(hash, ranges);
+                    let initial = crate::get::fsm::start(conn, request);
                     stream_to_db(initial, store, hash, peer, send).await?;
                     anyhow::Ok(())
                 });
@@ -599,6 +607,11 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
             }
             Event::StopPeerDownload { id } => {
                 self.peer_download_tasks.remove(&id);
+            }
+            Event::DownloadComplete { id } => {
+                if let Some(done) = self.download_futs.remove(&id) {
+                    done.send(()).ok();
+                }
             }
             Event::Error { message } => {
                 error!("Error during processing event {}", message);
@@ -644,9 +657,10 @@ async fn stream_to_db<S: Store>(initial: AtInitial, store: S, hash: Hash, peer: 
                 match data? {
                     BaoContentItem::Parent(parent) => {
                         batch.push(parent.into());
-                    },
+                    }
                     BaoContentItem::Leaf(leaf) => {
-                        let added = ChunkRanges::from(ChunkNum(leaf.offset / 1024)..);
+                        let start_chunk = leaf.offset / 1024;
+                        let added = ChunkRanges::from(ChunkNum(start_chunk)..ChunkNum(start_chunk + 1));
                         sender.send(Command::ChunksDownloaded { time: Duration::ZERO, peer, hash, added: added.clone() }).await.ok();
                         batch.push(leaf.into());
                         writer.write_batch(size, std::mem::take(&mut batch)).await?;
@@ -696,12 +710,9 @@ mod tests {
         let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
         let node_id = endpoint.node_id();
         let store = crate::store::mem::Store::new();
-        let blobs = Blobs::builder(store)
-            .build(&endpoint);
+        let blobs = Blobs::builder(store).build(&endpoint);
         let hash = blobs.client().add_bytes(bytes::Bytes::copy_from_slice(data)).await?.hash;
-        let router = iroh::protocol::Router::builder(endpoint)
-            .accept(crate::ALPN, blobs)
-            .spawn().await?;
+        let router = iroh::protocol::Router::builder(endpoint).accept(crate::ALPN, blobs).spawn().await?;
         Ok((router, node_id, hash))
     }
 
@@ -748,7 +759,11 @@ mod tests {
         assert!(evs.iter().filter(|e| **e == Event::SubscribeBitmap { peer: Some(peer_a), hash, id: 1 }).count() == 1, "adding a new peer for a hash we are interested in should subscribe to the bitmap");
         let evs = state.apply_and_get_evs(Command::Bitmap { peer: Some(peer_a), hash, bitmap: chunk_ranges([0..64]) });
         assert!(evs.iter().filter(|e| **e == Event::StartPeerDownload { id: 0, peer: peer_a, hash, ranges: chunk_ranges([32..64]) }).count() == 1, "bitmap from a peer should start a download");
+        // ChunksDownloaded just updates the peer stats
         let evs = state.apply_and_get_evs(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..64]) });
+        assert!(evs.is_empty());
+        // Bitmap update for the local bitmap should complete the download
+        let evs = state.apply_and_get_evs(Command::BitmapUpdate { peer: None, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
         assert!(evs.iter().filter(|e| matches!(e, Event::DownloadComplete { .. })).count() == 1, "download should be completed by the data");
         println!("{evs:?}");
         Ok(())
@@ -758,14 +773,39 @@ mod tests {
     #[cfg(feature = "rpc")]
     async fn downloader_driver_smoke() -> TestResult<()> {
         let _ = tracing_subscriber::fmt::try_init();
-        let (router, peer, hash) = make_test_node(b"test").await?;
+        let (_router1, peer, hash) = make_test_node(b"test").await?;
         let store = crate::store::mem::Store::new();
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
         let local_pool = LocalPool::single();
         let downloader = Downloader::new(endpoint, store, discovery, local_pool);
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let fut = downloader.download(DownloadRequest { hash, ranges: ChunkRanges::all() });
+        let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1]) });
+        fut.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "rpc")]
+    async fn downloader_driver_large() -> TestResult<()> {
+        use std::collections::BTreeSet;
+
+        let _ = tracing_subscriber::fmt::try_init();
+        let data = vec![0u8; 1024 * 1024];
+        let mut nodes = vec![];
+        for _i in 0..10 {
+            nodes.push(make_test_node(&data).await?);
+        }
+        let peers = nodes.iter().map(|(_, peer, _)| *peer).collect::<Vec<_>>();
+        let hashes = nodes.iter().map(|(_, _, hash)| *hash).collect::<BTreeSet<_>>();
+        let hash = *hashes.iter().next().unwrap();
+        let store = crate::store::mem::Store::new();
+        let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
+        let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
+        let local_pool = LocalPool::single();
+        let downloader = Downloader::new(endpoint, store, discovery, local_pool);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
         fut.await?;
         Ok(())
     }
