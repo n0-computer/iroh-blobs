@@ -202,7 +202,9 @@ enum Command {
         /// The ranges that were removed
         removed: ChunkRanges,
     },
-    /// A chunk was downloaded
+    /// A chunk was downloaded, but not yet stored
+    /// 
+    /// This can only be used for updating peer stats, not for completing downloads.
     ChunksDownloaded {
         /// Time when the download was received
         time: Duration,
@@ -578,7 +580,10 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
                 let store = self.store.clone();
                 let task = self.local_pool.spawn(move || async move {
                     info!("Connecting to peer {peer}");
-                    let conn = endpoint.connect(peer, crate::ALPN).await?;
+                    let conn = endpoint.connect(peer, crate::ALPN).await;
+                    info!("Got connection to peer {peer} {}", conn.is_err());
+                    println!("{conn:?}");
+                    let conn = conn?;
                     let spec = RangeSpec::new(ranges);
                     let initial = crate::get::fsm::start(conn, GetRequest { hash, ranges: RangeSpecSeq::new([spec]) });
                     stream_to_db(initial, store, hash, peer, send).await?;
@@ -679,10 +684,26 @@ where
 mod tests {
     use std::ops::Range;
 
+    use crate::net_protocol::Blobs;
+
     use super::*;
     use bao_tree::ChunkNum;
+    use iroh::protocol::Router;
     use testresult::TestResult;
-    use tracing::info;
+
+    #[cfg(feature = "rpc")]
+    async fn make_test_node(data: &[u8]) -> anyhow::Result<(Router, NodeId, Hash)> {
+        let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
+        let node_id = endpoint.node_id();
+        let store = crate::store::mem::Store::new();
+        let blobs = Blobs::builder(store)
+            .build(&endpoint);
+        let hash = blobs.client().add_bytes(bytes::Bytes::copy_from_slice(data)).await?.hash;
+        let router = iroh::protocol::Router::builder(endpoint)
+            .accept(crate::ALPN, blobs)
+            .spawn().await?;
+        Ok((router, node_id, hash))
+    }
 
     /// Create chunk ranges from an array of u64 ranges
     fn chunk_ranges(ranges: impl IntoIterator<Item = Range<u64>>) -> ChunkRanges {
@@ -734,15 +755,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "rpc")]
     async fn downloader_driver_smoke() -> TestResult<()> {
         let _ = tracing_subscriber::fmt::try_init();
-        let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
-        let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
+        let (router, peer, hash) = make_test_node(b"test").await?;
         let store = crate::store::mem::Store::new();
-        let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).bind().await?;
-        let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer_a] };
+        let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
+        let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
         let local_pool = LocalPool::single();
         let downloader = Downloader::new(endpoint, store, discovery, local_pool);
+        tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: ChunkRanges::all() });
         fut.await?;
         Ok(())
