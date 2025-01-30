@@ -12,20 +12,40 @@
 //! of the caller to generate unique ids. We could use random uuids here, but using
 //! integers simplifies testing.
 //!
+//! Inside the state machine, we use [ChunkRanges] to represent avaiability bitmaps.
+//! We treat operations on such bitmaps as very cheap, which is the case as long as
+//! the bitmaps are not very fragmented. We can introduce an even more optimized
+//! bitmap type, or prevent fragmentation.
+//!
 //! The [DownloaderDriver] is the asynchronous driver for the state machine. It
 //! owns the actual tasks that perform IO.
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    future::Future,
+    io,
+    sync::Arc,
+};
 
-use crate::{store::Store, Hash};
+use crate::{
+    get::{
+        fsm::{AtInitial, BlobContentNext, ConnectedNext, EndBlobNext},
+        Stats,
+    },
+    protocol::{GetRequest, RangeSpec, RangeSpecSeq},
+    store::Store,
+    Hash,
+};
 use anyhow::Context;
-use bao_tree::ChunkRanges;
-use futures_lite::Stream;
-use iroh::NodeId;
+use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
+use bytes::Bytes;
+use futures_lite::{Stream, StreamExt};
+use iroh::{discovery, Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::task::JoinSet;
+use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
+use tracing::{debug, error, trace};
 
 /// todo: make newtypes?
 type DownloadId = u64;
@@ -34,27 +54,28 @@ type DiscoveryId = u64;
 type PeerDownloadId = u64;
 
 /// Announce kind
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum AnnounceKind {
     /// The peer supposedly has some of the data.
     Partial = 0,
     /// The peer supposedly has the complete data.
+    #[default]
     Complete,
 }
 
+#[derive(Default)]
 struct FindPeersOpts {
     /// Kind of announce
     kind: AnnounceKind,
 }
 
 /// A pluggable content discovery mechanism
-trait ContentDiscovery {
+trait ContentDiscovery: Send + 'static {
     /// Find peers that have the given blob.
     ///
     /// The returned stream is a handle for the discovery task. It should be an
     /// infinite stream that only stops when it is dropped.
-    fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts)
-        -> impl Stream<Item = NodeId> + Unpin;
+    fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts) -> impl Stream<Item = NodeId> + Send + Unpin + 'static;
 }
 
 /// Global information about a peer
@@ -78,14 +99,11 @@ struct PeerBlobState {
 
 impl PeerBlobState {
     fn new(subscription_id: BitmapSubscriptionId) -> Self {
-        Self {
-            subscription_id,
-            subscription_count: 1,
-            ranges: ChunkRanges::empty(),
-        }
+        Self { subscription_id, subscription_count: 1, ranges: ChunkRanges::empty() }
     }
 }
 
+#[derive(Debug)]
 struct DownloadRequest {
     /// The blob we are downloading
     hash: Hash,
@@ -102,10 +120,7 @@ struct DownloadState {
 
 impl DownloadState {
     fn new(request: DownloadRequest) -> Self {
-        Self {
-            request,
-            peer_downloads: BTreeMap::new(),
-        }
+        Self { request, peer_downloads: BTreeMap::new() }
     }
 }
 
@@ -231,6 +246,7 @@ enum Event {
         /// The unique id of the peer download task
         id: u64,
         peer: NodeId,
+        hash: Hash,
         ranges: ChunkRanges,
     },
     StopPeerDownload {
@@ -265,10 +281,7 @@ impl DownloaderState {
     }
 
     fn count_providers(&self, hash: Hash) -> usize {
-        self.bitmaps
-            .iter()
-            .filter(|((peer, x), _)| peer.is_some() && *x == hash)
-            .count()
+        self.bitmaps.iter().filter(|((peer, x), _)| peer.is_some() && *x == hash).count()
     }
 
     /// Apply a command and return the events that were generated
@@ -281,9 +294,7 @@ impl DownloaderState {
     /// Apply a command
     fn apply(&mut self, cmd: Command, evs: &mut Vec<Event>) {
         if let Err(cause) = self.apply0(cmd, evs) {
-            evs.push(Event::Error {
-                message: format!("{cause}"),
-            });
+            evs.push(Event::Error { message: format!("{cause}") });
         }
     }
 
@@ -292,10 +303,7 @@ impl DownloaderState {
         match cmd {
             Command::StartDownload { request, id } => {
                 // ids must be uniquely assigned by the caller!
-                anyhow::ensure!(
-                    !self.downloads.contains_key(&id),
-                    "duplicate download request {id}"
-                );
+                anyhow::ensure!(!self.downloads.contains_key(&id), "duplicate download request {id}");
                 // either we have a subscription for this blob, or we have to create one
                 if let Some(state) = self.bitmaps.get_mut(&(None, request.hash)) {
                     // just increment the count
@@ -303,37 +311,24 @@ impl DownloaderState {
                 } else {
                     // create a new subscription
                     let subscription_id = self.next_subscription_id();
-                    evs.push(Event::SubscribeBitmap {
-                        peer: None,
-                        hash: request.hash,
-                        id: subscription_id,
-                    });
-                    self.bitmaps
-                        .insert((None, request.hash), PeerBlobState::new(subscription_id));
+                    evs.push(Event::SubscribeBitmap { peer: None, hash: request.hash, id: subscription_id });
+                    self.bitmaps.insert((None, request.hash), PeerBlobState::new(subscription_id));
                 }
                 if !self.discovery.contains_key(&request.hash) {
                     // start a discovery task
                     let discovery_id = self.next_discovery_id();
-                    evs.push(Event::StartDiscovery {
-                        hash: request.hash,
-                        id: discovery_id,
-                    });
+                    evs.push(Event::StartDiscovery { hash: request.hash, id: discovery_id });
                     self.discovery.insert(request.hash, discovery_id);
                 }
                 self.downloads.insert(id, DownloadState::new(request));
             }
             Command::StopDownload { id } => {
-                let removed = self
-                    .downloads
-                    .remove(&id)
-                    .context(format!("removed unknown download {id}"))?;
+                let removed = self.downloads.remove(&id).context(format!("removed unknown download {id}"))?;
                 self.bitmaps.retain(|(_peer, hash), state| {
                     if *hash == removed.request.hash {
                         state.subscription_count -= 1;
                         if state.subscription_count == 0 {
-                            evs.push(Event::UnsubscribeBitmap {
-                                id: state.subscription_id,
-                            });
+                            evs.push(Event::UnsubscribeBitmap { id: state.subscription_id });
                             return false;
                         }
                     }
@@ -346,32 +341,21 @@ impl DownloaderState {
                     return Ok(());
                 };
                 // check if anybody needs this peer
-                if !self
-                    .downloads
-                    .iter()
-                    .any(|(_id, state)| state.request.hash == hash)
-                {
+                if !self.downloads.iter().any(|(_id, state)| state.request.hash == hash) {
                     return Ok(());
                 }
                 // create a peer state if it does not exist
                 let _state = self.peers.entry(peer).or_default();
                 // create a new subscription
                 let subscription_id = self.next_subscription_id();
-                evs.push(Event::SubscribeBitmap {
-                    peer: Some(peer),
-                    hash,
-                    id: subscription_id,
-                });
-                self.bitmaps
-                    .insert((Some(peer), hash), PeerBlobState::new(subscription_id));
+                evs.push(Event::SubscribeBitmap { peer: Some(peer), hash, id: subscription_id });
+                self.bitmaps.insert((Some(peer), hash), PeerBlobState::new(subscription_id));
             }
             Command::DropPeer { peer } => {
                 self.bitmaps.retain(|(p, _), state| {
                     if *p == Some(peer) {
                         // todo: should we emit unsubscribe evs here?
-                        evs.push(Event::UnsubscribeBitmap {
-                            id: state.subscription_id,
-                        });
+                        evs.push(Event::UnsubscribeBitmap { id: state.subscription_id });
                         return false;
                     } else {
                         return true;
@@ -380,46 +364,26 @@ impl DownloaderState {
                 self.peers.remove(&peer);
             }
             Command::Bitmap { peer, hash, bitmap } => {
-                let state = self
-                    .bitmaps
-                    .get_mut(&(peer, hash))
-                    .context(format!("bitmap for unknown peer {peer:?} and hash {hash}"))?;
+                let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap for unknown peer {peer:?} and hash {hash}"))?;
                 let _chunks = total_chunks(&bitmap).context("open range")?;
                 state.ranges = bitmap;
                 self.rebalance_downloads(hash, evs)?;
             }
-            Command::BitmapUpdate {
-                peer,
-                hash,
-                added,
-                removed,
-            } => {
-                let state = self.bitmaps.get_mut(&(peer, hash)).context(format!(
-                    "bitmap update for unknown peer {peer:?} and hash {hash}"
-                ))?;
+            Command::BitmapUpdate { peer, hash, added, removed } => {
+                let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap update for unknown peer {peer:?} and hash {hash}"))?;
                 state.ranges |= added;
                 state.ranges &= !removed;
                 self.rebalance_downloads(hash, evs)?;
             }
-            Command::ChunksDownloaded {
-                time,
-                peer,
-                hash,
-                added,
-            } => {
-                let state = self.bitmaps.get_mut(&(None, hash)).context(format!(
-                    "chunks downloaded before having local bitmap for {hash}"
-                ))?;
+            Command::ChunksDownloaded { time, peer, hash, added } => {
+                let state = self.bitmaps.get_mut(&(None, hash)).context(format!("chunks downloaded before having local bitmap for {hash}"))?;
                 let total_downloaded = total_chunks(&added).context("open range")?;
                 let total_before = total_chunks(&state.ranges).context("open range")?;
                 state.ranges |= added;
                 let total_after = total_chunks(&state.ranges).context("open range")?;
                 let useful_downloaded = total_after - total_before;
-                let peer = self.peers.get_mut(&peer).context(format!(
-                    "performing download before having peer state for {peer}"
-                ))?;
-                peer.download_history
-                    .push_back((time, (total_downloaded, useful_downloaded)));
+                let peer = self.peers.get_mut(&peer).context(format!("performing download before having peer state for {peer}"))?;
+                peer.download_history.push_back((time, (total_downloaded, useful_downloaded)));
                 self.rebalance_downloads(hash, evs)?;
             }
         }
@@ -432,18 +396,12 @@ impl DownloaderState {
             return Ok(());
         };
         let mut completed = vec![];
-        for (id, download) in self
-            .downloads
-            .iter_mut()
-            .filter(|(_id, download)| download.request.hash == hash)
-        {
+        for (id, download) in self.downloads.iter_mut().filter(|(_id, download)| download.request.hash == hash) {
             let remaining = &download.request.ranges - &self_state.ranges;
             if remaining.is_empty() {
                 // cancel all downloads, if needed
                 for (_, peer_download) in &download.peer_downloads {
-                    evs.push(Event::StopPeerDownload {
-                        id: peer_download.id,
-                    });
+                    evs.push(Event::StopPeerDownload { id: peer_download.id });
                 }
                 // notify the user that the download is complete
                 evs.push(Event::DownloadComplete { id: *id });
@@ -452,11 +410,7 @@ impl DownloaderState {
                 continue;
             }
             let mut candidates = vec![];
-            for ((peer, _), bitmap) in self
-                .bitmaps
-                .iter()
-                .filter(|((peer, x), _)| peer.is_some() && *x == hash)
-            {
+            for ((peer, _), bitmap) in self.bitmaps.iter().filter(|((peer, x), _)| peer.is_some() && *x == hash) {
                 let intersection = &bitmap.ranges & &remaining;
                 if !intersection.is_empty() {
                     candidates.push((peer.unwrap(), intersection));
@@ -470,14 +424,8 @@ impl DownloaderState {
             for (peer, ranges) in candidates {
                 let id = self.next_peer_download_id;
                 self.next_peer_download_id += 1;
-                evs.push(Event::StartPeerDownload {
-                    id,
-                    peer,
-                    ranges: ranges.clone(),
-                });
-                download
-                    .peer_downloads
-                    .insert(peer, PeerDownloadState { id, ranges });
+                evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
+                download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
             }
         }
         for id in completed {
@@ -498,26 +446,89 @@ fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
     Some(total)
 }
 
-struct DownloaderDriver<S, D> {
+#[derive(Debug, Clone)]
+struct Downloader {
+    send: mpsc::Sender<UserCommand>,
+    task: Arc<AbortOnDropHandle<()>>,
+}
+
+impl Downloader {
+    async fn download(&self, request: DownloadRequest) -> anyhow::Result<()> {
+        let (send, recv) = tokio::sync::oneshot::channel::<()>();
+        self.send.send(UserCommand::Download { request, done: send }).await?;
+        recv.await?;
+        Ok(())
+    }
+
+    fn new<S: Store, D: ContentDiscovery>(endpoint: Endpoint, store: S, discovery: D) -> Self {
+        let actor = DownloaderActor::new(endpoint, store, discovery);
+        let (send, recv) = tokio::sync::mpsc::channel(256);
+        let task = Arc::new(spawn(async move { actor.run(recv).await }));
+        Self { send, task }
+    }
+}
+
+/// An user-facing command
+#[derive(Debug)]
+enum UserCommand {
+    Download { request: DownloadRequest, done: tokio::sync::oneshot::Sender<()> },
+}
+
+struct DownloaderActor<S, D> {
+    endpoint: Endpoint,
+    command_rx: mpsc::Receiver<Command>,
+    command_tx: mpsc::Sender<Command>,
     state: DownloaderState,
     store: S,
     discovery: D,
+    download_futs: BTreeMap<DownloadId, tokio::sync::oneshot::Sender<()>>,
     peer_download_tasks: BTreeMap<PeerDownloadId, AbortOnDropHandle<()>>,
     discovery_tasks: BTreeMap<DiscoveryId, AbortOnDropHandle<()>>,
     bitmap_subscription_tasks: BTreeMap<BitmapSubscriptionId, AbortOnDropHandle<()>>,
     next_download_id: DownloadId,
 }
 
-impl<S: Store, D: ContentDiscovery> DownloaderDriver<S, D> {
-    fn new(me: NodeId, store: S, discovery: D) -> Self {
+impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
+    fn new(endpoint: Endpoint, store: S, discovery: D) -> Self {
+        let (send, recv) = mpsc::channel(256);
         Self {
+            endpoint,
             state: DownloaderState::new(),
             store,
             discovery,
             peer_download_tasks: BTreeMap::new(),
             discovery_tasks: BTreeMap::new(),
             bitmap_subscription_tasks: BTreeMap::new(),
+            download_futs: BTreeMap::new(),
+            command_tx: send,
+            command_rx: recv,
             next_download_id: 0,
+        }
+    }
+
+    async fn run(mut self, mut channel: mpsc::Receiver<UserCommand>) {
+        loop {
+            tokio::select! {
+                biased;
+                Some(cmd) = self.command_rx.recv() => {
+                    let evs = self.state.apply_and_get_evs(cmd);
+                    for ev in evs {
+                        self.handle_event(ev, 0);
+                    }
+                },
+                Some(cmd) = channel.recv() => {
+                    debug!("user command {cmd:?}");
+                    match cmd {
+                        UserCommand::Download {
+                            request, done,
+                        } => {
+                            let id = self.next_download_id();
+                            self.download_futs.insert(id, done);
+                            self.command_tx.send(Command::StartDownload { request, id }).await.ok();
+                        }
+                    }
+                },
+            }
         }
     }
 
@@ -527,20 +538,126 @@ impl<S: Store, D: ContentDiscovery> DownloaderDriver<S, D> {
         id
     }
 
-    fn handle_event(&mut self, ev: Event) {
-        println!("event: {:?}", ev);
-    }
-
-    fn download(&mut self, request: DownloadRequest) -> DownloadId {
-        let id = self.next_download_id();
-        let evs = self
-            .state
-            .apply_and_get_evs(Command::StartDownload { request, id });
-        for ev in evs {
-            self.handle_event(ev);
+    fn handle_event(&mut self, ev: Event, depth: usize) {
+        trace!("handle_event {ev:?} {depth}");
+        match ev {
+            Event::SubscribeBitmap { peer, hash, id } => {
+                let send = self.command_tx.clone();
+                let task = spawn(async move {
+                    let cmd = if peer.is_none() {
+                        // we don't have any data, for now
+                        Command::Bitmap { peer: None, hash, bitmap: ChunkRanges::empty() }
+                    } else {
+                        // all peers have all the data, for now
+                        Command::Bitmap { peer, hash, bitmap: ChunkRanges::from(ChunkNum(0)..ChunkNum(16)) }
+                    };
+                    send.send(cmd).await.ok();
+                    futures_lite::future::pending().await
+                });
+                self.bitmap_subscription_tasks.insert(id, task);
+            }
+            Event::StartDiscovery { hash, id } => {
+                let send = self.command_tx.clone();
+                let mut stream = self.discovery.find_peers(hash, Default::default());
+                let task = spawn(async move {
+                    // process the infinite discovery stream and send commands
+                    while let Some(peer) = stream.next().await {
+                        println!("peer discovered for hash {hash}: {peer}");
+                        let res = send.send(Command::PeerDiscovered { peer, hash }).await;
+                        if res.is_err() {
+                            // only reason for this is actor task dropped
+                            break;
+                        }
+                    }
+                });
+                self.discovery_tasks.insert(id, task);
+            }
+            Event::StartPeerDownload { id, peer, hash, ranges } => {
+                let send = self.command_tx.clone();
+                let endpoint = self.endpoint.clone();
+                let task = spawn(async move {
+                    let conn = endpoint.connect(peer, crate::ALPN).await?;
+                    let spec = RangeSpec::new(ranges);
+                    let initial = crate::get::fsm::start(conn, GetRequest { hash, ranges: RangeSpecSeq::new([spec]) });
+                    anyhow::Ok(())
+                });
+            }
+            Event::UnsubscribeBitmap { id } => {
+                self.bitmap_subscription_tasks.remove(&id);
+            }
+            Event::StopDiscovery { id } => {
+                self.discovery_tasks.remove(&id);
+            }
+            Event::StopPeerDownload { id } => {
+                self.peer_download_tasks.remove(&id);
+            }
+            Event::Error { message } => {
+                error!("Error during processing event {}", message);
+            }
+            _ => {
+                println!("event: {:?}", ev);
+            }
         }
-        id
     }
+}
+
+/// A simple static content discovery mechanism
+struct StaticContentDiscovery {
+    info: BTreeMap<Hash, Vec<NodeId>>,
+    default: Vec<NodeId>,
+}
+
+impl ContentDiscovery for StaticContentDiscovery {
+    fn find_peers(&mut self, hash: Hash, _opts: FindPeersOpts) -> impl Stream<Item = NodeId> + Unpin + 'static {
+        let peers = self.info.get(&hash).unwrap_or(&self.default).clone();
+        futures_lite::stream::iter(peers).chain(futures_lite::stream::pending())
+    }
+}
+
+async fn stream_blob(initial: AtInitial) -> io::Result<Stats> {
+    // connect
+    let connected = initial.next().await?;
+    // read the first bytes
+    let ConnectedNext::StartRoot(start_root) = connected.next().await? else {
+        return Err(io::Error::new(io::ErrorKind::Other, "expected start root"));
+    };
+    let header = start_root.next();
+
+    // get the size of the content
+    let (mut content, _size) = header.next().await?;
+    // manually loop over the content and yield all data
+    let done = loop {
+        match content.next().await {
+            BlobContentNext::More((next, data)) => {
+                if let BaoContentItem::Leaf(leaf) = data? {
+                    // yield the data
+                    // co.yield_(Ok(leaf.data)).await;
+                }
+                content = next;
+            }
+            BlobContentNext::Done(done) => {
+                // we are done with the root blob
+                break done;
+            }
+        }
+    };
+    // close the connection even if there is more data
+    let closing = match done.next() {
+        EndBlobNext::Closing(closing) => closing,
+        EndBlobNext::MoreChildren(more) => more.finish(),
+    };
+    // close the connection
+    let stats = closing.next().await?;
+    Ok(stats)
+}
+
+fn spawn<F, T>(f: F) -> AbortOnDropHandle<T>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let task = tokio::spawn(f);
+    AbortOnDropHandle::new(task)
 }
 
 #[cfg(test)]
@@ -550,6 +667,7 @@ mod tests {
     use super::*;
     use bao_tree::ChunkNum;
     use testresult::TestResult;
+    use tracing::info;
 
     /// Create chunk ranges from an array of u64 ranges
     fn chunk_ranges(ranges: impl IntoIterator<Item = Range<u64>>) -> ChunkRanges {
@@ -562,151 +680,55 @@ mod tests {
 
     #[test]
     fn downloader_state_smoke() -> TestResult<()> {
+        let _ = tracing_subscriber::fmt::try_init();
         // let me = "0000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
-        let unknown_hash =
-            "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
+        let unknown_hash = "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
         let mut state = DownloaderState::new();
-        let evs = state.apply_and_get_evs(super::Command::StartDownload {
-            request: DownloadRequest {
-                hash,
-                ranges: chunk_ranges([0..64]),
-            },
-            id: 1,
-        });
-        assert!(
-            evs.iter()
-                .filter(|e| **e == Event::StartDiscovery { hash, id: 0 })
-                .count()
-                == 1,
-            "starting a download should start a discovery task"
-        );
-        assert!(
-            evs.iter()
-                .filter(|e| **e
-                    == Event::SubscribeBitmap {
-                        peer: None,
-                        hash,
-                        id: 0
-                    })
-                .count()
-                == 1,
-            "starting a download should subscribe to the local bitmap"
-        );
+        let evs = state.apply_and_get_evs(super::Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 1 });
+        assert!(evs.iter().filter(|e| **e == Event::StartDiscovery { hash, id: 0 }).count() == 1, "starting a download should start a discovery task");
+        assert!(evs.iter().filter(|e| **e == Event::SubscribeBitmap { peer: None, hash, id: 0 }).count() == 1, "starting a download should subscribe to the local bitmap");
         println!("{evs:?}");
-        let evs = state.apply_and_get_evs(Command::Bitmap {
-            peer: None,
-            hash,
-            bitmap: ChunkRanges::all(),
-        });
-        assert!(
-            evs.iter().any(|e| matches!(e, Event::Error { .. })),
-            "adding an open bitmap should produce an error!"
-        );
-        let evs = state.apply_and_get_evs(Command::Bitmap {
-            peer: None,
-            hash: unknown_hash,
-            bitmap: ChunkRanges::all(),
-        });
-        assert!(
-            evs.iter().any(|e| matches!(e, Event::Error { .. })),
-            "adding an open bitmap for an unknown hash should produce an error!"
-        );
+        let evs = state.apply_and_get_evs(Command::Bitmap { peer: None, hash, bitmap: ChunkRanges::all() });
+        assert!(evs.iter().any(|e| matches!(e, Event::Error { .. })), "adding an open bitmap should produce an error!");
+        let evs = state.apply_and_get_evs(Command::Bitmap { peer: None, hash: unknown_hash, bitmap: ChunkRanges::all() });
+        assert!(evs.iter().any(|e| matches!(e, Event::Error { .. })), "adding an open bitmap for an unknown hash should produce an error!");
         let initial_bitmap = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
-        let evs = state.apply_and_get_evs(Command::Bitmap {
-            peer: None,
-            hash,
-            bitmap: initial_bitmap.clone(),
-        });
+        let evs = state.apply_and_get_evs(Command::Bitmap { peer: None, hash, bitmap: initial_bitmap.clone() });
         assert!(evs.is_empty());
-        assert_eq!(
-            state
-                .bitmaps
-                .get(&(None, hash))
-                .context("bitmap should be present")?
-                .ranges,
-            initial_bitmap,
-            "bitmap should be set to the initial bitmap"
-        );
-        let evs = state.apply_and_get_evs(Command::BitmapUpdate {
-            peer: None,
-            hash,
-            added: chunk_ranges([16..32]),
-            removed: ChunkRanges::empty(),
-        });
+        assert_eq!(state.bitmaps.get(&(None, hash)).context("bitmap should be present")?.ranges, initial_bitmap, "bitmap should be set to the initial bitmap");
+        let evs = state.apply_and_get_evs(Command::BitmapUpdate { peer: None, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
-        assert_eq!(
-            state
-                .bitmaps
-                .get(&(None, hash))
-                .context("bitmap should be present")?
-                .ranges,
-            ChunkRanges::from(ChunkNum(0)..ChunkNum(32)),
-            "bitmap should be updated"
-        );
+        assert_eq!(state.bitmaps.get(&(None, hash)).context("bitmap should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitmap should be updated");
         let evs = state.apply_and_get_evs(super::Command::ChunksDownloaded {
             time: Duration::ZERO,
             peer: peer_a,
             hash,
             added: ChunkRanges::from(ChunkNum(0)..ChunkNum(16)),
         });
-        assert!(
-            evs.iter().any(|e| matches!(e, Event::Error { .. })),
-            "download from unknown peer should lead to an error!"
-        );
+        assert!(evs.iter().any(|e| matches!(e, Event::Error { .. })), "download from unknown peer should lead to an error!");
         let evs = state.apply_and_get_evs(Command::PeerDiscovered { peer: peer_a, hash });
-        assert!(
-            evs.iter()
-                .filter(|e| **e
-                    == Event::SubscribeBitmap {
-                        peer: Some(peer_a),
-                        hash,
-                        id: 1
-                    })
-                .count()
-                == 1,
-            "adding a new peer for a hash we are interested in should subscribe to the bitmap"
-        );
-        let evs = state.apply_and_get_evs(Command::Bitmap {
-            peer: Some(peer_a),
-            hash,
-            bitmap: chunk_ranges([0..64]),
-        });
-        assert!(
-            evs.iter()
-                .filter(|e| **e
-                    == Event::StartPeerDownload {
-                        id: 0,
-                        peer: peer_a,
-                        ranges: chunk_ranges([32..64])
-                    })
-                .count()
-                == 1,
-            "bitmap from a peer should start a download"
-        );
-        let evs = state.apply_and_get_evs(Command::ChunksDownloaded {
-            time: Duration::ZERO,
-            peer: peer_a,
-            hash,
-            added: chunk_ranges([32..64]),
-        });
-        assert!(
-            evs.iter()
-                .any(|e| matches!(e, Event::DownloadComplete { .. })),
-            "download should be completed by the data"
-        );
+        assert!(evs.iter().filter(|e| **e == Event::SubscribeBitmap { peer: Some(peer_a), hash, id: 1 }).count() == 1, "adding a new peer for a hash we are interested in should subscribe to the bitmap");
+        let evs = state.apply_and_get_evs(Command::Bitmap { peer: Some(peer_a), hash, bitmap: chunk_ranges([0..64]) });
+        assert!(evs.iter().filter(|e| **e == Event::StartPeerDownload { id: 0, peer: peer_a, hash, ranges: chunk_ranges([32..64]) }).count() == 1, "bitmap from a peer should start a download");
+        let evs = state.apply_and_get_evs(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..64]) });
+        assert!(evs.iter().any(|e| matches!(e, Event::DownloadComplete { .. })), "download should be completed by the data");
         println!("{evs:?}");
         Ok(())
     }
 
     #[tokio::test]
     async fn downloader_driver_smoke() -> TestResult<()> {
+        let _ = tracing_subscriber::fmt::try_init();
+        let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
+        let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let store = crate::store::mem::Store::new();
-        let endpoint = iroh::Endpoint::builder()
-            .alpns(vec![crate::protocol::ALPN.to_vec()])
-            .bind()
-            .await?;
+        let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).bind().await?;
+        let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer_a] };
+        let downloader = Downloader::new(endpoint, store, discovery);
+        let fut = downloader.download(DownloadRequest { hash, ranges: ChunkRanges::all() });
+        fut.await?;
         Ok(())
     }
 }
