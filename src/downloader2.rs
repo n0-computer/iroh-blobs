@@ -20,7 +20,7 @@
 //! The [DownloaderDriver] is the asynchronous driver for the state machine. It
 //! owns the actual tasks that perform IO.
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
     io,
     sync::Arc,
@@ -126,6 +126,119 @@ impl DownloadState {
     }
 }
 
+/// Trait for a download planner.
+///
+/// A download planner has the option to be stateful and keep track of plans
+/// depending on the hash, but many planners will be stateless.
+/// 
+/// Planners can do whatever they want with the chunk ranges. Usually, they
+/// want to deduplicate the ranges, but they could also do other things, like
+/// eliminate gaps or even extend ranges. The only thing they should not do is
+/// to add new peers to the list of options.
+trait DownloadPlanner: Send + 'static {
+    /// Make a download plan for a hash, by reducing or eliminating the overlap of chunk ranges
+    fn plan(&mut self, hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>);
+}
+
+type BoxedDownloadPlanner = Box<dyn DownloadPlanner>;
+
+/// A download planner that just leaves everything as is.
+///
+/// Data will be downloaded from all peers wherever multiple peers have the same data.
+struct NoopPlanner;
+
+impl DownloadPlanner for NoopPlanner {
+    fn plan(&mut self, _hash: Hash, _options: &mut BTreeMap<NodeId, ChunkRanges>) {}
+}
+
+/// A download planner that fully removes overlap between peers.
+/// 
+/// It divides files into stripes of a fixed size `1 << stripe_size_log` chunks,
+/// and for each stripe decides on a single peer to download from, based on the
+/// peer id and a random seed.
+struct StripePlanner {
+    /// seed for the score function. This can be set to 0 for testing for
+    /// maximum determinism, but can be set to a random value for production
+    /// to avoid multiple downloaders coming up with the same plan.
+    seed: u64,
+    /// The log of the stripe size in chunks. This planner is relatively
+    /// dumb and does not try to come up with continuous ranges, but you can
+    /// just set this to a large value to avoid fragmentation.
+    /// 
+    /// In the very common case where you have small downloads, this will
+    /// frequently just choose a single peer for the entire download.
+    ///
+    /// This is a feature, not a bug. For small downloads, it is not worth
+    /// the effort to come up with a more sophisticated plan.
+    stripe_size_log: u8,
+}
+
+impl StripePlanner {
+    pub fn new(seed: u64, stripe_size_log: u8) -> Self {
+        Self { seed, stripe_size_log }
+    }
+
+    /// The score function to decide which peer to download from.
+    fn score(peer: &NodeId, seed: u64, stripe: u64) -> u64 {
+        // todo: use fnv? blake3 is a bit overkill
+        let mut data = [0u8; 32 + 8 + 8];
+        data[..32].copy_from_slice(peer.as_bytes());
+        data[32..40].copy_from_slice(&stripe.to_be_bytes());
+        data[40..48].copy_from_slice(&seed.to_be_bytes());
+        let hash = blake3::hash(&data);
+        u64::from_be_bytes(hash.as_bytes()[..8].try_into().unwrap())
+    }
+}
+
+impl DownloadPlanner for StripePlanner {
+    fn plan(&mut self, _hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>) {
+        options.retain(|_, x| !x.is_empty());
+        if options.len() <= 1 {
+            return;
+        }
+        assert!(options.values().all(|x| x.boundaries().len() % 2 == 0), "open ranges not supported");
+        let mut ranges = Vec::new();
+        for x in options.values() {
+            ranges.extend(x.boundaries().iter().map(|x| x.0));
+        }
+        let min = ranges.iter().next().copied().unwrap();
+        let max = ranges.iter().next_back().copied().unwrap();
+        // add stripe subdividers
+        for i in (min >> self.stripe_size_log)..(max >> self.stripe_size_log) {
+            let x = i << self.stripe_size_log;
+            if x > min && x < max {
+                ranges.push(x);
+            }
+        }
+        ranges.sort();
+        ranges.dedup();
+        for range in ranges.windows(2) {
+            let start = ChunkNum(range[0]);
+            let end = ChunkNum(range[1]);
+            let curr = ChunkRanges::from(start..end);
+            let stripe = range[0] >> self.stripe_size_log;
+            let mut best_peer = None;
+            let mut best_score = 0;
+            let mut matching = vec![];
+            for (peer, peer_ranges) in options.iter_mut() {
+                if peer_ranges.contains(&start) {
+                    let score = Self::score(peer, self.seed, stripe);
+                    if score > best_score && peer_ranges.contains(&start) {
+                        best_peer = Some(*peer);
+                        best_score = score;
+                    }
+                    matching.push((peer, peer_ranges));
+                }
+            }
+            for (peer, peer_ranges) in matching {
+                if *peer != best_peer.unwrap() {
+                    peer_ranges.difference_with(&curr);
+                }
+            }
+        }
+    }
+}
+
 struct PeerDownloadState {
     id: PeerDownloadId,
     ranges: ChunkRanges,
@@ -157,10 +270,12 @@ struct DownloaderState {
     next_discovery_id: u64,
     // the next peer download id
     next_peer_download_id: u64,
+    // the download planner
+    planner: Box<dyn DownloadPlanner>,
 }
 
 impl DownloaderState {
-    fn new() -> Self {
+    fn new(planner: Box<dyn DownloadPlanner>) -> Self {
         Self {
             peers: BTreeMap::new(),
             downloads: BTreeMap::new(),
@@ -169,6 +284,7 @@ impl DownloaderState {
             next_subscription_id: 0,
             next_discovery_id: 0,
             next_peer_download_id: 0,
+            planner,
         }
     }
 }
@@ -302,6 +418,42 @@ impl DownloaderState {
         }
     }
 
+    /// Stop a download and clean up
+    /// 
+    /// This is called both for stopping a download before completion, and for
+    /// cleaning up after a successful download.
+    /// 
+    /// Cleanup involves emitting events for
+    /// - stopping all peer downloads
+    /// - unsubscribing from bitmaps if needed
+    /// - stopping the discovery task if needed
+    fn stop_download(&mut self, id: u64, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+        let removed = self.downloads.remove(&id).context(format!("removed unknown download {id}"))?;
+        let removed_hash = removed.request.hash;
+        // stop associated peer downloads
+        for peer_download in removed.peer_downloads.values() {
+            evs.push(Event::StopPeerDownload { id: peer_download.id });
+        }
+        // unsubscribe from bitmaps that have no more subscriptions
+        self.bitmaps.retain(|(_peer, hash), state| {
+            if *hash == removed_hash {
+                state.subscription_count -= 1;
+                if state.subscription_count == 0 {
+                    evs.push(Event::UnsubscribeBitmap { id: state.subscription_id });
+                    return false;
+                }
+            }
+            true
+        });
+        let hash_interest = self.downloads.values().filter(|x| x.request.hash == removed.request.hash).count();
+        if hash_interest == 0 {
+            // stop the discovery task if we were the last one interested in the hash
+            let discovery_id = self.discovery.remove(&removed.request.hash).context(format!("removed unknown discovery task for {}", removed.request.hash))?;
+            evs.push(Event::StopDiscovery { id: discovery_id });
+        }
+        Ok(())
+    }
+
     /// Apply a command and bail out on error
     fn apply0(&mut self, cmd: Command, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         match cmd {
@@ -327,17 +479,7 @@ impl DownloaderState {
                 self.downloads.insert(id, DownloadState::new(request));
             }
             Command::StopDownload { id } => {
-                let removed = self.downloads.remove(&id).context(format!("removed unknown download {id}"))?;
-                self.bitmaps.retain(|(_peer, hash), state| {
-                    if *hash == removed.request.hash {
-                        state.subscription_count -= 1;
-                        if state.subscription_count == 0 {
-                            evs.push(Event::UnsubscribeBitmap { id: state.subscription_id });
-                            return false;
-                        }
-                    }
-                    true
-                });
+                self.stop_download(id, evs)?;
             }
             Command::PeerDiscovered { peer, hash } => {
                 if self.bitmaps.contains_key(&(Some(peer), hash)) {
@@ -371,12 +513,18 @@ impl DownloaderState {
                 let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap for unknown peer {peer:?} and hash {hash}"))?;
                 let _chunks = total_chunks(&bitmap).context("open range")?;
                 state.ranges = bitmap;
+                if peer.is_none() {
+                    self.check_completion(hash, evs)?;
+                }
                 self.rebalance_downloads(hash, evs)?;
             }
             Command::BitmapUpdate { peer, hash, added, removed } => {
                 let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap update for unknown peer {peer:?} and hash {hash}"))?;
                 state.ranges |= added;
                 state.ranges &= !removed;
+                if peer.is_none() {
+                    self.check_completion(hash, evs)?;
+                }
                 self.rebalance_downloads(hash, evs)?;
             }
             Command::ChunksDownloaded { time, peer, hash, added } => {
@@ -393,26 +541,73 @@ impl DownloaderState {
         Ok(())
     }
 
-    fn rebalance_downloads(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+    /// Check for completion of a download or of an individual peer download
+    ///
+    /// This must be called after each change of the local bitmap for a hash
+    fn check_completion(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         let Some(self_state) = self.bitmaps.get(&(None, hash)) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
         let mut completed = vec![];
         for (id, download) in self.downloads.iter_mut().filter(|(_id, download)| download.request.hash == hash) {
-            let remaining = &download.request.ranges - &self_state.ranges;
-            info!("Remaining chunks for download {id}: {remaining:?}");
-            if remaining.is_empty() {
-                // cancel all downloads, if needed
-                for (_, peer_download) in &download.peer_downloads {
-                    evs.push(Event::StopPeerDownload { id: peer_download.id });
-                }
+            // check if the entire download is complete. If this is the case, peer downloads will be cleaned up later
+            if self_state.ranges.is_superset(&download.request.ranges) {
                 // notify the user that the download is complete
                 evs.push(Event::DownloadComplete { id: *id });
-                // mark the download for later removal
+                // remember id for later cleanup
                 completed.push(*id);
+                // no need to look at individual peer downloads in this case
                 continue;
             }
+            // check if any peer download is complete, and remove it.
+            let mut available = vec![];
+            download.peer_downloads.retain(|peer, peer_download| {
+                if self_state.ranges.is_superset(&peer_download.ranges) {
+                    // stop this peer download.
+                    //
+                    // Might be a noop if the cause for this local change was the same peer download, but we don't know.
+                    evs.push(Event::StopPeerDownload { id: peer_download.id });
+                    // mark this peer as available
+                    available.push(*peer);
+                    false
+                } else {
+                    true
+                }
+            });
+            // reassign the newly available peers without doing a full rebalance
+            if !available.is_empty() {
+                // check if any of the available peers can provide something of the remaining data
+                let remaining = &download.request.ranges - &self_state.ranges;
+                // see what the new peers can do for us
+                let mut candidates= BTreeMap::new();
+                for peer in available {
+                    let Some(peer_state) = self.bitmaps.get(&(Some(peer), hash)) else {
+                        // weird. we should have a bitmap for this peer since it just completed a download
+                        continue;
+                    };
+                    let intersection = &peer_state.ranges & &remaining;
+                    if !intersection.is_empty() {
+                        candidates.insert(peer, intersection);
+                    }
+                }
+                // todo: make a plan and create new peer downloads if possible
+            }
+        }
+        // cleanup completed downloads, has to happen later to avoid double mutable borrow
+        for id in completed {
+            self.stop_download(id, evs)?;
+        }
+        Ok(())
+    }
+
+    fn rebalance_downloads(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+        let Some(self_state) = self.bitmaps.get(&(None, hash)) else {
+            // we don't have the self state yet, so we can't really decide if we need to download anything at all
+            return Ok(());
+        };
+        for (id, download) in self.downloads.iter_mut().filter(|(_id, download)| download.request.hash == hash) {
+            let remaining = &download.request.ranges - &self_state.ranges;
             let mut candidates = vec![];
             for ((peer, _), bitmap) in self.bitmaps.iter().filter(|((peer, x), _)| peer.is_some() && *x == hash) {
                 let intersection = &bitmap.ranges & &remaining;
@@ -434,9 +629,6 @@ impl DownloaderState {
                 evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
                 download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
             }
-        }
-        for id in completed {
-            self.downloads.remove(&id);
         }
         Ok(())
     }
@@ -467,8 +659,8 @@ impl Downloader {
         Ok(())
     }
 
-    fn new<S: Store, D: ContentDiscovery>(endpoint: Endpoint, store: S, discovery: D, local_pool: LocalPool) -> Self {
-        let actor = DownloaderActor::new(endpoint, store, discovery, local_pool);
+    fn new<S: Store, D: ContentDiscovery>(endpoint: Endpoint, store: S, discovery: D, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+        let actor = DownloaderActor::new(endpoint, store, discovery, local_pool, planner);
         let (send, recv) = tokio::sync::mpsc::channel(256);
         let task = Arc::new(spawn(async move { actor.run(recv).await }));
         Self { send, task }
@@ -497,12 +689,12 @@ struct DownloaderActor<S, D> {
 }
 
 impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
-    fn new(endpoint: Endpoint, store: S, discovery: D, local_pool: LocalPool) -> Self {
+    fn new(endpoint: Endpoint, store: S, discovery: D, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let (send, recv) = mpsc::channel(256);
         Self {
             local_pool,
             endpoint,
-            state: DownloaderState::new(),
+            state: DownloaderState::new(planner),
             store,
             discovery,
             peer_download_tasks: BTreeMap::new(),
@@ -694,6 +886,122 @@ where
     AbortOnDropHandle::new(task)
 }
 
+fn print_bitmap(iter: impl IntoIterator<Item = bool>) -> String {
+    let mut chars = String::new();
+    for x in iter {
+        chars.push(if x { '█' } else { ' ' });
+    }
+    chars
+}
+
+fn print_bitmap_compact(iter: impl IntoIterator<Item = bool>) -> String {
+    let mut chars = String::new();
+    let mut iter = iter.into_iter();
+
+    while let (Some(left), Some(right)) = (iter.next(), iter.next()) {
+        let c = match (left, right) {
+            (true, true) => '█',  // Both pixels are "on"
+            (true, false) => '▌', // Left pixel is "on"
+            (false, true) => '▐', // Right pixel is "on"
+            (false, false) => ' ', // Both are "off"
+        };
+        chars.push(c);
+    }
+
+    // If there's an odd pixel at the end, print only a left block.
+    if let Some(left) = iter.next() {
+        chars.push(if left { '▌' } else { ' ' });
+    }
+
+    chars
+}
+
+fn as_bool_iter(x: ChunkRanges, max: u64) -> impl Iterator<Item = bool> {
+    let max = x.iter().last().map(|x| match x {
+        RangeSetRange::RangeFrom(_) => max,
+        RangeSetRange::Range(x) => x.end.0,
+    }).unwrap_or_default();
+    (0..max).map(move |i| x.contains(&ChunkNum(i)))
+}
+
+/// Given a set of ranges, make them non-overlapping according to some rules.
+fn select_ranges(ranges: &[ChunkRanges], continuity_bonus: u64) -> Vec<Option<usize>> {
+    let mut total = vec![0u64; ranges.len()];
+    let mut boundaries = BTreeSet::new();
+    assert!(ranges.iter().all(|x| x.boundaries().len() % 2 == 0));
+    for range in ranges.iter() {
+        for x in range.boundaries() {
+            boundaries.insert(x.0);
+        }
+    }
+    let max = boundaries.iter().max().copied().unwrap_or(0);
+    let mut last_selected = None;
+    let mut res = vec![];
+    for i in 0..max {
+        let mut lowest_score = u64::MAX;
+        let mut selected = None;
+        for j in 0..ranges.len() {
+            if ranges[j].contains(&ChunkNum(i)) {
+                let consecutive = last_selected == Some(j);
+                let score = if consecutive {
+                    total[j].saturating_sub(continuity_bonus)
+                } else {
+                    total[j]
+                };
+                if score < lowest_score {
+                    lowest_score = score;
+                    selected = Some(j);
+                }
+            }
+        }
+        res.push(selected);
+        if let Some(selected) = selected {
+            total[selected] += 1;
+        }
+        last_selected = selected;
+    }
+    res
+}
+
+fn create_ranges(indexes: impl IntoIterator<Item = Option<usize>>) -> Vec<ChunkRanges> {
+    let mut res = vec![];
+    for (i, n) in indexes.into_iter().enumerate() {
+        let x = i as u64;
+        if let Some(n) = n {
+            while res.len() <= n {
+                res.push(ChunkRanges::empty());
+            }
+            res[n] |= ChunkRanges::from(ChunkNum(x)..ChunkNum(x + 1));
+        }
+    }
+    res
+}
+
+fn print_colored_bitmap(data: &[u8], colors: &[u8]) -> String {
+    let mut chars = String::new();
+    let mut iter = data.iter();
+
+    while let Some(&left) = iter.next() {
+        let right = iter.next(); // Try to fetch the next element
+        
+        let left_color = colors.get(left as usize).map(|x| *x).unwrap_or_default();
+        let right_char = match right {
+            Some(&right) => {
+                let right_color = colors.get(right as usize).map(|x| *x).unwrap_or_default();
+                // Use ANSI escape codes to color left and right halves of `█`
+                format!(
+                    "\x1b[38;5;{}m\x1b[48;5;{}m▌\x1b[0m", 
+                    left_color, right_color
+                )
+            }
+            None => format!("\x1b[38;5;{}m▌\x1b[0m", left_color), // Handle odd-length case
+        };
+
+        chars.push_str(&right_char);
+    }
+    chars
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Range;
@@ -704,6 +1012,53 @@ mod tests {
     use bao_tree::ChunkNum;
     use iroh::protocol::Router;
     use testresult::TestResult;
+
+    #[test]
+    fn print_chunk_range() {
+        let x = chunk_ranges([0..3, 4..30, 40..50]);
+        let s = print_bitmap_compact(as_bool_iter(x, 50));
+        println!("{}", s);
+    }
+
+    #[test]
+    fn test_select_ranges() {
+        let ranges = [
+            chunk_ranges([0..90]),
+            chunk_ranges([0..100]),
+            chunk_ranges([0..80]),
+        ];
+        let iter = select_ranges(ranges.as_slice(), 8);
+        for (i, range) in ranges.iter().enumerate() {
+            let bools = as_bool_iter(range.clone(), 100).collect::<Vec<_>>();
+            println!("{i:4}{}", print_bitmap(bools));
+        }
+        print!("    ");
+        for x in &iter {
+            print!("{}", x.map(|x| x.to_string()).unwrap_or(" ".to_string()));
+        }
+        println!();
+        let ranges = create_ranges(iter);
+        for (i, range) in ranges.iter().enumerate() {
+            let bools = as_bool_iter(range.clone(), 100).collect::<Vec<_>>();
+            println!("{i:4}{}", print_bitmap(bools));
+        }
+    }
+
+    #[test]
+    fn test_is_superset() {
+        let local = ChunkRanges::from(ChunkNum(0)..ChunkNum(100));
+        let request = ChunkRanges::from(ChunkNum(0)..ChunkNum(50));
+        assert!(local.is_superset(&request));
+    }
+
+    #[test]
+    fn test_print_colored_bitmap() {
+        let bitmap = vec![
+            0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+        ]; // Notice: odd-length input
+    
+        println!("{}", print_colored_bitmap(&bitmap, &[1,2,3,4]));
+    }
 
     #[cfg(feature = "rpc")]
     async fn make_test_node(data: &[u8]) -> anyhow::Result<(Router, NodeId, Hash)> {
@@ -725,6 +1080,19 @@ mod tests {
         res
     }
 
+    fn noop_planner() -> BoxedDownloadPlanner {
+        Box::new(NoopPlanner)
+    }
+
+    /// Checks if an exact event is present exactly once in a list of events
+    fn has_one_event(evs: &[Event], ev: &Event) -> bool {
+        evs.iter().filter(|e| *e == ev).count() == 1
+    }
+
+    fn has_one_event_matching(evs: &[Event], f: impl Fn(&Event) -> bool) -> bool {
+        evs.iter().filter(|e| f(e)).count() == 1
+    }
+
     #[test]
     fn downloader_state_smoke() -> TestResult<()> {
         let _ = tracing_subscriber::fmt::try_init();
@@ -732,13 +1100,12 @@ mod tests {
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let unknown_hash = "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
-        let mut state = DownloaderState::new();
+        let mut state = DownloaderState::new(noop_planner());
         let evs = state.apply_and_get_evs(super::Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 1 });
-        assert!(evs.iter().filter(|e| **e == Event::StartDiscovery { hash, id: 0 }).count() == 1, "starting a download should start a discovery task");
-        assert!(evs.iter().filter(|e| **e == Event::SubscribeBitmap { peer: None, hash, id: 0 }).count() == 1, "starting a download should subscribe to the local bitmap");
-        println!("{evs:?}");
+        assert!(has_one_event(&evs, &Event::StartDiscovery { hash, id: 0 }), "starting a download should start a discovery task");
+        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: None, hash, id: 0 }), "starting a download should subscribe to the local bitmap");
         let evs = state.apply_and_get_evs(Command::Bitmap { peer: None, hash, bitmap: ChunkRanges::all() });
-        assert!(evs.iter().any(|e| matches!(e, Event::Error { .. })), "adding an open bitmap should produce an error!");
+        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap should produce an error!");
         let evs = state.apply_and_get_evs(Command::Bitmap { peer: None, hash: unknown_hash, bitmap: ChunkRanges::all() });
         assert!(evs.iter().any(|e| matches!(e, Event::Error { .. })), "adding an open bitmap for an unknown hash should produce an error!");
         let initial_bitmap = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
@@ -765,7 +1132,7 @@ mod tests {
         // Bitmap update for the local bitmap should complete the download
         let evs = state.apply_and_get_evs(Command::BitmapUpdate { peer: None, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
         assert!(evs.iter().filter(|e| matches!(e, Event::DownloadComplete { .. })).count() == 1, "download should be completed by the data");
-        println!("{evs:?}");
+        println!("XXX {evs:?}");
         Ok(())
     }
 
@@ -778,7 +1145,7 @@ mod tests {
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
         let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, local_pool);
+        let downloader = Downloader::new(endpoint, store, discovery, local_pool, noop_planner());
         tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1]) });
         fut.await?;
@@ -803,7 +1170,7 @@ mod tests {
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
         let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, local_pool);
+        let downloader = Downloader::new(endpoint, store, discovery, local_pool, noop_planner());
         tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
         fut.await?;
