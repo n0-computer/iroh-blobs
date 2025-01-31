@@ -887,13 +887,14 @@ impl DownloaderState {
             return Ok(());
         };
         let remaining = &download.request.ranges - &self_state.ranges;
-        let mut candidates = vec![];
+        let mut candidates = BTreeMap::new();
         for (peer, bitmap) in self.bitmaps.remote_for_hash(hash) {
             let intersection = &bitmap.ranges & &remaining;
             if !intersection.is_empty() {
-                candidates.push((*peer, intersection));
+                candidates.insert(*peer, intersection);
             }
         }
+        self.planner.plan(hash, &mut candidates);
         info!("Stopping {} old peer downloads", download.peer_downloads.len());
         for (_, state) in &download.peer_downloads {
             // stop all downloads
@@ -1536,7 +1537,7 @@ mod tests {
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
         let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, local_pool, noop_planner());
+        let downloader = Downloader::new(endpoint, store, discovery, local_pool, Box::new(StripePlanner2::new(0, 8)));
         tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
         fut.await?;
