@@ -38,10 +38,8 @@ use crate::{
 };
 use anyhow::Context;
 use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
-use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
-use iroh::{discovery, Endpoint, NodeId};
-use quinn::Chunk;
+use iroh::{Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -126,6 +124,20 @@ impl DownloadState {
     }
 }
 
+#[derive(Debug, Default)]
+struct IdGenerator {
+    next_id: u64,
+}
+
+impl IdGenerator {
+
+    fn next(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}
+
 /// Trait for a download planner.
 ///
 /// A download planner has the option to be stateful and keep track of plans
@@ -192,26 +204,12 @@ impl StripePlanner {
 
 impl DownloadPlanner for StripePlanner {
     fn plan(&mut self, _hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>) {
+        assert!(options.values().all(|x| x.boundaries().len() % 2 == 0), "open ranges not supported");
         options.retain(|_, x| !x.is_empty());
         if options.len() <= 1 {
             return;
         }
-        assert!(options.values().all(|x| x.boundaries().len() % 2 == 0), "open ranges not supported");
-        let mut ranges = Vec::new();
-        for x in options.values() {
-            ranges.extend(x.boundaries().iter().map(|x| x.0));
-        }
-        let min = ranges.iter().next().copied().unwrap();
-        let max = ranges.iter().next_back().copied().unwrap();
-        // add stripe subdividers
-        for i in (min >> self.stripe_size_log)..(max >> self.stripe_size_log) {
-            let x = i << self.stripe_size_log;
-            if x > min && x < max {
-                ranges.push(x);
-            }
-        }
-        ranges.sort();
-        ranges.dedup();
+        let ranges = get_continuous_ranges(options, self.stripe_size_log).unwrap();
         for range in ranges.windows(2) {
             let start = ChunkNum(range[0]);
             let end = ChunkNum(range[1]);
@@ -236,8 +234,109 @@ impl DownloadPlanner for StripePlanner {
                 }
             }
         }
+        options.retain(|_, x| !x.is_empty());
     }
 }
+
+fn get_continuous_ranges(options: &mut BTreeMap<NodeId, ChunkRanges>, stripe_size_log: u8) -> Option<Vec<u64>> {
+    let mut ranges = BTreeSet::new();
+    for x in options.values() {
+        ranges.extend(x.boundaries().iter().map(|x| x.0));
+    }
+    let min = ranges.iter().next().copied()?;
+    let max = ranges.iter().next_back().copied()?;
+    // add stripe subdividers
+    for i in (min >> stripe_size_log)..(max >> stripe_size_log) {
+        let x = i << stripe_size_log;
+        if x > min && x < max {
+            ranges.insert(x);
+        }
+    }
+    let ranges = ranges.into_iter().collect::<Vec<_>>();
+    Some(ranges)
+}
+
+
+/// A download planner that fully removes overlap between peers.
+/// 
+/// It divides files into stripes of a fixed size `1 << stripe_size_log` chunks,
+/// and for each stripe decides on a single peer to download from, based on the
+/// peer id and a random seed.
+struct StripePlanner2 {
+    /// seed for the score function. This can be set to 0 for testing for
+    /// maximum determinism, but can be set to a random value for production
+    /// to avoid multiple downloaders coming up with the same plan.
+    seed: u64,
+    /// The log of the stripe size in chunks. This planner is relatively
+    /// dumb and does not try to come up with continuous ranges, but you can
+    /// just set this to a large value to avoid fragmentation.
+    /// 
+    /// In the very common case where you have small downloads, this will
+    /// frequently just choose a single peer for the entire download.
+    ///
+    /// This is a feature, not a bug. For small downloads, it is not worth
+    /// the effort to come up with a more sophisticated plan.
+    stripe_size_log: u8,
+}
+
+impl StripePlanner2 {
+    pub fn new(seed: u64, stripe_size_log: u8) -> Self {
+        Self { seed, stripe_size_log }
+    }
+
+    /// The score function to decide which peer to download from.
+    fn score(peer: &NodeId, seed: u64) -> u64 {
+        // todo: use fnv? blake3 is a bit overkill
+        let mut data = [0u8; 32 + 8];
+        data[..32].copy_from_slice(peer.as_bytes());
+        data[32..40].copy_from_slice(&seed.to_be_bytes());
+        let hash = blake3::hash(&data);
+        u64::from_be_bytes(hash.as_bytes()[..8].try_into().unwrap())
+    }
+}
+
+impl DownloadPlanner for StripePlanner2 {
+    fn plan(&mut self, _hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>) {
+        assert!(options.values().all(|x| x.boundaries().len() % 2 == 0), "open ranges not supported");
+        options.retain(|_, x| !x.is_empty());
+        if options.len() <= 1 {
+            return;
+        }
+        let ranges = get_continuous_ranges(options, self.stripe_size_log).unwrap();
+        for range in ranges.windows(2) {
+            let start = ChunkNum(range[0]);
+            let end = ChunkNum(range[1]);
+            let curr = ChunkRanges::from(start..end);
+            let stripe = range[0] >> self.stripe_size_log;
+            let mut best_peer = None;
+            let mut best_score = None;
+            let mut matching = vec![];
+            for (peer, peer_ranges) in options.iter_mut() {
+                if peer_ranges.contains(&start) {
+                    matching.push((peer, peer_ranges));
+                }
+            }
+            let mut peer_and_score = matching.iter().map(|(peer, _)| (Self::score(peer, self.seed), peer)).collect::<Vec<_>>();
+            peer_and_score.sort();
+            let peer_to_rank = peer_and_score.into_iter().enumerate().map(|(i, (_, peer))| (*peer, i as u64)).collect::<BTreeMap<_, _>>();
+            let n = matching.len() as u64;
+            for (peer, _) in matching.iter() {
+                let score = Some((peer_to_rank[*peer] + stripe) % n);
+                if score > best_score {
+                    best_peer = Some(**peer);
+                    best_score = score;
+                }
+            }
+            for (peer, peer_ranges) in matching {
+                if *peer != best_peer.unwrap() {
+                    peer_ranges.difference_with(&curr);
+                }
+            }
+        }
+        options.retain(|_, x| !x.is_empty());
+    }
+}
+
 
 struct PeerDownloadState {
     id: PeerDownloadId,
@@ -265,11 +364,11 @@ struct DownloaderState {
     // We could use uuid here, but using integers simplifies testing.
     //
     // the next subscription id
-    next_subscription_id: BitmapSubscriptionId,
+    subscription_id_gen: IdGenerator,
     // the next discovery id
-    next_discovery_id: u64,
+    discovery_id_gen: IdGenerator,
     // the next peer download id
-    next_peer_download_id: u64,
+    peer_download_id_gen: IdGenerator,
     // the download planner
     planner: Box<dyn DownloadPlanner>,
 }
@@ -281,9 +380,9 @@ impl DownloaderState {
             downloads: BTreeMap::new(),
             bitmaps: BTreeMap::new(),
             discovery: BTreeMap::new(),
-            next_subscription_id: 0,
-            next_discovery_id: 0,
-            next_peer_download_id: 0,
+            subscription_id_gen: Default::default(),
+            discovery_id_gen: Default::default(),
+            peer_download_id_gen: Default::default(),
             planner,
         }
     }
@@ -382,23 +481,6 @@ enum Event {
 }
 
 impl DownloaderState {
-    fn next_subscription_id(&mut self) -> u64 {
-        let id = self.next_subscription_id;
-        self.next_subscription_id += 1;
-        id
-    }
-
-    fn next_discovery_id(&mut self) -> u64 {
-        let id = self.next_discovery_id;
-        self.next_discovery_id += 1;
-        id
-    }
-
-    fn next_peer_download_id(&mut self) -> u64 {
-        let id = self.next_peer_download_id;
-        self.next_peer_download_id += 1;
-        id
-    }
 
     fn count_providers(&self, hash: Hash) -> usize {
         self.bitmaps.iter().filter(|((peer, x), _)| peer.is_some() && *x == hash).count()
@@ -466,13 +548,13 @@ impl DownloaderState {
                     state.subscription_count += 1;
                 } else {
                     // create a new subscription
-                    let subscription_id = self.next_subscription_id();
+                    let subscription_id = self.subscription_id_gen.next();
                     evs.push(Event::SubscribeBitmap { peer: None, hash: request.hash, id: subscription_id });
                     self.bitmaps.insert((None, request.hash), PeerBlobState::new(subscription_id));
                 }
                 if !self.discovery.contains_key(&request.hash) {
                     // start a discovery task
-                    let discovery_id = self.next_discovery_id();
+                    let discovery_id = self.discovery_id_gen.next();
                     evs.push(Event::StartDiscovery { hash: request.hash, id: discovery_id });
                     self.discovery.insert(request.hash, discovery_id);
                 }
@@ -493,7 +575,7 @@ impl DownloaderState {
                 // create a peer state if it does not exist
                 let _state = self.peers.entry(peer).or_default();
                 // create a new subscription
-                let subscription_id = self.next_subscription_id();
+                let subscription_id = self.subscription_id_gen.next();
                 evs.push(Event::SubscribeBitmap { peer: Some(peer), hash, id: subscription_id });
                 self.bitmaps.insert((Some(peer), hash), PeerBlobState::new(subscription_id));
             }
@@ -544,6 +626,8 @@ impl DownloaderState {
     /// Check for completion of a download or of an individual peer download
     ///
     /// This must be called after each change of the local bitmap for a hash
+    /// 
+    /// In addition to checking for completion, this also create new peer downloads if a peer download is complete and there is more data available for that peer.
     fn check_completion(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         let Some(self_state) = self.bitmaps.get(&(None, hash)) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
@@ -578,7 +662,11 @@ impl DownloaderState {
             // reassign the newly available peers without doing a full rebalance
             if !available.is_empty() {
                 // check if any of the available peers can provide something of the remaining data
-                let remaining = &download.request.ranges - &self_state.ranges;
+                let mut remaining = &download.request.ranges - &self_state.ranges;
+                // subtract the ranges that are already being taken care of by remaining peer downloads
+                for peer_download in download.peer_downloads.values() {
+                    remaining.difference_with(&peer_download.ranges);
+                }
                 // see what the new peers can do for us
                 let mut candidates= BTreeMap::new();
                 for peer in available {
@@ -591,12 +679,45 @@ impl DownloaderState {
                         candidates.insert(peer, intersection);
                     }
                 }
-                // todo: make a plan and create new peer downloads if possible
+                // deduplicate the ranges
+                self.planner.plan(hash, &mut candidates);
+                // start new downloads
+                for (peer, ranges) in candidates {
+                    let id = self.peer_download_id_gen.next();
+                    evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
+                    download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
+                }
             }
         }
         // cleanup completed downloads, has to happen later to avoid double mutable borrow
         for id in completed {
             self.stop_download(id, evs)?;
+        }
+        Ok(())
+    }
+
+    /// Look at all downloads for a hash and see start peer downloads for those that do not have any yet
+    fn start_downloads(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+        let Some(self_state) = self.bitmaps.get(&(None, hash)) else {
+            // we don't have the self state yet, so we can't really decide if we need to download anything at all
+            return Ok(());
+        };
+        for (_id, download) in self.downloads.iter_mut().filter(|(_id, download)| download.request.hash == hash && download.peer_downloads.is_empty()) {
+            let remaining = &download.request.ranges - &self_state.ranges;
+            let mut candidates = BTreeMap::new();
+            for ((peer, _), bitmap) in self.bitmaps.iter().filter(|((peer, x), _)| peer.is_some() && *x == hash) {
+                let intersection = &bitmap.ranges & &remaining;
+                if !intersection.is_empty() {
+                    candidates.insert(peer.unwrap(), intersection);
+                }
+            }
+            self.planner.plan(hash, &mut candidates);
+            for (peer, ranges) in candidates {
+                info!("  Starting download from {peer} for {hash} {ranges:?}");
+                let id = self.peer_download_id_gen.next();
+                evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
+                download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
+            }
         }
         Ok(())
     }
@@ -624,8 +745,7 @@ impl DownloaderState {
             download.peer_downloads.clear();
             for (peer, ranges) in candidates {
                 info!("  Starting download from {peer} for {hash} {ranges:?}");
-                let id = self.next_peer_download_id;
-                self.next_peer_download_id += 1;
+                let id = self.peer_download_id_gen.next();
                 evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
                 download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
             }
@@ -685,7 +805,7 @@ struct DownloaderActor<S, D> {
     peer_download_tasks: BTreeMap<PeerDownloadId, local_pool::Run<anyhow::Result<()>>>,
     discovery_tasks: BTreeMap<DiscoveryId, AbortOnDropHandle<()>>,
     bitmap_subscription_tasks: BTreeMap<BitmapSubscriptionId, AbortOnDropHandle<()>>,
-    next_download_id: DownloadId,
+    download_id_gen: IdGenerator,
 }
 
 impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
@@ -703,7 +823,7 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
             download_futs: BTreeMap::new(),
             command_tx: send,
             command_rx: recv,
-            next_download_id: 0,
+            download_id_gen: Default::default(),
         }
     }
 
@@ -723,7 +843,7 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
                         UserCommand::Download {
                             request, done,
                         } => {
-                            let id = self.next_download_id();
+                            let id = self.download_id_gen.next();
                             self.download_futs.insert(id, done);
                             self.command_tx.send(Command::StartDownload { request, id }).await.ok();
                         }
@@ -731,12 +851,6 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
                 },
             }
         }
-    }
-
-    fn next_download_id(&mut self) -> DownloadId {
-        let id = self.next_download_id;
-        self.next_download_id += 1;
-        id
     }
 
     fn handle_event(&mut self, ev: Event, depth: usize) {
@@ -916,12 +1030,13 @@ fn print_bitmap_compact(iter: impl IntoIterator<Item = bool>) -> String {
     chars
 }
 
-fn as_bool_iter(x: ChunkRanges, max: u64) -> impl Iterator<Item = bool> {
+fn as_bool_iter(x: &ChunkRanges, max: u64) -> impl Iterator<Item = bool> {
     let max = x.iter().last().map(|x| match x {
         RangeSetRange::RangeFrom(_) => max,
         RangeSetRange::Range(x) => x.end.0,
     }).unwrap_or_default();
-    (0..max).map(move |i| x.contains(&ChunkNum(i)))
+    let res = (0..max).map(move |i| x.contains(&ChunkNum(i))).collect::<Vec<_>>();
+    res.into_iter()
 }
 
 /// Given a set of ranges, make them non-overlapping according to some rules.
@@ -1010,14 +1125,61 @@ mod tests {
 
     use super::*;
     use bao_tree::ChunkNum;
-    use iroh::protocol::Router;
+    use iroh::{protocol::Router, SecretKey};
     use testresult::TestResult;
 
     #[test]
     fn print_chunk_range() {
         let x = chunk_ranges([0..3, 4..30, 40..50]);
-        let s = print_bitmap_compact(as_bool_iter(x, 50));
+        let s = print_bitmap_compact(as_bool_iter(&x, 50));
         println!("{}", s);
+    }
+
+    fn peer(id: u8) -> NodeId {
+        let mut secret = [0; 32];
+        secret[0] = id;
+        SecretKey::from(secret).public()
+    }
+
+    #[test]
+    fn test_planner() {
+        let mut planner = StripePlanner2::new(0, 4);
+        let hash = Hash::new(b"test");
+        let mut ranges = make_range_map(&[
+            chunk_ranges([0..100]),
+            chunk_ranges([0..110]),
+            chunk_ranges([0..120]),
+        ]);
+        print_range_map(&ranges);
+        println!("planning");
+        planner.plan(hash, &mut ranges);
+        print_range_map(&ranges);
+        println!("---");
+        let mut ranges = make_range_map(&[
+            chunk_ranges([0..100]),
+            chunk_ranges([0..110]),
+            chunk_ranges([0..120]),
+            chunk_ranges([0..50]),
+        ]);
+        print_range_map(&ranges);
+        println!("planning");
+        planner.plan(hash, &mut ranges);
+        print_range_map(&ranges);
+    }
+
+    fn make_range_map(ranges: &[ChunkRanges]) -> BTreeMap<NodeId, ChunkRanges> {
+        let mut res = BTreeMap::new();
+        for (i, range) in ranges.iter().enumerate() {
+            res.insert(peer(i as u8), range.clone());
+        }
+        res
+    }
+
+    fn print_range_map(ranges: &BTreeMap<NodeId, ChunkRanges>) {
+        for (peer, ranges) in ranges {
+            let x = print_bitmap(as_bool_iter(ranges, 100));
+            println!("{peer}: {x}");
+        }
     }
 
     #[test]
@@ -1029,7 +1191,7 @@ mod tests {
         ];
         let iter = select_ranges(ranges.as_slice(), 8);
         for (i, range) in ranges.iter().enumerate() {
-            let bools = as_bool_iter(range.clone(), 100).collect::<Vec<_>>();
+            let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
             println!("{i:4}{}", print_bitmap(bools));
         }
         print!("    ");
@@ -1039,7 +1201,7 @@ mod tests {
         println!();
         let ranges = create_ranges(iter);
         for (i, range) in ranges.iter().enumerate() {
-            let bools = as_bool_iter(range.clone(), 100).collect::<Vec<_>>();
+            let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
             println!("{i:4}{}", print_bitmap(bools));
         }
     }
