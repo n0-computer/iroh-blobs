@@ -130,7 +130,6 @@ struct IdGenerator {
 }
 
 impl IdGenerator {
-
     fn next(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -142,7 +141,7 @@ impl IdGenerator {
 ///
 /// A download planner has the option to be stateful and keep track of plans
 /// depending on the hash, but many planners will be stateless.
-/// 
+///
 /// Planners can do whatever they want with the chunk ranges. Usually, they
 /// want to deduplicate the ranges, but they could also do other things, like
 /// eliminate gaps or even extend ranges. The only thing they should not do is
@@ -164,7 +163,7 @@ impl DownloadPlanner for NoopPlanner {
 }
 
 /// A download planner that fully removes overlap between peers.
-/// 
+///
 /// It divides files into stripes of a fixed size `1 << stripe_size_log` chunks,
 /// and for each stripe decides on a single peer to download from, based on the
 /// peer id and a random seed.
@@ -176,7 +175,7 @@ struct StripePlanner {
     /// The log of the stripe size in chunks. This planner is relatively
     /// dumb and does not try to come up with continuous ranges, but you can
     /// just set this to a large value to avoid fragmentation.
-    /// 
+    ///
     /// In the very common case where you have small downloads, this will
     /// frequently just choose a single peer for the entire download.
     ///
@@ -256,9 +255,8 @@ fn get_continuous_ranges(options: &mut BTreeMap<NodeId, ChunkRanges>, stripe_siz
     Some(ranges)
 }
 
-
 /// A download planner that fully removes overlap between peers.
-/// 
+///
 /// It divides files into stripes of a fixed size `1 << stripe_size_log` chunks,
 /// and for each stripe decides on a single peer to download from, based on the
 /// peer id and a random seed.
@@ -270,7 +268,7 @@ struct StripePlanner2 {
     /// The log of the stripe size in chunks. This planner is relatively
     /// dumb and does not try to come up with continuous ranges, but you can
     /// just set this to a large value to avoid fragmentation.
-    /// 
+    ///
     /// In the very common case where you have small downloads, this will
     /// frequently just choose a single peer for the entire download.
     ///
@@ -336,7 +334,6 @@ impl DownloadPlanner for StripePlanner2 {
         options.retain(|_, x| !x.is_empty());
     }
 }
-
 
 struct PeerDownloadState {
     id: PeerDownloadId,
@@ -487,30 +484,29 @@ enum Event {
 }
 
 impl DownloaderState {
-
     fn count_providers(&self, hash: Hash) -> usize {
         self.bitmaps.iter().filter(|((peer, x), _)| *peer != BitmapPeer::Local && *x == hash).count()
     }
 
     /// Apply a command and return the events that were generated
-    fn apply_and_get_evs(&mut self, cmd: Command) -> Vec<Event> {
+    fn apply(&mut self, cmd: Command) -> Vec<Event> {
         let mut evs = vec![];
-        self.apply(cmd, &mut evs);
+        self.apply_mut(cmd, &mut evs);
         evs
     }
 
-    /// Apply a command
-    fn apply(&mut self, cmd: Command, evs: &mut Vec<Event>) {
-        if let Err(cause) = self.apply0(cmd, evs) {
+    /// Apply a command, using a mutable reference to the events
+    fn apply_mut(&mut self, cmd: Command, evs: &mut Vec<Event>) {
+        if let Err(cause) = self.apply_mut_0(cmd, evs) {
             evs.push(Event::Error { message: format!("{cause}") });
         }
     }
 
     /// Stop a download and clean up
-    /// 
+    ///
     /// This is called both for stopping a download before completion, and for
     /// cleaning up after a successful download.
-    /// 
+    ///
     /// Cleanup involves emitting events for
     /// - stopping all peer downloads
     /// - unsubscribing from bitmaps if needed
@@ -543,7 +539,7 @@ impl DownloaderState {
     }
 
     /// Apply a command and bail out on error
-    fn apply0(&mut self, cmd: Command, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+    fn apply_mut_0(&mut self, cmd: Command, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         match cmd {
             Command::StartDownload { request, id } => {
                 // ids must be uniquely assigned by the caller!
@@ -635,7 +631,7 @@ impl DownloaderState {
     /// Check for completion of a download or of an individual peer download
     ///
     /// This must be called after each change of the local bitmap for a hash
-    /// 
+    ///
     /// In addition to checking for completion, this also create new peer downloads if a peer download is complete and there is more data available for that peer.
     fn check_completion(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         let Some(self_state) = self.bitmaps.get(&(BitmapPeer::Local, hash)) else {
@@ -677,7 +673,7 @@ impl DownloaderState {
                     remaining.difference_with(&peer_download.ranges);
                 }
                 // see what the new peers can do for us
-                let mut candidates= BTreeMap::new();
+                let mut candidates = BTreeMap::new();
                 for peer in available {
                     let Some(peer_state) = self.bitmaps.get(&(BitmapPeer::Remote(peer), hash)) else {
                         // weird. we should have a bitmap for this peer since it just completed a download
@@ -705,7 +701,7 @@ impl DownloaderState {
         Ok(())
     }
 
-    /// Look at all downloads for a hash and see start peer downloads for those that do not have any yet
+    /// Look at all downloads for a hash and start peer downloads for those that do not have any yet
     fn start_downloads(&mut self, hash: Hash, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         let Some(self_state) = self.bitmaps.get(&(BitmapPeer::Local, hash)) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
@@ -741,7 +737,9 @@ impl DownloaderState {
             let remaining = &download.request.ranges - &self_state.ranges;
             let mut candidates = vec![];
             for ((peer, _), bitmap) in self.bitmaps.iter().filter(|((peer, x), _)| *peer != BitmapPeer::Local && *x == hash) {
-                let BitmapPeer::Remote(peer) = peer else { panic!(); };
+                let BitmapPeer::Remote(peer) = peer else {
+                    panic!();
+                };
                 let intersection = &bitmap.ranges & &remaining;
                 if !intersection.is_empty() {
                     candidates.push((*peer, intersection));
@@ -843,7 +841,7 @@ impl<S: Store, D: ContentDiscovery> DownloaderActor<S, D> {
             tokio::select! {
                 biased;
                 Some(cmd) = self.command_rx.recv() => {
-                    let evs = self.state.apply_and_get_evs(cmd);
+                    let evs = self.state.apply(cmd);
                     for ev in evs {
                         self.handle_event(ev, 0);
                     }
@@ -1025,9 +1023,9 @@ fn print_bitmap_compact(iter: impl IntoIterator<Item = bool>) -> String {
 
     while let (Some(left), Some(right)) = (iter.next(), iter.next()) {
         let c = match (left, right) {
-            (true, true) => '█',  // Both pixels are "on"
-            (true, false) => '▌', // Left pixel is "on"
-            (false, true) => '▐', // Right pixel is "on"
+            (true, true) => '█',   // Both pixels are "on"
+            (true, false) => '▌',  // Left pixel is "on"
+            (false, true) => '▐',  // Right pixel is "on"
             (false, false) => ' ', // Both are "off"
         };
         chars.push(c);
@@ -1042,10 +1040,14 @@ fn print_bitmap_compact(iter: impl IntoIterator<Item = bool>) -> String {
 }
 
 fn as_bool_iter(x: &ChunkRanges, max: u64) -> impl Iterator<Item = bool> {
-    let max = x.iter().last().map(|x| match x {
-        RangeSetRange::RangeFrom(_) => max,
-        RangeSetRange::Range(x) => x.end.0,
-    }).unwrap_or_default();
+    let max = x
+        .iter()
+        .last()
+        .map(|x| match x {
+            RangeSetRange::RangeFrom(_) => max,
+            RangeSetRange::Range(x) => x.end.0,
+        })
+        .unwrap_or_default();
     let res = (0..max).map(move |i| x.contains(&ChunkNum(i))).collect::<Vec<_>>();
     res.into_iter()
 }
@@ -1069,11 +1071,7 @@ fn select_ranges(ranges: &[ChunkRanges], continuity_bonus: u64) -> Vec<Option<us
         for j in 0..ranges.len() {
             if ranges[j].contains(&ChunkNum(i)) {
                 let consecutive = last_selected == Some(j);
-                let score = if consecutive {
-                    total[j].saturating_sub(continuity_bonus)
-                } else {
-                    total[j]
-                };
+                let score = if consecutive { total[j].saturating_sub(continuity_bonus) } else { total[j] };
                 if score < lowest_score {
                     lowest_score = score;
                     selected = Some(j);
@@ -1109,16 +1107,13 @@ fn print_colored_bitmap(data: &[u8], colors: &[u8]) -> String {
 
     while let Some(&left) = iter.next() {
         let right = iter.next(); // Try to fetch the next element
-        
+
         let left_color = colors.get(left as usize).map(|x| *x).unwrap_or_default();
         let right_char = match right {
             Some(&right) => {
                 let right_color = colors.get(right as usize).map(|x| *x).unwrap_or_default();
                 // Use ANSI escape codes to color left and right halves of `█`
-                format!(
-                    "\x1b[38;5;{}m\x1b[48;5;{}m▌\x1b[0m", 
-                    left_color, right_color
-                )
+                format!("\x1b[38;5;{}m\x1b[48;5;{}m▌\x1b[0m", left_color, right_color)
             }
             None => format!("\x1b[38;5;{}m▌\x1b[0m", left_color), // Handle odd-length case
         };
@@ -1156,22 +1151,13 @@ mod tests {
     fn test_planner() {
         let mut planner = StripePlanner2::new(0, 4);
         let hash = Hash::new(b"test");
-        let mut ranges = make_range_map(&[
-            chunk_ranges([0..100]),
-            chunk_ranges([0..110]),
-            chunk_ranges([0..120]),
-        ]);
+        let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..110]), chunk_ranges([0..120])]);
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
         print_range_map(&ranges);
         println!("---");
-        let mut ranges = make_range_map(&[
-            chunk_ranges([0..100]),
-            chunk_ranges([0..110]),
-            chunk_ranges([0..120]),
-            chunk_ranges([0..50]),
-        ]);
+        let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..110]), chunk_ranges([0..120]), chunk_ranges([0..50])]);
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
@@ -1195,11 +1181,7 @@ mod tests {
 
     #[test]
     fn test_select_ranges() {
-        let ranges = [
-            chunk_ranges([0..90]),
-            chunk_ranges([0..100]),
-            chunk_ranges([0..80]),
-        ];
+        let ranges = [chunk_ranges([0..90]), chunk_ranges([0..100]), chunk_ranges([0..80])];
         let iter = select_ranges(ranges.as_slice(), 8);
         for (i, range) in ranges.iter().enumerate() {
             let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
@@ -1226,11 +1208,9 @@ mod tests {
 
     #[test]
     fn test_print_colored_bitmap() {
-        let bitmap = vec![
-            0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
-        ]; // Notice: odd-length input
-    
-        println!("{}", print_colored_bitmap(&bitmap, &[1,2,3,4]));
+        let bitmap = vec![0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]; // Notice: odd-length input
+
+        println!("{}", print_colored_bitmap(&bitmap, &[1, 2, 3, 4]));
     }
 
     #[cfg(feature = "rpc")]
@@ -1262,55 +1242,105 @@ mod tests {
         evs.iter().filter(|e| *e == ev).count() == 1
     }
 
+    fn has_all_events(evs: &[Event], evs2: &[&Event]) -> bool {
+        evs2.iter().all(|ev| has_one_event(evs, ev))
+    }
+
     fn has_one_event_matching(evs: &[Event], f: impl Fn(&Event) -> bool) -> bool {
         evs.iter().filter(|e| f(e)).count() == 1
     }
 
+    /// Test various things that should produce errors
     #[test]
-    fn downloader_state_smoke() -> TestResult<()> {
+    fn downloader_state_errors() -> TestResult<()> {
+        use BitmapPeer::*;
         let _ = tracing_subscriber::fmt::try_init();
-        // let me = "0000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let unknown_hash = "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
         let mut state = DownloaderState::new(noop_planner());
-        let evs = state.apply_and_get_evs(super::Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 1 });
-        assert!(has_one_event(&evs, &Event::StartDiscovery { hash, id: 0 }), "starting a download should start a discovery task");
-        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: BitmapPeer::Local, hash, id: 0 }), "starting a download should subscribe to the local bitmap");
-        let evs = state.apply_and_get_evs(Command::Bitmap { peer: BitmapPeer::Local, hash, bitmap: ChunkRanges::all() });
+        let evs = state.apply(Command::Bitmap { peer: Local, hash, bitmap: ChunkRanges::all() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap should produce an error!");
-        let evs = state.apply_and_get_evs(Command::Bitmap { peer: BitmapPeer::Local, hash: unknown_hash, bitmap: ChunkRanges::all() });
+        let evs = state.apply(Command::Bitmap { peer: Local, hash: unknown_hash, bitmap: ChunkRanges::all() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap for an unknown hash should produce an error!");
-        let initial_bitmap = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
-        let evs = state.apply_and_get_evs(Command::Bitmap { peer: BitmapPeer::Local, hash, bitmap: initial_bitmap.clone() });
-        assert!(evs.is_empty());
-        assert_eq!(state.bitmaps.get(&(BitmapPeer::Local, hash)).context("bitmap should be present")?.ranges, initial_bitmap, "bitmap should be set to the initial bitmap");
-        let evs = state.apply_and_get_evs(Command::BitmapUpdate { peer: BitmapPeer::Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
-        assert!(evs.is_empty());
-        assert_eq!(state.bitmaps.get(&(BitmapPeer::Local, hash)).context("bitmap should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitmap should be updated");
-        let evs = state.apply_and_get_evs(super::Command::ChunksDownloaded {
-            time: Duration::ZERO,
-            peer: peer_a,
-            hash,
-            added: ChunkRanges::from(ChunkNum(0)..ChunkNum(16)),
-        });
+        let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "download from unknown peer should lead to an error!");
-        let evs = state.apply_and_get_evs(Command::PeerDiscovered { peer: peer_a, hash });
-        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: BitmapPeer::Remote(peer_a), hash, id: 1 }), "adding a new peer for a hash we are interested in should subscribe to the bitmap");
-        let evs = state.apply_and_get_evs(Command::Bitmap { peer: BitmapPeer::Remote(peer_a), hash, bitmap: chunk_ranges([0..64]) });
+        Ok(())
+    }
+
+    /// Test a simple scenario where a download is started and completed
+    #[test]
+    fn downloader_state_smoke() -> TestResult<()> {
+        use BitmapPeer::*;
+        let _ = tracing_subscriber::fmt::try_init();
+        let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
+        let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
+        let mut state = DownloaderState::new(noop_planner());
+        let evs = state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 0 });
+        assert!(has_one_event(&evs, &Event::StartDiscovery { hash, id: 0 }), "starting a download should start a discovery task");
+        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: Local, hash, id: 0 }), "starting a download should subscribe to the local bitmap");
+        let initial_bitmap = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
+        let evs = state.apply(Command::Bitmap { peer: Local, hash, bitmap: initial_bitmap.clone() });
+        assert!(evs.is_empty());
+        assert_eq!(state.bitmaps.get(&(Local, hash)).context("bitmap should be present")?.ranges, initial_bitmap, "bitmap should be set to the initial bitmap");
+        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
+        assert!(evs.is_empty());
+        assert_eq!(state.bitmaps.get(&(Local, hash)).context("bitmap should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitmap should be updated");
+        let evs = state.apply(Command::PeerDiscovered { peer: peer_a, hash });
+        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: Remote(peer_a), hash, id: 1 }), "adding a new peer for a hash we are interested in should subscribe to the bitmap");
+        let evs = state.apply(Command::Bitmap { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..64]) });
         assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0, peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "bitmap from a peer should start a download");
         // ChunksDownloaded just updates the peer stats
-        let evs = state.apply_and_get_evs(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..48]) });
+        let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..48]) });
         assert!(evs.is_empty());
         // Bitmap update does not yet complete the download
-        let evs = state.apply_and_get_evs(Command::BitmapUpdate { peer: BitmapPeer::Local, hash, added: chunk_ranges([32..48]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([32..48]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
         // ChunksDownloaded just updates the peer stats
-        let evs = state.apply_and_get_evs(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([48..64]) });
+        let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([48..64]) });
         assert!(evs.is_empty());
         // Final bitmap update for the local bitmap should complete the download
-        let evs = state.apply_and_get_evs(Command::BitmapUpdate { peer: BitmapPeer::Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })), "download should be completed by the data");
+        Ok(())
+    }
+
+    /// Test a scenario where more data becomes available at the remote peer as the download progresses
+    #[test]
+    fn downloader_state_incremental() -> TestResult<()> {
+        use BitmapPeer::*;
+        let _ = tracing_subscriber::fmt::try_init();
+        let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
+        let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
+        let mut state = DownloaderState::new(noop_planner());
+        // Start a download
+        state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 0 });
+        // Initially, we have nothing
+        state.apply(Command::Bitmap { peer: Local, hash, bitmap: ChunkRanges::empty() });
+        // We have a peer for the hash
+        state.apply(Command::PeerDiscovered { peer: peer_a, hash });
+        // We have a bitmap from the peer
+        let evs = state.apply(Command::Bitmap { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..32]) });
+        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0, peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitmap from a peer should start a download");
+        // ChunksDownloaded just updates the peer stats
+        state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
+        // Bitmap update does not yet complete the download
+        state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([0..16]), removed: ChunkRanges::empty() });
+        // The peer now has more data
+        state.apply(Command::Bitmap { peer: Remote(peer_a), hash, bitmap: chunk_ranges([32..64]) });
+        // ChunksDownloaded just updates the peer stats
+        state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([16..32]) });
+        // Complete the first part of the download
+        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
+        // This triggers cancellation of the first peer download and starting a new one for the remaining data
+        assert!(has_one_event(&evs, &Event::StopPeerDownload { id: 0 }), "first peer download should be stopped");
+        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 1, peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "second peer download should be started");
+        // ChunksDownloaded just updates the peer stats
+        state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..64]) });
+        // Final bitmap update for the local bitmap should complete the download
+        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
+        assert!(has_all_events(&evs, &[&Event::StopPeerDownload { id: 1 }, &Event::DownloadComplete { id: 0 }, &Event::UnsubscribeBitmap { id: 0 }, &Event::StopDiscovery { id: 0 },]), "download should be completed by the data");
+        println!("{evs:?}");
         Ok(())
     }
 
