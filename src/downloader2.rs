@@ -4,7 +4,7 @@
 //!
 //! The [DownloaderState] is a synchronous state machine containing the logic.
 //! It gets commands and produces events. It does not do any IO and also does
-//! not have any time dependency. So [DownloaderState::apply_and_get_evs] is a
+//! not have any time dependency. So [DownloaderState::apply] is a
 //! pure function of the state and the command and can therefore be tested
 //! easily.
 //!
@@ -17,7 +17,7 @@
 //! the bitmaps are not very fragmented. We can introduce an even more optimized
 //! bitmap type, or prevent fragmentation.
 //!
-//! The [DownloaderDriver] is the asynchronous driver for the state machine. It
+//! The [DownloaderActor] is the asynchronous driver for the state machine. It
 //! owns the actual tasks that perform IO.
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque}, future::Future, io, marker::PhantomData, sync::Arc, time::Instant
@@ -100,7 +100,7 @@ impl BitmapSubscription for TestBitmapSubscription {
                 ChunkRanges::empty()
             }
             BitmapPeer::Remote(_) => {
-                ChunkRanges::all()
+                ChunkRanges::from(ChunkNum(0)..ChunkNum(1024))
             }
         };
         futures_lite::stream::once(BitmapSubscriptionEvent::Bitmap { ranges: bitmap }).chain(futures_lite::stream::pending())
@@ -588,7 +588,6 @@ enum Command {
     PeerDiscovered { peer: NodeId, hash: Hash },
     /// A tick from the driver, for rebalancing
     Tick { time: Duration },
-    // todo: peerdownloadaborted
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1058,7 +1057,7 @@ impl<S: Store, D: ContentDiscovery, B: BitmapSubscription> DownloaderActor<S, D,
     }
 
     async fn run(mut self, mut channel: mpsc::Receiver<UserCommand>) {
-        let mut ticks = tokio::time::interval(Duration::from_millis(50));
+        let mut ticks = tokio::time::interval(Duration::from_millis(100));
         loop {
             tokio::select! {
                 biased;
@@ -1093,16 +1092,28 @@ impl<S: Store, D: ContentDiscovery, B: BitmapSubscription> DownloaderActor<S, D,
         match ev {
             Event::SubscribeBitmap { peer, hash, id } => {
                 let send = self.command_tx.clone();
+                let mut stream = self.subscribe_bitmap.subscribe(peer, hash);
                 let task = spawn(async move {
-                    let cmd = if peer == BitmapPeer::Local {
-                        // we don't have any data, for now
-                        Command::Bitmap { peer: BitmapPeer::Local, hash, bitmap: ChunkRanges::empty() }
-                    } else {
-                        // all peers have all the data, for now
-                        Command::Bitmap { peer, hash, bitmap: ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)) }
-                    };
-                    send.send(cmd).await.ok();
-                    futures_lite::future::pending().await
+                    while let Some(ev) = stream.next().await {
+                        let cmd = match ev {
+                            BitmapSubscriptionEvent::Bitmap { ranges } => {
+                                Command::Bitmap { peer, hash, bitmap: ranges }
+                            }
+                            BitmapSubscriptionEvent::BitmapUpdate { added, removed } => {
+                                Command::BitmapUpdate { peer, hash, added, removed }
+                            }
+                        };
+                        send.send(cmd).await.ok();
+                    }
+                    // let cmd = if peer == BitmapPeer::Local {
+                    //     // we don't have any data, for now
+                    //     Command::Bitmap { peer: BitmapPeer::Local, hash, bitmap: ChunkRanges::empty() }
+                    // } else {
+                    //     // all peers have all the data, for now
+                    //     Command::Bitmap { peer, hash, bitmap: ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)) }
+                    // };
+                    // send.send(cmd).await.ok();
+                    // futures_lite::future::pending().await
                 });
                 self.bitmap_subscription_tasks.insert(id, task);
             }
@@ -1377,16 +1388,35 @@ mod tests {
     }
 
     #[test]
-    fn test_planner() {
+    fn test_planner_1() {
         let mut planner = StripePlanner2::new(0, 4);
         let hash = Hash::new(b"test");
-        let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..110]), chunk_ranges([0..120])]);
+        let mut ranges = make_range_map(&[chunk_ranges([0..50]), chunk_ranges([50..100])]);
+        println!("");
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
         print_range_map(&ranges);
-        println!("---");
+    }
+
+    #[test]
+    fn test_planner_2() {
+        let mut planner = StripePlanner2::new(0, 4);
+        let hash = Hash::new(b"test");
+        let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..100]), chunk_ranges([0..100])]);
+        println!("");
+        print_range_map(&ranges);
+        println!("planning");
+        planner.plan(hash, &mut ranges);
+        print_range_map(&ranges);
+    }
+
+    #[test]
+    fn test_planner_3() {
+        let mut planner = StripePlanner2::new(0, 4);
+        let hash = Hash::new(b"test");
         let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..110]), chunk_ranges([0..120]), chunk_ranges([0..50])]);
+        println!("");
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
@@ -1444,6 +1474,11 @@ mod tests {
 
     #[cfg(feature = "rpc")]
     async fn make_test_node(data: &[u8]) -> anyhow::Result<(Router, NodeId, Hash)> {
+        // let noop_subscriber = tracing_subscriber::fmt::Subscriber::builder()
+        //     .with_writer(io::sink) // all output is discarded
+        //     .with_max_level(tracing::level_filters::LevelFilter::OFF) // effectively disable logging
+        //     .finish();
+        // let noop_dispatch = tracing::Dispatch::new(noop_subscriber);
         let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
         let node_id = endpoint.node_id();
         let store = crate::store::mem::Store::new();
@@ -1598,7 +1633,7 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
         let data = vec![0u8; 1024 * 1024];
         let mut nodes = vec![];
-        for _i in 0..2 {
+        for _i in 0..4 {
             nodes.push(make_test_node(&data).await?);
         }
         let peers = nodes.iter().map(|(_, peer, _)| *peer).collect::<Vec<_>>();
