@@ -33,6 +33,7 @@ Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 ```rust
 use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::net_protocol::Blobs;
+use iroh_blobs::store::traits::Store;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

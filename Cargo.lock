@@ -1969,8 +1969,9 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 
 [[package]]
 name = "iroh"
-version = "0.31.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#a1d21c673d3449a31a32262bb5453c4ec8ce6bd5"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3a813bde213da0740a28141ea97be251bd8df27f00d9d0938a3d55c0c6e5cb"
 dependencies = [
  "aead",
  "anyhow",
@@ -2030,8 +2031,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.31.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#a1d21c673d3449a31a32262bb5453c4ec8ce6bd5"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56b4a9e4db1e505710d0aaca2afc17dd92aeac2dd06a34ccf9934dab7240bc9"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -2085,7 +2087,6 @@ dependencies = [
  "iroh-io",
  "iroh-metrics",
  "iroh-quinn",
- "iroh-test",
  "nested_enum_utils",
  "num_cpus",
  "oneshot",
@@ -2093,7 +2094,7 @@ dependencies = [
  "portable-atomic",
  "postcard",
  "proptest",
- "quic-rpc 0.18.0",
+ "quic-rpc 0.18.1",
  "quic-rpc-derive",
  "rand",
  "range-collections",
@@ -2118,6 +2119,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
+ "tracing-test",
  "walkdir",
 ]
 
@@ -2155,8 +2157,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-net-report"
-version = "0.31.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#a1d21c673d3449a31a32262bb5453c4ec8ce6bd5"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6043244fda74da51f46c6199ff7f7e1c350d58b650e39983ae24ca4cfd46f4be"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2237,8 +2240,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.31.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#a1d21c673d3449a31a32262bb5453c4ec8ce6bd5"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0700bfc2dcd5d6b28a9176dddbc989a6c90b06fc49e9e60069213408450ab47"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2287,18 +2291,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "webpki-roots",
-]
-
-[[package]]
-name = "iroh-test"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aca0e7c59e447ab8ced8cd4841d95fe13ed44dce203c6ece1a963cf1be2aed25"
-dependencies = [
- "anyhow",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3440,8 +3432,9 @@ dependencies = [
 
 [[package]]
 name = "quic-rpc"
-version = "0.18.0"
-source = "git+https://github.com/n0-computer/quic-rpc.git?branch=release-prep#74c1bfe141fdc3ee722448a9878c733ad30c8f38"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09b61cd874b52a79146069fc15456f5cf7abafea818e2fdd828598456349d6a4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4789,7 +4782,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -5047,6 +5039,27 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "tracing-test"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "557b891436fe0d5e0e363427fc7f217abf9ccd510d5136549847bdcbcd011d68"
+dependencies = [
+ "tracing-core",
+ "tracing-subscriber",
+ "tracing-test-macro",
+]
+
+[[package]]
+name = "tracing-test-macro"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04659ddb06c87d233c566112c1c9c5b9e98256d9af50ec3bc9c8327f873a7568"
+dependencies = [
+ "quote",
+ "syn 2.0.96",
 ]
 
 [[package]]

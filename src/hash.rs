@@ -417,7 +417,7 @@ impl<'de> Deserialize<'de> for HashAndFormat {
 #[cfg(test)]
 mod tests {
 
-    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
+    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
     use serde_test::{assert_tokens, Configure, Token};
 
     use super::*;

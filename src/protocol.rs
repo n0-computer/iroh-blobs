@@ -483,7 +483,7 @@ impl TryFrom<VarInt> for Closed {
 
 #[cfg(test)]
 mod tests {
-    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
+    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     use super::{GetRequest, Request};
 
