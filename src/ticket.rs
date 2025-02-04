@@ -153,10 +153,10 @@ impl<'de> Deserialize<'de> for BlobTicket {
 mod tests {
     use std::net::SocketAddr;
 
-    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
     use iroh::{PublicKey, SecretKey};
 
     use super::*;
+    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     fn make_ticket() -> BlobTicket {
         let hash = Hash::new(b"hi there");

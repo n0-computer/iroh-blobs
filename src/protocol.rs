@@ -483,9 +483,8 @@ impl TryFrom<VarInt> for Closed {
 
 #[cfg(test)]
 mod tests {
-    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
-
     use super::{GetRequest, Request};
+    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     #[test]
     fn request_wire_format() {
