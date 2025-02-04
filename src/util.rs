@@ -24,6 +24,9 @@ mod sparse_mem_file;
 pub use sparse_mem_file::SparseMemFile;
 pub mod local_pool;
 
+#[cfg(test)]
+pub(crate) mod hexdump;
+
 /// A tag
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, From, Into)]
 pub struct Tag(pub Bytes);

@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
-use iroh::endpoint::{self, RecvStream, SendStream};
+use iroh::endpoint::{self, ClosedStream, RecvStream, SendStream, WriteError};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
@@ -189,10 +189,10 @@ pub mod fsm {
         RequestTooBig,
         /// Error when writing the request to the [`SendStream`].
         #[error("write: {0}")]
-        Write(#[from] quinn::WriteError),
+        Write(#[from] WriteError),
         /// Quic connection is closed.
         #[error("closed")]
-        Closed(#[from] quinn::ClosedStream),
+        Closed(#[from] ClosedStream),
         /// A generic io error
         #[error("io {0}")]
         Io(io::Error),

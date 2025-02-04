@@ -412,9 +412,8 @@ pub async fn handle_connection<D: Map>(
     events: EventSender,
     rt: LocalPoolHandle,
 ) {
-    let remote_addr = connection.remote_address();
     let connection_id = connection.stable_id() as u64;
-    let span = debug_span!("connection", connection_id, %remote_addr);
+    let span = debug_span!("connection", connection_id);
     async move {
         while let Ok((writer, reader)) = connection.accept_bi().await {
             // The stream ID index is used to identify this request.  Requests only arrive in
