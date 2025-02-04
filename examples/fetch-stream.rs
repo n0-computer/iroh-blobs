@@ -3,7 +3,7 @@
 //! Since this example does not use [`iroh-net::Endpoint`], it does not do any holepunching, and so will only work locally or between two processes that have public IP addresses.
 //!
 //! Run the provide-bytes example first. It will give instructions on how to run this example properly.
-use std::{io, net::SocketAddr};
+use std::{io, str::FromStr};
 
 use anyhow::{Context, Result};
 use bao_tree::io::fsm::BaoContentItem;
@@ -14,13 +14,12 @@ use iroh_blobs::{
     get::fsm::{AtInitial, BlobContentNext, ConnectedNext, EndBlobNext},
     hashseq::HashSeq,
     protocol::GetRequest,
-    Hash,
+    BlobFormat,
 };
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 mod connect;
-use connect::{load_certs, make_client_endpoint};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
 pub fn setup_logging() {
@@ -36,51 +35,50 @@ async fn main() -> Result<()> {
     println!("\nfetch stream example!");
     setup_logging();
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 4 {
-        anyhow::bail!("usage: fetch-bytes [HASH] [SOCKET_ADDR] [FORMAT]");
+    if args.len() != 2 {
+        anyhow::bail!("usage: fetch-stream [TICKET]");
     }
-    let hash: Hash = args[1].parse().context("unable to parse [HASH]")?;
-    let addr: SocketAddr = args[2].parse().context("unable to parse [SOCKET_ADDR]")?;
-    let format = {
-        if args[3] != "blob" && args[3] != "collection" {
-            anyhow::bail!(
-                "expected either 'blob' or 'collection' for FORMAT argument, got {}",
-                args[3]
-            );
-        }
-        args[3].clone()
-    };
+    let ticket =
+        iroh_blobs::ticket::BlobTicket::from_str(&args[1]).context("unable to parse [TICKET]")?;
 
-    // load tls certificates
-    // This will error if you have not run the `provide-bytes` example
-    let roots = load_certs().await?;
+    let (node, hash, format) = ticket.into_parts();
 
     // create an endpoint to listen for incoming connections
-    let endpoint = make_client_endpoint(roots)?;
-    println!("\nlistening on {}", endpoint.local_addr()?);
-    println!("fetching hash {hash} from {addr}");
+    let endpoint = iroh::Endpoint::builder()
+        .relay_mode(iroh::RelayMode::Disabled)
+        .alpns(vec![connect::EXAMPLE_ALPN.into()])
+        .bind()
+        .await?;
+    println!(
+        "\nlistening on {:?}",
+        endpoint.node_addr().await?.direct_addresses
+    );
+    println!("fetching hash {hash} from {:?}", node.node_id);
 
     // connect
-    let connection = endpoint.connect(addr, "localhost")?.await?;
+    let connection = endpoint.connect(node, connect::EXAMPLE_ALPN).await?;
 
-    let mut stream = if format == "collection" {
-        // create a request for a collection
-        let request = GetRequest::all(hash);
+    let mut stream = match format {
+        BlobFormat::HashSeq => {
+            // create a request for a collection
+            let request = GetRequest::all(hash);
 
-        // create the initial state of the finite state machine
-        let initial = iroh_blobs::get::fsm::start(connection, request);
+            // create the initial state of the finite state machine
+            let initial = iroh_blobs::get::fsm::start(connection, request);
 
-        // create a stream that yields all the data of the blob
-        stream_children(initial).boxed_local()
-    } else {
-        // create a request for a single blob
-        let request = GetRequest::single(hash);
+            // create a stream that yields all the data of the blob
+            stream_children(initial).boxed_local()
+        }
+        BlobFormat::Raw => {
+            // create a request for a single blob
+            let request = GetRequest::single(hash);
 
-        // create the initial state of the finite state machine
-        let initial = iroh_blobs::get::fsm::start(connection, request);
+            // create the initial state of the finite state machine
+            let initial = iroh_blobs::get::fsm::start(connection, request);
 
-        // create a stream that yields all the data of the blob
-        stream_blob(initial).boxed_local()
+            // create a stream that yields all the data of the blob
+            stream_blob(initial).boxed_local()
+        }
     };
     while let Some(item) = stream.next().await {
         let item = item?;

@@ -10,12 +10,11 @@
 //!    cargo run --example provide-bytes collection
 //! To provide a collection (multiple blobs)
 use anyhow::Result;
-use iroh_blobs::{format::collection::Collection, util::local_pool::LocalPool, Hash};
+use iroh_blobs::{format::collection::Collection, util::local_pool::LocalPool, BlobFormat, Hash};
 use tracing::warn;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 mod connect;
-use connect::{make_and_write_certs, make_server_endpoint, CERT_PATH};
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
 pub fn setup_logging() {
@@ -45,7 +44,7 @@ async fn main() -> Result<()> {
     };
     println!("\nprovide bytes {format} example!");
 
-    let (db, hash) = if format == "collection" {
+    let (db, hash, format) = if format == "collection" {
         let (mut db, names) = iroh_blobs::store::readonly_mem::Store::new([
             ("blob1", b"the first blob of bytes".to_vec()),
             ("blob2", b"the second blob of bytes".to_vec()),
@@ -56,7 +55,7 @@ async fn main() -> Result<()> {
             .collect();
         // add it to the db
         let hash = db.insert_many(collection.to_blobs()).unwrap();
-        (db, hash)
+        (db, hash, BlobFormat::HashSeq)
     } else {
         // create a new database and add a blob
         let (db, names) =
@@ -64,20 +63,23 @@ async fn main() -> Result<()> {
 
         // get the hash of the content
         let hash = names.get("hello").unwrap();
-        (db, Hash::from(hash.as_bytes()))
+        (db, Hash::from(hash.as_bytes()), BlobFormat::Raw)
     };
 
-    // create tls certs and save to CERT_PATH
-    let (key, cert) = make_and_write_certs().await?;
-
     // create an endpoint to listen for incoming connections
-    let endpoint = make_server_endpoint(key, cert)?;
-    let addr = endpoint.local_addr()?;
-    println!("\nlistening on {addr}");
+    let endpoint = iroh::Endpoint::builder()
+        .relay_mode(iroh::RelayMode::Disabled)
+        .alpns(vec![connect::EXAMPLE_ALPN.into()])
+        .bind()
+        .await?;
+    let addr = endpoint.node_addr().await?;
+    println!("\nlistening on {:?}", addr.direct_addresses);
     println!("providing hash {hash}");
 
-    println!("\nfetch the content using a finite state machine by running the following example:\n\ncargo run --example fetch-fsm {hash} \"{addr}\" {format}");
-    println!("\nfetch the content using a stream by running the following example:\n\ncargo run --example fetch-stream {hash} \"{addr}\" {format}\n");
+    let ticket = iroh_blobs::ticket::BlobTicket::new(addr, hash, format)?;
+
+    println!("\nfetch the content using a finite state machine by running the following example:\n\ncargo run --example fetch-fsm {ticket}");
+    println!("\nfetch the content using a stream by running the following example:\n\ncargo run --example fetch-stream {ticket}\n");
 
     // create a new local pool handle with 1 worker thread
     let lp = LocalPool::single();
@@ -100,11 +102,10 @@ async fn main() -> Result<()> {
 
             // spawn a task to handle the connection
             tokio::spawn(async move {
-                let remote_addr = conn.remote_address();
                 let conn = match conn.await {
                     Ok(conn) => conn,
                     Err(err) => {
-                        warn!(%remote_addr, "Error connecting: {err:#}");
+                        warn!("Error connecting: {err:#}");
                         return;
                     }
                 };
@@ -115,7 +116,6 @@ async fn main() -> Result<()> {
 
     match tokio::signal::ctrl_c().await {
         Ok(()) => {
-            tokio::fs::remove_dir_all(std::path::PathBuf::from(CERT_PATH)).await?;
             accept_task.abort();
             Ok(())
         }
