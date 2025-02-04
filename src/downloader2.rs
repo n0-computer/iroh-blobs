@@ -40,7 +40,7 @@ use iroh::{Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinSet};
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace};
 
@@ -1062,6 +1062,7 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
     async fn run(mut self, mut channel: mpsc::Receiver<UserCommand>) {
         let mut ticks = tokio::time::interval(Duration::from_millis(100));
         loop {
+            trace!("downloader actor tick");
             tokio::select! {
                 biased;
                 Some(cmd) = channel.recv() => {
@@ -1085,6 +1086,15 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
                 _ = ticks.tick() => {
                     let time = self.start.elapsed();
                     self.command_tx.send(Command::Tick { time }).await.ok();
+                    // clean up dropped futures
+                    //
+                    // todo: is there a better mechanism than periodic checks?
+                    // I don't want some cancellation token rube goldberg machine.
+                    for (id, fut) in self.download_futs.iter() {
+                        if fut.is_closed() {
+                            self.command_tx.send(Command::StopDownload { id: *id }).await.ok();
+                        }
+                    }
                 },
             }
         }
@@ -1602,6 +1612,33 @@ mod tests {
         Ok(())
     }
 
+    /// Test a scenario where more data becomes available at the remote peer as the download progresses
+    #[test]
+    fn downloader_state_drop() -> TestResult<()> {
+        use BitfieldPeer::*;
+        let _ = tracing_subscriber::fmt::try_init();
+        let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
+        let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
+        let mut state = DownloaderState::new(noop_planner());
+        // Start a download
+        state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 0.into() });
+        // Initially, we have nothing
+        state.apply(Command::Bitfield { peer: Local, hash, ranges: ChunkRanges::empty() });
+        // We have a peer for the hash
+        state.apply(Command::PeerDiscovered { peer: peer_a, hash });
+        // We have a bitfield from the peer
+        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([0..32]) });
+        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0.into(), peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitfield from a peer should start a download");
+        // Sending StopDownload should stop the download and all associated tasks
+        // This is what happens (delayed) when the user drops the download future
+        let evs = state.apply(Command::StopDownload { id: 0.into() });
+        assert!(has_one_event(&evs, &Event::StopPeerDownload { id: 0.into() }));
+        assert!(has_one_event(&evs, &Event::UnsubscribeBitfield { id: 0.into() }));
+        assert!(has_one_event(&evs, &Event::UnsubscribeBitfield { id: 1.into() }));
+        assert!(has_one_event(&evs, &Event::StopDiscovery { id: 0.into() }));
+        Ok(())
+    }
+
     #[tokio::test]
     #[cfg(feature = "rpc")]
     async fn downloader_driver_smoke() -> TestResult<()> {
@@ -1639,7 +1676,7 @@ mod tests {
         let bitfield_subscription = TestBitfieldSubscription;
         let local_pool = LocalPool::single();
         let downloader = Downloader::new(endpoint, store, discovery, bitfield_subscription, local_pool, Box::new(StripePlanner2::new(0, 8)));
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
         fut.await?;
         Ok(())
