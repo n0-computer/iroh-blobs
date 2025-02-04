@@ -558,8 +558,7 @@
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
-<a href="#560" id="560">560</a>
-<a href="#561" id="561">561</a></pre></div><pre class="rust"><code><span class="doccomment">//! Specifications for ranges selection in blobs and sequences of blobs.
+<a href="#560" id="560">560</a></pre></div><pre class="rust"><code><span class="doccomment">//! Specifications for ranges selection in blobs and sequences of blobs.
 //!
 //! The [`RangeSpec`] allows specifying which BAO chunks inside a single blob should be
 //! selected.
@@ -918,7 +917,6 @@
     <span class="kw">use </span>proptest::prelude::<span class="kw-2">*</span>;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
-
     <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     <span class="kw">fn </span>ranges(value_range: Range&lt;u64&gt;) -&gt; <span class="kw">impl </span>Strategy&lt;Value = ChunkRanges&gt; {
