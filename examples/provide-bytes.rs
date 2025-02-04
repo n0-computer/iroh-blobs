@@ -14,7 +14,7 @@ use iroh_blobs::{format::collection::Collection, util::local_pool::LocalPool, Bl
 use tracing::warn;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
-mod connect;
+const EXAMPLE_ALPN: &[u8] = b"n0/iroh/examples/bytes/0";
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
 pub fn setup_logging() {
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     // create an endpoint to listen for incoming connections
     let endpoint = iroh::Endpoint::builder()
         .relay_mode(iroh::RelayMode::Disabled)
-        .alpns(vec![connect::EXAMPLE_ALPN.into()])
+        .alpns(vec![EXAMPLE_ALPN.into()])
         .bind()
         .await?;
     let addr = endpoint.node_addr().await?;

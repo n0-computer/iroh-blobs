@@ -225,7 +225,7 @@ impl BlobSearch {
             match recv.read_exact(&mut hash_bytes).await {
                 // FinishedEarly means that the remote side did not send further data,
                 // so in this case we break our loop.
-                Err(quinn::ReadExactError::FinishedEarly(_)) => break,
+                Err(iroh::endpoint::ReadExactError::FinishedEarly(_)) => break,
                 // Other errors are connection errors, so we bail.
                 Err(err) => return Err(err.into()),
                 Ok(_) => {}

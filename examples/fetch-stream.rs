@@ -19,7 +19,7 @@ use iroh_blobs::{
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
-mod connect;
+const EXAMPLE_ALPN: &[u8] = b"n0/iroh/examples/bytes/0";
 
 // set the RUST_LOG env var to one of {debug,info,warn} to see logging info
 pub fn setup_logging() {
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     // create an endpoint to listen for incoming connections
     let endpoint = iroh::Endpoint::builder()
         .relay_mode(iroh::RelayMode::Disabled)
-        .alpns(vec![connect::EXAMPLE_ALPN.into()])
+        .alpns(vec![EXAMPLE_ALPN.into()])
         .bind()
         .await?;
     println!(
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
     println!("fetching hash {hash} from {:?}", node.node_id);
 
     // connect
-    let connection = endpoint.connect(node, connect::EXAMPLE_ALPN).await?;
+    let connection = endpoint.connect(node, EXAMPLE_ALPN).await?;
 
     let mut stream = match format {
         BlobFormat::HashSeq => {
