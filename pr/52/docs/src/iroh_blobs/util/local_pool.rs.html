@@ -683,7 +683,8 @@
 <a href="#682" id="682">682</a>
 <a href="#683" id="683">683</a>
 <a href="#684" id="684">684</a>
-<a href="#685" id="685">685</a></pre></div><pre class="rust"><code><span class="doccomment">//! A local task pool with proper shutdown
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a></pre></div><pre class="rust"><code><span class="doccomment">//! A local task pool with proper shutdown
 </span><span class="kw">use </span>std::{
     any::Any,
     future::Future,
@@ -1228,6 +1229,7 @@
     <span class="kw">use </span>std::{sync::atomic::AtomicU64, time::Duration};
 
     <span class="kw">use </span>tracing::info;
+    <span class="kw">use </span>tracing_test::traced_test;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
 
@@ -1271,6 +1273,7 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_tracing() {
         <span class="comment">// This test wants to make sure that logging inside the pool propagates to the
         // tracing subscriber that was set for the current thread at the time the pool was
@@ -1284,8 +1287,7 @@
         // cargo nextest run -p iroh-blobs local_pool::tests::test_tracing --success-output final
         //
         // and eyeball the output.  yolo
-        </span><span class="kw">let </span>_guard = iroh_test::logging::setup();
-        <span class="macro">info!</span>(<span class="string">"hello from the test"</span>);
+        </span><span class="macro">info!</span>(<span class="string">"hello from the test"</span>);
         <span class="kw">let </span>pool = LocalPool::single();
         pool.spawn(|| <span class="kw">async move </span>{
             <span class="macro">info!</span>(<span class="string">"hello from the pool"</span>);

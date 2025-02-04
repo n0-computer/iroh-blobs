@@ -29,6 +29,7 @@ request blobs or ranges of blobs, as well as collections.</p>
 
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iroh::{protocol::Router, Endpoint};
 <span class="kw">use </span>iroh_blobs::net_protocol::Blobs;
+<span class="kw">use </span>iroh_blobs::store::traits::Store;
 
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {

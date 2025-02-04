@@ -914,7 +914,7 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::ops::Range;
 
-    <span class="kw">use </span>iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
+    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
     <span class="kw">use </span>proptest::prelude::<span class="kw-2">*</span>;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;

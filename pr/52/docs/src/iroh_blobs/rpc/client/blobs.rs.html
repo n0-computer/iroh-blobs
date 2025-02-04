@@ -1915,19 +1915,7 @@
 <a href="#1914" id="1914">1914</a>
 <a href="#1915" id="1915">1915</a>
 <a href="#1916" id="1916">1916</a>
-<a href="#1917" id="1917">1917</a>
-<a href="#1918" id="1918">1918</a>
-<a href="#1919" id="1919">1919</a>
-<a href="#1920" id="1920">1920</a>
-<a href="#1921" id="1921">1921</a>
-<a href="#1922" id="1922">1922</a>
-<a href="#1923" id="1923">1923</a>
-<a href="#1924" id="1924">1924</a>
-<a href="#1925" id="1925">1925</a>
-<a href="#1926" id="1926">1926</a>
-<a href="#1927" id="1927">1927</a>
-<a href="#1928" id="1928">1928</a>
-<a href="#1929" id="1929">1929</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1917" id="1917">1917</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -2931,6 +2919,7 @@
     <span class="kw">use </span>rand::RngCore;
     <span class="kw">use </span>testresult::TestResult;
     <span class="kw">use </span>tokio::{io::AsyncWriteExt, sync::mpsc};
+    <span class="kw">use </span>tracing_test::traced_test;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
     <span class="kw">use crate</span>::{hashseq::HashSeq, ticket::BlobTicket};
@@ -3068,9 +3057,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_create_collection() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// create temp file
@@ -3152,10 +3140,9 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_read_at() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="comment">// let _guard = iroh_test::logging::setup();
-
-        </span><span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// create temp file
         </span><span class="kw">let </span>temp_dir = tempfile::tempdir().context(<span class="string">"tempdir"</span>)<span class="question-mark">?</span>;
@@ -3291,9 +3278,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_get_collection() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// create temp file
@@ -3357,9 +3343,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_share() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// create temp file
@@ -3431,9 +3416,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_provide_events() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>(node1_events, <span class="kw-2">mut </span>node1_events_r) = BlobEvents::new(<span class="number">16</span>);
         <span class="kw">let </span>node1 = node::Node::memory()
             .blobs_events(node1_events)
@@ -3496,9 +3480,8 @@
     }
     <span class="doccomment">/// Download a existing blob from oneself
     </span><span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_get_self_existing() -&gt; TestResult&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>node_id = node.node_id();
         <span class="kw">let </span>blobs = node.blobs();
@@ -3544,9 +3527,8 @@
 
     <span class="doccomment">/// Download a missing blob from oneself
     </span><span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_get_self_missing() -&gt; TestResult&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>node_id = node.node_id();
         <span class="kw">let </span>blobs = node.blobs();
@@ -3596,9 +3578,8 @@
 
     <span class="doccomment">/// Download a existing collection. Check that things succeed and no download is performed.
     </span><span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_get_existing_collection() -&gt; TestResult&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="comment">// We use a nonexisting node id because we just want to check that this succeeds without
         // hitting the network.
@@ -3668,10 +3649,9 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     #[cfg_attr(target_os = <span class="string">"windows"</span>, ignore = <span class="string">"flaky"</span>)]
     </span><span class="kw">async fn </span>test_blob_delete_mem() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = node::Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>res = node.blobs().add_bytes(<span class="kw-2">&amp;</span><span class="string">b"hello world"</span>[..]).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -3690,9 +3670,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_blob_delete_fs() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>dir = tempfile::tempdir()<span class="question-mark">?</span>;
         <span class="kw">let </span>node = node::Node::persistent(dir.path()).<span class="kw">await</span><span class="question-mark">?</span>.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
@@ -3712,9 +3691,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_ticket_multiple_addrs() -&gt; TestResult&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>hash = node
             .blobs()
@@ -3730,9 +3708,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_node_add_blob_stream() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">use </span>std::io::Cursor;
         <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
@@ -3748,9 +3725,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_node_add_tagged_blob_event() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
-
         <span class="kw">let </span>node = Node::memory().spawn().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>_got_hash = tokio::time::timeout(Duration::from_secs(<span class="number">10</span>), <span class="kw">async move </span>{
@@ -3785,8 +3761,8 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     </span><span class="kw">async fn </span>test_download_via_relay() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
         <span class="kw">let </span>(relay_map, relay_url, _guard) = iroh::test_utils::run_relay_server().<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="kw">let </span>endpoint1 = iroh::Endpoint::builder()
@@ -3815,9 +3791,9 @@
     }
 
     <span class="attr">#[tokio::test]
+    #[traced_test]
     #[ignore = <span class="string">"flaky"</span>]
     </span><span class="kw">async fn </span>test_download_via_relay_with_discovery() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>_guard = iroh_test::logging::setup();
         <span class="kw">let </span>(relay_map, _relay_url, _guard) = iroh::test_utils::run_relay_server().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>dns_pkarr_server = DnsPkarrServer::run().<span class="kw">await</span><span class="question-mark">?</span>;
 
