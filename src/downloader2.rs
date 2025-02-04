@@ -12,10 +12,10 @@
 //! of the caller to generate unique ids. We could use random uuids here, but using
 //! integers simplifies testing.
 //!
-//! Inside the state machine, we use [ChunkRanges] to represent avaiability bitmaps.
-//! We treat operations on such bitmaps as very cheap, which is the case as long as
-//! the bitmaps are not very fragmented. We can introduce an even more optimized
-//! bitmap type, or prevent fragmentation.
+//! Inside the state machine, we use [ChunkRanges] to represent avaiability bitfields.
+//! We treat operations on such bitfields as very cheap, which is the case as long as
+//! the bitfields are not very fragmented. We can introduce an even more optimized
+//! bitfield type, or prevent fragmentation.
 //!
 //! The [DownloaderActor] is the asynchronous driver for the state machine. It
 //! owns the actual tasks that perform IO.
@@ -54,7 +54,7 @@ struct DiscoveryId(u64);
 struct PeerDownloadId(u64);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From)]
-struct BitmapSubscriptionId(u64);
+struct BitfieldSubscriptionId(u64);
 
 /// Announce kind
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -81,20 +81,23 @@ trait ContentDiscovery: Send + 'static {
     fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts) -> impl Stream<Item = NodeId> + Send + Unpin + 'static;
 }
 
-trait BitmapSubscription: Send + 'static {
+trait BitfieldSubscription: Send + 'static {
     /// Subscribe to a bitmap
-    fn subscribe(&mut self, peer: BitmapPeer, hash: Hash) -> impl Stream<Item = BitmapSubscriptionEvent> + Send + Unpin + 'static;
+    fn subscribe(&mut self, peer: BitmapPeer, hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static;
 }
 
-enum BitmapSubscriptionEvent {
-    Bitmap { ranges: ChunkRanges },
-    BitmapUpdate { added: ChunkRanges, removed: ChunkRanges},
+enum BitfieldSubscriptionEvent {
+    Bitfield { ranges: ChunkRanges },
+    BitfieldUpdate { added: ChunkRanges, removed: ChunkRanges},
 }
 
-struct TestBitmapSubscription;
+/// A bitmap subscription that just returns nothing for local and everything(*) for remote
+/// 
+/// * Still need to figure out how to deal with open ended chunk ranges.
+struct TestBitfieldSubscription;
 
-impl BitmapSubscription for TestBitmapSubscription {
-    fn subscribe(&mut self, peer: BitmapPeer, _hash: Hash) -> impl Stream<Item = BitmapSubscriptionEvent> + Send + Unpin + 'static {
+impl BitfieldSubscription for TestBitfieldSubscription {
+    fn subscribe(&mut self, peer: BitmapPeer, _hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static {
         let bitmap = match peer {
             BitmapPeer::Local => {
                 ChunkRanges::empty()
@@ -103,7 +106,7 @@ impl BitmapSubscription for TestBitmapSubscription {
                 ChunkRanges::from(ChunkNum(0)..ChunkNum(1024))
             }
         };
-        futures_lite::stream::once(BitmapSubscriptionEvent::Bitmap { ranges: bitmap }).chain(futures_lite::stream::pending())
+        futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges: bitmap }).chain(futures_lite::stream::pending())
     }
 }
 
@@ -119,7 +122,7 @@ struct PeerState {
 /// Information about one blob on one peer
 struct PeerBlobState {
     /// The subscription id for the subscription
-    subscription_id: BitmapSubscriptionId,
+    subscription_id: BitfieldSubscriptionId,
     /// The number of subscriptions this peer has
     subscription_count: usize,
     /// chunk ranges this peer reports to have
@@ -127,7 +130,7 @@ struct PeerBlobState {
 }
 
 impl PeerBlobState {
-    fn new(subscription_id: BitmapSubscriptionId) -> Self {
+    fn new(subscription_id: BitfieldSubscriptionId) -> Self {
         Self { subscription_id, subscription_count: 1, ranges: ChunkRanges::empty() }
     }
 }
@@ -500,7 +503,7 @@ struct DownloaderState {
     // We could use uuid here, but using integers simplifies testing.
     //
     // the next subscription id
-    subscription_id_gen: IdGenerator<BitmapSubscriptionId>,
+    subscription_id_gen: IdGenerator<BitfieldSubscriptionId>,
     // the next discovery id
     discovery_id_gen: IdGenerator<DiscoveryId>,
     // the next peer download id
@@ -542,7 +545,7 @@ enum Command {
     /// A user request to abort a download.
     StopDownload { id: DownloadId },
     /// A full bitmap for a blob and a peer
-    Bitmap {
+    Bitfield {
         /// The peer that sent the bitmap.
         peer: BitmapPeer,
         /// The blob for which the bitmap is
@@ -554,7 +557,7 @@ enum Command {
     ///
     /// This is used both to update the bitmap of remote peers, and to update
     /// the local bitmap.
-    BitmapUpdate {
+    BitfieldUpdate {
         /// The peer that sent the update.
         peer: BitmapPeer,
         /// The blob that was updated.
@@ -592,15 +595,15 @@ enum Command {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Event {
-    SubscribeBitmap {
+    SubscribeBitfield {
         peer: BitmapPeer,
         hash: Hash,
         /// The unique id of the subscription
-        id: BitmapSubscriptionId,
+        id: BitfieldSubscriptionId,
     },
-    UnsubscribeBitmap {
+    UnsubscribeBitfield {
         /// The unique id of the subscription
-        id: BitmapSubscriptionId,
+        id: BitfieldSubscriptionId,
     },
     StartDiscovery {
         hash: Hash,
@@ -666,7 +669,7 @@ impl DownloaderState {
             if *hash == removed_hash {
                 state.subscription_count -= 1;
                 if state.subscription_count == 0 {
-                    evs.push(Event::UnsubscribeBitmap { id: state.subscription_id });
+                    evs.push(Event::UnsubscribeBitfield { id: state.subscription_id });
                     return false;
                 }
             }
@@ -696,7 +699,7 @@ impl DownloaderState {
                 } else {
                     // create a new subscription
                     let subscription_id = self.subscription_id_gen.next();
-                    evs.push(Event::SubscribeBitmap { peer: BitmapPeer::Local, hash, id: subscription_id });
+                    evs.push(Event::SubscribeBitfield { peer: BitmapPeer::Local, hash, id: subscription_id });
                     self.bitmaps.insert((BitmapPeer::Local, hash), PeerBlobState::new(subscription_id));
                 }
                 if !self.discovery.contains_key(&request.hash) {
@@ -735,14 +738,14 @@ impl DownloaderState {
                 let _state = self.peers.entry(peer).or_default();
                 // create a new subscription
                 let subscription_id = self.subscription_id_gen.next();
-                evs.push(Event::SubscribeBitmap { peer: BitmapPeer::Remote(peer), hash, id: subscription_id });
+                evs.push(Event::SubscribeBitfield { peer: BitmapPeer::Remote(peer), hash, id: subscription_id });
                 self.bitmaps.insert((BitmapPeer::Remote(peer), hash), PeerBlobState::new(subscription_id));
             }
             Command::DropPeer { peer } => {
                 self.bitmaps.retain(|(p, _), state| {
                     if *p == BitmapPeer::Remote(peer) {
                         // todo: should we emit unsubscribe evs here?
-                        evs.push(Event::UnsubscribeBitmap { id: state.subscription_id });
+                        evs.push(Event::UnsubscribeBitfield { id: state.subscription_id });
                         return false;
                     } else {
                         return true;
@@ -750,7 +753,7 @@ impl DownloaderState {
                 });
                 self.peers.remove(&peer);
             }
-            Command::Bitmap { peer, hash, bitmap } => {
+            Command::Bitfield { peer, hash, bitmap } => {
                 let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap for unknown peer {peer:?} and hash {hash}"))?;
                 let _chunks = total_chunks(&bitmap).context("open range")?;
                 if peer == BitmapPeer::Local {
@@ -768,7 +771,7 @@ impl DownloaderState {
                 // we have to call start_downloads even if the local bitmap set, since we don't know in which order local and remote bitmaps arrive
                 self.start_downloads(hash, None, evs)?;
             }
-            Command::BitmapUpdate { peer, hash, added, removed } => {
+            Command::BitfieldUpdate { peer, hash, added, removed } => {
                 let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap update for unknown peer {peer:?} and hash {hash}"))?;
                 if peer == BitmapPeer::Local {
                     state.ranges |= added;
@@ -1002,7 +1005,7 @@ impl Downloader {
         Ok(())
     }
 
-    fn new<S: Store, D: ContentDiscovery, B: BitmapSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitmap: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+    fn new<S: Store, D: ContentDiscovery, B: BitfieldSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitmap: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let actor = DownloaderActor::new(endpoint, store, discovery, subscribe_bitmap, local_pool, planner);
         let (send, recv) = tokio::sync::mpsc::channel(256);
         let task = Arc::new(spawn(async move { actor.run(recv).await }));
@@ -1028,14 +1031,14 @@ struct DownloaderActor<S, D, B> {
     download_futs: BTreeMap<DownloadId, tokio::sync::oneshot::Sender<()>>,
     peer_download_tasks: BTreeMap<PeerDownloadId, local_pool::Run<()>>,
     discovery_tasks: BTreeMap<DiscoveryId, AbortOnDropHandle<()>>,
-    bitmap_subscription_tasks: BTreeMap<BitmapSubscriptionId, AbortOnDropHandle<()>>,
+    bitmap_subscription_tasks: BTreeMap<BitfieldSubscriptionId, AbortOnDropHandle<()>>,
     /// Id generator for download ids
     download_id_gen: IdGenerator<DownloadId>,
     /// The time when the actor was started, serves as the epoch for time messages to the state machine
     start: Instant,
 }
 
-impl<S: Store, D: ContentDiscovery, B: BitmapSubscription> DownloaderActor<S, D, B> {
+impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, D, B> {
     fn new(endpoint: Endpoint, store: S, discovery: D, subscribe_bitmap: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let (send, recv) = mpsc::channel(256);
         Self {
@@ -1090,17 +1093,17 @@ impl<S: Store, D: ContentDiscovery, B: BitmapSubscription> DownloaderActor<S, D,
     fn handle_event(&mut self, ev: Event, depth: usize) {
         trace!("handle_event {ev:?} {depth}");
         match ev {
-            Event::SubscribeBitmap { peer, hash, id } => {
+            Event::SubscribeBitfield { peer, hash, id } => {
                 let send = self.command_tx.clone();
                 let mut stream = self.subscribe_bitmap.subscribe(peer, hash);
                 let task = spawn(async move {
                     while let Some(ev) = stream.next().await {
                         let cmd = match ev {
-                            BitmapSubscriptionEvent::Bitmap { ranges } => {
-                                Command::Bitmap { peer, hash, bitmap: ranges }
+                            BitfieldSubscriptionEvent::Bitfield { ranges } => {
+                                Command::Bitfield { peer, hash, bitmap: ranges }
                             }
-                            BitmapSubscriptionEvent::BitmapUpdate { added, removed } => {
-                                Command::BitmapUpdate { peer, hash, added, removed }
+                            BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => {
+                                Command::BitfieldUpdate { peer, hash, added, removed }
                             }
                         };
                         send.send(cmd).await.ok();
@@ -1141,7 +1144,7 @@ impl<S: Store, D: ContentDiscovery, B: BitmapSubscription> DownloaderActor<S, D,
                 let task = self.local_pool.spawn(move || peer_download_task(id, endpoint, store, hash, peer, ranges, send, start));
                 self.peer_download_tasks.insert(id, task);
             }
-            Event::UnsubscribeBitmap { id } => {
+            Event::UnsubscribeBitfield { id } => {
                 self.bitmap_subscription_tasks.remove(&id);
             }
             Event::StopDiscovery { id } => {
@@ -1219,7 +1222,7 @@ async fn peer_download<S: Store>(endpoint: Endpoint, store: S, hash: Hash, peer:
                         sender.send(Command::ChunksDownloaded { time: start.elapsed(), peer, hash, added: added.clone() }).await.ok();
                         batch.push(leaf.into());
                         writer.write_batch(size, std::mem::take(&mut batch)).await?;
-                        sender.send(Command::BitmapUpdate { peer: BitmapPeer::Local, hash, added, removed: ChunkRanges::empty() }).await.ok();
+                        sender.send(Command::BitfieldUpdate { peer: BitmapPeer::Local, hash, added, removed: ChunkRanges::empty() }).await.ok();
                     }
                 }
                 content = next;
@@ -1523,9 +1526,9 @@ mod tests {
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let unknown_hash = "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
         let mut state = DownloaderState::new(noop_planner());
-        let evs = state.apply(Command::Bitmap { peer: Local, hash, bitmap: ChunkRanges::all() });
+        let evs = state.apply(Command::Bitfield { peer: Local, hash, bitmap: ChunkRanges::all() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap should produce an error!");
-        let evs = state.apply(Command::Bitmap { peer: Local, hash: unknown_hash, bitmap: ChunkRanges::all() });
+        let evs = state.apply(Command::Bitfield { peer: Local, hash: unknown_hash, bitmap: ChunkRanges::all() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap for an unknown hash should produce an error!");
         let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "download from unknown peer should lead to an error!");
@@ -1542,29 +1545,29 @@ mod tests {
         let mut state = DownloaderState::new(noop_planner());
         let evs = state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: DownloadId(0) });
         assert!(has_one_event(&evs, &Event::StartDiscovery { hash, id: DiscoveryId(0) }), "starting a download should start a discovery task");
-        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: Local, hash, id: BitmapSubscriptionId(0) }), "starting a download should subscribe to the local bitmap");
+        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }), "starting a download should subscribe to the local bitmap");
         let initial_bitmap = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
-        let evs = state.apply(Command::Bitmap { peer: Local, hash, bitmap: initial_bitmap.clone() });
+        let evs = state.apply(Command::Bitfield { peer: Local, hash, bitmap: initial_bitmap.clone() });
         assert!(evs.is_empty());
         assert_eq!(state.bitmaps.get_local(hash).context("bitmap should be present")?.ranges, initial_bitmap, "bitmap should be set to the initial bitmap");
-        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
         assert_eq!(state.bitmaps.get_local(hash).context("bitmap should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitmap should be updated");
         let evs = state.apply(Command::PeerDiscovered { peer: peer_a, hash });
-        assert!(has_one_event(&evs, &Event::SubscribeBitmap { peer: Remote(peer_a), hash, id: 1.into() }), "adding a new peer for a hash we are interested in should subscribe to the bitmap");
-        let evs = state.apply(Command::Bitmap { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..64]) });
+        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Remote(peer_a), hash, id: 1.into() }), "adding a new peer for a hash we are interested in should subscribe to the bitmap");
+        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..64]) });
         assert!(has_one_event(&evs, &Event::StartPeerDownload { id: PeerDownloadId(0), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "bitmap from a peer should start a download");
         // ChunksDownloaded just updates the peer stats
         let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..48]) });
         assert!(evs.is_empty());
         // Bitmap update does not yet complete the download
-        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([32..48]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..48]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
         // ChunksDownloaded just updates the peer stats
         let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([48..64]) });
         assert!(evs.is_empty());
         // Final bitmap update for the local bitmap should complete the download
-        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })), "download should be completed by the data");
         Ok(())
     }
@@ -1580,30 +1583,30 @@ mod tests {
         // Start a download
         state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: DownloadId(0) });
         // Initially, we have nothing
-        state.apply(Command::Bitmap { peer: Local, hash, bitmap: ChunkRanges::empty() });
+        state.apply(Command::Bitfield { peer: Local, hash, bitmap: ChunkRanges::empty() });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
         // We have a bitmap from the peer
-        let evs = state.apply(Command::Bitmap { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..32]) });
+        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..32]) });
         assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0.into(), peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitmap from a peer should start a download");
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
         // Bitmap update does not yet complete the download
-        state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([0..16]), removed: ChunkRanges::empty() });
+        state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([0..16]), removed: ChunkRanges::empty() });
         // The peer now has more data
-        state.apply(Command::Bitmap { peer: Remote(peer_a), hash, bitmap: chunk_ranges([32..64]) });
+        state.apply(Command::Bitfield { peer: Remote(peer_a), hash, bitmap: chunk_ranges([32..64]) });
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([16..32]) });
         // Complete the first part of the download
-        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
         // This triggers cancellation of the first peer download and starting a new one for the remaining data
         assert!(has_one_event(&evs, &Event::StopPeerDownload { id: 0.into() }), "first peer download should be stopped");
         assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 1.into(), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "second peer download should be started");
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..64]) });
         // Final bitmap update for the local bitmap should complete the download
-        let evs = state.apply(Command::BitmapUpdate { peer: Local, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
-        assert!(has_all_events(&evs, &[&Event::StopPeerDownload { id: 1.into() }, &Event::DownloadComplete { id: 0.into() }, &Event::UnsubscribeBitmap { id: 0.into() }, &Event::StopDiscovery { id: 0.into() },]), "download should be completed by the data");
+        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
+        assert!(has_all_events(&evs, &[&Event::StopPeerDownload { id: 1.into() }, &Event::DownloadComplete { id: 0.into() }, &Event::UnsubscribeBitfield { id: 0.into() }, &Event::StopDiscovery { id: 0.into() },]), "download should be completed by the data");
         println!("{evs:?}");
         Ok(())
     }
@@ -1616,7 +1619,7 @@ mod tests {
         let store = crate::store::mem::Store::new();
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
-        let bitmap_subscription = TestBitmapSubscription;
+        let bitmap_subscription = TestBitfieldSubscription;
         let local_pool = LocalPool::single();
         let downloader = Downloader::new(endpoint, store, discovery, bitmap_subscription, local_pool, noop_planner());
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1642,7 +1645,7 @@ mod tests {
         let store = crate::store::mem::Store::new();
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
-        let bitmap_subscription = TestBitmapSubscription;
+        let bitmap_subscription = TestBitfieldSubscription;
         let local_pool = LocalPool::single();
         let downloader = Downloader::new(endpoint, store, discovery, bitmap_subscription, local_pool, Box::new(StripePlanner2::new(0, 8)));
         tokio::time::sleep(Duration::from_secs(2)).await;
