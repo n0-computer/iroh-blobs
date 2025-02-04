@@ -584,8 +584,7 @@
 <a href="#583" id="583">583</a>
 <a href="#584" id="584">584</a>
 <a href="#585" id="585">585</a>
-<a href="#586" id="586">586</a>
-<a href="#587" id="587">587</a></pre></div><pre class="rust"><code><span class="doccomment">//! The blake3 hash used in Iroh.
+<a href="#586" id="586">586</a></pre></div><pre class="rust"><code><span class="doccomment">//! The blake3 hash used in Iroh.
 
 </span><span class="kw">use </span>std::{borrow::Borrow, fmt, str::FromStr};
 
@@ -1003,11 +1002,10 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
-
-    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
     <span class="kw">use </span>serde_test::{assert_tokens, Configure, Token};
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
+    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_display_parse_roundtrip() {

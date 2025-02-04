@@ -371,10 +371,10 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::net::SocketAddr;
 
-    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
     <span class="kw">use </span>iroh::{PublicKey, SecretKey};
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
+    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     <span class="kw">fn </span>make_ticket() -&gt; BlobTicket {
         <span class="kw">let </span>hash = Hash::new(<span class="string">b"hi there"</span>);
