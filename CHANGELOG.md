@@ -2,6 +2,19 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.32.0](https://github.com/n0-computer/iroh-blobs/compare/v0.31.0..0.32.0) - 2025-02-04
+
+### ⛰️  Features
+
+- Update quic-rpc to 0.18 ([#46](https://github.com/n0-computer/iroh-blobs/issues/46)) - ([030420e](https://github.com/n0-computer/iroh-blobs/commit/030420e7fa03c80b44491f8da16b993f4015007f))
+- [**breaking**] Simplify LocalPool handling ([#47](https://github.com/n0-computer/iroh-blobs/issues/47)) - ([b29991d](https://github.com/n0-computer/iroh-blobs/commit/b29991dc913459e034b758271d9b79f8ae6c498e))
+
+### ⚙️ Miscellaneous Tasks
+
+- Fix URL to beta workflow ([#50](https://github.com/n0-computer/iroh-blobs/issues/50)) - ([5cacccb](https://github.com/n0-computer/iroh-blobs/commit/5cacccb33818b11eab487b89da0bb4a69325f52b))
+- Remove individual repo project tracking ([#48](https://github.com/n0-computer/iroh-blobs/issues/48)) - ([64b6ae6](https://github.com/n0-computer/iroh-blobs/commit/64b6ae6a6b1dfcdf639ad55923391957b0b4186e))
+- Upgrade to `iroh@v0.32.0` and `quic-rpc@v0.18.1` ([#52](https://github.com/n0-computer/iroh-blobs/issues/52)) - ([7dccac9](https://github.com/n0-computer/iroh-blobs/commit/7dccac9610482f9acbde4c46a134d99e979e6001))
+
 ## [0.31.0](https://github.com/n0-computer/iroh-blobs/compare/v0.30.0..0.31.0) - 2025-01-14
 
 ### ⚙️ Miscellaneous Tasks
