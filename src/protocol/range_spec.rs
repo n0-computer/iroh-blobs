@@ -357,7 +357,6 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-
     use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     fn ranges(value_range: Range<u64>) -> impl Strategy<Value = ChunkRanges> {
