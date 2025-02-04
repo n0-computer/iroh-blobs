@@ -82,8 +82,8 @@ trait ContentDiscovery: Send + 'static {
 }
 
 trait BitfieldSubscription: Send + 'static {
-    /// Subscribe to a bitmap
-    fn subscribe(&mut self, peer: BitmapPeer, hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static;
+    /// Subscribe to a bitfield
+    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static;
 }
 
 enum BitfieldSubscriptionEvent {
@@ -91,22 +91,22 @@ enum BitfieldSubscriptionEvent {
     BitfieldUpdate { added: ChunkRanges, removed: ChunkRanges},
 }
 
-/// A bitmap subscription that just returns nothing for local and everything(*) for remote
+/// A bitfield subscription that just returns nothing for local and everything(*) for remote
 /// 
 /// * Still need to figure out how to deal with open ended chunk ranges.
 struct TestBitfieldSubscription;
 
 impl BitfieldSubscription for TestBitfieldSubscription {
-    fn subscribe(&mut self, peer: BitmapPeer, _hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static {
-        let bitmap = match peer {
-            BitmapPeer::Local => {
+    fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static {
+        let ranges = match peer {
+            BitfieldPeer::Local => {
                 ChunkRanges::empty()
             }
-            BitmapPeer::Remote(_) => {
+            BitfieldPeer::Remote(_) => {
                 ChunkRanges::from(ChunkNum(0)..ChunkNum(1024))
             }
         };
-        futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges: bitmap }).chain(futures_lite::stream::pending())
+        futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending())
     }
 }
 
@@ -229,45 +229,45 @@ impl Downloads {
 }
 
 #[derive(Default)]
-struct Bitmaps {
-    by_peer_and_hash: BTreeMap<(BitmapPeer, Hash), PeerBlobState>,
+struct Bitfields {
+    by_peer_and_hash: BTreeMap<(BitfieldPeer, Hash), PeerBlobState>,
 }
 
-impl Bitmaps {
+impl Bitfields {
     fn retain<F>(&mut self, mut f: F)
     where
-        F: FnMut(&(BitmapPeer, Hash), &mut PeerBlobState) -> bool,
+        F: FnMut(&(BitfieldPeer, Hash), &mut PeerBlobState) -> bool,
     {
         self.by_peer_and_hash.retain(|k, v| f(k, v));
     }
 
-    fn get(&self, key: &(BitmapPeer, Hash)) -> Option<&PeerBlobState> {
+    fn get(&self, key: &(BitfieldPeer, Hash)) -> Option<&PeerBlobState> {
         self.by_peer_and_hash.get(key)
     }
 
     fn get_local(&self, hash: Hash) -> Option<&PeerBlobState> {
-        self.by_peer_and_hash.get(&(BitmapPeer::Local, hash))
+        self.by_peer_and_hash.get(&(BitfieldPeer::Local, hash))
     }
 
-    fn get_mut(&mut self, key: &(BitmapPeer, Hash)) -> Option<&mut PeerBlobState> {
+    fn get_mut(&mut self, key: &(BitfieldPeer, Hash)) -> Option<&mut PeerBlobState> {
         self.by_peer_and_hash.get_mut(key)
     }
 
     fn get_local_mut(&mut self, hash: Hash) -> Option<&mut PeerBlobState> {
-        self.by_peer_and_hash.get_mut(&(BitmapPeer::Local, hash))
+        self.by_peer_and_hash.get_mut(&(BitfieldPeer::Local, hash))
     }
 
-    fn insert(&mut self, key: (BitmapPeer, Hash), value: PeerBlobState) {
+    fn insert(&mut self, key: (BitfieldPeer, Hash), value: PeerBlobState) {
         self.by_peer_and_hash.insert(key, value);
     }
 
-    fn contains_key(&self, key: &(BitmapPeer, Hash)) -> bool {
+    fn contains_key(&self, key: &(BitfieldPeer, Hash)) -> bool {
         self.by_peer_and_hash.contains_key(key)
     }
 
     fn remote_for_hash(&self, hash: Hash) -> impl Iterator<Item = (&NodeId, &PeerBlobState)> {
         self.by_peer_and_hash.iter().filter_map(move |((peer, h), state)| {
-            if let BitmapPeer::Remote(peer) = peer {
+            if let BitfieldPeer::Remote(peer) = peer {
                 if *h == hash {
                     Some((peer, state))
                 } else {
@@ -486,10 +486,10 @@ struct PeerDownloadState {
 struct DownloaderState {
     // all peers I am tracking for any download
     peers: BTreeMap<NodeId, PeerState>,
-    // all bitmaps I am tracking, both for myself and for remote peers
+    // all bitfields I am tracking, both for myself and for remote peers
     //
     // each item here corresponds to an active subscription
-    bitmaps: Bitmaps,
+    bitfields: Bitfields,
     // all active downloads
     //
     // these are user downloads. each user download gets split into one or more
@@ -517,7 +517,7 @@ impl DownloaderState {
         Self {
             peers: BTreeMap::new(),
             downloads: Default::default(),
-            bitmaps: Default::default(),
+            bitfields: Default::default(),
             discovery: BTreeMap::new(),
             subscription_id_gen: Default::default(),
             discovery_id_gen: Default::default(),
@@ -528,7 +528,7 @@ impl DownloaderState {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum BitmapPeer {
+enum BitfieldPeer {
     Local,
     Remote(NodeId),
 }
@@ -544,22 +544,22 @@ enum Command {
     },
     /// A user request to abort a download.
     StopDownload { id: DownloadId },
-    /// A full bitmap for a blob and a peer
+    /// A full bitfield for a blob and a peer
     Bitfield {
-        /// The peer that sent the bitmap.
-        peer: BitmapPeer,
-        /// The blob for which the bitmap is
+        /// The peer that sent the bitfield.
+        peer: BitfieldPeer,
+        /// The blob for which the bitfield is
         hash: Hash,
-        /// The complete bitmap
-        bitmap: ChunkRanges,
+        /// The complete bitfield
+        ranges: ChunkRanges,
     },
-    /// An update of a bitmap for a hash
+    /// An update of a bitfield for a hash
     ///
-    /// This is used both to update the bitmap of remote peers, and to update
-    /// the local bitmap.
+    /// This is used both to update the bitfield of remote peers, and to update
+    /// the local bitfield.
     BitfieldUpdate {
         /// The peer that sent the update.
-        peer: BitmapPeer,
+        peer: BitfieldPeer,
         /// The blob that was updated.
         hash: Hash,
         /// The ranges that were added
@@ -596,7 +596,7 @@ enum Command {
 #[derive(Debug, PartialEq, Eq)]
 enum Event {
     SubscribeBitfield {
-        peer: BitmapPeer,
+        peer: BitfieldPeer,
         hash: Hash,
         /// The unique id of the subscription
         id: BitfieldSubscriptionId,
@@ -655,7 +655,7 @@ impl DownloaderState {
     ///
     /// Cleanup involves emitting events for
     /// - stopping all peer downloads
-    /// - unsubscribing from bitmaps if needed
+    /// - unsubscribing from bitfields if needed
     /// - stopping the discovery task if needed
     fn stop_download(&mut self, id: DownloadId, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         let removed = self.downloads.remove(&id).context(format!("removed unknown download {id:?}"))?;
@@ -664,8 +664,8 @@ impl DownloaderState {
         for peer_download in removed.peer_downloads.values() {
             evs.push(Event::StopPeerDownload { id: peer_download.id });
         }
-        // unsubscribe from bitmaps that have no more subscriptions
-        self.bitmaps.retain(|(_peer, hash), state| {
+        // unsubscribe from bitfields that have no more subscriptions
+        self.bitfields.retain(|(_peer, hash), state| {
             if *hash == removed_hash {
                 state.subscription_count -= 1;
                 if state.subscription_count == 0 {
@@ -693,14 +693,14 @@ impl DownloaderState {
                 anyhow::ensure!(!self.downloads.contains_key(&id), "duplicate download request {id:?}");
                 let hash = request.hash;
                 // either we have a subscription for this blob, or we have to create one
-                if let Some(state) = self.bitmaps.get_local_mut(hash) {
+                if let Some(state) = self.bitfields.get_local_mut(hash) {
                     // just increment the count
                     state.subscription_count += 1;
                 } else {
                     // create a new subscription
                     let subscription_id = self.subscription_id_gen.next();
-                    evs.push(Event::SubscribeBitfield { peer: BitmapPeer::Local, hash, id: subscription_id });
-                    self.bitmaps.insert((BitmapPeer::Local, hash), PeerBlobState::new(subscription_id));
+                    evs.push(Event::SubscribeBitfield { peer: BitfieldPeer::Local, hash, id: subscription_id });
+                    self.bitfields.insert((BitfieldPeer::Local, hash), PeerBlobState::new(subscription_id));
                 }
                 if !self.discovery.contains_key(&request.hash) {
                     // start a discovery task
@@ -726,7 +726,7 @@ impl DownloaderState {
                 self.stop_download(id, evs)?;
             }
             Command::PeerDiscovered { peer, hash } => {
-                if self.bitmaps.contains_key(&(BitmapPeer::Remote(peer), hash)) {
+                if self.bitfields.contains_key(&(BitfieldPeer::Remote(peer), hash)) {
                     // we already have a subscription for this peer
                     return Ok(());
                 };
@@ -738,12 +738,12 @@ impl DownloaderState {
                 let _state = self.peers.entry(peer).or_default();
                 // create a new subscription
                 let subscription_id = self.subscription_id_gen.next();
-                evs.push(Event::SubscribeBitfield { peer: BitmapPeer::Remote(peer), hash, id: subscription_id });
-                self.bitmaps.insert((BitmapPeer::Remote(peer), hash), PeerBlobState::new(subscription_id));
+                evs.push(Event::SubscribeBitfield { peer: BitfieldPeer::Remote(peer), hash, id: subscription_id });
+                self.bitfields.insert((BitfieldPeer::Remote(peer), hash), PeerBlobState::new(subscription_id));
             }
             Command::DropPeer { peer } => {
-                self.bitmaps.retain(|(p, _), state| {
-                    if *p == BitmapPeer::Remote(peer) {
+                self.bitfields.retain(|(p, _), state| {
+                    if *p == BitfieldPeer::Remote(peer) {
                         // todo: should we emit unsubscribe evs here?
                         evs.push(Event::UnsubscribeBitfield { id: state.subscription_id });
                         return false;
@@ -753,27 +753,27 @@ impl DownloaderState {
                 });
                 self.peers.remove(&peer);
             }
-            Command::Bitfield { peer, hash, bitmap } => {
-                let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap for unknown peer {peer:?} and hash {hash}"))?;
-                let _chunks = total_chunks(&bitmap).context("open range")?;
-                if peer == BitmapPeer::Local {
-                    state.ranges = bitmap;
+            Command::Bitfield { peer, hash, ranges } => {
+                let state = self.bitfields.get_mut(&(peer, hash)).context(format!("bitfields for unknown peer {peer:?} and hash {hash}"))?;
+                let _chunks = total_chunks(&ranges).context("open range")?;
+                if peer == BitfieldPeer::Local {
+                    state.ranges = ranges;
                     self.check_completion(hash, None, evs)?;
                 } else {
                     // We got an entirely new peer, mark all affected downloads for rebalancing
                     for download in self.downloads.values_mut_for_hash(hash) {
-                        if bitmap.intersects(&download.request.ranges) {
+                        if ranges.intersects(&download.request.ranges) {
                             download.needs_rebalancing = true;
                         }
                     }
-                    state.ranges = bitmap;
+                    state.ranges = ranges;
                 }
-                // we have to call start_downloads even if the local bitmap set, since we don't know in which order local and remote bitmaps arrive
+                // we have to call start_downloads even if the local bitfield set, since we don't know in which order local and remote bitfields arrive
                 self.start_downloads(hash, None, evs)?;
             }
             Command::BitfieldUpdate { peer, hash, added, removed } => {
-                let state = self.bitmaps.get_mut(&(peer, hash)).context(format!("bitmap update for unknown peer {peer:?} and hash {hash}"))?;
-                if peer == BitmapPeer::Local {
+                let state = self.bitfields.get_mut(&(peer, hash)).context(format!("bitfield update for unknown peer {peer:?} and hash {hash}"))?;
+                if peer == BitfieldPeer::Local {
                     state.ranges |= added;
                     state.ranges &= !removed;
                     self.check_completion(hash, None, evs)?;
@@ -787,12 +787,12 @@ impl DownloaderState {
                     }
                     state.ranges |= added;
                     state.ranges &= !removed;
-                    // a local bitmap update does not make more data available, so we don't need to start downloads
+                    // a local bitfield update does not make more data available, so we don't need to start downloads
                     self.start_downloads(hash, None, evs)?;
                 }
             }
             Command::ChunksDownloaded { time, peer, hash, added } => {
-                let state = self.bitmaps.get_local_mut(hash).context(format!("chunks downloaded before having local bitmap for {hash}"))?;
+                let state = self.bitfields.get_local_mut(hash).context(format!("chunks downloaded before having local bitfield for {hash}"))?;
                 let total_downloaded = total_chunks(&added).context("open range")?;
                 let total_before = total_chunks(&state.ranges).context("open range")?;
                 state.ranges |= added;
@@ -824,7 +824,7 @@ impl DownloaderState {
                         // nothing has changed that affects this download
                         continue;
                     }
-                    let n_peers = self.bitmaps.remote_for_hash(download.request.hash).count();
+                    let n_peers = self.bitfields.remote_for_hash(download.request.hash).count();
                     if download.peer_downloads.len() >= n_peers {
                         // we are already downloading from all peers for this hash
                         continue;
@@ -841,11 +841,11 @@ impl DownloaderState {
 
     /// Check for completion of a download or of an individual peer download
     ///
-    /// This must be called after each change of the local bitmap for a hash
+    /// This must be called after each change of the local bitfield for a hash
     ///
     /// In addition to checking for completion, this also create new peer downloads if a peer download is complete and there is more data available for that peer.
     fn check_completion(&mut self, hash: Hash, just_id: Option<DownloadId>, evs: &mut Vec<Event>) -> anyhow::Result<()> {
-        let Some(self_state) = self.bitmaps.get_local(hash) else {
+        let Some(self_state) = self.bitfields.get_local(hash) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
@@ -889,8 +889,8 @@ impl DownloaderState {
                 // see what the new peers can do for us
                 let mut candidates = BTreeMap::new();
                 for peer in available {
-                    let Some(peer_state) = self.bitmaps.get(&(BitmapPeer::Remote(peer), hash)) else {
-                        // weird. we should have a bitmap for this peer since it just completed a download
+                    let Some(peer_state) = self.bitfields.get(&(BitfieldPeer::Remote(peer), hash)) else {
+                        // weird. we should have a bitfield for this peer since it just completed a download
                         continue;
                     };
                     let intersection = &peer_state.ranges & &remaining;
@@ -917,7 +917,7 @@ impl DownloaderState {
 
     /// Look at all downloads for a hash and start peer downloads for those that do not have any yet
     fn start_downloads(&mut self, hash: Hash, just_id: Option<DownloadId>, evs: &mut Vec<Event>) -> anyhow::Result<()> {
-        let Some(self_state) = self.bitmaps.get_local(hash) else {
+        let Some(self_state) = self.bitfields.get_local(hash) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
@@ -927,8 +927,8 @@ impl DownloaderState {
             }
             let remaining = &download.request.ranges - &self_state.ranges;
             let mut candidates = BTreeMap::new();
-            for (peer, bitmap) in self.bitmaps.remote_for_hash(hash) {
-                let intersection = &bitmap.ranges & &remaining;
+            for (peer, bitfield) in self.bitfields.remote_for_hash(hash) {
+                let intersection = &bitfield.ranges & &remaining;
                 if !intersection.is_empty() {
                     candidates.insert(*peer, intersection);
                 }
@@ -950,14 +950,14 @@ impl DownloaderState {
         download.needs_rebalancing = false;
         tracing::error!("Rebalancing download {id:?} {:?}", download.request);
         let hash = download.request.hash;
-        let Some(self_state) = self.bitmaps.get_local(hash) else {
+        let Some(self_state) = self.bitfields.get_local(hash) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
         let remaining = &download.request.ranges - &self_state.ranges;
         let mut candidates = BTreeMap::new();
-        for (peer, bitmap) in self.bitmaps.remote_for_hash(hash) {
-            let intersection = &bitmap.ranges & &remaining;
+        for (peer, bitfield) in self.bitfields.remote_for_hash(hash) {
+            let intersection = &bitfield.ranges & &remaining;
             if !intersection.is_empty() {
                 candidates.insert(*peer, intersection);
             }
@@ -1005,8 +1005,8 @@ impl Downloader {
         Ok(())
     }
 
-    fn new<S: Store, D: ContentDiscovery, B: BitfieldSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitmap: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
-        let actor = DownloaderActor::new(endpoint, store, discovery, subscribe_bitmap, local_pool, planner);
+    fn new<S: Store, D: ContentDiscovery, B: BitfieldSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitfield: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+        let actor = DownloaderActor::new(endpoint, store, discovery, subscribe_bitfield, local_pool, planner);
         let (send, recv) = tokio::sync::mpsc::channel(256);
         let task = Arc::new(spawn(async move { actor.run(recv).await }));
         Self { send, task }
@@ -1027,11 +1027,11 @@ struct DownloaderActor<S, D, B> {
     state: DownloaderState,
     store: S,
     discovery: D,
-    subscribe_bitmap: B,
+    subscribe_bitfield: B,
     download_futs: BTreeMap<DownloadId, tokio::sync::oneshot::Sender<()>>,
     peer_download_tasks: BTreeMap<PeerDownloadId, local_pool::Run<()>>,
     discovery_tasks: BTreeMap<DiscoveryId, AbortOnDropHandle<()>>,
-    bitmap_subscription_tasks: BTreeMap<BitfieldSubscriptionId, AbortOnDropHandle<()>>,
+    bitfield_subscription_tasks: BTreeMap<BitfieldSubscriptionId, AbortOnDropHandle<()>>,
     /// Id generator for download ids
     download_id_gen: IdGenerator<DownloadId>,
     /// The time when the actor was started, serves as the epoch for time messages to the state machine
@@ -1039,7 +1039,7 @@ struct DownloaderActor<S, D, B> {
 }
 
 impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, D, B> {
-    fn new(endpoint: Endpoint, store: S, discovery: D, subscribe_bitmap: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+    fn new(endpoint: Endpoint, store: S, discovery: D, subscribe_bitfield: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let (send, recv) = mpsc::channel(256);
         Self {
             local_pool,
@@ -1047,10 +1047,10 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
             state: DownloaderState::new(planner),
             store,
             discovery,
-            subscribe_bitmap,
+            subscribe_bitfield,
             peer_download_tasks: BTreeMap::new(),
             discovery_tasks: BTreeMap::new(),
-            bitmap_subscription_tasks: BTreeMap::new(),
+            bitfield_subscription_tasks: BTreeMap::new(),
             download_futs: BTreeMap::new(),
             command_tx: send,
             command_rx: recv,
@@ -1095,12 +1095,12 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
         match ev {
             Event::SubscribeBitfield { peer, hash, id } => {
                 let send = self.command_tx.clone();
-                let mut stream = self.subscribe_bitmap.subscribe(peer, hash);
+                let mut stream = self.subscribe_bitfield.subscribe(peer, hash);
                 let task = spawn(async move {
                     while let Some(ev) = stream.next().await {
                         let cmd = match ev {
                             BitfieldSubscriptionEvent::Bitfield { ranges } => {
-                                Command::Bitfield { peer, hash, bitmap: ranges }
+                                Command::Bitfield { peer, hash, ranges }
                             }
                             BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => {
                                 Command::BitfieldUpdate { peer, hash, added, removed }
@@ -1108,17 +1108,8 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
                         };
                         send.send(cmd).await.ok();
                     }
-                    // let cmd = if peer == BitmapPeer::Local {
-                    //     // we don't have any data, for now
-                    //     Command::Bitmap { peer: BitmapPeer::Local, hash, bitmap: ChunkRanges::empty() }
-                    // } else {
-                    //     // all peers have all the data, for now
-                    //     Command::Bitmap { peer, hash, bitmap: ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)) }
-                    // };
-                    // send.send(cmd).await.ok();
-                    // futures_lite::future::pending().await
                 });
-                self.bitmap_subscription_tasks.insert(id, task);
+                self.bitfield_subscription_tasks.insert(id, task);
             }
             Event::StartDiscovery { hash, id } => {
                 let send = self.command_tx.clone();
@@ -1145,7 +1136,7 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
                 self.peer_download_tasks.insert(id, task);
             }
             Event::UnsubscribeBitfield { id } => {
-                self.bitmap_subscription_tasks.remove(&id);
+                self.bitfield_subscription_tasks.remove(&id);
             }
             Event::StopDiscovery { id } => {
                 self.discovery_tasks.remove(&id);
@@ -1222,7 +1213,7 @@ async fn peer_download<S: Store>(endpoint: Endpoint, store: S, hash: Hash, peer:
                         sender.send(Command::ChunksDownloaded { time: start.elapsed(), peer, hash, added: added.clone() }).await.ok();
                         batch.push(leaf.into());
                         writer.write_batch(size, std::mem::take(&mut batch)).await?;
-                        sender.send(Command::BitfieldUpdate { peer: BitmapPeer::Local, hash, added, removed: ChunkRanges::empty() }).await.ok();
+                        sender.send(Command::BitfieldUpdate { peer: BitfieldPeer::Local, hash, added, removed: ChunkRanges::empty() }).await.ok();
                     }
                 }
                 content = next;
@@ -1252,7 +1243,7 @@ where
     AbortOnDropHandle::new(task)
 }
 
-fn print_bitmap(iter: impl IntoIterator<Item = bool>) -> String {
+fn print_bitfield(iter: impl IntoIterator<Item = bool>) -> String {
     let mut chars = String::new();
     for x in iter {
         chars.push(if x { '█' } else { ' ' });
@@ -1260,7 +1251,7 @@ fn print_bitmap(iter: impl IntoIterator<Item = bool>) -> String {
     chars
 }
 
-fn print_bitmap_compact(iter: impl IntoIterator<Item = bool>) -> String {
+fn print_bitfield_compact(iter: impl IntoIterator<Item = bool>) -> String {
     let mut chars = String::new();
     let mut iter = iter.into_iter();
 
@@ -1344,7 +1335,7 @@ fn create_ranges(indexes: impl IntoIterator<Item = Option<usize>>) -> Vec<ChunkR
     res
 }
 
-fn print_colored_bitmap(data: &[u8], colors: &[u8]) -> String {
+fn print_colored_bitfield(data: &[u8], colors: &[u8]) -> String {
     let mut chars = String::new();
     let mut iter = data.iter();
 
@@ -1380,7 +1371,7 @@ mod tests {
     #[test]
     fn print_chunk_range() {
         let x = chunk_ranges([0..3, 4..30, 40..50]);
-        let s = print_bitmap_compact(as_bool_iter(&x, 50));
+        let s = print_bitfield_compact(as_bool_iter(&x, 50));
         println!("{}", s);
     }
 
@@ -1436,7 +1427,7 @@ mod tests {
 
     fn print_range_map(ranges: &BTreeMap<NodeId, ChunkRanges>) {
         for (peer, ranges) in ranges {
-            let x = print_bitmap(as_bool_iter(ranges, 100));
+            let x = print_bitfield(as_bool_iter(ranges, 100));
             println!("{peer}: {x}");
         }
     }
@@ -1447,7 +1438,7 @@ mod tests {
         let iter = select_ranges(ranges.as_slice(), 8);
         for (i, range) in ranges.iter().enumerate() {
             let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
-            println!("{i:4}{}", print_bitmap(bools));
+            println!("{i:4}{}", print_bitfield(bools));
         }
         print!("    ");
         for x in &iter {
@@ -1457,7 +1448,7 @@ mod tests {
         let ranges = create_ranges(iter);
         for (i, range) in ranges.iter().enumerate() {
             let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
-            println!("{i:4}{}", print_bitmap(bools));
+            println!("{i:4}{}", print_bitfield(bools));
         }
     }
 
@@ -1469,10 +1460,10 @@ mod tests {
     }
 
     #[test]
-    fn test_print_colored_bitmap() {
-        let bitmap = vec![0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]; // Notice: odd-length input
+    fn test_print_colored_bitfield() {
+        let bitfield = vec![0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]; // Notice: odd-length input
 
-        println!("{}", print_colored_bitmap(&bitmap, &[1, 2, 3, 4]));
+        println!("{}", print_colored_bitfield(&bitfield, &[1, 2, 3, 4]));
     }
 
     #[cfg(feature = "rpc")]
@@ -1520,16 +1511,16 @@ mod tests {
     /// Test various things that should produce errors
     #[test]
     fn downloader_state_errors() -> TestResult<()> {
-        use BitmapPeer::*;
+        use BitfieldPeer::*;
         let _ = tracing_subscriber::fmt::try_init();
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let unknown_hash = "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
         let mut state = DownloaderState::new(noop_planner());
-        let evs = state.apply(Command::Bitfield { peer: Local, hash, bitmap: ChunkRanges::all() });
-        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap should produce an error!");
-        let evs = state.apply(Command::Bitfield { peer: Local, hash: unknown_hash, bitmap: ChunkRanges::all() });
-        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitmap for an unknown hash should produce an error!");
+        let evs = state.apply(Command::Bitfield { peer: Local, hash, ranges: ChunkRanges::all() });
+        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitfield should produce an error!");
+        let evs = state.apply(Command::Bitfield { peer: Local, hash: unknown_hash, ranges: ChunkRanges::all() });
+        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitfield for an unknown hash should produce an error!");
         let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "download from unknown peer should lead to an error!");
         Ok(())
@@ -1538,35 +1529,35 @@ mod tests {
     /// Test a simple scenario where a download is started and completed
     #[test]
     fn downloader_state_smoke() -> TestResult<()> {
-        use BitmapPeer::*;
+        use BitfieldPeer::*;
         let _ = tracing_subscriber::fmt::try_init();
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let mut state = DownloaderState::new(noop_planner());
         let evs = state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: DownloadId(0) });
         assert!(has_one_event(&evs, &Event::StartDiscovery { hash, id: DiscoveryId(0) }), "starting a download should start a discovery task");
-        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }), "starting a download should subscribe to the local bitmap");
-        let initial_bitmap = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
-        let evs = state.apply(Command::Bitfield { peer: Local, hash, bitmap: initial_bitmap.clone() });
+        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }), "starting a download should subscribe to the local bitfield");
+        let initial_bitfield = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
+        let evs = state.apply(Command::Bitfield { peer: Local, hash, ranges: initial_bitfield.clone() });
         assert!(evs.is_empty());
-        assert_eq!(state.bitmaps.get_local(hash).context("bitmap should be present")?.ranges, initial_bitmap, "bitmap should be set to the initial bitmap");
+        assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.ranges, initial_bitfield, "bitfield should be set to the initial bitfield");
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
-        assert_eq!(state.bitmaps.get_local(hash).context("bitmap should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitmap should be updated");
+        assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitfield should be updated");
         let evs = state.apply(Command::PeerDiscovered { peer: peer_a, hash });
-        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Remote(peer_a), hash, id: 1.into() }), "adding a new peer for a hash we are interested in should subscribe to the bitmap");
-        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..64]) });
-        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: PeerDownloadId(0), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "bitmap from a peer should start a download");
+        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Remote(peer_a), hash, id: 1.into() }), "adding a new peer for a hash we are interested in should subscribe to the bitfield");
+        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([0..64]) });
+        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: PeerDownloadId(0), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "bitfield from a peer should start a download");
         // ChunksDownloaded just updates the peer stats
         let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..48]) });
         assert!(evs.is_empty());
-        // Bitmap update does not yet complete the download
+        // Bitfield update does not yet complete the download
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..48]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
         // ChunksDownloaded just updates the peer stats
         let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([48..64]) });
         assert!(evs.is_empty());
-        // Final bitmap update for the local bitmap should complete the download
+        // Final bitfield update for the local bitfield should complete the download
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })), "download should be completed by the data");
         Ok(())
@@ -1575,7 +1566,7 @@ mod tests {
     /// Test a scenario where more data becomes available at the remote peer as the download progresses
     #[test]
     fn downloader_state_incremental() -> TestResult<()> {
-        use BitmapPeer::*;
+        use BitfieldPeer::*;
         let _ = tracing_subscriber::fmt::try_init();
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
@@ -1583,18 +1574,18 @@ mod tests {
         // Start a download
         state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: DownloadId(0) });
         // Initially, we have nothing
-        state.apply(Command::Bitfield { peer: Local, hash, bitmap: ChunkRanges::empty() });
+        state.apply(Command::Bitfield { peer: Local, hash, ranges: ChunkRanges::empty() });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
-        // We have a bitmap from the peer
-        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, bitmap: chunk_ranges([0..32]) });
-        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0.into(), peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitmap from a peer should start a download");
+        // We have a bitfield from the peer
+        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([0..32]) });
+        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0.into(), peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitfield from a peer should start a download");
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
-        // Bitmap update does not yet complete the download
+        // Bitfield update does not yet complete the download
         state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([0..16]), removed: ChunkRanges::empty() });
         // The peer now has more data
-        state.apply(Command::Bitfield { peer: Remote(peer_a), hash, bitmap: chunk_ranges([32..64]) });
+        state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([32..64]) });
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([16..32]) });
         // Complete the first part of the download
@@ -1604,7 +1595,7 @@ mod tests {
         assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 1.into(), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "second peer download should be started");
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..64]) });
-        // Final bitmap update for the local bitmap should complete the download
+        // Final bitfield update for the local bitfield should complete the download
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
         assert!(has_all_events(&evs, &[&Event::StopPeerDownload { id: 1.into() }, &Event::DownloadComplete { id: 0.into() }, &Event::UnsubscribeBitfield { id: 0.into() }, &Event::StopDiscovery { id: 0.into() },]), "download should be completed by the data");
         println!("{evs:?}");
@@ -1619,9 +1610,9 @@ mod tests {
         let store = crate::store::mem::Store::new();
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
-        let bitmap_subscription = TestBitfieldSubscription;
+        let bitfield_subscription = TestBitfieldSubscription;
         let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, bitmap_subscription, local_pool, noop_planner());
+        let downloader = Downloader::new(endpoint, store, discovery, bitfield_subscription, local_pool, noop_planner());
         tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1]) });
         fut.await?;
@@ -1645,9 +1636,9 @@ mod tests {
         let store = crate::store::mem::Store::new();
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
-        let bitmap_subscription = TestBitfieldSubscription;
+        let bitfield_subscription = TestBitfieldSubscription;
         let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, bitmap_subscription, local_pool, Box::new(StripePlanner2::new(0, 8)));
+        let downloader = Downloader::new(endpoint, store, discovery, bitfield_subscription, local_pool, Box::new(StripePlanner2::new(0, 8)));
         tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
         fut.await?;
