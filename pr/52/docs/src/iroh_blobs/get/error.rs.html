@@ -190,7 +190,7 @@
 <a href="#189" id="189">189</a>
 <a href="#190" id="190">190</a></pre></div><pre class="rust"><code><span class="doccomment">//! Error returned from get operations
 
-</span><span class="kw">use </span>iroh::endpoint;
+</span><span class="kw">use </span>iroh::endpoint::{<span class="self">self</span>, ClosedStream};
 
 <span class="kw">use </span><span class="kw">crate</span>::util::progress::ProgressSendError;
 
@@ -263,7 +263,7 @@
                 // TODO(@divma): don't see how this is reachable but let's just not use the peer
                 </span>GetError::Io(e.into())
             }
-            e @ quinn::ConnectionError::CidsExhausted =&gt; {
+            e @ ConnectionError::CidsExhausted =&gt; {
                 <span class="comment">// &gt; The connection could not be created because not enough of the CID space
                 // &gt; is available
                 </span>GetError::Io(e.into())
@@ -287,8 +287,8 @@
         }
     }
 }
-<span class="kw">impl </span>From&lt;quinn::ClosedStream&gt; <span class="kw">for </span>GetError {
-    <span class="kw">fn </span>from(value: quinn::ClosedStream) -&gt; <span class="self">Self </span>{
+<span class="kw">impl </span>From&lt;ClosedStream&gt; <span class="kw">for </span>GetError {
+    <span class="kw">fn </span>from(value: ClosedStream) -&gt; <span class="self">Self </span>{
         GetError::Io(value.into())
     }
 }
