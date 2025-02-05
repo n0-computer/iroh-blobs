@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
         }
         cmd => {
             print_usage();
-            bail!("unkown command {}", cmd);
+            bail!("unknown command {}", cmd);
         }
     }
 
