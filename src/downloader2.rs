@@ -1,24 +1,16 @@
 //! Downloader version that supports range downloads and downloads from multiple sources.
 //!
-//! # Structure
-//!
-//! The [DownloaderState] is a synchronous state machine containing the logic.
-//! It gets commands and produces events. It does not do any IO and also does
-//! not have any time dependency. So [DownloaderState::apply] is a
-//! pure function of the state and the command and can therefore be tested
-//! easily.
-//!
-//! In several places, requests are identified by a unique id. It is the responsibility
-//! of the caller to generate unique ids. We could use random uuids here, but using
-//! integers simplifies testing.
-//!
-//! Inside the state machine, we use [ChunkRanges] to represent avaiability bitfields.
-//! We treat operations on such bitfields as very cheap, which is the case as long as
-//! the bitfields are not very fragmented. We can introduce an even more optimized
-//! bitfield type, or prevent fragmentation.
-//!
-//! The [DownloaderActor] is the asynchronous driver for the state machine. It
-//! owns the actual tasks that perform IO.
+//! The entry point is the [Downloader::builder] function, which creates a downloader
+//! builder. The downloader is highly configurable.
+//! 
+//! Content discovery is configurable via the [ContentDiscovery] trait.
+//! Bitfield subscriptions are configurable via the [BitfieldSubscription] trait.
+//! Download planning is configurable via the [DownloadPlanner] trait.
+//! 
+//! After creating a downloader, you can schedule downloads using the
+//! [Downloader::download] function. The function returns a future that
+//! resolves once the download is complete. The download can be cancelled by
+//! dropping the future.
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
@@ -40,7 +32,8 @@ use crate::{
 };
 use anyhow::Context;
 use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
-use futures_lite::{Stream, StreamExt};
+use futures_lite::StreamExt;
+use futures_util::stream::BoxStream;
 use iroh::{Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
@@ -79,19 +72,25 @@ pub struct FindPeersOpts {
 }
 
 /// A pluggable content discovery mechanism
-pub trait ContentDiscovery: Send + 'static {
+pub trait ContentDiscovery: std::fmt::Debug + Send + 'static {
     /// Find peers that have the given blob.
     ///
     /// The returned stream is a handle for the discovery task. It should be an
     /// infinite stream that only stops when it is dropped.
-    fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts) -> impl Stream<Item = NodeId> + Send + Unpin + 'static;
+    fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts) -> BoxStream<'static, NodeId>;
 }
 
+/// A boxed content discovery
+pub type BoxedContentDiscovery = Box<dyn ContentDiscovery>;
+
 /// A pluggable bitfield subscription mechanism
-pub trait BitfieldSubscription: Send + 'static {
+pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
     /// Subscribe to a bitfield
-    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static;
+    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> BoxStream<'static, BitfieldSubscriptionEvent>;
 }
+
+/// A boxed bitfield subscription
+pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 
 /// An event from a bitfield subscription
 #[derive(Debug)]
@@ -290,7 +289,7 @@ impl Bitfields {
 /// want to deduplicate the ranges, but they could also do other things, like
 /// eliminate gaps or even extend ranges. The only thing they should not do is
 /// to add new peers to the list of options.
-pub trait DownloadPlanner: Send + 'static {
+pub trait DownloadPlanner: Send + std::fmt::Debug + 'static {
     /// Make a download plan for a hash, by reducing or eliminating the overlap of chunk ranges
     fn plan(&mut self, hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>);
 }
@@ -1010,6 +1009,56 @@ pub struct Downloader {
     _task: Arc<AbortOnDropHandle<()>>,
 }
 
+/// A builder for a downloader
+#[derive(Debug)]
+pub struct DownloaderBuilder<S> {
+    endpoint: Endpoint,
+    store: S,
+    discovery: Option<BoxedContentDiscovery>,
+    subscribe_bitfield: Option<BoxedBitfieldSubscription>,
+    local_pool: Option<LocalPool>,
+    planner: Option<BoxedDownloadPlanner>,
+}
+
+impl<S> DownloaderBuilder<S> {
+
+    /// Set the content discovery
+    pub fn discovery<D: ContentDiscovery>(self, discovery: D) -> Self {
+        Self { discovery: Some(Box::new(discovery)), ..self }
+    }
+
+    /// Set the bitfield subscription
+    pub fn bitfield_subscription<B: BitfieldSubscription>(self, value: B) -> Self {
+        Self {
+            subscribe_bitfield: Some(Box::new(value)),
+            ..self
+        }
+    }
+
+    /// Set the local pool
+    pub fn local_pool(self, local_pool: LocalPool) -> Self {
+        Self { local_pool: Some(local_pool), ..self }
+    }
+
+    /// Set the download planner
+    pub fn planner<P: DownloadPlanner>(self, planner: P) -> Self {
+        Self { planner: Some(Box::new(planner)), ..self }
+    }
+
+    /// Build the downloader
+    pub fn build(self) -> Downloader
+    where
+        S: Store,
+    {
+        let store = self.store;
+        let discovery = self.discovery.expect("discovery not set");
+        let subscribe_bitfield = self.subscribe_bitfield.unwrap_or_else(|| Box::new(TestBitfieldSubscription));
+        let local_pool = self.local_pool.unwrap_or_else(|| LocalPool::single());
+        let planner = self.planner.unwrap_or_else(|| Box::new(StripePlanner2::new(0, 10)));
+        Downloader::new(self.endpoint, store, discovery, subscribe_bitfield, local_pool, planner)
+    }
+}
+
 impl Downloader {
     /// Create a new download
     ///
@@ -1021,8 +1070,13 @@ impl Downloader {
         Ok(())
     }
 
+    /// Create a new downloader builder
+    pub fn builder<S: Store>(endpoint: Endpoint, store: S) -> DownloaderBuilder<S> {
+        DownloaderBuilder { endpoint, store, discovery: None, subscribe_bitfield: None, local_pool: None, planner: None }
+    }
+
     /// Create a new downloader
-    pub fn new<S: Store, D: ContentDiscovery, B: BitfieldSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitfield: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+    fn new<S: Store>(endpoint: Endpoint, store: S, discovery: BoxedContentDiscovery, subscribe_bitfield: BoxedBitfieldSubscription, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let actor = DownloaderActor::new(endpoint, store, discovery, subscribe_bitfield, local_pool, planner);
         let (send, recv) = tokio::sync::mpsc::channel(256);
         let task = Arc::new(spawn(async move { actor.run(recv).await }));
@@ -1036,15 +1090,15 @@ enum UserCommand {
     Download { request: DownloadRequest, done: tokio::sync::oneshot::Sender<()> },
 }
 
-struct DownloaderActor<S, D, B> {
+struct DownloaderActor<S> {
     local_pool: LocalPool,
     endpoint: Endpoint,
     command_rx: mpsc::Receiver<Command>,
     command_tx: mpsc::Sender<Command>,
     state: DownloaderState,
     store: S,
-    discovery: D,
-    subscribe_bitfield: B,
+    discovery: BoxedContentDiscovery,
+    subscribe_bitfield: BoxedBitfieldSubscription,
     download_futs: BTreeMap<DownloadId, tokio::sync::oneshot::Sender<()>>,
     peer_download_tasks: BTreeMap<PeerDownloadId, local_pool::Run<()>>,
     discovery_tasks: BTreeMap<DiscoveryId, AbortOnDropHandle<()>>,
@@ -1055,8 +1109,8 @@ struct DownloaderActor<S, D, B> {
     start: Instant,
 }
 
-impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, D, B> {
-    fn new(endpoint: Endpoint, store: S, discovery: D, subscribe_bitfield: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+impl<S: Store> DownloaderActor<S> {
+    fn new(endpoint: Endpoint, store: S, discovery: BoxedContentDiscovery, subscribe_bitfield: BoxedBitfieldSubscription, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let (send, recv) = mpsc::channel(256);
         Self {
             local_pool,
@@ -1188,15 +1242,21 @@ pub struct StaticContentDiscovery {
 
 impl StaticContentDiscovery {
     /// Create a new static content discovery mechanism
-    pub fn new(info: BTreeMap<Hash, Vec<NodeId>>, default: Vec<NodeId>) -> Self {
+    pub fn new(mut info: BTreeMap<Hash, Vec<NodeId>>, mut default: Vec<NodeId>) -> Self {
+        default.sort();
+        default.dedup();
+        for (_, peers) in info.iter_mut() {
+            peers.sort();
+            peers.dedup();
+        }
         Self { info, default }
     }
 }
 
 impl ContentDiscovery for StaticContentDiscovery {
-    fn find_peers(&mut self, hash: Hash, _opts: FindPeersOpts) -> impl Stream<Item = NodeId> + Unpin + 'static {
+    fn find_peers(&mut self, hash: Hash, _opts: FindPeersOpts) -> BoxStream<'static, NodeId> {
         let peers = self.info.get(&hash).unwrap_or(&self.default).clone();
-        futures_lite::stream::iter(peers).chain(futures_lite::stream::pending())
+        Box::pin(futures_lite::stream::iter(peers).chain(futures_lite::stream::pending()))
     }
 }
 
@@ -1271,6 +1331,22 @@ where
     AbortOnDropHandle::new(task)
 }
 
+/// A bitfield subscription that just returns nothing for local and everything(*) for remote
+///
+/// * Still need to figure out how to deal with open ended chunk ranges.
+#[derive(Debug)]
+struct TestBitfieldSubscription;
+
+impl BitfieldSubscription for TestBitfieldSubscription {
+    fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> BoxStream<'static, BitfieldSubscriptionEvent> {
+        let ranges = match peer {
+            BitfieldPeer::Local => ChunkRanges::empty(),
+            BitfieldPeer::Remote(_) => ChunkRanges::from(ChunkNum(0)..ChunkNum(1024 * 1024 * 1024 * 1024)),
+        };
+        Box::pin(futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Range;
@@ -1301,21 +1377,6 @@ mod tests {
             .unwrap_or_default();
         let res = (0..max).map(move |i| x.contains(&ChunkNum(i))).collect::<Vec<_>>();
         res.into_iter()
-    }
-
-    /// A bitfield subscription that just returns nothing for local and everything(*) for remote
-    ///
-    /// * Still need to figure out how to deal with open ended chunk ranges.
-    struct TestBitfieldSubscription;
-
-    impl BitfieldSubscription for TestBitfieldSubscription {
-        fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static {
-            let ranges = match peer {
-                BitfieldPeer::Local => ChunkRanges::empty(),
-                BitfieldPeer::Remote(_) => ChunkRanges::from(ChunkNum(0)..ChunkNum(1024 * 1024 * 1024 * 1024)),
-            };
-            futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending())
-        }
     }
 
     fn peer(id: u8) -> NodeId {
@@ -1601,8 +1662,7 @@ mod tests {
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
         let bitfield_subscription = TestBitfieldSubscription;
-        let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, bitfield_subscription, local_pool, noop_planner());
+        let downloader = Downloader::builder(endpoint, store).discovery(discovery).bitfield_subscription(bitfield_subscription).build();
         tokio::time::sleep(Duration::from_secs(2)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1]) });
         fut.await?;
@@ -1626,9 +1686,7 @@ mod tests {
         let store = crate::store::mem::Store::new();
         let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
         let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
-        let bitfield_subscription = TestBitfieldSubscription;
-        let local_pool = LocalPool::single();
-        let downloader = Downloader::new(endpoint, store, discovery, bitfield_subscription, local_pool, Box::new(StripePlanner2::new(0, 8)));
+        let downloader = Downloader::builder(endpoint, store).discovery(discovery).planner(StripePlanner2::new(0, 8)).build();
         tokio::time::sleep(Duration::from_secs(1)).await;
         let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
         fut.await?;
