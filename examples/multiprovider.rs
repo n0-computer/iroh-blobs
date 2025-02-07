@@ -36,8 +36,9 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let mut tags = Vec::new();
     for path in args.path {
         let data = std::fs::read(&path)?;
+        let len = data.len();
         let tag = store.import_bytes(data.into(), iroh_blobs::BlobFormat::Raw).await?;
-        println!("added {} as {}", path.display(), tag.hash());
+        println!("added {} as {}, {} bytes, {} chunks", path.display(), tag.hash(), len, (len + 1023) / 1024);
         tags.push((path, tag));
     }
     let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
@@ -67,6 +68,7 @@ async fn download(args: DownloadArgs) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
     let args = Args::parse();
     match args.subcommand {
         Subcommand::Download(args) => download(args).await?,
