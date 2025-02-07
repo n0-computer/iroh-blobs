@@ -27,13 +27,13 @@ use crate::{
     },
     protocol::{GetRequest, RangeSpec, RangeSpecSeq},
     store::{BaoBatchWriter, MapEntryMut, Store},
-    util::local_pool::{self, LocalPool},
+    util::local_pool::{self, LocalPool, LocalPoolHandle},
     Hash,
 };
 use anyhow::Context;
 use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
 use futures_lite::StreamExt;
-use futures_util::stream::BoxStream;
+use futures_util::{stream::BoxStream, FutureExt};
 use iroh::{Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
@@ -1052,9 +1052,9 @@ impl<S> DownloaderBuilder<S> {
     {
         let store = self.store;
         let discovery = self.discovery.expect("discovery not set");
-        let subscribe_bitfield = self.subscribe_bitfield.unwrap_or_else(|| Box::new(TestBitfieldSubscription));
         let local_pool = self.local_pool.unwrap_or_else(|| LocalPool::single());
         let planner = self.planner.unwrap_or_else(|| Box::new(StripePlanner2::new(0, 10)));
+        let subscribe_bitfield = self.subscribe_bitfield.unwrap_or_else(|| Box::new(SimpleBitfieldSubscription::new(self.endpoint.clone(), store.clone(), local_pool.handle().clone())));
         Downloader::new(self.endpoint, store, discovery, subscribe_bitfield, local_pool, planner)
     }
 }
@@ -1334,6 +1334,7 @@ where
 /// A bitfield subscription that just returns nothing for local and everything(*) for remote
 ///
 /// * Still need to figure out how to deal with open ended chunk ranges.
+#[allow(dead_code)]
 #[derive(Debug)]
 struct TestBitfieldSubscription;
 
@@ -1344,6 +1345,77 @@ impl BitfieldSubscription for TestBitfieldSubscription {
             BitfieldPeer::Remote(_) => ChunkRanges::from(ChunkNum(0)..ChunkNum(1024 * 1024 * 1024 * 1024)),
         };
         Box::pin(futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending()))
+    }
+}
+
+/// A simple bitfield subscription that gets the valid ranges from a remote node, and the bitmap from a local store
+#[derive(Debug)]
+pub struct SimpleBitfieldSubscription<S> {
+    endpoint: Endpoint,
+    store: S,
+    local_pool: LocalPoolHandle,
+}
+
+impl<S> SimpleBitfieldSubscription<S> {
+    /// Create a new bitfield subscription
+    pub fn new(endpoint: Endpoint, store: S, local_pool: LocalPoolHandle) -> Self {
+        Self { endpoint, store, local_pool }
+    }
+}
+
+async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<ChunkRanges> {
+    if let Some(entry) = store.get_mut(&hash).await? {
+        crate::get::db::valid_ranges::<S>(&entry).await
+    } else {
+        Ok(ChunkRanges::empty())
+    }
+}
+
+async fn get_valid_ranges_remote(endpoint: &Endpoint, id: NodeId, hash: &Hash) -> anyhow::Result<ChunkRanges> {
+    let conn = endpoint.connect(id, crate::ALPN).await?;
+    let (size, _) = crate::get::request::get_verified_size(&conn, &hash).await?;
+    let chunks = (size + 1023) / 1024;
+    Ok(ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks)))
+}
+
+impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
+    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> BoxStream<'static, BitfieldSubscriptionEvent> {
+        let (send, recv) = tokio::sync::oneshot::channel();
+        match peer {
+            BitfieldPeer::Local => {
+                let store = self.store.clone();
+                self.local_pool.spawn_detached(move || async move {
+                    match get_valid_ranges_local(&hash, store).await {
+                        Ok(ranges) => {
+                            send.send(ranges).ok();
+                        },
+                        Err(e) => {
+                            tracing::error!("error getting bitfield: {e}");
+                        },
+                    };
+                });
+            }
+            BitfieldPeer::Remote(id) => {
+                let endpoint = self.endpoint.clone();
+                tokio::spawn(async move {
+                    match get_valid_ranges_remote(&endpoint, id, &hash).await {
+                        Ok(ranges) => {
+                            send.send(ranges).ok();
+                        },
+                        Err(cause) => {
+                            tracing::error!("error getting bitfield: {cause}");
+                        }
+                    }
+                });
+            }
+        }
+        Box::pin(async move {
+            let ranges = match recv.await {
+                Ok(ev) => ev,
+                Err(_) => ChunkRanges::empty(),
+            };
+            BitfieldSubscriptionEvent::Bitfield { ranges }
+        }.into_stream())
     }
 }
 

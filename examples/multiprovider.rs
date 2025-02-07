@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use bao_tree::ChunkRanges;
+use bao_tree::{ChunkNum, ChunkRanges};
 use iroh::NodeId;
 use iroh_blobs::{downloader2::{DownloadRequest, Downloader, StaticContentDiscovery}, store::Store, Hash};
 use clap::Parser;
@@ -60,7 +60,7 @@ async fn download(args: DownloadArgs) -> anyhow::Result<()> {
     let downloader = Downloader::builder(endpoint, store).discovery(discovery).build();
     let request = DownloadRequest {
         hash: args.hash,
-        ranges: ChunkRanges::all(),
+        ranges: ChunkRanges::from(ChunkNum(0)..ChunkNum(25421)),
     };
     downloader.download(request).await?;
     Ok(())
