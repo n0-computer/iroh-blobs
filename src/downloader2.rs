@@ -1551,6 +1551,7 @@ mod tests {
         let evs = state.apply(Command::Bitfield { peer: Local, hash, ranges: initial_bitfield.clone() });
         assert!(evs.is_empty());
         assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.ranges, initial_bitfield, "bitfield should be set to the initial bitfield");
+        assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.subscription_count, 1, "we have one download interested in the bitfield");
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
         assert!(evs.is_empty());
         assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitfield should be updated");
@@ -1570,6 +1571,10 @@ mod tests {
         // Final bitfield update for the local bitfield should complete the download
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
         assert!(has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })), "download should be completed by the data");
+        // quick check that everything got cleaned up
+        assert!(state.downloads.by_id.is_empty());
+        assert!(state.bitfields.by_peer_and_hash.is_empty());
+        assert!(state.discovery.is_empty());
         Ok(())
     }
 
@@ -1609,6 +1614,74 @@ mod tests {
         let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
         assert!(has_all_events(&evs, &[&Event::StopPeerDownload { id: 1.into() }, &Event::DownloadComplete { id: 0.into() }, &Event::UnsubscribeBitfield { id: 0.into() }, &Event::StopDiscovery { id: 0.into() },]), "download should be completed by the data");
         println!("{evs:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn downloader_state_multiple_downloads() -> testresult::TestResult<()> {
+        use BitfieldPeer::*;
+        // Use a constant hash (the same style as used in other tests).
+        let hash = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse()?;
+        // Create a downloader state with a no‐op planner.
+        let mut state = DownloaderState::new(noop_planner());
+    
+        // --- Start the first (ongoing) download.
+        // Request a range from 0..64.
+        let download0 = DownloadId(0);
+        let req0 = DownloadRequest {
+            hash,
+            ranges: chunk_ranges([0..64]),
+        };
+        let evs0 = state.apply(Command::StartDownload { request: req0, id: download0 });
+        // When starting the download, we expect a discovery task to be started
+        // and a subscription to the local bitfield to be requested.
+        assert!(
+            has_one_event(&evs0, &Event::StartDiscovery { hash, id: DiscoveryId(0) }),
+            "download0 should start discovery"
+        );
+        assert!(
+            has_one_event(&evs0, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }),
+            "download0 should subscribe to the local bitfield"
+        );
+    
+        // --- Simulate some progress for the first download.
+        // Let’s say only chunks 0..32 are available locally.
+        let evs1 = state.apply(Command::Bitfield {
+            peer: Local,
+            hash,
+            ranges: chunk_ranges([0..32]),
+        });
+        // No completion event should be generated for download0 because its full range 0..64 is not yet met.
+        assert!(evs1.is_empty(), "Partial bitfield update should not complete download0");
+    
+        // --- Start a second download for the same hash.
+        // This new download only requires chunks 0..32 which are already available.
+        let download1 = DownloadId(1);
+        let req1 = DownloadRequest {
+            hash,
+            ranges: chunk_ranges([0..32]),
+        };
+        let evs2 = state.apply(Command::StartDownload { request: req1, id: download1 });
+        // Because the local bitfield (0..32) is already a superset of the new download’s request,
+        // a DownloadComplete event for download1 should be generated immediately.
+        assert!(
+            has_one_event(&evs2, &Event::DownloadComplete { id: download1 }),
+            "New download should complete immediately"
+        );
+    
+        // --- Verify state:
+        // The ongoing download (download0) should still be present in the state,
+        // while the newly completed download (download1) is removed.
+        assert!(
+            state.downloads.contains_key(&download0),
+            "download0 should still be active"
+        );
+        assert!(
+            !state.downloads.contains_key(&download1),
+            "download1 should have been cleaned up after completion"
+        );
+    
         Ok(())
     }
 
