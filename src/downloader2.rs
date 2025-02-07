@@ -20,7 +20,12 @@
 //! The [DownloaderActor] is the asynchronous driver for the state machine. It
 //! owns the actual tasks that perform IO.
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque}, future::Future, io, marker::PhantomData, sync::Arc, time::Instant
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    future::Future,
+    io,
+    marker::PhantomData,
+    sync::Arc,
+    time::Instant,
 };
 
 use crate::{
@@ -40,7 +45,7 @@ use iroh::{Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace};
 
@@ -66,14 +71,15 @@ pub enum AnnounceKind {
     Complete,
 }
 
-#[derive(Default)]
-struct FindPeersOpts {
+/// Options for finding peers
+#[derive(Debug, Default)]
+pub struct FindPeersOpts {
     /// Kind of announce
-    kind: AnnounceKind,
+    pub kind: AnnounceKind,
 }
 
 /// A pluggable content discovery mechanism
-trait ContentDiscovery: Send + 'static {
+pub trait ContentDiscovery: Send + 'static {
     /// Find peers that have the given blob.
     ///
     /// The returned stream is a handle for the discovery task. It should be an
@@ -81,33 +87,27 @@ trait ContentDiscovery: Send + 'static {
     fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts) -> impl Stream<Item = NodeId> + Send + Unpin + 'static;
 }
 
-trait BitfieldSubscription: Send + 'static {
+/// A pluggable bitfield subscription mechanism
+pub trait BitfieldSubscription: Send + 'static {
     /// Subscribe to a bitfield
     fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static;
 }
 
-enum BitfieldSubscriptionEvent {
-    Bitfield { ranges: ChunkRanges },
-    BitfieldUpdate { added: ChunkRanges, removed: ChunkRanges},
-}
-
-/// A bitfield subscription that just returns nothing for local and everything(*) for remote
-/// 
-/// * Still need to figure out how to deal with open ended chunk ranges.
-struct TestBitfieldSubscription;
-
-impl BitfieldSubscription for TestBitfieldSubscription {
-    fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static {
-        let ranges = match peer {
-            BitfieldPeer::Local => {
-                ChunkRanges::empty()
-            }
-            BitfieldPeer::Remote(_) => {
-                ChunkRanges::from(ChunkNum(0)..ChunkNum(1024))
-            }
-        };
-        futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending())
-    }
+/// An event from a bitfield subscription
+#[derive(Debug)]
+pub enum BitfieldSubscriptionEvent {
+    /// Set the bitfield to the given ranges
+    Bitfield {
+        /// The entire bitfield
+        ranges: ChunkRanges,
+    },
+    /// Update the bitfield with the given ranges
+    BitfieldUpdate {
+        /// The ranges that were added
+        added: ChunkRanges,
+        /// The ranges that were removed
+        removed: ChunkRanges,
+    },
 }
 
 /// Global information about a peer
@@ -135,12 +135,13 @@ impl PeerBlobState {
     }
 }
 
+/// A download request
 #[derive(Debug)]
-struct DownloadRequest {
+pub struct DownloadRequest {
     /// The blob we are downloading
-    hash: Hash,
+    pub hash: Hash,
     /// The ranges we are interested in
-    ranges: ChunkRanges,
+    pub ranges: ChunkRanges,
 }
 
 struct DownloadState {
@@ -224,7 +225,7 @@ impl Downloads {
     }
 
     fn by_peer_download_id_mut(&mut self, id: PeerDownloadId) -> Option<(&DownloadId, &mut DownloadState)> {
-        self.by_id.iter_mut().filter(|(k, v)| v.peer_downloads.iter().any(|(_, state)| state.id == id)).next()
+        self.by_id.iter_mut().filter(|(_, v)| v.peer_downloads.iter().any(|(_, state)| state.id == id)).next()
     }
 }
 
@@ -289,17 +290,19 @@ impl Bitfields {
 /// want to deduplicate the ranges, but they could also do other things, like
 /// eliminate gaps or even extend ranges. The only thing they should not do is
 /// to add new peers to the list of options.
-trait DownloadPlanner: Send + 'static {
+pub trait DownloadPlanner: Send + 'static {
     /// Make a download plan for a hash, by reducing or eliminating the overlap of chunk ranges
     fn plan(&mut self, hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>);
 }
 
-type BoxedDownloadPlanner = Box<dyn DownloadPlanner>;
+/// A boxed download planner
+pub type BoxedDownloadPlanner = Box<dyn DownloadPlanner>;
 
 /// A download planner that just leaves everything as is.
 ///
 /// Data will be downloaded from all peers wherever multiple peers have the same data.
-struct NoopPlanner;
+#[derive(Debug, Clone, Copy)]
+pub struct NoopPlanner;
 
 impl DownloadPlanner for NoopPlanner {
     fn plan(&mut self, _hash: Hash, _options: &mut BTreeMap<NodeId, ChunkRanges>) {}
@@ -310,7 +313,8 @@ impl DownloadPlanner for NoopPlanner {
 /// It divides files into stripes of a fixed size `1 << stripe_size_log` chunks,
 /// and for each stripe decides on a single peer to download from, based on the
 /// peer id and a random seed.
-struct StripePlanner {
+#[derive(Debug)]
+pub struct StripePlanner {
     /// seed for the score function. This can be set to 0 for testing for
     /// maximum determinism, but can be set to a random value for production
     /// to avoid multiple downloaders coming up with the same plan.
@@ -328,6 +332,7 @@ struct StripePlanner {
 }
 
 impl StripePlanner {
+    /// Create a new planner with the given seed and stripe size.
     pub fn new(seed: u64, stripe_size_log: u8) -> Self {
         Self { seed, stripe_size_log }
     }
@@ -403,7 +408,8 @@ fn get_continuous_ranges(options: &mut BTreeMap<NodeId, ChunkRanges>, stripe_siz
 /// It divides files into stripes of a fixed size `1 << stripe_size_log` chunks,
 /// and for each stripe decides on a single peer to download from, based on the
 /// peer id and a random seed.
-struct StripePlanner2 {
+#[derive(Debug)]
+pub struct StripePlanner2 {
     /// seed for the score function. This can be set to 0 for testing for
     /// maximum determinism, but can be set to a random value for production
     /// to avoid multiple downloaders coming up with the same plan.
@@ -421,6 +427,7 @@ struct StripePlanner2 {
 }
 
 impl StripePlanner2 {
+    /// Create a new planner with the given seed and stripe size.
     pub fn new(seed: u64, stripe_size_log: u8) -> Self {
         Self { seed, stripe_size_log }
     }
@@ -527,9 +534,12 @@ impl DownloaderState {
     }
 }
 
+/// Peer for a bitfield subscription
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum BitfieldPeer {
+pub enum BitfieldPeer {
+    /// The local bitfield
     Local,
+    /// A bitfield from a remote peer
     Remote(NodeId),
 }
 
@@ -583,9 +593,11 @@ enum Command {
     /// A peer download has completed
     PeerDownloadComplete {
         id: PeerDownloadId,
+        #[allow(dead_code)]
         result: anyhow::Result<Stats>,
     },
     /// Stop tracking a peer for all blobs, for whatever reason
+    #[allow(dead_code)]
     DropPeer { peer: NodeId },
     /// A peer has been discovered
     PeerDiscovered { peer: NodeId, hash: Hash },
@@ -706,7 +718,7 @@ impl DownloaderState {
                     // start a discovery task
                     let id = self.discovery_id_gen.next();
                     evs.push(Event::StartDiscovery { hash, id });
-                    self.discovery.insert(request.hash, id );
+                    self.discovery.insert(request.hash, id);
                 }
                 self.downloads.insert(id, DownloadState::new(request));
                 self.check_completion(hash, Some(id), evs)?;
@@ -948,7 +960,7 @@ impl DownloaderState {
     fn rebalance_download(&mut self, id: DownloadId, evs: &mut Vec<Event>) -> anyhow::Result<()> {
         let download = self.downloads.by_id_mut(id).context(format!("rebalancing unknown download {id:?}"))?;
         download.needs_rebalancing = false;
-        tracing::error!("Rebalancing download {id:?} {:?}", download.request);
+        tracing::info!("Rebalancing download {id:?} {:?}", download.request);
         let hash = download.request.hash;
         let Some(self_state) = self.bitfields.get_local(hash) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
@@ -991,25 +1003,30 @@ fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
     Some(total)
 }
 
+/// A downloader that allows range downloads and downloads from multiple peers.
 #[derive(Debug, Clone)]
-struct Downloader {
+pub struct Downloader {
     send: mpsc::Sender<UserCommand>,
-    task: Arc<AbortOnDropHandle<()>>,
+    _task: Arc<AbortOnDropHandle<()>>,
 }
 
 impl Downloader {
-    async fn download(&self, request: DownloadRequest) -> anyhow::Result<()> {
+    /// Create a new download
+    ///
+    /// The download will be cancelled if the returned future is dropped.
+    pub async fn download(&self, request: DownloadRequest) -> anyhow::Result<()> {
         let (send, recv) = tokio::sync::oneshot::channel::<()>();
         self.send.send(UserCommand::Download { request, done: send }).await?;
         recv.await?;
         Ok(())
     }
 
-    fn new<S: Store, D: ContentDiscovery, B: BitfieldSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitfield: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+    /// Create a new downloader
+    pub fn new<S: Store, D: ContentDiscovery, B: BitfieldSubscription>(endpoint: Endpoint, store: S, discovery: D, subscribe_bitfield: B, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
         let actor = DownloaderActor::new(endpoint, store, discovery, subscribe_bitfield, local_pool, planner);
         let (send, recv) = tokio::sync::mpsc::channel(256);
         let task = Arc::new(spawn(async move { actor.run(recv).await }));
-        Self { send, task }
+        Self { send, _task: task }
     }
 }
 
@@ -1080,7 +1097,7 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
                 Some(cmd) = self.command_rx.recv() => {
                     let evs = self.state.apply(cmd);
                     for ev in evs {
-                        self.handle_event(ev, 0);
+                        self.handle_event(ev);
                     }
                 },
                 _ = ticks.tick() => {
@@ -1100,8 +1117,8 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
         }
     }
 
-    fn handle_event(&mut self, ev: Event, depth: usize) {
-        trace!("handle_event {ev:?} {depth}");
+    fn handle_event(&mut self, ev: Event) {
+        trace!("handle_event {ev:?}");
         match ev {
             Event::SubscribeBitfield { peer, hash, id } => {
                 let send = self.command_tx.clone();
@@ -1109,12 +1126,8 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
                 let task = spawn(async move {
                     while let Some(ev) = stream.next().await {
                         let cmd = match ev {
-                            BitfieldSubscriptionEvent::Bitfield { ranges } => {
-                                Command::Bitfield { peer, hash, ranges }
-                            }
-                            BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => {
-                                Command::BitfieldUpdate { peer, hash, added, removed }
-                            }
+                            BitfieldSubscriptionEvent::Bitfield { ranges } => Command::Bitfield { peer, hash, ranges },
+                            BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => Command::BitfieldUpdate { peer, hash, added, removed },
                         };
                         send.send(cmd).await.ok();
                     }
@@ -1162,17 +1175,22 @@ impl<S: Store, D: ContentDiscovery, B: BitfieldSubscription> DownloaderActor<S, 
             Event::Error { message } => {
                 error!("Error during processing event {}", message);
             }
-            _ => {
-                println!("event: {:?}", ev);
-            }
         }
     }
 }
 
 /// A simple static content discovery mechanism
-struct StaticContentDiscovery {
+#[derive(Debug)]
+pub struct StaticContentDiscovery {
     info: BTreeMap<Hash, Vec<NodeId>>,
     default: Vec<NodeId>,
+}
+
+impl StaticContentDiscovery {
+    /// Create a new static content discovery mechanism
+    pub fn new(info: BTreeMap<Hash, Vec<NodeId>>, default: Vec<NodeId>) -> Self {
+        Self { info, default }
+    }
 }
 
 impl ContentDiscovery for StaticContentDiscovery {
@@ -1253,120 +1271,6 @@ where
     AbortOnDropHandle::new(task)
 }
 
-fn print_bitfield(iter: impl IntoIterator<Item = bool>) -> String {
-    let mut chars = String::new();
-    for x in iter {
-        chars.push(if x { '█' } else { ' ' });
-    }
-    chars
-}
-
-fn print_bitfield_compact(iter: impl IntoIterator<Item = bool>) -> String {
-    let mut chars = String::new();
-    let mut iter = iter.into_iter();
-
-    while let (Some(left), Some(right)) = (iter.next(), iter.next()) {
-        let c = match (left, right) {
-            (true, true) => '█',   // Both pixels are "on"
-            (true, false) => '▌',  // Left pixel is "on"
-            (false, true) => '▐',  // Right pixel is "on"
-            (false, false) => ' ', // Both are "off"
-        };
-        chars.push(c);
-    }
-
-    // If there's an odd pixel at the end, print only a left block.
-    if let Some(left) = iter.next() {
-        chars.push(if left { '▌' } else { ' ' });
-    }
-
-    chars
-}
-
-fn as_bool_iter(x: &ChunkRanges, max: u64) -> impl Iterator<Item = bool> {
-    let max = x
-        .iter()
-        .last()
-        .map(|x| match x {
-            RangeSetRange::RangeFrom(_) => max,
-            RangeSetRange::Range(x) => x.end.0,
-        })
-        .unwrap_or_default();
-    let res = (0..max).map(move |i| x.contains(&ChunkNum(i))).collect::<Vec<_>>();
-    res.into_iter()
-}
-
-/// Given a set of ranges, make them non-overlapping according to some rules.
-fn select_ranges(ranges: &[ChunkRanges], continuity_bonus: u64) -> Vec<Option<usize>> {
-    let mut total = vec![0u64; ranges.len()];
-    let mut boundaries = BTreeSet::new();
-    assert!(ranges.iter().all(|x| x.boundaries().len() % 2 == 0));
-    for range in ranges.iter() {
-        for x in range.boundaries() {
-            boundaries.insert(x.0);
-        }
-    }
-    let max = boundaries.iter().max().copied().unwrap_or(0);
-    let mut last_selected = None;
-    let mut res = vec![];
-    for i in 0..max {
-        let mut lowest_score = u64::MAX;
-        let mut selected = None;
-        for j in 0..ranges.len() {
-            if ranges[j].contains(&ChunkNum(i)) {
-                let consecutive = last_selected == Some(j);
-                let score = if consecutive { total[j].saturating_sub(continuity_bonus) } else { total[j] };
-                if score < lowest_score {
-                    lowest_score = score;
-                    selected = Some(j);
-                }
-            }
-        }
-        res.push(selected);
-        if let Some(selected) = selected {
-            total[selected] += 1;
-        }
-        last_selected = selected;
-    }
-    res
-}
-
-fn create_ranges(indexes: impl IntoIterator<Item = Option<usize>>) -> Vec<ChunkRanges> {
-    let mut res = vec![];
-    for (i, n) in indexes.into_iter().enumerate() {
-        let x = i as u64;
-        if let Some(n) = n {
-            while res.len() <= n {
-                res.push(ChunkRanges::empty());
-            }
-            res[n] |= ChunkRanges::from(ChunkNum(x)..ChunkNum(x + 1));
-        }
-    }
-    res
-}
-
-fn print_colored_bitfield(data: &[u8], colors: &[u8]) -> String {
-    let mut chars = String::new();
-    let mut iter = data.iter();
-
-    while let Some(&left) = iter.next() {
-        let right = iter.next(); // Try to fetch the next element
-
-        let left_color = colors.get(left as usize).map(|x| *x).unwrap_or_default();
-        let right_char = match right {
-            Some(&right) => {
-                let right_color = colors.get(right as usize).map(|x| *x).unwrap_or_default();
-                // Use ANSI escape codes to color left and right halves of `█`
-                format!("\x1b[38;5;{}m\x1b[48;5;{}m▌\x1b[0m", left_color, right_color)
-            }
-            None => format!("\x1b[38;5;{}m▌\x1b[0m", left_color), // Handle odd-length case
-        };
-
-        chars.push_str(&right_char);
-    }
-    chars
-}
-
 #[cfg(test)]
 mod tests {
     use std::ops::Range;
@@ -1378,11 +1282,40 @@ mod tests {
     use iroh::{protocol::Router, SecretKey};
     use testresult::TestResult;
 
-    #[test]
-    fn print_chunk_range() {
-        let x = chunk_ranges([0..3, 4..30, 40..50]);
-        let s = print_bitfield_compact(as_bool_iter(&x, 50));
-        println!("{}", s);
+    fn print_bitfield(iter: impl IntoIterator<Item = bool>) -> String {
+        let mut chars = String::new();
+        for x in iter {
+            chars.push(if x { '█' } else { ' ' });
+        }
+        chars
+    }
+
+    fn as_bool_iter(x: &ChunkRanges, max: u64) -> impl Iterator<Item = bool> {
+        let max = x
+            .iter()
+            .last()
+            .map(|x| match x {
+                RangeSetRange::RangeFrom(_) => max,
+                RangeSetRange::Range(x) => x.end.0,
+            })
+            .unwrap_or_default();
+        let res = (0..max).map(move |i| x.contains(&ChunkNum(i))).collect::<Vec<_>>();
+        res.into_iter()
+    }
+
+    /// A bitfield subscription that just returns nothing for local and everything(*) for remote
+    ///
+    /// * Still need to figure out how to deal with open ended chunk ranges.
+    struct TestBitfieldSubscription;
+
+    impl BitfieldSubscription for TestBitfieldSubscription {
+        fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> impl Stream<Item = BitfieldSubscriptionEvent> + Send + Unpin + 'static {
+            let ranges = match peer {
+                BitfieldPeer::Local => ChunkRanges::empty(),
+                BitfieldPeer::Remote(_) => ChunkRanges::from(ChunkNum(0)..ChunkNum(1024 * 1024 * 1024 * 1024)),
+            };
+            futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending())
+        }
     }
 
     fn peer(id: u8) -> NodeId {
@@ -1443,37 +1376,10 @@ mod tests {
     }
 
     #[test]
-    fn test_select_ranges() {
-        let ranges = [chunk_ranges([0..90]), chunk_ranges([0..100]), chunk_ranges([0..80])];
-        let iter = select_ranges(ranges.as_slice(), 8);
-        for (i, range) in ranges.iter().enumerate() {
-            let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
-            println!("{i:4}{}", print_bitfield(bools));
-        }
-        print!("    ");
-        for x in &iter {
-            print!("{}", x.map(|x| x.to_string()).unwrap_or(" ".to_string()));
-        }
-        println!();
-        let ranges = create_ranges(iter);
-        for (i, range) in ranges.iter().enumerate() {
-            let bools = as_bool_iter(&range, 100).collect::<Vec<_>>();
-            println!("{i:4}{}", print_bitfield(bools));
-        }
-    }
-
-    #[test]
     fn test_is_superset() {
         let local = ChunkRanges::from(ChunkNum(0)..ChunkNum(100));
         let request = ChunkRanges::from(ChunkNum(0)..ChunkNum(50));
         assert!(local.is_superset(&request));
-    }
-
-    #[test]
-    fn test_print_colored_bitfield() {
-        let bitfield = vec![0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]; // Notice: odd-length input
-
-        println!("{}", print_colored_bitfield(&bitfield, &[1, 2, 3, 4]));
     }
 
     #[cfg(feature = "rpc")]
@@ -1621,67 +1527,41 @@ mod tests {
     fn downloader_state_multiple_downloads() -> testresult::TestResult<()> {
         use BitfieldPeer::*;
         // Use a constant hash (the same style as used in other tests).
-        let hash = "0000000000000000000000000000000000000000000000000000000000000001"
-            .parse()?;
+        let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         // Create a downloader state with a no‐op planner.
         let mut state = DownloaderState::new(noop_planner());
-    
+
         // --- Start the first (ongoing) download.
         // Request a range from 0..64.
         let download0 = DownloadId(0);
-        let req0 = DownloadRequest {
-            hash,
-            ranges: chunk_ranges([0..64]),
-        };
+        let req0 = DownloadRequest { hash, ranges: chunk_ranges([0..64]) };
         let evs0 = state.apply(Command::StartDownload { request: req0, id: download0 });
         // When starting the download, we expect a discovery task to be started
         // and a subscription to the local bitfield to be requested.
-        assert!(
-            has_one_event(&evs0, &Event::StartDiscovery { hash, id: DiscoveryId(0) }),
-            "download0 should start discovery"
-        );
-        assert!(
-            has_one_event(&evs0, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }),
-            "download0 should subscribe to the local bitfield"
-        );
-    
+        assert!(has_one_event(&evs0, &Event::StartDiscovery { hash, id: DiscoveryId(0) }), "download0 should start discovery");
+        assert!(has_one_event(&evs0, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }), "download0 should subscribe to the local bitfield");
+
         // --- Simulate some progress for the first download.
         // Let’s say only chunks 0..32 are available locally.
-        let evs1 = state.apply(Command::Bitfield {
-            peer: Local,
-            hash,
-            ranges: chunk_ranges([0..32]),
-        });
+        let evs1 = state.apply(Command::Bitfield { peer: Local, hash, ranges: chunk_ranges([0..32]) });
         // No completion event should be generated for download0 because its full range 0..64 is not yet met.
         assert!(evs1.is_empty(), "Partial bitfield update should not complete download0");
-    
+
         // --- Start a second download for the same hash.
         // This new download only requires chunks 0..32 which are already available.
         let download1 = DownloadId(1);
-        let req1 = DownloadRequest {
-            hash,
-            ranges: chunk_ranges([0..32]),
-        };
+        let req1 = DownloadRequest { hash, ranges: chunk_ranges([0..32]) };
         let evs2 = state.apply(Command::StartDownload { request: req1, id: download1 });
         // Because the local bitfield (0..32) is already a superset of the new download’s request,
         // a DownloadComplete event for download1 should be generated immediately.
-        assert!(
-            has_one_event(&evs2, &Event::DownloadComplete { id: download1 }),
-            "New download should complete immediately"
-        );
-    
+        assert!(has_one_event(&evs2, &Event::DownloadComplete { id: download1 }), "New download should complete immediately");
+
         // --- Verify state:
         // The ongoing download (download0) should still be present in the state,
         // while the newly completed download (download1) is removed.
-        assert!(
-            state.downloads.contains_key(&download0),
-            "download0 should still be active"
-        );
-        assert!(
-            !state.downloads.contains_key(&download1),
-            "download1 should have been cleaned up after completion"
-        );
-    
+        assert!(state.downloads.contains_key(&download0), "download0 should still be active");
+        assert!(!state.downloads.contains_key(&download1), "download1 should have been cleaned up after completion");
+
         Ok(())
     }
 
