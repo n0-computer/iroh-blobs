@@ -1,4 +1,9 @@
-//! The state machine for the downloader
+//! The state machine for the downloader, as well as the commands and events.
+//!
+//! In addition to the state machine, there are also some structs encapsulating
+//! a part of the state. These are at this point just wrappers around a single
+//! map, but can be made more efficient later if needed without breaking the
+//! interface.
 use super::*;
 
 #[derive(Debug)]
@@ -886,6 +891,17 @@ impl PeerBlobState {
             ranges: ChunkRanges::empty(),
         }
     }
+}
+
+fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
+    let mut total = 0;
+    for range in chunks.iter() {
+        match range {
+            RangeSetRange::RangeFrom(_range) => return None,
+            RangeSetRange::Range(range) => total += range.end.0 - range.start.0,
+        }
+    }
+    Some(total)
 }
 
 #[cfg(test)]

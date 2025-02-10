@@ -207,17 +207,6 @@ pub enum BitfieldPeer {
     Remote(NodeId),
 }
 
-fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
-    let mut total = 0;
-    for range in chunks.iter() {
-        match range {
-            RangeSetRange::RangeFrom(_range) => return None,
-            RangeSetRange::Range(range) => total += range.end.0 - range.start.0,
-        }
-    }
-    Some(total)
-}
-
 /// A downloader that allows range downloads and downloads from multiple peers.
 #[derive(Debug, Clone)]
 pub struct Downloader {
@@ -361,18 +350,6 @@ impl Downloader {
     }
 }
 
-/// An user-facing command
-#[derive(Debug)]
-pub(super) enum UserCommand {
-    Download {
-        request: DownloadRequest,
-        done: tokio::sync::oneshot::Sender<()>,
-    },
-    Observe {
-        request: ObserveRequest,
-        send: tokio::sync::mpsc::Sender<ObserveEvent>,
-    },
-}
 /// A simple static content discovery mechanism
 #[derive(Debug)]
 pub struct StaticContentDiscovery {

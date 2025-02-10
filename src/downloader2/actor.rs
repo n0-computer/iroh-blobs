@@ -1,4 +1,18 @@
+//! The actor for the downloader
 use super::*;
+
+/// An user-facing command
+#[derive(Debug)]
+pub(super) enum UserCommand {
+    Download {
+        request: DownloadRequest,
+        done: tokio::sync::oneshot::Sender<()>,
+    },
+    Observe {
+        request: ObserveRequest,
+        send: tokio::sync::mpsc::Sender<ObserveEvent>,
+    },
+}
 
 pub(super) struct DownloaderActor<S> {
     local_pool: LocalPool,
