@@ -2,11 +2,11 @@
 //!
 //! The entry point is the [Downloader::builder] function, which creates a downloader
 //! builder. The downloader is highly configurable.
-//! 
+//!
 //! Content discovery is configurable via the [ContentDiscovery] trait.
 //! Bitfield subscriptions are configurable via the [BitfieldSubscription] trait.
 //! Download planning is configurable via the [DownloadPlanner] trait.
-//! 
+//!
 //! After creating a downloader, you can schedule downloads using the
 //! [Downloader::download] function. The function returns a future that
 //! resolves once the download is complete. The download can be cancelled by
@@ -42,16 +42,29 @@ use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
+)]
 struct DownloadId(u64);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
+)]
+struct ObserveId(u64);
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
+)]
 struct DiscoveryId(u64);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
+)]
 struct PeerDownloadId(u64);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
+)]
 struct BitfieldSubscriptionId(u64);
 
 /// Announce kind
@@ -86,7 +99,11 @@ pub type BoxedContentDiscovery = Box<dyn ContentDiscovery>;
 /// A pluggable bitfield subscription mechanism
 pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
     /// Subscribe to a bitfield
-    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> BoxStream<'static, BitfieldSubscriptionEvent>;
+    fn subscribe(
+        &mut self,
+        peer: BitfieldPeer,
+        hash: Hash,
+    ) -> BoxStream<'static, BitfieldSubscriptionEvent>;
 }
 
 /// A boxed bitfield subscription
@@ -95,6 +112,23 @@ pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 /// An event from a bitfield subscription
 #[derive(Debug)]
 pub enum BitfieldSubscriptionEvent {
+    /// Set the bitfield to the given ranges
+    Bitfield {
+        /// The entire bitfield
+        ranges: ChunkRanges,
+    },
+    /// Update the bitfield with the given ranges
+    BitfieldUpdate {
+        /// The ranges that were added
+        added: ChunkRanges,
+        /// The ranges that were removed
+        removed: ChunkRanges,
+    },
+}
+
+/// Events from observing a local bitfield
+#[derive(Debug)]
+pub enum ObserveEvent {
     /// Set the bitfield to the given ranges
     Bitfield {
         /// The entire bitfield
@@ -130,17 +164,32 @@ struct PeerBlobState {
 
 impl PeerBlobState {
     fn new(subscription_id: BitfieldSubscriptionId) -> Self {
-        Self { subscription_id, subscription_count: 1, ranges: ChunkRanges::empty() }
+        Self {
+            subscription_id,
+            subscription_count: 1,
+            ranges: ChunkRanges::empty(),
+        }
     }
 }
 
 /// A download request
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DownloadRequest {
     /// The blob we are downloading
     pub hash: Hash,
     /// The ranges we are interested in
     pub ranges: ChunkRanges,
+}
+
+/// A request to observe the local bitmap for a blob
+#[derive(Debug, Clone)]
+pub struct ObserveRequest {
+    /// The blob we are observing
+    pub hash: Hash,
+    /// The ranges we are interested in
+    pub ranges: ChunkRanges,
+    /// Buffer size
+    pub buffer: usize,
 }
 
 struct DownloadState {
@@ -154,7 +203,11 @@ struct DownloadState {
 
 impl DownloadState {
     fn new(request: DownloadRequest) -> Self {
-        Self { request, peer_downloads: BTreeMap::new(), needs_rebalancing: false }
+        Self {
+            request,
+            peer_downloads: BTreeMap::new(),
+            needs_rebalancing: false,
+        }
     }
 }
 
@@ -166,7 +219,10 @@ struct IdGenerator<T = u64> {
 
 impl<T> Default for IdGenerator<T> {
     fn default() -> Self {
-        Self { next_id: 0, _p: PhantomData }
+        Self {
+            next_id: 0,
+            _p: PhantomData,
+        }
     }
 }
 
@@ -202,8 +258,13 @@ impl Downloads {
         self.by_id.insert(id, state);
     }
 
-    fn iter_mut_for_hash(&mut self, hash: Hash) -> impl Iterator<Item = (&DownloadId, &mut DownloadState)> {
-        self.by_id.iter_mut().filter(move |x| x.1.request.hash == hash)
+    fn iter_mut_for_hash(
+        &mut self,
+        hash: Hash,
+    ) -> impl Iterator<Item = (&DownloadId, &mut DownloadState)> {
+        self.by_id
+            .iter_mut()
+            .filter(move |x| x.1.request.hash == hash)
     }
 
     fn iter(&mut self) -> impl Iterator<Item = (&DownloadId, &DownloadState)> {
@@ -216,20 +277,33 @@ impl Downloads {
     }
 
     fn values_mut_for_hash(&mut self, hash: Hash) -> impl Iterator<Item = &mut DownloadState> {
-        self.by_id.values_mut().filter(move |x| x.request.hash == hash)
+        self.by_id
+            .values_mut()
+            .filter(move |x| x.request.hash == hash)
     }
 
     fn by_id_mut(&mut self, id: DownloadId) -> Option<&mut DownloadState> {
         self.by_id.get_mut(&id)
     }
 
-    fn by_peer_download_id_mut(&mut self, id: PeerDownloadId) -> Option<(&DownloadId, &mut DownloadState)> {
-        self.by_id.iter_mut().filter(|(_, v)| v.peer_downloads.iter().any(|(_, state)| state.id == id)).next()
+    fn by_peer_download_id_mut(
+        &mut self,
+        id: PeerDownloadId,
+    ) -> Option<(&DownloadId, &mut DownloadState)> {
+        self.by_id
+            .iter_mut()
+            .filter(|(_, v)| v.peer_downloads.iter().any(|(_, state)| state.id == id))
+            .next()
     }
 }
 
 #[derive(Default)]
 struct Bitfields {
+    // Counters to generate unique ids for various requests.
+    // We could use uuid here, but using integers simplifies testing.
+    //
+    // the next subscription id
+    subscription_id_gen: IdGenerator<BitfieldSubscriptionId>,
     by_peer_and_hash: BTreeMap<(BitfieldPeer, Hash), PeerBlobState>,
 }
 
@@ -266,17 +340,19 @@ impl Bitfields {
     }
 
     fn remote_for_hash(&self, hash: Hash) -> impl Iterator<Item = (&NodeId, &PeerBlobState)> {
-        self.by_peer_and_hash.iter().filter_map(move |((peer, h), state)| {
-            if let BitfieldPeer::Remote(peer) = peer {
-                if *h == hash {
-                    Some((peer, state))
+        self.by_peer_and_hash
+            .iter()
+            .filter_map(move |((peer, h), state)| {
+                if let BitfieldPeer::Remote(peer) = peer {
+                    if *h == hash {
+                        Some((peer, state))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        })
+            })
     }
 }
 
@@ -333,7 +409,10 @@ pub struct StripePlanner {
 impl StripePlanner {
     /// Create a new planner with the given seed and stripe size.
     pub fn new(seed: u64, stripe_size_log: u8) -> Self {
-        Self { seed, stripe_size_log }
+        Self {
+            seed,
+            stripe_size_log,
+        }
     }
 
     /// The score function to decide which peer to download from.
@@ -350,7 +429,10 @@ impl StripePlanner {
 
 impl DownloadPlanner for StripePlanner {
     fn plan(&mut self, _hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>) {
-        assert!(options.values().all(|x| x.boundaries().len() % 2 == 0), "open ranges not supported");
+        assert!(
+            options.values().all(|x| x.boundaries().len() % 2 == 0),
+            "open ranges not supported"
+        );
         options.retain(|_, x| !x.is_empty());
         if options.len() <= 1 {
             return;
@@ -384,7 +466,10 @@ impl DownloadPlanner for StripePlanner {
     }
 }
 
-fn get_continuous_ranges(options: &mut BTreeMap<NodeId, ChunkRanges>, stripe_size_log: u8) -> Option<Vec<u64>> {
+fn get_continuous_ranges(
+    options: &mut BTreeMap<NodeId, ChunkRanges>,
+    stripe_size_log: u8,
+) -> Option<Vec<u64>> {
     let mut ranges = BTreeSet::new();
     for x in options.values() {
         ranges.extend(x.boundaries().iter().map(|x| x.0));
@@ -428,7 +513,10 @@ pub struct StripePlanner2 {
 impl StripePlanner2 {
     /// Create a new planner with the given seed and stripe size.
     pub fn new(seed: u64, stripe_size_log: u8) -> Self {
-        Self { seed, stripe_size_log }
+        Self {
+            seed,
+            stripe_size_log,
+        }
     }
 
     /// The score function to decide which peer to download from.
@@ -444,7 +532,10 @@ impl StripePlanner2 {
 
 impl DownloadPlanner for StripePlanner2 {
     fn plan(&mut self, _hash: Hash, options: &mut BTreeMap<NodeId, ChunkRanges>) {
-        assert!(options.values().all(|x| x.boundaries().len() % 2 == 0), "open ranges not supported");
+        assert!(
+            options.values().all(|x| x.boundaries().len() % 2 == 0),
+            "open ranges not supported"
+        );
         options.retain(|_, x| !x.is_empty());
         if options.len() <= 1 {
             return;
@@ -463,9 +554,16 @@ impl DownloadPlanner for StripePlanner2 {
                     matching.push((peer, peer_ranges));
                 }
             }
-            let mut peer_and_score = matching.iter().map(|(peer, _)| (Self::score(peer, self.seed), peer)).collect::<Vec<_>>();
+            let mut peer_and_score = matching
+                .iter()
+                .map(|(peer, _)| (Self::score(peer, self.seed), peer))
+                .collect::<Vec<_>>();
             peer_and_score.sort();
-            let peer_to_rank = peer_and_score.into_iter().enumerate().map(|(i, (_, peer))| (*peer, i as u64)).collect::<BTreeMap<_, _>>();
+            let peer_to_rank = peer_and_score
+                .into_iter()
+                .enumerate()
+                .map(|(i, (_, peer))| (*peer, i as u64))
+                .collect::<BTreeMap<_, _>>();
             let n = matching.len() as u64;
             for (peer, _) in matching.iter() {
                 let score = Some((peer_to_rank[*peer] + stripe) % n);
@@ -496,6 +594,8 @@ struct DownloaderState {
     //
     // each item here corresponds to an active subscription
     bitfields: Bitfields,
+    /// Observers for local bitfields
+    observers: Observers,
     // all active downloads
     //
     // these are user downloads. each user download gets split into one or more
@@ -505,11 +605,6 @@ struct DownloaderState {
     //
     // there is a discovery task for each blob we are interested in.
     discovery: BTreeMap<Hash, DiscoveryId>,
-    // Counters to generate unique ids for various requests.
-    // We could use uuid here, but using integers simplifies testing.
-    //
-    // the next subscription id
-    subscription_id_gen: IdGenerator<BitfieldSubscriptionId>,
     // the next discovery id
     discovery_id_gen: IdGenerator<DiscoveryId>,
     // the next peer download id
@@ -521,11 +616,11 @@ struct DownloaderState {
 impl DownloaderState {
     fn new(planner: Box<dyn DownloadPlanner>) -> Self {
         Self {
-            peers: BTreeMap::new(),
+            peers: Default::default(),
             downloads: Default::default(),
             bitfields: Default::default(),
-            discovery: BTreeMap::new(),
-            subscription_id_gen: Default::default(),
+            discovery: Default::default(),
+            observers: Default::default(),
             discovery_id_gen: Default::default(),
             peer_download_id_gen: Default::default(),
             planner,
@@ -600,6 +695,10 @@ enum Command {
     DropPeer { peer: NodeId },
     /// A peer has been discovered
     PeerDiscovered { peer: NodeId, hash: Hash },
+    ///
+    ObserveLocal { id: ObserveId, hash: Hash, ranges: ChunkRanges },
+    ///
+    StopObserveLocal { id: ObserveId },
     /// A tick from the driver, for rebalancing
     Tick { time: Duration },
 }
@@ -615,6 +714,15 @@ enum Event {
     UnsubscribeBitfield {
         /// The unique id of the subscription
         id: BitfieldSubscriptionId,
+    },
+    LocalBitfield {
+        id: ObserveId,
+        ranges: ChunkRanges,
+    },
+    LocalBitfieldUpdate {
+        id: ObserveId,
+        added: ChunkRanges,
+        removed: ChunkRanges,
     },
     StartDiscovery {
         hash: Hash,
@@ -655,7 +763,9 @@ impl DownloaderState {
     /// Apply a command, using a mutable reference to the events
     fn apply_mut(&mut self, cmd: Command, evs: &mut Vec<Event>) {
         if let Err(cause) = self.apply_mut_0(cmd, evs) {
-            evs.push(Event::Error { message: format!("{cause}") });
+            evs.push(Event::Error {
+                message: format!("{cause}"),
+            });
         }
     }
 
@@ -669,18 +779,25 @@ impl DownloaderState {
     /// - unsubscribing from bitfields if needed
     /// - stopping the discovery task if needed
     fn stop_download(&mut self, id: DownloadId, evs: &mut Vec<Event>) -> anyhow::Result<()> {
-        let removed = self.downloads.remove(&id).context(format!("removed unknown download {id:?}"))?;
+        let removed = self
+            .downloads
+            .remove(&id)
+            .context(format!("removed unknown download {id:?}"))?;
         let removed_hash = removed.request.hash;
         // stop associated peer downloads
         for peer_download in removed.peer_downloads.values() {
-            evs.push(Event::StopPeerDownload { id: peer_download.id });
+            evs.push(Event::StopPeerDownload {
+                id: peer_download.id,
+            });
         }
         // unsubscribe from bitfields that have no more subscriptions
         self.bitfields.retain(|(_peer, hash), state| {
             if *hash == removed_hash {
                 state.subscription_count -= 1;
                 if state.subscription_count == 0 {
-                    evs.push(Event::UnsubscribeBitfield { id: state.subscription_id });
+                    evs.push(Event::UnsubscribeBitfield {
+                        id: state.subscription_id,
+                    });
                     return false;
                 }
             }
@@ -689,7 +806,13 @@ impl DownloaderState {
         let hash_interest = self.downloads.values_for_hash(removed.request.hash).count();
         if hash_interest == 0 {
             // stop the discovery task if we were the last one interested in the hash
-            let discovery_id = self.discovery.remove(&removed.request.hash).context(format!("removed unknown discovery task for {}", removed.request.hash))?;
+            let discovery_id = self
+                .discovery
+                .remove(&removed.request.hash)
+                .context(format!(
+                    "removed unknown discovery task for {}",
+                    removed.request.hash
+                ))?;
             evs.push(Event::StopDiscovery { id: discovery_id });
         }
         Ok(())
@@ -701,7 +824,10 @@ impl DownloaderState {
         match cmd {
             Command::StartDownload { request, id } => {
                 // ids must be uniquely assigned by the caller!
-                anyhow::ensure!(!self.downloads.contains_key(&id), "duplicate download request {id:?}");
+                anyhow::ensure!(
+                    !self.downloads.contains_key(&id),
+                    "duplicate download request {id:?}"
+                );
                 let hash = request.hash;
                 // either we have a subscription for this blob, or we have to create one
                 if let Some(state) = self.bitfields.get_local_mut(hash) {
@@ -709,9 +835,16 @@ impl DownloaderState {
                     state.subscription_count += 1;
                 } else {
                     // create a new subscription
-                    let subscription_id = self.subscription_id_gen.next();
-                    evs.push(Event::SubscribeBitfield { peer: BitfieldPeer::Local, hash, id: subscription_id });
-                    self.bitfields.insert((BitfieldPeer::Local, hash), PeerBlobState::new(subscription_id));
+                    let subscription_id = self.bitfields.subscription_id_gen.next();
+                    evs.push(Event::SubscribeBitfield {
+                        peer: BitfieldPeer::Local,
+                        hash,
+                        id: subscription_id,
+                    });
+                    self.bitfields.insert(
+                        (BitfieldPeer::Local, hash),
+                        PeerBlobState::new(subscription_id),
+                    );
                 }
                 if !self.discovery.contains_key(&request.hash) {
                     // start a discovery task
@@ -724,7 +857,8 @@ impl DownloaderState {
                 self.start_downloads(hash, Some(id), evs)?;
             }
             Command::PeerDownloadComplete { id, .. } => {
-                let Some((download_id, download)) = self.downloads.by_peer_download_id_mut(id) else {
+                let Some((download_id, download)) = self.downloads.by_peer_download_id_mut(id)
+                else {
                     // the download was already removed
                     return Ok(());
                 };
@@ -737,7 +871,10 @@ impl DownloaderState {
                 self.stop_download(id, evs)?;
             }
             Command::PeerDiscovered { peer, hash } => {
-                if self.bitfields.contains_key(&(BitfieldPeer::Remote(peer), hash)) {
+                if self
+                    .bitfields
+                    .contains_key(&(BitfieldPeer::Remote(peer), hash))
+                {
                     // we already have a subscription for this peer
                     return Ok(());
                 };
@@ -748,15 +885,24 @@ impl DownloaderState {
                 // create a peer state if it does not exist
                 let _state = self.peers.entry(peer).or_default();
                 // create a new subscription
-                let subscription_id = self.subscription_id_gen.next();
-                evs.push(Event::SubscribeBitfield { peer: BitfieldPeer::Remote(peer), hash, id: subscription_id });
-                self.bitfields.insert((BitfieldPeer::Remote(peer), hash), PeerBlobState::new(subscription_id));
+                let subscription_id = self.bitfields.subscription_id_gen.next();
+                evs.push(Event::SubscribeBitfield {
+                    peer: BitfieldPeer::Remote(peer),
+                    hash,
+                    id: subscription_id,
+                });
+                self.bitfields.insert(
+                    (BitfieldPeer::Remote(peer), hash),
+                    PeerBlobState::new(subscription_id),
+                );
             }
             Command::DropPeer { peer } => {
                 self.bitfields.retain(|(p, _), state| {
                     if *p == BitfieldPeer::Remote(peer) {
                         // todo: should we emit unsubscribe evs here?
-                        evs.push(Event::UnsubscribeBitfield { id: state.subscription_id });
+                        evs.push(Event::UnsubscribeBitfield {
+                            id: state.subscription_id,
+                        });
                         return false;
                     } else {
                         return true;
@@ -765,9 +911,20 @@ impl DownloaderState {
                 self.peers.remove(&peer);
             }
             Command::Bitfield { peer, hash, ranges } => {
-                let state = self.bitfields.get_mut(&(peer, hash)).context(format!("bitfields for unknown peer {peer:?} and hash {hash}"))?;
+                let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
+                    "bitfields for unknown peer {peer:?} and hash {hash}"
+                ))?;
                 let _chunks = total_chunks(&ranges).context("open range")?;
                 if peer == BitfieldPeer::Local {
+                    if let Some(observers) = self.observers.get_by_hash(&hash) {
+                        for (id, request) in observers {
+                            let ranges = &ranges & &request.ranges;
+                            evs.push(Event::LocalBitfield {
+                                id: *id,
+                                ranges,
+                            });
+                        }
+                    }
                     state.ranges = ranges;
                     self.check_completion(hash, None, evs)?;
                 } else {
@@ -782,9 +939,29 @@ impl DownloaderState {
                 // we have to call start_downloads even if the local bitfield set, since we don't know in which order local and remote bitfields arrive
                 self.start_downloads(hash, None, evs)?;
             }
-            Command::BitfieldUpdate { peer, hash, added, removed } => {
-                let state = self.bitfields.get_mut(&(peer, hash)).context(format!("bitfield update for unknown peer {peer:?} and hash {hash}"))?;
+            Command::BitfieldUpdate {
+                peer,
+                hash,
+                added,
+                removed,
+            } => {
+                let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
+                    "bitfield update for unknown peer {peer:?} and hash {hash}"
+                ))?;
                 if peer == BitfieldPeer::Local {
+                    if let Some(observers) = self.observers.get_by_hash(&hash) {
+                        for (id, request) in observers {
+                            let added = &added & &request.ranges;
+                            let removed = &removed & &request.ranges;
+                            if !added.is_empty() || !removed.is_empty() {
+                                evs.push(Event::LocalBitfieldUpdate {
+                                    id: *id,
+                                    added: &added & &request.ranges,
+                                    removed: &removed & &request.ranges,
+                                });
+                            }
+                        }
+                    }
                     state.ranges |= added;
                     state.ranges &= !removed;
                     self.check_completion(hash, None, evs)?;
@@ -802,15 +979,25 @@ impl DownloaderState {
                     self.start_downloads(hash, None, evs)?;
                 }
             }
-            Command::ChunksDownloaded { time, peer, hash, added } => {
-                let state = self.bitfields.get_local_mut(hash).context(format!("chunks downloaded before having local bitfield for {hash}"))?;
+            Command::ChunksDownloaded {
+                time,
+                peer,
+                hash,
+                added,
+            } => {
+                let state = self.bitfields.get_local_mut(hash).context(format!(
+                    "chunks downloaded before having local bitfield for {hash}"
+                ))?;
                 let total_downloaded = total_chunks(&added).context("open range")?;
                 let total_before = total_chunks(&state.ranges).context("open range")?;
                 state.ranges |= added;
                 let total_after = total_chunks(&state.ranges).context("open range")?;
                 let useful_downloaded = total_after - total_before;
-                let peer = self.peers.get_mut(&peer).context(format!("performing download before having peer state for {peer}"))?;
-                peer.download_history.push_back((time, (total_downloaded, useful_downloaded)));
+                let peer = self.peers.get_mut(&peer).context(format!(
+                    "performing download before having peer state for {peer}"
+                ))?;
+                peer.download_history
+                    .push_back((time, (total_downloaded, useful_downloaded)));
             }
             Command::Tick { time } => {
                 let window = 10;
@@ -818,7 +1005,9 @@ impl DownloaderState {
                 // clean up download history
                 let mut to_rebalance = vec![];
                 for (peer, state) in self.peers.iter_mut() {
-                    state.download_history.retain(|(duration, _)| *duration > horizon);
+                    state
+                        .download_history
+                        .retain(|(duration, _)| *duration > horizon);
                     let mut sum_total = 0;
                     let mut sum_useful = 0;
                     for (_, (total, useful)) in state.download_history.iter() {
@@ -835,7 +1024,10 @@ impl DownloaderState {
                         // nothing has changed that affects this download
                         continue;
                     }
-                    let n_peers = self.bitfields.remote_for_hash(download.request.hash).count();
+                    let n_peers = self
+                        .bitfields
+                        .remote_for_hash(download.request.hash)
+                        .count();
                     if download.peer_downloads.len() >= n_peers {
                         // we are already downloading from all peers for this hash
                         continue;
@@ -846,6 +1038,47 @@ impl DownloaderState {
                     self.rebalance_download(id, evs)?;
                 }
             }
+            Command::ObserveLocal { id, hash, ranges } => {
+                // either we have a subscription for this blob, or we have to create one
+                if let Some(state) = self.bitfields.get_local_mut(hash) {
+                    // just increment the count
+                    state.subscription_count += 1;
+                    // emit the current bitfield
+                    evs.push(Event::LocalBitfield { id, ranges: state.ranges.clone() });
+                } else {
+                    // create a new subscription
+                    let subscription_id = self.bitfields.subscription_id_gen.next();
+                    evs.push(Event::SubscribeBitfield {
+                        peer: BitfieldPeer::Local,
+                        hash,
+                        id: subscription_id,
+                    });
+                    self.bitfields.insert(
+                        (BitfieldPeer::Local, hash),
+                        PeerBlobState::new(subscription_id),
+                    );
+                }
+                self.observers.insert(id, ObserveRequest { hash, ranges, buffer: 0 });
+            }
+            Command::StopObserveLocal { id } => {
+                let request = self.observers.remove(&id).context(format!(
+                    "stop observing unknown local bitfield {id:?}"
+                ))?;
+                let removed_hash = request.hash;
+                // unsubscribe from bitfields that have no more subscriptions
+                self.bitfields.retain(|(_peer, hash), state| {
+                    if *hash == removed_hash {
+                        state.subscription_count -= 1;
+                        if state.subscription_count == 0 {
+                            evs.push(Event::UnsubscribeBitfield {
+                                id: state.subscription_id,
+                            });
+                            return false;
+                        }
+                    }
+                    true
+                });
+            }
         }
         Ok(())
     }
@@ -855,7 +1088,12 @@ impl DownloaderState {
     /// This must be called after each change of the local bitfield for a hash
     ///
     /// In addition to checking for completion, this also create new peer downloads if a peer download is complete and there is more data available for that peer.
-    fn check_completion(&mut self, hash: Hash, just_id: Option<DownloadId>, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+    fn check_completion(
+        &mut self,
+        hash: Hash,
+        just_id: Option<DownloadId>,
+        evs: &mut Vec<Event>,
+    ) -> anyhow::Result<()> {
         let Some(self_state) = self.bitfields.get_local(hash) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
@@ -881,7 +1119,9 @@ impl DownloaderState {
                     // stop this peer download.
                     //
                     // Might be a noop if the cause for this local change was the same peer download, but we don't know.
-                    evs.push(Event::StopPeerDownload { id: peer_download.id });
+                    evs.push(Event::StopPeerDownload {
+                        id: peer_download.id,
+                    });
                     // mark this peer as available
                     available.push(*peer);
                     false
@@ -900,7 +1140,8 @@ impl DownloaderState {
                 // see what the new peers can do for us
                 let mut candidates = BTreeMap::new();
                 for peer in available {
-                    let Some(peer_state) = self.bitfields.get(&(BitfieldPeer::Remote(peer), hash)) else {
+                    let Some(peer_state) = self.bitfields.get(&(BitfieldPeer::Remote(peer), hash))
+                    else {
                         // weird. we should have a bitfield for this peer since it just completed a download
                         continue;
                     };
@@ -914,8 +1155,15 @@ impl DownloaderState {
                 // start new downloads
                 for (peer, ranges) in candidates {
                     let id = self.peer_download_id_gen.next();
-                    evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
-                    download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
+                    evs.push(Event::StartPeerDownload {
+                        id,
+                        peer,
+                        hash,
+                        ranges: ranges.clone(),
+                    });
+                    download
+                        .peer_downloads
+                        .insert(peer, PeerDownloadState { id, ranges });
                 }
             }
         }
@@ -927,12 +1175,21 @@ impl DownloaderState {
     }
 
     /// Look at all downloads for a hash and start peer downloads for those that do not have any yet
-    fn start_downloads(&mut self, hash: Hash, just_id: Option<DownloadId>, evs: &mut Vec<Event>) -> anyhow::Result<()> {
+    fn start_downloads(
+        &mut self,
+        hash: Hash,
+        just_id: Option<DownloadId>,
+        evs: &mut Vec<Event>,
+    ) -> anyhow::Result<()> {
         let Some(self_state) = self.bitfields.get_local(hash) else {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
-        for (id, download) in self.downloads.iter_mut_for_hash(hash).filter(|(_, download)| download.peer_downloads.is_empty()) {
+        for (id, download) in self
+            .downloads
+            .iter_mut_for_hash(hash)
+            .filter(|(_, download)| download.peer_downloads.is_empty())
+        {
             if just_id.is_some() && just_id != Some(*id) {
                 continue;
             }
@@ -948,8 +1205,15 @@ impl DownloaderState {
             for (peer, ranges) in candidates {
                 info!("  Starting download from {peer} for {hash} {ranges:?}");
                 let id = self.peer_download_id_gen.next();
-                evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
-                download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
+                evs.push(Event::StartPeerDownload {
+                    id,
+                    peer,
+                    hash,
+                    ranges: ranges.clone(),
+                });
+                download
+                    .peer_downloads
+                    .insert(peer, PeerDownloadState { id, ranges });
             }
         }
         Ok(())
@@ -957,7 +1221,10 @@ impl DownloaderState {
 
     /// rebalance a single download
     fn rebalance_download(&mut self, id: DownloadId, evs: &mut Vec<Event>) -> anyhow::Result<()> {
-        let download = self.downloads.by_id_mut(id).context(format!("rebalancing unknown download {id:?}"))?;
+        let download = self
+            .downloads
+            .by_id_mut(id)
+            .context(format!("rebalancing unknown download {id:?}"))?;
         download.needs_rebalancing = false;
         tracing::info!("Rebalancing download {id:?} {:?}", download.request);
         let hash = download.request.hash;
@@ -974,7 +1241,10 @@ impl DownloaderState {
             }
         }
         self.planner.plan(hash, &mut candidates);
-        info!("Stopping {} old peer downloads", download.peer_downloads.len());
+        info!(
+            "Stopping {} old peer downloads",
+            download.peer_downloads.len()
+        );
         for (_, state) in &download.peer_downloads {
             // stop all downloads
             evs.push(Event::StopPeerDownload { id: state.id });
@@ -984,8 +1254,15 @@ impl DownloaderState {
         for (peer, ranges) in candidates {
             info!("  Starting download from {peer} for {hash} {ranges:?}");
             let id = self.peer_download_id_gen.next();
-            evs.push(Event::StartPeerDownload { id, peer, hash, ranges: ranges.clone() });
-            download.peer_downloads.insert(peer, PeerDownloadState { id, ranges });
+            evs.push(Event::StartPeerDownload {
+                id,
+                peer,
+                hash,
+                ranges: ranges.clone(),
+            });
+            download
+                .peer_downloads
+                .insert(peer, PeerDownloadState { id, ranges });
         }
         Ok(())
     }
@@ -1021,10 +1298,12 @@ pub struct DownloaderBuilder<S> {
 }
 
 impl<S> DownloaderBuilder<S> {
-
     /// Set the content discovery
     pub fn discovery<D: ContentDiscovery>(self, discovery: D) -> Self {
-        Self { discovery: Some(Box::new(discovery)), ..self }
+        Self {
+            discovery: Some(Box::new(discovery)),
+            ..self
+        }
     }
 
     /// Set the bitfield subscription
@@ -1037,12 +1316,18 @@ impl<S> DownloaderBuilder<S> {
 
     /// Set the local pool
     pub fn local_pool(self, local_pool: LocalPool) -> Self {
-        Self { local_pool: Some(local_pool), ..self }
+        Self {
+            local_pool: Some(local_pool),
+            ..self
+        }
     }
 
     /// Set the download planner
     pub fn planner<P: DownloadPlanner>(self, planner: P) -> Self {
-        Self { planner: Some(Box::new(planner)), ..self }
+        Self {
+            planner: Some(Box::new(planner)),
+            ..self
+        }
     }
 
     /// Build the downloader
@@ -1053,9 +1338,24 @@ impl<S> DownloaderBuilder<S> {
         let store = self.store;
         let discovery = self.discovery.expect("discovery not set");
         let local_pool = self.local_pool.unwrap_or_else(|| LocalPool::single());
-        let planner = self.planner.unwrap_or_else(|| Box::new(StripePlanner2::new(0, 10)));
-        let subscribe_bitfield = self.subscribe_bitfield.unwrap_or_else(|| Box::new(SimpleBitfieldSubscription::new(self.endpoint.clone(), store.clone(), local_pool.handle().clone())));
-        Downloader::new(self.endpoint, store, discovery, subscribe_bitfield, local_pool, planner)
+        let planner = self
+            .planner
+            .unwrap_or_else(|| Box::new(StripePlanner2::new(0, 10)));
+        let subscribe_bitfield = self.subscribe_bitfield.unwrap_or_else(|| {
+            Box::new(SimpleBitfieldSubscription::new(
+                self.endpoint.clone(),
+                store.clone(),
+                local_pool.handle().clone(),
+            ))
+        });
+        Downloader::new(
+            self.endpoint,
+            store,
+            discovery,
+            subscribe_bitfield,
+            local_pool,
+            planner,
+        )
     }
 }
 
@@ -1065,29 +1365,101 @@ impl Downloader {
     /// The download will be cancelled if the returned future is dropped.
     pub async fn download(&self, request: DownloadRequest) -> anyhow::Result<()> {
         let (send, recv) = tokio::sync::oneshot::channel::<()>();
-        self.send.send(UserCommand::Download { request, done: send }).await?;
+        self.send
+            .send(UserCommand::Download {
+                request,
+                done: send,
+            })
+            .await?;
         recv.await?;
         Ok(())
     }
 
+    /// Observe a local bitmap
+    pub async fn observe(
+        &self,
+        request: ObserveRequest,
+    ) -> anyhow::Result<tokio::sync::mpsc::Receiver<ObserveEvent>> {
+        let (send, recv) = tokio::sync::mpsc::channel(request.buffer);
+        self.send
+            .send(UserCommand::Observe { request, send })
+            .await?;
+        Ok(recv)
+    }
+
     /// Create a new downloader builder
     pub fn builder<S: Store>(endpoint: Endpoint, store: S) -> DownloaderBuilder<S> {
-        DownloaderBuilder { endpoint, store, discovery: None, subscribe_bitfield: None, local_pool: None, planner: None }
+        DownloaderBuilder {
+            endpoint,
+            store,
+            discovery: None,
+            subscribe_bitfield: None,
+            local_pool: None,
+            planner: None,
+        }
     }
 
     /// Create a new downloader
-    fn new<S: Store>(endpoint: Endpoint, store: S, discovery: BoxedContentDiscovery, subscribe_bitfield: BoxedBitfieldSubscription, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
-        let actor = DownloaderActor::new(endpoint, store, discovery, subscribe_bitfield, local_pool, planner);
+    fn new<S: Store>(
+        endpoint: Endpoint,
+        store: S,
+        discovery: BoxedContentDiscovery,
+        subscribe_bitfield: BoxedBitfieldSubscription,
+        local_pool: LocalPool,
+        planner: Box<dyn DownloadPlanner>,
+    ) -> Self {
+        let actor = DownloaderActor::new(
+            endpoint,
+            store,
+            discovery,
+            subscribe_bitfield,
+            local_pool,
+            planner,
+        );
         let (send, recv) = tokio::sync::mpsc::channel(256);
         let task = Arc::new(spawn(async move { actor.run(recv).await }));
         Self { send, _task: task }
     }
 }
 
+#[derive(Debug, Default)]
+struct Observers {
+    by_hash_and_id: BTreeMap<Hash, BTreeMap<ObserveId, ObserveRequest>>,
+}
+
+impl Observers {
+    fn insert(&mut self, id: ObserveId, request: ObserveRequest) {
+        self.by_hash_and_id
+            .entry(request.hash)
+            .or_default()
+            .insert(id, request);
+    }
+
+    fn remove(&mut self, id: &ObserveId) -> Option<ObserveRequest> {
+        for requests in self.by_hash_and_id.values_mut() {
+            if let Some(request) = requests.remove(id) {
+                return Some(request);
+            }
+        }
+        None
+    }
+
+    fn get_by_hash(&self, hash: &Hash) -> Option<&BTreeMap<ObserveId, ObserveRequest>> {
+        self.by_hash_and_id.get(hash)
+    }
+}
+
 /// An user-facing command
 #[derive(Debug)]
 enum UserCommand {
-    Download { request: DownloadRequest, done: tokio::sync::oneshot::Sender<()> },
+    Download {
+        request: DownloadRequest,
+        done: tokio::sync::oneshot::Sender<()>,
+    },
+    Observe {
+        request: ObserveRequest,
+        send: tokio::sync::mpsc::Sender<ObserveEvent>,
+    },
 }
 
 struct DownloaderActor<S> {
@@ -1105,12 +1477,23 @@ struct DownloaderActor<S> {
     bitfield_subscription_tasks: BTreeMap<BitfieldSubscriptionId, AbortOnDropHandle<()>>,
     /// Id generator for download ids
     download_id_gen: IdGenerator<DownloadId>,
+    /// Id generator for observe ids
+    observe_id_gen: IdGenerator<ObserveId>,
+    /// Observers
+    observers: BTreeMap<ObserveId, tokio::sync::mpsc::Sender<ObserveEvent>>,
     /// The time when the actor was started, serves as the epoch for time messages to the state machine
     start: Instant,
 }
 
 impl<S: Store> DownloaderActor<S> {
-    fn new(endpoint: Endpoint, store: S, discovery: BoxedContentDiscovery, subscribe_bitfield: BoxedBitfieldSubscription, local_pool: LocalPool, planner: Box<dyn DownloadPlanner>) -> Self {
+    fn new(
+        endpoint: Endpoint,
+        store: S,
+        discovery: BoxedContentDiscovery,
+        subscribe_bitfield: BoxedBitfieldSubscription,
+        local_pool: LocalPool,
+        planner: Box<dyn DownloadPlanner>,
+    ) -> Self {
         let (send, recv) = mpsc::channel(256);
         Self {
             local_pool,
@@ -1126,6 +1509,8 @@ impl<S: Store> DownloaderActor<S> {
             command_tx: send,
             command_rx: recv,
             download_id_gen: Default::default(),
+            observe_id_gen: Default::default(),
+            observers: Default::default(),
             start: Instant::now(),
         }
     }
@@ -1146,6 +1531,11 @@ impl<S: Store> DownloaderActor<S> {
                             self.download_futs.insert(id, done);
                             self.command_tx.send(Command::StartDownload { request, id }).await.ok();
                         }
+                        UserCommand::Observe { request, send } => {
+                            let id = self.observe_id_gen.next();
+                            self.command_tx.send(Command::ObserveLocal { id, hash: request.hash, ranges: request.ranges }).await.ok();
+                            self.observers.insert(id, send);
+                        }
                     }
                 },
                 Some(cmd) = self.command_rx.recv() => {
@@ -1161,10 +1551,26 @@ impl<S: Store> DownloaderActor<S> {
                     //
                     // todo: is there a better mechanism than periodic checks?
                     // I don't want some cancellation token rube goldberg machine.
+                    let mut to_delete = vec![];
                     for (id, fut) in self.download_futs.iter() {
                         if fut.is_closed() {
+                            to_delete.push(*id);
                             self.command_tx.send(Command::StopDownload { id: *id }).await.ok();
                         }
+                    }
+                    for id in to_delete {
+                        self.download_futs.remove(&id);
+                    }
+                    // clean up dropped observers
+                    let mut to_delete = vec![];
+                    for (id, sender) in self.observers.iter() {
+                        if sender.is_closed() {
+                            to_delete.push(*id);
+                            self.command_tx.send(Command::StopObserveLocal { id: *id }).await.ok();
+                        }
+                    }
+                    for id in to_delete {
+                        self.observers.remove(&id);
                     }
                 },
             }
@@ -1180,8 +1586,17 @@ impl<S: Store> DownloaderActor<S> {
                 let task = spawn(async move {
                     while let Some(ev) = stream.next().await {
                         let cmd = match ev {
-                            BitfieldSubscriptionEvent::Bitfield { ranges } => Command::Bitfield { peer, hash, ranges },
-                            BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => Command::BitfieldUpdate { peer, hash, added, removed },
+                            BitfieldSubscriptionEvent::Bitfield { ranges } => {
+                                Command::Bitfield { peer, hash, ranges }
+                            }
+                            BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => {
+                                Command::BitfieldUpdate {
+                                    peer,
+                                    hash,
+                                    added,
+                                    removed,
+                                }
+                            }
                         };
                         send.send(cmd).await.ok();
                     }
@@ -1204,12 +1619,19 @@ impl<S: Store> DownloaderActor<S> {
                 });
                 self.discovery_tasks.insert(id, task);
             }
-            Event::StartPeerDownload { id, peer, hash, ranges } => {
+            Event::StartPeerDownload {
+                id,
+                peer,
+                hash,
+                ranges,
+            } => {
                 let send = self.command_tx.clone();
                 let endpoint = self.endpoint.clone();
                 let store = self.store.clone();
                 let start = self.start;
-                let task = self.local_pool.spawn(move || peer_download_task(id, endpoint, store, hash, peer, ranges, send, start));
+                let task = self.local_pool.spawn(move || {
+                    peer_download_task(id, endpoint, store, hash, peer, ranges, send, start)
+                });
                 self.peer_download_tasks.insert(id, task);
             }
             Event::UnsubscribeBitfield { id } => {
@@ -1224,6 +1646,24 @@ impl<S: Store> DownloaderActor<S> {
             Event::DownloadComplete { id } => {
                 if let Some(done) = self.download_futs.remove(&id) {
                     done.send(()).ok();
+                }
+            }
+            Event::LocalBitfield { id, ranges } => {
+                let Some(sender) = self.observers.get(&id) else {
+                    return;
+                };
+                if sender.try_send(ObserveEvent::Bitfield { ranges }).is_err() {
+                    // the observer has been dropped
+                    self.observers.remove(&id);
+                }
+            }
+            Event::LocalBitfieldUpdate { id, added, removed } => {
+                let Some(sender) = self.observers.get(&id) else {
+                    return;
+                };
+                if sender.try_send(ObserveEvent::BitfieldUpdate { added, removed }).is_err() {
+                    // the observer has been dropped
+                    self.observers.remove(&id);
                 }
             }
             Event::Error { message } => {
@@ -1260,12 +1700,32 @@ impl ContentDiscovery for StaticContentDiscovery {
     }
 }
 
-async fn peer_download_task<S: Store>(id: PeerDownloadId, endpoint: Endpoint, store: S, hash: Hash, peer: NodeId, ranges: ChunkRanges, sender: mpsc::Sender<Command>, start: Instant) {
+async fn peer_download_task<S: Store>(
+    id: PeerDownloadId,
+    endpoint: Endpoint,
+    store: S,
+    hash: Hash,
+    peer: NodeId,
+    ranges: ChunkRanges,
+    sender: mpsc::Sender<Command>,
+    start: Instant,
+) {
     let result = peer_download(endpoint, store, hash, peer, ranges, &sender, start).await;
-    sender.send(Command::PeerDownloadComplete { id, result }).await.ok();
+    sender
+        .send(Command::PeerDownloadComplete { id, result })
+        .await
+        .ok();
 }
 
-async fn peer_download<S: Store>(endpoint: Endpoint, store: S, hash: Hash, peer: NodeId, ranges: ChunkRanges, sender: &mpsc::Sender<Command>, start: Instant) -> anyhow::Result<Stats> {
+async fn peer_download<S: Store>(
+    endpoint: Endpoint,
+    store: S,
+    hash: Hash,
+    peer: NodeId,
+    ranges: ChunkRanges,
+    sender: &mpsc::Sender<Command>,
+    start: Instant,
+) -> anyhow::Result<Stats> {
     info!("Connecting to peer {peer}");
     let conn = endpoint.connect(peer, crate::ALPN).await?;
     info!("Got connection to peer {peer}");
@@ -1297,11 +1757,28 @@ async fn peer_download<S: Store>(endpoint: Endpoint, store: S, hash: Hash, peer:
                     }
                     BaoContentItem::Leaf(leaf) => {
                         let start_chunk = leaf.offset / 1024;
-                        let added = ChunkRanges::from(ChunkNum(start_chunk)..ChunkNum(start_chunk + 16));
-                        sender.send(Command::ChunksDownloaded { time: start.elapsed(), peer, hash, added: added.clone() }).await.ok();
+                        let added =
+                            ChunkRanges::from(ChunkNum(start_chunk)..ChunkNum(start_chunk + 16));
+                        sender
+                            .send(Command::ChunksDownloaded {
+                                time: start.elapsed(),
+                                peer,
+                                hash,
+                                added: added.clone(),
+                            })
+                            .await
+                            .ok();
                         batch.push(leaf.into());
                         writer.write_batch(size, std::mem::take(&mut batch)).await?;
-                        sender.send(Command::BitfieldUpdate { peer: BitfieldPeer::Local, hash, added, removed: ChunkRanges::empty() }).await.ok();
+                        sender
+                            .send(Command::BitfieldUpdate {
+                                peer: BitfieldPeer::Local,
+                                hash,
+                                added,
+                                removed: ChunkRanges::empty(),
+                            })
+                            .await
+                            .ok();
                     }
                 }
                 content = next;
@@ -1339,12 +1816,21 @@ where
 struct TestBitfieldSubscription;
 
 impl BitfieldSubscription for TestBitfieldSubscription {
-    fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> BoxStream<'static, BitfieldSubscriptionEvent> {
+    fn subscribe(
+        &mut self,
+        peer: BitfieldPeer,
+        _hash: Hash,
+    ) -> BoxStream<'static, BitfieldSubscriptionEvent> {
         let ranges = match peer {
             BitfieldPeer::Local => ChunkRanges::empty(),
-            BitfieldPeer::Remote(_) => ChunkRanges::from(ChunkNum(0)..ChunkNum(1024 * 1024 * 1024 * 1024)),
+            BitfieldPeer::Remote(_) => {
+                ChunkRanges::from(ChunkNum(0)..ChunkNum(1024 * 1024 * 1024 * 1024))
+            }
         };
-        Box::pin(futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges }).chain(futures_lite::stream::pending()))
+        Box::pin(
+            futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges })
+                .chain(futures_lite::stream::pending()),
+        )
     }
 }
 
@@ -1359,7 +1845,11 @@ pub struct SimpleBitfieldSubscription<S> {
 impl<S> SimpleBitfieldSubscription<S> {
     /// Create a new bitfield subscription
     pub fn new(endpoint: Endpoint, store: S, local_pool: LocalPoolHandle) -> Self {
-        Self { endpoint, store, local_pool }
+        Self {
+            endpoint,
+            store,
+            local_pool,
+        }
     }
 }
 
@@ -1371,7 +1861,11 @@ async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Resu
     }
 }
 
-async fn get_valid_ranges_remote(endpoint: &Endpoint, id: NodeId, hash: &Hash) -> anyhow::Result<ChunkRanges> {
+async fn get_valid_ranges_remote(
+    endpoint: &Endpoint,
+    id: NodeId,
+    hash: &Hash,
+) -> anyhow::Result<ChunkRanges> {
     let conn = endpoint.connect(id, crate::ALPN).await?;
     let (size, _) = crate::get::request::get_verified_size(&conn, &hash).await?;
     let chunks = (size + 1023) / 1024;
@@ -1379,7 +1873,11 @@ async fn get_valid_ranges_remote(endpoint: &Endpoint, id: NodeId, hash: &Hash) -
 }
 
 impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
-    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> BoxStream<'static, BitfieldSubscriptionEvent> {
+    fn subscribe(
+        &mut self,
+        peer: BitfieldPeer,
+        hash: Hash,
+    ) -> BoxStream<'static, BitfieldSubscriptionEvent> {
         let (send, recv) = tokio::sync::oneshot::channel();
         match peer {
             BitfieldPeer::Local => {
@@ -1388,10 +1886,10 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
                     match get_valid_ranges_local(&hash, store).await {
                         Ok(ranges) => {
                             send.send(ranges).ok();
-                        },
+                        }
                         Err(e) => {
                             tracing::error!("error getting bitfield: {e}");
-                        },
+                        }
                     };
                 });
             }
@@ -1401,7 +1899,7 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
                     match get_valid_ranges_remote(&endpoint, id, &hash).await {
                         Ok(ranges) => {
                             send.send(ranges).ok();
-                        },
+                        }
                         Err(cause) => {
                             tracing::error!("error getting bitfield: {cause}");
                         }
@@ -1409,13 +1907,16 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
                 });
             }
         }
-        Box::pin(async move {
-            let ranges = match recv.await {
-                Ok(ev) => ev,
-                Err(_) => ChunkRanges::empty(),
-            };
-            BitfieldSubscriptionEvent::Bitfield { ranges }
-        }.into_stream())
+        Box::pin(
+            async move {
+                let ranges = match recv.await {
+                    Ok(ev) => ev,
+                    Err(_) => ChunkRanges::empty(),
+                };
+                BitfieldSubscriptionEvent::Bitfield { ranges }
+            }
+            .into_stream(),
+        )
     }
 }
 
@@ -1447,7 +1948,9 @@ mod tests {
                 RangeSetRange::Range(x) => x.end.0,
             })
             .unwrap_or_default();
-        let res = (0..max).map(move |i| x.contains(&ChunkNum(i))).collect::<Vec<_>>();
+        let res = (0..max)
+            .map(move |i| x.contains(&ChunkNum(i)))
+            .collect::<Vec<_>>();
         res.into_iter()
     }
 
@@ -1473,7 +1976,11 @@ mod tests {
     fn test_planner_2() {
         let mut planner = StripePlanner2::new(0, 4);
         let hash = Hash::new(b"test");
-        let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..100]), chunk_ranges([0..100])]);
+        let mut ranges = make_range_map(&[
+            chunk_ranges([0..100]),
+            chunk_ranges([0..100]),
+            chunk_ranges([0..100]),
+        ]);
         println!("");
         print_range_map(&ranges);
         println!("planning");
@@ -1485,7 +1992,12 @@ mod tests {
     fn test_planner_3() {
         let mut planner = StripePlanner2::new(0, 4);
         let hash = Hash::new(b"test");
-        let mut ranges = make_range_map(&[chunk_ranges([0..100]), chunk_ranges([0..110]), chunk_ranges([0..120]), chunk_ranges([0..50])]);
+        let mut ranges = make_range_map(&[
+            chunk_ranges([0..100]),
+            chunk_ranges([0..110]),
+            chunk_ranges([0..120]),
+            chunk_ranges([0..50]),
+        ]);
         println!("");
         print_range_map(&ranges);
         println!("planning");
@@ -1526,8 +2038,15 @@ mod tests {
         let node_id = endpoint.node_id();
         let store = crate::store::mem::Store::new();
         let blobs = Blobs::builder(store).build(&endpoint);
-        let hash = blobs.client().add_bytes(bytes::Bytes::copy_from_slice(data)).await?.hash;
-        let router = iroh::protocol::Router::builder(endpoint).accept(crate::ALPN, blobs).spawn().await?;
+        let hash = blobs
+            .client()
+            .add_bytes(bytes::Bytes::copy_from_slice(data))
+            .await?
+            .hash;
+        let router = iroh::protocol::Router::builder(endpoint)
+            .accept(crate::ALPN, blobs)
+            .spawn()
+            .await?;
         Ok((router, node_id, hash))
     }
 
@@ -1564,14 +2083,37 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
-        let unknown_hash = "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
+        let unknown_hash =
+            "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
         let mut state = DownloaderState::new(noop_planner());
-        let evs = state.apply(Command::Bitfield { peer: Local, hash, ranges: ChunkRanges::all() });
-        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitfield should produce an error!");
-        let evs = state.apply(Command::Bitfield { peer: Local, hash: unknown_hash, ranges: ChunkRanges::all() });
-        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "adding an open bitfield for an unknown hash should produce an error!");
-        let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
-        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })), "download from unknown peer should lead to an error!");
+        let evs = state.apply(Command::Bitfield {
+            peer: Local,
+            hash,
+            ranges: ChunkRanges::all(),
+        });
+        assert!(
+            has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),
+            "adding an open bitfield should produce an error!"
+        );
+        let evs = state.apply(Command::Bitfield {
+            peer: Local,
+            hash: unknown_hash,
+            ranges: ChunkRanges::all(),
+        });
+        assert!(
+            has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),
+            "adding an open bitfield for an unknown hash should produce an error!"
+        );
+        let evs = state.apply(Command::ChunksDownloaded {
+            time: Duration::ZERO,
+            peer: peer_a,
+            hash,
+            added: chunk_ranges([0..16]),
+        });
+        assert!(
+            has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),
+            "download from unknown peer should lead to an error!"
+        );
         Ok(())
     }
 
@@ -1583,33 +2125,139 @@ mod tests {
         let peer_a = "1000000000000000000000000000000000000000000000000000000000000000".parse()?;
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let mut state = DownloaderState::new(noop_planner());
-        let evs = state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: DownloadId(0) });
-        assert!(has_one_event(&evs, &Event::StartDiscovery { hash, id: DiscoveryId(0) }), "starting a download should start a discovery task");
-        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }), "starting a download should subscribe to the local bitfield");
+        let evs = state.apply(Command::StartDownload {
+            request: DownloadRequest {
+                hash,
+                ranges: chunk_ranges([0..64]),
+            },
+            id: DownloadId(0),
+        });
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::StartDiscovery {
+                    hash,
+                    id: DiscoveryId(0)
+                }
+            ),
+            "starting a download should start a discovery task"
+        );
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::SubscribeBitfield {
+                    peer: Local,
+                    hash,
+                    id: BitfieldSubscriptionId(0)
+                }
+            ),
+            "starting a download should subscribe to the local bitfield"
+        );
         let initial_bitfield = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
-        let evs = state.apply(Command::Bitfield { peer: Local, hash, ranges: initial_bitfield.clone() });
+        let evs = state.apply(Command::Bitfield {
+            peer: Local,
+            hash,
+            ranges: initial_bitfield.clone(),
+        });
         assert!(evs.is_empty());
-        assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.ranges, initial_bitfield, "bitfield should be set to the initial bitfield");
-        assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.subscription_count, 1, "we have one download interested in the bitfield");
-        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
+        assert_eq!(
+            state
+                .bitfields
+                .get_local(hash)
+                .context("bitfield should be present")?
+                .ranges,
+            initial_bitfield,
+            "bitfield should be set to the initial bitfield"
+        );
+        assert_eq!(
+            state
+                .bitfields
+                .get_local(hash)
+                .context("bitfield should be present")?
+                .subscription_count,
+            1,
+            "we have one download interested in the bitfield"
+        );
+        let evs = state.apply(Command::BitfieldUpdate {
+            peer: Local,
+            hash,
+            added: chunk_ranges([16..32]),
+            removed: ChunkRanges::empty(),
+        });
         assert!(evs.is_empty());
-        assert_eq!(state.bitfields.get_local(hash).context("bitfield should be present")?.ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(32)), "bitfield should be updated");
+        assert_eq!(
+            state
+                .bitfields
+                .get_local(hash)
+                .context("bitfield should be present")?
+                .ranges,
+            ChunkRanges::from(ChunkNum(0)..ChunkNum(32)),
+            "bitfield should be updated"
+        );
         let evs = state.apply(Command::PeerDiscovered { peer: peer_a, hash });
-        assert!(has_one_event(&evs, &Event::SubscribeBitfield { peer: Remote(peer_a), hash, id: 1.into() }), "adding a new peer for a hash we are interested in should subscribe to the bitfield");
-        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([0..64]) });
-        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: PeerDownloadId(0), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "bitfield from a peer should start a download");
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::SubscribeBitfield {
+                    peer: Remote(peer_a),
+                    hash,
+                    id: 1.into()
+                }
+            ),
+            "adding a new peer for a hash we are interested in should subscribe to the bitfield"
+        );
+        let evs = state.apply(Command::Bitfield {
+            peer: Remote(peer_a),
+            hash,
+            ranges: chunk_ranges([0..64]),
+        });
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::StartPeerDownload {
+                    id: PeerDownloadId(0),
+                    peer: peer_a,
+                    hash,
+                    ranges: chunk_ranges([32..64])
+                }
+            ),
+            "bitfield from a peer should start a download"
+        );
         // ChunksDownloaded just updates the peer stats
-        let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..48]) });
+        let evs = state.apply(Command::ChunksDownloaded {
+            time: Duration::ZERO,
+            peer: peer_a,
+            hash,
+            added: chunk_ranges([32..48]),
+        });
         assert!(evs.is_empty());
         // Bitfield update does not yet complete the download
-        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..48]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitfieldUpdate {
+            peer: Local,
+            hash,
+            added: chunk_ranges([32..48]),
+            removed: ChunkRanges::empty(),
+        });
         assert!(evs.is_empty());
         // ChunksDownloaded just updates the peer stats
-        let evs = state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([48..64]) });
+        let evs = state.apply(Command::ChunksDownloaded {
+            time: Duration::ZERO,
+            peer: peer_a,
+            hash,
+            added: chunk_ranges([48..64]),
+        });
         assert!(evs.is_empty());
         // Final bitfield update for the local bitfield should complete the download
-        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([48..64]), removed: ChunkRanges::empty() });
-        assert!(has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })), "download should be completed by the data");
+        let evs = state.apply(Command::BitfieldUpdate {
+            peer: Local,
+            hash,
+            added: chunk_ranges([48..64]),
+            removed: ChunkRanges::empty(),
+        });
+        assert!(
+            has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })),
+            "download should be completed by the data"
+        );
         // quick check that everything got cleaned up
         assert!(state.downloads.by_id.is_empty());
         assert!(state.bitfields.by_peer_and_hash.is_empty());
@@ -1626,32 +2274,116 @@ mod tests {
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let mut state = DownloaderState::new(noop_planner());
         // Start a download
-        state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: DownloadId(0) });
+        state.apply(Command::StartDownload {
+            request: DownloadRequest {
+                hash,
+                ranges: chunk_ranges([0..64]),
+            },
+            id: DownloadId(0),
+        });
         // Initially, we have nothing
-        state.apply(Command::Bitfield { peer: Local, hash, ranges: ChunkRanges::empty() });
+        state.apply(Command::Bitfield {
+            peer: Local,
+            hash,
+            ranges: ChunkRanges::empty(),
+        });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
         // We have a bitfield from the peer
-        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([0..32]) });
-        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0.into(), peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitfield from a peer should start a download");
+        let evs = state.apply(Command::Bitfield {
+            peer: Remote(peer_a),
+            hash,
+            ranges: chunk_ranges([0..32]),
+        });
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::StartPeerDownload {
+                    id: 0.into(),
+                    peer: peer_a,
+                    hash,
+                    ranges: chunk_ranges([0..32])
+                }
+            ),
+            "bitfield from a peer should start a download"
+        );
         // ChunksDownloaded just updates the peer stats
-        state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([0..16]) });
+        state.apply(Command::ChunksDownloaded {
+            time: Duration::ZERO,
+            peer: peer_a,
+            hash,
+            added: chunk_ranges([0..16]),
+        });
         // Bitfield update does not yet complete the download
-        state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([0..16]), removed: ChunkRanges::empty() });
+        state.apply(Command::BitfieldUpdate {
+            peer: Local,
+            hash,
+            added: chunk_ranges([0..16]),
+            removed: ChunkRanges::empty(),
+        });
         // The peer now has more data
-        state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([32..64]) });
+        state.apply(Command::Bitfield {
+            peer: Remote(peer_a),
+            hash,
+            ranges: chunk_ranges([32..64]),
+        });
         // ChunksDownloaded just updates the peer stats
-        state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([16..32]) });
+        state.apply(Command::ChunksDownloaded {
+            time: Duration::ZERO,
+            peer: peer_a,
+            hash,
+            added: chunk_ranges([16..32]),
+        });
         // Complete the first part of the download
-        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([16..32]), removed: ChunkRanges::empty() });
+        let evs = state.apply(Command::BitfieldUpdate {
+            peer: Local,
+            hash,
+            added: chunk_ranges([16..32]),
+            removed: ChunkRanges::empty(),
+        });
         // This triggers cancellation of the first peer download and starting a new one for the remaining data
-        assert!(has_one_event(&evs, &Event::StopPeerDownload { id: 0.into() }), "first peer download should be stopped");
-        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 1.into(), peer: peer_a, hash, ranges: chunk_ranges([32..64]) }), "second peer download should be started");
+        assert!(
+            has_one_event(&evs, &Event::StopPeerDownload { id: 0.into() }),
+            "first peer download should be stopped"
+        );
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::StartPeerDownload {
+                    id: 1.into(),
+                    peer: peer_a,
+                    hash,
+                    ranges: chunk_ranges([32..64])
+                }
+            ),
+            "second peer download should be started"
+        );
         // ChunksDownloaded just updates the peer stats
-        state.apply(Command::ChunksDownloaded { time: Duration::ZERO, peer: peer_a, hash, added: chunk_ranges([32..64]) });
+        state.apply(Command::ChunksDownloaded {
+            time: Duration::ZERO,
+            peer: peer_a,
+            hash,
+            added: chunk_ranges([32..64]),
+        });
         // Final bitfield update for the local bitfield should complete the download
-        let evs = state.apply(Command::BitfieldUpdate { peer: Local, hash, added: chunk_ranges([32..64]), removed: ChunkRanges::empty() });
-        assert!(has_all_events(&evs, &[&Event::StopPeerDownload { id: 1.into() }, &Event::DownloadComplete { id: 0.into() }, &Event::UnsubscribeBitfield { id: 0.into() }, &Event::StopDiscovery { id: 0.into() },]), "download should be completed by the data");
+        let evs = state.apply(Command::BitfieldUpdate {
+            peer: Local,
+            hash,
+            added: chunk_ranges([32..64]),
+            removed: ChunkRanges::empty(),
+        });
+        assert!(
+            has_all_events(
+                &evs,
+                &[
+                    &Event::StopPeerDownload { id: 1.into() },
+                    &Event::DownloadComplete { id: 0.into() },
+                    &Event::UnsubscribeBitfield { id: 0.into() },
+                    &Event::StopDiscovery { id: 0.into() },
+                ]
+            ),
+            "download should be completed by the data"
+        );
         println!("{evs:?}");
         Ok(())
     }
@@ -1667,33 +2399,80 @@ mod tests {
         // --- Start the first (ongoing) download.
         // Request a range from 0..64.
         let download0 = DownloadId(0);
-        let req0 = DownloadRequest { hash, ranges: chunk_ranges([0..64]) };
-        let evs0 = state.apply(Command::StartDownload { request: req0, id: download0 });
+        let req0 = DownloadRequest {
+            hash,
+            ranges: chunk_ranges([0..64]),
+        };
+        let evs0 = state.apply(Command::StartDownload {
+            request: req0,
+            id: download0,
+        });
         // When starting the download, we expect a discovery task to be started
         // and a subscription to the local bitfield to be requested.
-        assert!(has_one_event(&evs0, &Event::StartDiscovery { hash, id: DiscoveryId(0) }), "download0 should start discovery");
-        assert!(has_one_event(&evs0, &Event::SubscribeBitfield { peer: Local, hash, id: BitfieldSubscriptionId(0) }), "download0 should subscribe to the local bitfield");
+        assert!(
+            has_one_event(
+                &evs0,
+                &Event::StartDiscovery {
+                    hash,
+                    id: DiscoveryId(0)
+                }
+            ),
+            "download0 should start discovery"
+        );
+        assert!(
+            has_one_event(
+                &evs0,
+                &Event::SubscribeBitfield {
+                    peer: Local,
+                    hash,
+                    id: BitfieldSubscriptionId(0)
+                }
+            ),
+            "download0 should subscribe to the local bitfield"
+        );
 
         // --- Simulate some progress for the first download.
         // Let’s say only chunks 0..32 are available locally.
-        let evs1 = state.apply(Command::Bitfield { peer: Local, hash, ranges: chunk_ranges([0..32]) });
+        let evs1 = state.apply(Command::Bitfield {
+            peer: Local,
+            hash,
+            ranges: chunk_ranges([0..32]),
+        });
         // No completion event should be generated for download0 because its full range 0..64 is not yet met.
-        assert!(evs1.is_empty(), "Partial bitfield update should not complete download0");
+        assert!(
+            evs1.is_empty(),
+            "Partial bitfield update should not complete download0"
+        );
 
         // --- Start a second download for the same hash.
         // This new download only requires chunks 0..32 which are already available.
         let download1 = DownloadId(1);
-        let req1 = DownloadRequest { hash, ranges: chunk_ranges([0..32]) };
-        let evs2 = state.apply(Command::StartDownload { request: req1, id: download1 });
+        let req1 = DownloadRequest {
+            hash,
+            ranges: chunk_ranges([0..32]),
+        };
+        let evs2 = state.apply(Command::StartDownload {
+            request: req1,
+            id: download1,
+        });
         // Because the local bitfield (0..32) is already a superset of the new download’s request,
         // a DownloadComplete event for download1 should be generated immediately.
-        assert!(has_one_event(&evs2, &Event::DownloadComplete { id: download1 }), "New download should complete immediately");
+        assert!(
+            has_one_event(&evs2, &Event::DownloadComplete { id: download1 }),
+            "New download should complete immediately"
+        );
 
         // --- Verify state:
         // The ongoing download (download0) should still be present in the state,
         // while the newly completed download (download1) is removed.
-        assert!(state.downloads.contains_key(&download0), "download0 should still be active");
-        assert!(!state.downloads.contains_key(&download1), "download1 should have been cleaned up after completion");
+        assert!(
+            state.downloads.contains_key(&download0),
+            "download0 should still be active"
+        );
+        assert!(
+            !state.downloads.contains_key(&download1),
+            "download1 should have been cleaned up after completion"
+        );
 
         Ok(())
     }
@@ -1707,20 +2486,54 @@ mod tests {
         let hash = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
         let mut state = DownloaderState::new(noop_planner());
         // Start a download
-        state.apply(Command::StartDownload { request: DownloadRequest { hash, ranges: chunk_ranges([0..64]) }, id: 0.into() });
+        state.apply(Command::StartDownload {
+            request: DownloadRequest {
+                hash,
+                ranges: chunk_ranges([0..64]),
+            },
+            id: 0.into(),
+        });
         // Initially, we have nothing
-        state.apply(Command::Bitfield { peer: Local, hash, ranges: ChunkRanges::empty() });
+        state.apply(Command::Bitfield {
+            peer: Local,
+            hash,
+            ranges: ChunkRanges::empty(),
+        });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
         // We have a bitfield from the peer
-        let evs = state.apply(Command::Bitfield { peer: Remote(peer_a), hash, ranges: chunk_ranges([0..32]) });
-        assert!(has_one_event(&evs, &Event::StartPeerDownload { id: 0.into(), peer: peer_a, hash, ranges: chunk_ranges([0..32]) }), "bitfield from a peer should start a download");
+        let evs = state.apply(Command::Bitfield {
+            peer: Remote(peer_a),
+            hash,
+            ranges: chunk_ranges([0..32]),
+        });
+        assert!(
+            has_one_event(
+                &evs,
+                &Event::StartPeerDownload {
+                    id: 0.into(),
+                    peer: peer_a,
+                    hash,
+                    ranges: chunk_ranges([0..32])
+                }
+            ),
+            "bitfield from a peer should start a download"
+        );
         // Sending StopDownload should stop the download and all associated tasks
         // This is what happens (delayed) when the user drops the download future
         let evs = state.apply(Command::StopDownload { id: 0.into() });
-        assert!(has_one_event(&evs, &Event::StopPeerDownload { id: 0.into() }));
-        assert!(has_one_event(&evs, &Event::UnsubscribeBitfield { id: 0.into() }));
-        assert!(has_one_event(&evs, &Event::UnsubscribeBitfield { id: 1.into() }));
+        assert!(has_one_event(
+            &evs,
+            &Event::StopPeerDownload { id: 0.into() }
+        ));
+        assert!(has_one_event(
+            &evs,
+            &Event::UnsubscribeBitfield { id: 0.into() }
+        ));
+        assert!(has_one_event(
+            &evs,
+            &Event::UnsubscribeBitfield { id: 1.into() }
+        ));
         assert!(has_one_event(&evs, &Event::StopDiscovery { id: 0.into() }));
         Ok(())
     }
@@ -1731,12 +2544,25 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
         let (_router1, peer, hash) = make_test_node(b"test").await?;
         let store = crate::store::mem::Store::new();
-        let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
-        let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: vec![peer] };
+        let endpoint = iroh::Endpoint::builder()
+            .alpns(vec![crate::protocol::ALPN.to_vec()])
+            .discovery_n0()
+            .bind()
+            .await?;
+        let discovery = StaticContentDiscovery {
+            info: BTreeMap::new(),
+            default: vec![peer],
+        };
         let bitfield_subscription = TestBitfieldSubscription;
-        let downloader = Downloader::builder(endpoint, store).discovery(discovery).bitfield_subscription(bitfield_subscription).build();
+        let downloader = Downloader::builder(endpoint, store)
+            .discovery(discovery)
+            .bitfield_subscription(bitfield_subscription)
+            .build();
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1]) });
+        let fut = downloader.download(DownloadRequest {
+            hash,
+            ranges: chunk_ranges([0..1]),
+        });
         fut.await?;
         Ok(())
     }
@@ -1753,14 +2579,30 @@ mod tests {
             nodes.push(make_test_node(&data).await?);
         }
         let peers = nodes.iter().map(|(_, peer, _)| *peer).collect::<Vec<_>>();
-        let hashes = nodes.iter().map(|(_, _, hash)| *hash).collect::<BTreeSet<_>>();
+        let hashes = nodes
+            .iter()
+            .map(|(_, _, hash)| *hash)
+            .collect::<BTreeSet<_>>();
         let hash = *hashes.iter().next().unwrap();
         let store = crate::store::mem::Store::new();
-        let endpoint = iroh::Endpoint::builder().alpns(vec![crate::protocol::ALPN.to_vec()]).discovery_n0().bind().await?;
-        let discovery = StaticContentDiscovery { info: BTreeMap::new(), default: peers };
-        let downloader = Downloader::builder(endpoint, store).discovery(discovery).planner(StripePlanner2::new(0, 8)).build();
+        let endpoint = iroh::Endpoint::builder()
+            .alpns(vec![crate::protocol::ALPN.to_vec()])
+            .discovery_n0()
+            .bind()
+            .await?;
+        let discovery = StaticContentDiscovery {
+            info: BTreeMap::new(),
+            default: peers,
+        };
+        let downloader = Downloader::builder(endpoint, store)
+            .discovery(discovery)
+            .planner(StripePlanner2::new(0, 8))
+            .build();
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let fut = downloader.download(DownloadRequest { hash, ranges: chunk_ranges([0..1024]) });
+        let fut = downloader.download(DownloadRequest {
+            hash,
+            ranges: chunk_ranges([0..1024]),
+        });
         fut.await?;
         Ok(())
     }
