@@ -22,7 +22,6 @@ pub trait DownloadPlanner: Send + std::fmt::Debug + 'static {
 /// A boxed download planner
 pub type BoxedDownloadPlanner = Box<dyn DownloadPlanner>;
 
-
 /// A download planner that just leaves everything as is.
 ///
 /// Data will be downloaded from all peers wherever multiple peers have the same data.
