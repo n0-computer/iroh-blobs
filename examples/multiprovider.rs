@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::{env::VarError, path::PathBuf, str::FromStr};
 
 use bao_tree::{ChunkNum, ChunkRanges};
-use iroh::NodeId;
+use iroh::{NodeId, SecretKey};
 use iroh_blobs::{downloader2::{DownloadRequest, Downloader, StaticContentDiscovery}, store::Store, Hash};
 use clap::Parser;
 
@@ -31,6 +31,27 @@ struct ProvideArgs {
     path: Vec<PathBuf>,
 }
 
+fn load_secret_key() ->  anyhow::Result<Option<iroh::SecretKey>> {
+    match std::env::var("IROH_SECRET") {
+        Ok(secret) => Ok(Some(SecretKey::from_str(&secret)?)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(x) => Err(x.into()),
+    }
+}
+
+fn get_or_create_secret_key() -> iroh::SecretKey {
+    match load_secret_key() {
+        Ok(Some(secret)) => return secret,
+        Ok(None) => {}
+        Err(cause) => {
+            println!("failed to load secret key: {}", cause);
+        }
+    };
+    let secret = SecretKey::generate(rand::thread_rng());
+    println!("Using secret key {secret}. Set IROH_SECRET env var to use the same key next time.");
+    secret
+}
+
 async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let store = iroh_blobs::store::mem::Store::new();
     let mut tags = Vec::new();
@@ -41,7 +62,9 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         println!("added {} as {}, {} bytes, {} chunks", path.display(), tag.hash(), len, (len + 1023) / 1024);
         tags.push((path, tag));
     }
-    let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
+    let secret_key = get_or_create_secret_key();
+    let endpoint = iroh::Endpoint::builder().discovery_n0()
+        .secret_key(secret_key).bind().await?;
     let id = endpoint.node_id();
     let blobs = iroh_blobs::net_protocol::Blobs::builder(store).build(&endpoint);
     let router = iroh::protocol::Router::builder(endpoint)
