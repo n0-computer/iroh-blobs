@@ -5,7 +5,12 @@ use clap::Parser;
 use console::Term;
 use iroh::{NodeId, SecretKey};
 use iroh_blobs::{
-    downloader2::{DownloadRequest, Downloader, ObserveEvent, ObserveRequest, StaticContentDiscovery}, store::Store, util::total_bytes, Hash
+    downloader2::{
+        DownloadRequest, Downloader, ObserveEvent, ObserveRequest, StaticContentDiscovery,
+    },
+    store::Store,
+    util::total_bytes,
+    Hash,
 };
 
 #[derive(Debug, Parser)]
@@ -132,7 +137,7 @@ impl BlobDownloadProgress {
     fn is_done(&self) -> bool {
         self.current == self.request.ranges
     }
-} 
+}
 
 fn bitmap(current: &[ChunkNum], requested: &[ChunkNum], n: usize) -> String {
     // If n is 0, return an empty string.
@@ -185,9 +190,9 @@ fn bitmap(current: &[ChunkNum], requested: &[ChunkNum], n: usize) -> String {
 
         // Map the fraction to a grayscale character.
         let ch = if fraction == 0.0 {
-            ' '   // completely empty
+            ' ' // completely empty
         } else if fraction == 1.0 {
-            '█'   // completely full
+            '█' // completely full
         } else if fraction < 0.25 {
             '░'
         } else if fraction < 0.5 {

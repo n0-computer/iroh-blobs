@@ -696,7 +696,11 @@ enum Command {
     /// A peer has been discovered
     PeerDiscovered { peer: NodeId, hash: Hash },
     ///
-    ObserveLocal { id: ObserveId, hash: Hash, ranges: ChunkRanges },
+    ObserveLocal {
+        id: ObserveId,
+        hash: Hash,
+        ranges: ChunkRanges,
+    },
     ///
     StopObserveLocal { id: ObserveId },
     /// A tick from the driver, for rebalancing
@@ -749,7 +753,9 @@ enum Event {
         id: DownloadId,
     },
     /// An error that stops processing the command
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 impl DownloaderState {
@@ -916,13 +922,12 @@ impl DownloaderState {
                 ))?;
                 let _chunks = total_chunks(&ranges).context("open range")?;
                 if peer == BitfieldPeer::Local {
+                    // we got a new local bitmap, notify local observers
+                    // we must notify all local observers, even if the bitmap is empty
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let ranges = &ranges & &request.ranges;
-                            evs.push(Event::LocalBitfield {
-                                id: *id,
-                                ranges,
-                            });
+                            evs.push(Event::LocalBitfield { id: *id, ranges });
                         }
                     }
                     state.ranges = ranges;
@@ -949,6 +954,8 @@ impl DownloaderState {
                     "bitfield update for unknown peer {peer:?} and hash {hash}"
                 ))?;
                 if peer == BitfieldPeer::Local {
+                    // we got a local bitfield update, notify local observers
+                    // for updates we can just notify the observers that have a non-empty intersection with the update
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let added = &added & &request.ranges;
@@ -1044,7 +1051,10 @@ impl DownloaderState {
                     // just increment the count
                     state.subscription_count += 1;
                     // emit the current bitfield
-                    evs.push(Event::LocalBitfield { id, ranges: state.ranges.clone() });
+                    evs.push(Event::LocalBitfield {
+                        id,
+                        ranges: state.ranges.clone(),
+                    });
                 } else {
                     // create a new subscription
                     let subscription_id = self.bitfields.subscription_id_gen.next();
@@ -1058,12 +1068,13 @@ impl DownloaderState {
                         PeerBlobState::new(subscription_id),
                     );
                 }
-                self.observers.insert(id, ObserveRequest { hash, ranges, buffer: 0 });
+                self.observers.insert(id, ObserveInfo { hash, ranges });
             }
             Command::StopObserveLocal { id } => {
-                let request = self.observers.remove(&id).context(format!(
-                    "stop observing unknown local bitfield {id:?}"
-                ))?;
+                let request = self
+                    .observers
+                    .remove(&id)
+                    .context(format!("stop observing unknown local bitfield {id:?}"))?;
                 let removed_hash = request.hash;
                 // unsubscribe from bitfields that have no more subscriptions
                 self.bitfields.retain(|(_peer, hash), state| {
@@ -1422,20 +1433,26 @@ impl Downloader {
     }
 }
 
+#[derive(Debug)]
+struct ObserveInfo {
+    hash: Hash,
+    ranges: ChunkRanges,
+}
+
 #[derive(Debug, Default)]
 struct Observers {
-    by_hash_and_id: BTreeMap<Hash, BTreeMap<ObserveId, ObserveRequest>>,
+    by_hash_and_id: BTreeMap<Hash, BTreeMap<ObserveId, ObserveInfo>>,
 }
 
 impl Observers {
-    fn insert(&mut self, id: ObserveId, request: ObserveRequest) {
+    fn insert(&mut self, id: ObserveId, request: ObserveInfo) {
         self.by_hash_and_id
             .entry(request.hash)
             .or_default()
             .insert(id, request);
     }
 
-    fn remove(&mut self, id: &ObserveId) -> Option<ObserveRequest> {
+    fn remove(&mut self, id: &ObserveId) -> Option<ObserveInfo> {
         for requests in self.by_hash_and_id.values_mut() {
             if let Some(request) = requests.remove(id) {
                 return Some(request);
@@ -1444,7 +1461,7 @@ impl Observers {
         None
     }
 
-    fn get_by_hash(&self, hash: &Hash) -> Option<&BTreeMap<ObserveId, ObserveRequest>> {
+    fn get_by_hash(&self, hash: &Hash) -> Option<&BTreeMap<ObserveId, ObserveInfo>> {
         self.by_hash_and_id.get(hash)
     }
 }
@@ -1661,7 +1678,10 @@ impl<S: Store> DownloaderActor<S> {
                 let Some(sender) = self.observers.get(&id) else {
                     return;
                 };
-                if sender.try_send(ObserveEvent::BitfieldUpdate { added, removed }).is_err() {
+                if sender
+                    .try_send(ObserveEvent::BitfieldUpdate { added, removed })
+                    .is_err()
+                {
                     // the observer has been dropped
                     self.observers.remove(&id);
                 }
