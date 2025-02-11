@@ -262,11 +262,11 @@ impl DownloaderState {
                         PeerBlobState::new(subscription_id),
                     );
                 }
-                if !self.discovery.contains_key(&request.hash) {
+                if let std::collections::btree_map::Entry::Vacant(e) = self.discovery.entry(request.hash) {
                     // start a discovery task
                     let id = self.discovery_id_gen.next();
                     evs.push(Event::StartDiscovery { hash, id });
-                    self.discovery.insert(request.hash, id);
+                    e.insert(id);
                 }
                 self.downloads.insert(id, DownloadState::new(request));
                 self.check_completion(hash, Some(id), evs)?;
@@ -825,9 +825,7 @@ impl Downloads {
         id: PeerDownloadId,
     ) -> Option<(&DownloadId, &mut DownloadState)> {
         self.by_id
-            .iter_mut()
-            .filter(|(_, v)| v.peer_downloads.iter().any(|(_, state)| state.id == id))
-            .next()
+            .iter_mut().find(|(_, v)| v.peer_downloads.iter().any(|(_, state)| state.id == id))
     }
 }
 
