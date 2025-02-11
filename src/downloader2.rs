@@ -510,7 +510,7 @@ mod tests {
     #![allow(clippy::single_range_in_vec_init)]
     use std::ops::Range;
 
-    use crate::net_protocol::Blobs;
+    use crate::{net_protocol::Blobs, store::MapMut};
 
     use super::*;
     use bao_tree::ChunkNum;
@@ -544,6 +544,16 @@ mod tests {
         let mut secret = [0; 32];
         secret[0] = id;
         SecretKey::from(secret).public()
+    }
+
+    #[tokio::test]
+    async fn test_chunk_ranges() -> TestResult<()> {
+        let store = crate::store::mem::Store::new();
+        let tt = store.import_bytes(vec![0u8;1025].into(), crate::BlobFormat::Raw).await?;
+        let entry = store.get_mut(tt.hash()).await?.unwrap();
+        let valid = crate::get::db::valid_ranges::<crate::store::mem::Store>(&entry).await?;
+        println!("{valid:?}");
+        Ok(())
     }
 
     #[test]
