@@ -6,7 +6,8 @@ use console::Term;
 use iroh::{NodeId, SecretKey};
 use iroh_blobs::{
     downloader2::{
-        DownloadRequest, Downloader, ObserveEvent, ObserveRequest, StaticContentDiscovery,
+        print_bitmap, DownloadRequest, Downloader, ObserveEvent, ObserveRequest,
+        StaticContentDiscovery,
     },
     store::Store,
     util::total_bytes,
@@ -30,7 +31,11 @@ struct DownloadArgs {
     #[clap(help = "hash to download")]
     hash: Hash,
 
+    #[clap(help = "providers to download from")]
     providers: Vec<NodeId>,
+
+    #[clap(long, help = "path to save to")]
+    path: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -139,77 +144,28 @@ impl BlobDownloadProgress {
     }
 }
 
-fn bitmap(current: &[ChunkNum], requested: &[ChunkNum], n: usize) -> String {
-    // If n is 0, return an empty string.
-    if n == 0 {
-        return String::new();
-    }
-
-    // Determine the overall bitfield size.
-    // Since the ranges are sorted, we take the last element as the total size.
-    let total = if let Some(&last) = requested.last() {
-        last.0
-    } else {
-        // If there are no ranges, we assume the bitfield is empty.
-        0
-    };
-
-    // If total is 0, output n spaces.
-    if total == 0 {
-        return " ".repeat(n);
-    }
-
-    let mut result = String::with_capacity(n);
-
-    // For each of the n output buckets:
-    for bucket in 0..n {
-        // Calculate the bucket's start and end in the overall bitfield.
-        let bucket_start = bucket as u64 * total / n as u64;
-        let bucket_end = (bucket as u64 + 1) * total / n as u64;
-        let bucket_size = bucket_end.saturating_sub(bucket_start);
-
-        // Sum the number of bits that are set in this bucket.
-        let mut set_bits = 0u64;
-        for pair in current.chunks_exact(2) {
-            let start = pair[0];
-            let end = pair[1];
-            // Determine the overlap between the bucket and the current range.
-            let overlap_start = start.0.max(bucket_start);
-            let overlap_end = end.0.min(bucket_end);
-            if overlap_start < overlap_end {
-                set_bits += overlap_end - overlap_start;
-            }
+async fn download(args: DownloadArgs) -> anyhow::Result<()> {
+    match &args.path {
+        Some(path) => {
+            tokio::fs::create_dir_all(path).await?;
+            let store = iroh_blobs::store::fs::Store::load(path).await?;
+            // make sure we properly shut down the store on ctrl-c
+            let res = tokio::select! {
+                x = download_impl(args, store.clone()) => x,
+                _ = tokio::signal::ctrl_c() => Ok(()),
+            };
+            store.shutdown().await;
+            res
         }
-
-        // Calculate the fraction of the bucket that is set.
-        let fraction = if bucket_size > 0 {
-            set_bits as f64 / bucket_size as f64
-        } else {
-            0.0
-        };
-
-        // Map the fraction to a grayscale character.
-        let ch = if fraction == 0.0 {
-            ' ' // completely empty
-        } else if fraction == 1.0 {
-            '█' // completely full
-        } else if fraction < 0.25 {
-            '░'
-        } else if fraction < 0.5 {
-            '▒'
-        } else {
-            '▓'
-        };
-
-        result.push(ch);
+        None => {
+            let store = iroh_blobs::store::mem::Store::new();
+            download_impl(args, store).await
+        }
     }
-
-    result
 }
 
-async fn download(args: DownloadArgs) -> anyhow::Result<()> {
+async fn download_impl<S: Store>(args: DownloadArgs, store: S) -> anyhow::Result<()> {
     let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
-    let store = iroh_blobs::store::mem::Store::new();
     let discovery = StaticContentDiscovery::new(Default::default(), args.providers);
     let downloader = Downloader::builder(endpoint, store)
         .discovery(discovery)
@@ -233,7 +189,7 @@ async fn download(args: DownloadArgs) -> anyhow::Result<()> {
             progress.update(chunk);
             let current = progress.current.boundaries();
             let requested = progress.request.ranges.boundaries();
-            let bitmap = bitmap(current, requested, rows as usize);
+            let bitmap = print_bitmap(current, requested, rows as usize);
             print!("\r{bitmap}");
             if progress.is_done() {
                 println!();
