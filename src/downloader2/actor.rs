@@ -15,17 +15,23 @@ pub(super) enum UserCommand {
 }
 
 pub(super) struct DownloaderActor<S> {
+    state: DownloaderState,
     local_pool: LocalPool,
     endpoint: Endpoint,
     command_rx: mpsc::Receiver<Command>,
     command_tx: mpsc::Sender<Command>,
-    state: DownloaderState,
     store: S,
+    /// Content discovery
     discovery: BoxedContentDiscovery,
+    /// Bitfield subscription
     subscribe_bitfield: BoxedBitfieldSubscription,
+    /// Futures for downloads
     download_futs: BTreeMap<DownloadId, tokio::sync::oneshot::Sender<()>>,
+    /// Tasks for peer downloads
     peer_download_tasks: BTreeMap<PeerDownloadId, local_pool::Run<()>>,
+    /// Tasks for discovery
     discovery_tasks: BTreeMap<DiscoveryId, AbortOnDropHandle<()>>,
+    /// Tasks for bitfield subscriptions
     bitfield_subscription_tasks: BTreeMap<BitfieldSubscriptionId, AbortOnDropHandle<()>>,
     /// Id generator for download ids
     download_id_gen: IdGenerator<DownloadId>,
@@ -67,13 +73,13 @@ impl<S: Store> DownloaderActor<S> {
         }
     }
 
-    pub(super) async fn run(mut self, mut channel: mpsc::Receiver<UserCommand>) {
+    pub(super) async fn run(mut self, mut user_commands: mpsc::Receiver<UserCommand>) {
         let mut ticks = tokio::time::interval(Duration::from_millis(100));
         loop {
             trace!("downloader actor tick");
             tokio::select! {
                 biased;
-                Some(cmd) = channel.recv() => {
+                Some(cmd) = user_commands.recv() => {
                     debug!("user command {cmd:?}");
                     match cmd {
                         UserCommand::Download {
@@ -228,6 +234,7 @@ impl<S: Store> DownloaderActor<S> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn peer_download_task<S: Store>(
     id: PeerDownloadId,
     endpoint: Endpoint,
@@ -327,6 +334,7 @@ async fn peer_download<S: Store>(
     Ok(stats)
 }
 
+/// Spawn a future and wrap it in a [`AbortOnDropHandle`]
 pub(super) fn spawn<F, T>(f: F) -> AbortOnDropHandle<T>
 where
     F: Future<Output = T> + Send + 'static,

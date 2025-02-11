@@ -51,6 +51,9 @@ use state::*;
 mod actor;
 use actor::*;
 
+mod content_discovery;
+pub use content_discovery::*;
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
 )]
@@ -75,35 +78,6 @@ struct PeerDownloadId(u64);
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, derive_more::From,
 )]
 struct BitfieldSubscriptionId(u64);
-
-/// Announce kind
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub enum AnnounceKind {
-    /// The peer supposedly has some of the data.
-    Partial = 0,
-    /// The peer supposedly has the complete data.
-    #[default]
-    Complete,
-}
-
-/// Options for finding peers
-#[derive(Debug, Default)]
-pub struct FindPeersOpts {
-    /// Kind of announce
-    pub kind: AnnounceKind,
-}
-
-/// A pluggable content discovery mechanism
-pub trait ContentDiscovery: std::fmt::Debug + Send + 'static {
-    /// Find peers that have the given blob.
-    ///
-    /// The returned stream is a handle for the discovery task. It should be an
-    /// infinite stream that only stops when it is dropped.
-    fn find_peers(&mut self, hash: Hash, opts: FindPeersOpts) -> BoxStream<'static, NodeId>;
-}
-
-/// A boxed content discovery
-pub type BoxedContentDiscovery = Box<dyn ContentDiscovery>;
 
 /// A pluggable bitfield subscription mechanism
 pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
@@ -265,7 +239,7 @@ impl<S> DownloaderBuilder<S> {
     {
         let store = self.store;
         let discovery = self.discovery.expect("discovery not set");
-        let local_pool = self.local_pool.unwrap_or_else(|| LocalPool::single());
+        let local_pool = self.local_pool.unwrap_or_else(LocalPool::single);
         let planner = self
             .planner
             .unwrap_or_else(|| Box::new(StripePlanner2::new(0, 10)));
@@ -350,33 +324,6 @@ impl Downloader {
     }
 }
 
-/// A simple static content discovery mechanism
-#[derive(Debug)]
-pub struct StaticContentDiscovery {
-    info: BTreeMap<Hash, Vec<NodeId>>,
-    default: Vec<NodeId>,
-}
-
-impl StaticContentDiscovery {
-    /// Create a new static content discovery mechanism
-    pub fn new(mut info: BTreeMap<Hash, Vec<NodeId>>, mut default: Vec<NodeId>) -> Self {
-        default.sort();
-        default.dedup();
-        for (_, peers) in info.iter_mut() {
-            peers.sort();
-            peers.dedup();
-        }
-        Self { info, default }
-    }
-}
-
-impl ContentDiscovery for StaticContentDiscovery {
-    fn find_peers(&mut self, hash: Hash, _opts: FindPeersOpts) -> BoxStream<'static, NodeId> {
-        let peers = self.info.get(&hash).unwrap_or(&self.default).clone();
-        Box::pin(futures_lite::stream::iter(peers).chain(futures_lite::stream::pending()))
-    }
-}
-
 /// A bitfield subscription that just returns nothing for local and everything(*) for remote
 ///
 /// * Still need to figure out how to deal with open ended chunk ranges.
@@ -423,7 +370,7 @@ impl<S> SimpleBitfieldSubscription<S> {
 }
 
 async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<ChunkRanges> {
-    if let Some(entry) = store.get_mut(&hash).await? {
+    if let Some(entry) = store.get_mut(hash).await? {
         crate::get::db::valid_ranges::<S>(&entry).await
     } else {
         Ok(ChunkRanges::empty())
@@ -436,7 +383,7 @@ async fn get_valid_ranges_remote(
     hash: &Hash,
 ) -> anyhow::Result<ChunkRanges> {
     let conn = endpoint.connect(id, crate::ALPN).await?;
-    let (size, _) = crate::get::request::get_verified_size(&conn, &hash).await?;
+    let (size, _) = crate::get::request::get_verified_size(&conn, hash).await?;
     let chunks = (size + 1023) / 1024;
     Ok(ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks)))
 }
@@ -491,6 +438,7 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::single_range_in_vec_init)]
     use std::ops::Range;
 
     use crate::net_protocol::Blobs;
@@ -534,7 +482,7 @@ mod tests {
         let mut planner = StripePlanner2::new(0, 4);
         let hash = Hash::new(b"test");
         let mut ranges = make_range_map(&[chunk_ranges([0..50]), chunk_ranges([50..100])]);
-        println!("");
+        println!();
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
@@ -550,7 +498,7 @@ mod tests {
             chunk_ranges([0..100]),
             chunk_ranges([0..100]),
         ]);
-        println!("");
+        println!();
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
@@ -567,7 +515,7 @@ mod tests {
             chunk_ranges([0..120]),
             chunk_ranges([0..50]),
         ]);
-        println!("");
+        println!();
         print_range_map(&ranges);
         println!("planning");
         planner.plan(hash, &mut ranges);
@@ -656,10 +604,7 @@ mod tests {
             .discovery_n0()
             .bind()
             .await?;
-        let discovery = StaticContentDiscovery {
-            info: BTreeMap::new(),
-            default: vec![peer],
-        };
+        let discovery = StaticContentDiscovery::new(BTreeMap::new(), vec![peer]);
         let bitfield_subscription = TestBitfieldSubscription;
         let downloader = Downloader::builder(endpoint, store)
             .discovery(discovery)
@@ -697,10 +642,7 @@ mod tests {
             .discovery_n0()
             .bind()
             .await?;
-        let discovery = StaticContentDiscovery {
-            info: BTreeMap::new(),
-            default: peers,
-        };
+        let discovery = StaticContentDiscovery::new(BTreeMap::new(), peers);
         let downloader = Downloader::builder(endpoint, store)
             .discovery(discovery)
             .planner(StripePlanner2::new(0, 8))

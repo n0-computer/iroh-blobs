@@ -64,13 +64,13 @@ pub(super) enum Command {
     DropPeer { peer: NodeId },
     /// A peer has been discovered
     PeerDiscovered { peer: NodeId, hash: Hash },
-    ///
+    /// Start observing a local bitfield
     ObserveLocal {
         id: ObserveId,
         hash: Hash,
         ranges: ChunkRanges,
     },
-    ///
+    /// Stop observing a local bitfield
     StopObserveLocal { id: ObserveId },
     /// A tick from the driver, for rebalancing
     Tick { time: Duration },
@@ -319,9 +319,9 @@ impl DownloaderState {
                         evs.push(Event::UnsubscribeBitfield {
                             id: state.subscription_id,
                         });
-                        return false;
+                        false
                     } else {
-                        return true;
+                        true
                     }
                 });
                 self.peers.remove(&peer);
@@ -666,7 +666,7 @@ impl DownloaderState {
             "Stopping {} old peer downloads",
             download.peer_downloads.len()
         );
-        for (_, state) in &download.peer_downloads {
+        for state in download.peer_downloads.values() {
             // stop all downloads
             evs.push(Event::StopPeerDownload { id: state.id });
         }
@@ -906,6 +906,7 @@ fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::single_range_in_vec_init)]
 
     use super::super::tests::{
         chunk_ranges, has_all_events, has_one_event, has_one_event_matching, noop_planner,

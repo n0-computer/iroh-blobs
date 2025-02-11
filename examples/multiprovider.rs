@@ -236,7 +236,7 @@ async fn download(args: DownloadArgs) -> anyhow::Result<()> {
             let bitmap = bitmap(current, requested, rows as usize);
             print!("\r{bitmap}");
             if progress.is_done() {
-                println!("");
+                println!();
                 break;
             }
         }
