@@ -288,6 +288,7 @@ async fn peer_download<S: Store>(
                                 event: BitfieldEvent::Update {
                                     added,
                                     removed: ChunkRanges::empty(),
+                                    size,
                                 },
                             })
                             .await

@@ -331,6 +331,7 @@ impl DownloaderState {
                         }
                     }
                     state.ranges = ranges;
+                    state.size = state.size.min(size);
                     self.check_completion(hash, None, evs)?;
                 } else {
                     // We got an entirely new peer, mark all affected downloads for rebalancing
@@ -340,6 +341,7 @@ impl DownloaderState {
                         }
                     }
                     state.ranges = ranges;
+                    state.size = state.size.min(size);
                 }
                 // we have to call start_downloads even if the local bitfield set, since we don't know in which order local and remote bitfields arrive
                 self.start_downloads(hash, None, evs)?;
@@ -347,7 +349,7 @@ impl DownloaderState {
             Command::BitfieldInfo {
                 peer,
                 hash,
-                event: BitfieldEvent::Update { added, removed },
+                event: BitfieldEvent::Update { added, removed, size },
             } => {
                 let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
                     "bitfield update for unknown peer {peer:?} and hash {hash}"
@@ -355,6 +357,7 @@ impl DownloaderState {
                 if peer == BitfieldPeer::Local {
                     // we got a local bitfield update, notify local observers
                     // for updates we can just notify the observers that have a non-empty intersection with the update
+                    state.size = state.size.min(size);
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let added = &added & &request.ranges;
@@ -365,6 +368,7 @@ impl DownloaderState {
                                     event: BitfieldEvent::Update {
                                         added: &added & &request.ranges,
                                         removed: &removed & &request.ranges,
+                                        size: state.size,
                                     }
                                 });
                             }
@@ -383,6 +387,7 @@ impl DownloaderState {
                     }
                     state.ranges |= added;
                     state.ranges &= !removed;
+                    state.size = state.size.min(size);
                     // a local bitfield update does not make more data available, so we don't need to start downloads
                     self.start_downloads(hash, None, evs)?;
                 }
@@ -874,6 +879,8 @@ struct PeerBlobState {
     subscription_count: usize,
     /// chunk ranges this peer reports to have
     ranges: ChunkRanges,
+    /// The minimum reported size of the blob
+    size: u64,
 }
 
 impl PeerBlobState {
@@ -882,6 +889,7 @@ impl PeerBlobState {
             subscription_id,
             subscription_count: 1,
             ranges: ChunkRanges::empty(),
+            size: u64::MAX,
         }
     }
 }
@@ -977,6 +985,7 @@ mod tests {
             event: BitfieldEvent::Update {
                 added: chunk_ranges([16..32]),
                 removed: ChunkRanges::empty(),
+                size: u64::MAX,
             },
         });
         assert!(evs.is_empty());
@@ -1036,6 +1045,7 @@ mod tests {
             event: BitfieldEvent::Update {
                 added: chunk_ranges([32..48]),
                 removed: ChunkRanges::empty(),
+                size: u64::MAX,
             },
         });
         assert!(evs.is_empty());
@@ -1054,6 +1064,7 @@ mod tests {
             event: BitfieldEvent::Update {
                 added: chunk_ranges([48..64]),
                 removed: ChunkRanges::empty(),
+                size: u64::MAX,
             },
         });
         assert!(
@@ -1129,6 +1140,7 @@ mod tests {
             event: BitfieldEvent::Update {
                 added: chunk_ranges([0..16]),
                 removed: ChunkRanges::empty(),
+                size: u64::MAX,
             },
         });
         // The peer now has more data
@@ -1154,6 +1166,7 @@ mod tests {
             event: BitfieldEvent::Update {
                 added: chunk_ranges([16..32]),
                 removed: ChunkRanges::empty(),
+                size: u64::MAX,
             },
         });
         // This triggers cancellation of the first peer download and starting a new one for the remaining data
@@ -1187,6 +1200,7 @@ mod tests {
             event: BitfieldEvent::Update {
                 added: chunk_ranges([32..64]),
                 removed: ChunkRanges::empty(),
+                size: u64::MAX,
             },
         });
         assert!(

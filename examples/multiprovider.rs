@@ -120,7 +120,7 @@ impl BlobDownloadProgress {
             BitfieldEvent::State { ranges, .. } => {
                 self.current = ranges;
             }
-            BitfieldEvent::Update { added, removed } => {
+            BitfieldEvent::Update { added, removed, .. } => {
                 self.current |= added;
                 self.current -= removed;
             }

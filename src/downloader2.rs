@@ -95,7 +95,9 @@ pub enum BitfieldEvent {
     State {
         /// The entire bitfield
         ranges: ChunkRanges,
-        /// The most precise known size of the blob
+        /// The most precise known size of the blob.
+        ///
+        /// If I know nothing about the blob, this is u64::MAX.
         size: u64,
     },
     /// An update to the bitfield
@@ -104,6 +106,8 @@ pub enum BitfieldEvent {
         added: ChunkRanges,
         /// The ranges that were removed
         removed: ChunkRanges,
+        /// A refinement of the size of the blob.
+        size: u64,
     },
 }
 
@@ -346,11 +350,12 @@ impl<S> SimpleBitfieldSubscription<S> {
     }
 }
 
-async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<ChunkRanges> {
+async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<BitfieldEvent> {
     if let Some(entry) = store.get_mut(hash).await? {
-        crate::get::db::valid_ranges::<S>(&entry).await
+        let (ranges, size) = crate::get::db::valid_ranges_and_size::<S>(&entry).await?;
+        Ok(BitfieldEvent::State { ranges, size })
     } else {
-        Ok(ChunkRanges::empty())
+        Ok(BitfieldEvent::State { ranges: ChunkRanges::empty(), size: u64::MAX })
     }
 }
 
@@ -358,11 +363,12 @@ async fn get_valid_ranges_remote(
     endpoint: &Endpoint,
     id: NodeId,
     hash: &Hash,
-) -> anyhow::Result<ChunkRanges> {
+) -> anyhow::Result<BitfieldEvent> {
     let conn = endpoint.connect(id, crate::ALPN).await?;
     let (size, _) = crate::get::request::get_verified_size(&conn, hash).await?;
     let chunks = (size + 1023) / 1024;
-    Ok(ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks)))
+    let ranges = ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks));
+    Ok(BitfieldEvent::State { ranges, size })
 }
 
 impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
@@ -398,11 +404,14 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
         }
         Box::pin(
             async move {
-                let ranges = match recv.await {
+                let event = match recv.await {
                     Ok(ev) => ev,
-                    Err(_) => ChunkRanges::empty(),
+                    Err(_) => BitfieldEvent::State {
+                        ranges: ChunkRanges::empty(),
+                        size: u64::MAX,
+                    },
                 };
-                BitfieldEvent::State { ranges, size: u64::MAX }
+                event
             }
             .into_stream(),
         )
