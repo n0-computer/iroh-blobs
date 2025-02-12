@@ -10,7 +10,7 @@ pub(super) enum UserCommand {
     },
     Observe {
         request: ObserveRequest,
-        send: tokio::sync::mpsc::Sender<ObserveEvent>,
+        send: tokio::sync::mpsc::Sender<BitfieldEvent>,
     },
 }
 
@@ -38,7 +38,7 @@ pub(super) struct DownloaderActor<S> {
     /// Id generator for observe ids
     observe_id_gen: IdGenerator<ObserveId>,
     /// Observers
-    observers: BTreeMap<ObserveId, tokio::sync::mpsc::Sender<ObserveEvent>>,
+    observers: BTreeMap<ObserveId, tokio::sync::mpsc::Sender<BitfieldEvent>>,
     /// The time when the actor was started, serves as the epoch for time messages to the state machine
     start: Instant,
 }
@@ -144,17 +144,15 @@ impl<S: Store> DownloaderActor<S> {
                 let task = spawn(async move {
                     while let Some(ev) = stream.next().await {
                         let cmd = match ev {
-                            BitfieldSubscriptionEvent::Bitfield { ranges } => {
+                            BitfieldEvent::State { ranges } => {
                                 Command::Bitfield { peer, hash, ranges }
                             }
-                            BitfieldSubscriptionEvent::BitfieldUpdate { added, removed } => {
-                                Command::BitfieldUpdate {
-                                    peer,
-                                    hash,
-                                    added,
-                                    removed,
-                                }
-                            }
+                            BitfieldEvent::Update { added, removed } => Command::BitfieldUpdate {
+                                peer,
+                                hash,
+                                added,
+                                removed,
+                            },
                         };
                         send.send(cmd).await.ok();
                     }
@@ -210,7 +208,7 @@ impl<S: Store> DownloaderActor<S> {
                 let Some(sender) = self.observers.get(&id) else {
                     return;
                 };
-                if sender.try_send(ObserveEvent::Bitfield { ranges }).is_err() {
+                if sender.try_send(BitfieldEvent::State { ranges }).is_err() {
                     // the observer has been dropped
                     self.observers.remove(&id);
                 }
@@ -220,7 +218,7 @@ impl<S: Store> DownloaderActor<S> {
                     return;
                 };
                 if sender
-                    .try_send(ObserveEvent::BitfieldUpdate { added, removed })
+                    .try_send(BitfieldEvent::Update { added, removed })
                     .is_err()
                 {
                     // the observer has been dropped

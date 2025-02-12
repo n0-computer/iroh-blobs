@@ -82,43 +82,22 @@ struct BitfieldSubscriptionId(u64);
 /// A pluggable bitfield subscription mechanism
 pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
     /// Subscribe to a bitfield
-    fn subscribe(
-        &mut self,
-        peer: BitfieldPeer,
-        hash: Hash,
-    ) -> BoxStream<'static, BitfieldSubscriptionEvent>;
+    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> BoxStream<'static, BitfieldEvent>;
 }
 
 /// A boxed bitfield subscription
 pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 
-/// An event from a bitfield subscription
-#[derive(Debug)]
-pub enum BitfieldSubscriptionEvent {
-    /// Set the bitfield to the given ranges
-    Bitfield {
-        /// The entire bitfield
-        ranges: ChunkRanges,
-    },
-    /// Update the bitfield with the given ranges
-    BitfieldUpdate {
-        /// The ranges that were added
-        added: ChunkRanges,
-        /// The ranges that were removed
-        removed: ChunkRanges,
-    },
-}
-
 /// Events from observing a local bitfield
 #[derive(Debug)]
-pub enum ObserveEvent {
-    /// Set the bitfield to the given ranges
-    Bitfield {
+pub enum BitfieldEvent {
+    /// The full state of the bitfield
+    State {
         /// The entire bitfield
         ranges: ChunkRanges,
     },
-    /// Update the bitfield with the given ranges
-    BitfieldUpdate {
+    /// An update to the bitfield
+    Update {
         /// The ranges that were added
         added: ChunkRanges,
         /// The ranges that were removed
@@ -281,7 +260,7 @@ impl Downloader {
     pub async fn observe(
         &self,
         request: ObserveRequest,
-    ) -> anyhow::Result<tokio::sync::mpsc::Receiver<ObserveEvent>> {
+    ) -> anyhow::Result<tokio::sync::mpsc::Receiver<BitfieldEvent>> {
         let (send, recv) = tokio::sync::mpsc::channel(request.buffer);
         self.send
             .send(UserCommand::Observe { request, send })
@@ -332,11 +311,7 @@ impl Downloader {
 struct TestBitfieldSubscription;
 
 impl BitfieldSubscription for TestBitfieldSubscription {
-    fn subscribe(
-        &mut self,
-        peer: BitfieldPeer,
-        _hash: Hash,
-    ) -> BoxStream<'static, BitfieldSubscriptionEvent> {
+    fn subscribe(&mut self, peer: BitfieldPeer, _hash: Hash) -> BoxStream<'static, BitfieldEvent> {
         let ranges = match peer {
             BitfieldPeer::Local => ChunkRanges::empty(),
             BitfieldPeer::Remote(_) => {
@@ -344,7 +319,7 @@ impl BitfieldSubscription for TestBitfieldSubscription {
             }
         };
         Box::pin(
-            futures_lite::stream::once(BitfieldSubscriptionEvent::Bitfield { ranges })
+            futures_lite::stream::once(BitfieldEvent::State { ranges })
                 .chain(futures_lite::stream::pending()),
         )
     }
@@ -389,11 +364,7 @@ async fn get_valid_ranges_remote(
 }
 
 impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
-    fn subscribe(
-        &mut self,
-        peer: BitfieldPeer,
-        hash: Hash,
-    ) -> BoxStream<'static, BitfieldSubscriptionEvent> {
+    fn subscribe(&mut self, peer: BitfieldPeer, hash: Hash) -> BoxStream<'static, BitfieldEvent> {
         let (send, recv) = tokio::sync::oneshot::channel();
         match peer {
             BitfieldPeer::Local => {
@@ -429,7 +400,7 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
                     Ok(ev) => ev,
                     Err(_) => ChunkRanges::empty(),
                 };
-                BitfieldSubscriptionEvent::Bitfield { ranges }
+                BitfieldEvent::State { ranges }
             }
             .into_stream(),
         )
@@ -549,7 +520,9 @@ mod tests {
     #[tokio::test]
     async fn test_valid_ranges() -> TestResult<()> {
         let store = crate::store::mem::Store::new();
-        let tt = store.import_bytes(vec![0u8;1025].into(), crate::BlobFormat::Raw).await?;
+        let tt = store
+            .import_bytes(vec![0u8; 1025].into(), crate::BlobFormat::Raw)
+            .await?;
         let entry = store.get_mut(tt.hash()).await?.unwrap();
         let valid = crate::get::db::valid_ranges::<crate::store::mem::Store>(&entry).await?;
         assert!(valid == ChunkRanges::from(ChunkNum(0)..ChunkNum(2)));
