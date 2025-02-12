@@ -315,7 +315,7 @@ impl DownloaderState {
             Command::BitfieldInfo {
                 peer,
                 hash,
-                event: BitfieldEvent::State { ranges, size },
+                event: BitfieldEvent::State(BitfieldState { ranges, size }),
             } => {
                 let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
                     "bitfields for unknown peer {peer:?} and hash {hash}"
@@ -327,7 +327,14 @@ impl DownloaderState {
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let ranges = &ranges & &request.ranges;
-                            evs.push(Event::LocalBitfieldInfo { id: *id, event: BitfieldEvent::State { ranges: ranges.clone(), size } });
+                            evs.push(Event::LocalBitfieldInfo {
+                                id: *id,
+                                event: BitfieldState {
+                                    ranges: ranges.clone(),
+                                    size,
+                                }
+                                .into(),
+                            });
                         }
                     }
                     state.ranges = ranges;
@@ -349,7 +356,12 @@ impl DownloaderState {
             Command::BitfieldInfo {
                 peer,
                 hash,
-                event: BitfieldEvent::Update { added, removed, size },
+                event:
+                    BitfieldEvent::Update(BitfieldUpdate {
+                        added,
+                        removed,
+                        size,
+                    }),
             } => {
                 let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
                     "bitfield update for unknown peer {peer:?} and hash {hash}"
@@ -365,11 +377,12 @@ impl DownloaderState {
                             if !added.is_empty() || !removed.is_empty() {
                                 evs.push(Event::LocalBitfieldInfo {
                                     id: *id,
-                                    event: BitfieldEvent::Update {
+                                    event: BitfieldUpdate {
                                         added: &added & &request.ranges,
                                         removed: &removed & &request.ranges,
                                         size: state.size,
                                     }
+                                    .into(),
                                 });
                             }
                         }
@@ -459,10 +472,11 @@ impl DownloaderState {
                     // emit the current bitfield
                     evs.push(Event::LocalBitfieldInfo {
                         id,
-                        event: BitfieldEvent::State {
+                        event: BitfieldState {
                             ranges: state.ranges.clone(),
                             size: u64::MAX,
                         }
+                        .into(),
                     });
                 } else {
                     // create a new subscription
@@ -955,10 +969,11 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: initial_bitfield.clone(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(evs.is_empty());
         assert_eq!(
@@ -982,11 +997,12 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::Update {
+            event: BitfieldUpdate {
                 added: chunk_ranges([16..32]),
                 removed: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(evs.is_empty());
         assert_eq!(
@@ -1013,10 +1029,11 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: chunk_ranges([0..64]),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_one_event(
@@ -1042,11 +1059,12 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::Update {
+            event: BitfieldUpdate {
                 added: chunk_ranges([32..48]),
                 removed: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(evs.is_empty());
         // ChunksDownloaded just updates the peer stats
@@ -1061,11 +1079,12 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::Update {
+            event: BitfieldUpdate {
                 added: chunk_ranges([48..64]),
                 removed: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })),
@@ -1098,10 +1117,11 @@ mod tests {
         state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
@@ -1109,10 +1129,11 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: chunk_ranges([0..32]),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_one_event(
@@ -1137,20 +1158,22 @@ mod tests {
         state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::Update {
+            event: BitfieldUpdate {
                 added: chunk_ranges([0..16]),
                 removed: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         // The peer now has more data
         state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: chunk_ranges([32..64]),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded {
@@ -1163,11 +1186,12 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::Update {
+            event: BitfieldUpdate {
                 added: chunk_ranges([16..32]),
                 removed: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         // This triggers cancellation of the first peer download and starting a new one for the remaining data
         assert!(
@@ -1197,11 +1221,12 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::Update {
+            event: BitfieldUpdate {
                 added: chunk_ranges([32..64]),
                 removed: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_all_events(
@@ -1267,10 +1292,11 @@ mod tests {
         let evs1 = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: chunk_ranges([0..32]),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         // No completion event should be generated for download0 because its full range 0..64 is not yet met.
         assert!(
@@ -1331,10 +1357,11 @@ mod tests {
         state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: ChunkRanges::empty(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
@@ -1342,10 +1369,11 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: chunk_ranges([0..32]),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_one_event(
@@ -1391,10 +1419,11 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: ChunkRanges::all(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),
@@ -1403,10 +1432,11 @@ mod tests {
         let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash: unknown_hash,
-            event: BitfieldEvent::State {
+            event: BitfieldState {
                 ranges: ChunkRanges::all(),
                 size: u64::MAX,
-            },
+            }
+            .into(),
         });
         assert!(
             has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),

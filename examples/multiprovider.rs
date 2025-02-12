@@ -6,8 +6,8 @@ use console::Term;
 use iroh::{NodeId, SecretKey};
 use iroh_blobs::{
     downloader2::{
-        print_bitmap, BitfieldEvent, DownloadRequest, Downloader, ObserveRequest,
-        StaticContentDiscovery,
+        print_bitmap, BitfieldEvent, BitfieldState, BitfieldUpdate, DownloadRequest, Downloader,
+        ObserveRequest, StaticContentDiscovery,
     },
     store::Store,
     util::total_bytes,
@@ -117,10 +117,10 @@ impl BlobDownloadProgress {
 
     fn update(&mut self, ev: BitfieldEvent) {
         match ev {
-            BitfieldEvent::State { ranges, .. } => {
+            BitfieldEvent::State(BitfieldState { ranges, .. }) => {
                 self.current = ranges;
             }
-            BitfieldEvent::Update { added, removed, .. } => {
+            BitfieldEvent::Update(BitfieldUpdate { added, removed, .. }) => {
                 self.current |= added;
                 self.current -= removed;
             }

@@ -285,11 +285,12 @@ async fn peer_download<S: Store>(
                             .send(Command::BitfieldInfo {
                                 peer: BitfieldPeer::Local,
                                 hash,
-                                event: BitfieldEvent::Update {
+                                event: BitfieldUpdate {
                                     added,
                                     removed: ChunkRanges::empty(),
                                     size,
-                                },
+                                }
+                                .into(),
                             })
                             .await
                             .ok();

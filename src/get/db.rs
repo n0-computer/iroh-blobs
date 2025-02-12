@@ -242,7 +242,9 @@ pub async fn valid_ranges<D: MapMut>(entry: &D::EntryMut) -> anyhow::Result<Chun
 }
 
 /// Given a partial entry, get the valid ranges.
-pub async fn valid_ranges_and_size<D: MapMut>(entry: &D::EntryMut) -> anyhow::Result<(ChunkRanges, u64)> {
+pub async fn valid_ranges_and_size<D: MapMut>(
+    entry: &D::EntryMut,
+) -> anyhow::Result<(ChunkRanges, u64)> {
     use tracing::trace as log;
     // compute the valid range from just looking at the data file
     let mut data_reader = entry.data_reader().await?;

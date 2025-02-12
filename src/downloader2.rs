@@ -17,7 +17,8 @@ use std::{
     io,
     marker::PhantomData,
     sync::Arc,
-    time::Instant, u64,
+    time::Instant,
+    u64,
 };
 
 use crate::{
@@ -89,26 +90,32 @@ pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
 pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 
 /// Events from observing a local bitfield
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, derive_more::From)]
 pub enum BitfieldEvent {
     /// The full state of the bitfield
-    State {
-        /// The entire bitfield
-        ranges: ChunkRanges,
-        /// The most precise known size of the blob.
-        ///
-        /// If I know nothing about the blob, this is u64::MAX.
-        size: u64,
-    },
+    State(BitfieldState),
     /// An update to the bitfield
-    Update {
-        /// The ranges that were added
-        added: ChunkRanges,
-        /// The ranges that were removed
-        removed: ChunkRanges,
-        /// A refinement of the size of the blob.
-        size: u64,
-    },
+    Update(BitfieldUpdate),
+}
+
+/// An update to a bitfield
+#[derive(Debug, PartialEq, Eq)]
+pub struct BitfieldUpdate {
+    /// The ranges that were added
+    pub added: ChunkRanges,
+    /// The ranges that were removed
+    pub removed: ChunkRanges,
+    /// The total size of the bitfield in bytes
+    pub size: u64,
+}
+
+/// The state of a bitfield
+#[derive(Debug, PartialEq, Eq)]
+pub struct BitfieldState {
+    /// The ranges that are set
+    pub ranges: ChunkRanges,
+    /// The total size of the bitfield in bytes
+    pub size: u64,
 }
 
 /// A download request
@@ -325,8 +332,14 @@ impl BitfieldSubscription for TestBitfieldSubscription {
             }
         };
         Box::pin(
-            futures_lite::stream::once(BitfieldEvent::State { ranges, size: 1024 * 1024 * 1024 * 1024 * 1024 })
-                .chain(futures_lite::stream::pending()),
+            futures_lite::stream::once(
+                BitfieldState {
+                    ranges,
+                    size: 1024 * 1024 * 1024 * 1024 * 1024,
+                }
+                .into(),
+            )
+            .chain(futures_lite::stream::pending()),
         )
     }
 }
@@ -353,9 +366,13 @@ impl<S> SimpleBitfieldSubscription<S> {
 async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<BitfieldEvent> {
     if let Some(entry) = store.get_mut(hash).await? {
         let (ranges, size) = crate::get::db::valid_ranges_and_size::<S>(&entry).await?;
-        Ok(BitfieldEvent::State { ranges, size })
+        Ok(BitfieldState { ranges, size }.into())
     } else {
-        Ok(BitfieldEvent::State { ranges: ChunkRanges::empty(), size: u64::MAX })
+        Ok(BitfieldState {
+            ranges: ChunkRanges::empty(),
+            size: u64::MAX,
+        }
+        .into())
     }
 }
 
@@ -368,7 +385,7 @@ async fn get_valid_ranges_remote(
     let (size, _) = crate::get::request::get_verified_size(&conn, hash).await?;
     let chunks = (size + 1023) / 1024;
     let ranges = ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks));
-    Ok(BitfieldEvent::State { ranges, size })
+    Ok(BitfieldState { ranges, size }.into())
 }
 
 impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
@@ -406,10 +423,11 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
             async move {
                 let event = match recv.await {
                     Ok(ev) => ev,
-                    Err(_) => BitfieldEvent::State {
+                    Err(_) => BitfieldState {
                         ranges: ChunkRanges::empty(),
                         size: u64::MAX,
-                    },
+                    }
+                    .into(),
                 };
                 event
             }
