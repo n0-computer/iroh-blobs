@@ -104,33 +104,41 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
 /// Progress for a single download
 struct BlobDownloadProgress {
     request: DownloadRequest,
-    current: ChunkRanges,
+    current: BitfieldState,
 }
 
 impl BlobDownloadProgress {
     fn new(request: DownloadRequest) -> Self {
         Self {
             request,
-            current: ChunkRanges::empty(),
+            current: BitfieldState::unknown(),
         }
     }
 
     fn update(&mut self, ev: BitfieldEvent) {
         match ev {
-            BitfieldEvent::State(BitfieldState { ranges, .. }) => {
-                self.current = ranges;
+            BitfieldEvent::State(BitfieldState { ranges, size }) => {
+                self.current.size = self.current.size.min(size);
+                self.current.ranges = ranges;
+                self.request.ranges &= ChunkRanges::from(..ChunkNum::chunks(self.current.size));
             }
-            BitfieldEvent::Update(BitfieldUpdate { added, removed, .. }) => {
-                self.current |= added;
-                self.current -= removed;
+            BitfieldEvent::Update(BitfieldUpdate {
+                added,
+                removed,
+                size,
+            }) => {
+                self.current.size = self.current.size.min(size);
+                self.request.ranges &= ChunkRanges::from(..ChunkNum::chunks(self.current.size));
+                self.current.ranges |= added;
+                self.current.ranges -= removed;
             }
         }
     }
 
     #[allow(dead_code)]
     fn get_stats(&self) -> (u64, u64) {
-        let total = total_bytes(&self.request.ranges, u64::MAX);
-        let downloaded = total_bytes(&self.current, u64::MAX);
+        let total = total_bytes(&self.request.ranges, self.current.size);
+        let downloaded = total_bytes(&self.current.ranges, self.current.size);
         (downloaded, total)
     }
 
@@ -140,7 +148,7 @@ impl BlobDownloadProgress {
     }
 
     fn is_done(&self) -> bool {
-        self.current == self.request.ranges
+        self.current.ranges == self.request.ranges
     }
 }
 
@@ -172,14 +180,14 @@ async fn download_impl<S: Store>(args: DownloadArgs, store: S) -> anyhow::Result
         .build();
     let request = DownloadRequest {
         hash: args.hash,
-        ranges: ChunkRanges::from(ChunkNum(0)..ChunkNum(25421)),
+        ranges: ChunkRanges::all(),
     };
     let downloader2 = downloader.clone();
     let mut progress = BlobDownloadProgress::new(request.clone());
     tokio::spawn(async move {
         let request = ObserveRequest {
             hash: args.hash,
-            ranges: ChunkRanges::from(ChunkNum(0)..ChunkNum(25421)),
+            ranges: ChunkRanges::all(),
             buffer: 1024,
         };
         let mut observe = downloader2.observe(request).await?;
@@ -187,8 +195,9 @@ async fn download_impl<S: Store>(args: DownloadArgs, store: S) -> anyhow::Result
         let (_, rows) = term.size();
         while let Some(chunk) = observe.recv().await {
             progress.update(chunk);
-            let current = progress.current.boundaries();
+            let current = progress.current.ranges.boundaries();
             let requested = progress.request.ranges.boundaries();
+            println!("observe print_bitmap {:?} {:?}", current, requested);
             let bitmap = print_bitmap(current, requested, rows as usize);
             print!("\r{bitmap}");
             if progress.is_done() {

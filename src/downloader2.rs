@@ -118,6 +118,16 @@ pub struct BitfieldState {
     pub size: u64,
 }
 
+impl BitfieldState {
+    /// State for a completely unknown bitfield
+    pub fn unknown() -> Self {
+        Self {
+            ranges: ChunkRanges::empty(),
+            size: u64::MAX,
+        }
+    }
+}
+
 /// A download request
 #[derive(Debug, Clone)]
 pub struct DownloadRequest {
@@ -368,11 +378,7 @@ async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Resu
         let (ranges, size) = crate::get::db::valid_ranges_and_size::<S>(&entry).await?;
         Ok(BitfieldState { ranges, size }.into())
     } else {
-        Ok(BitfieldState {
-            ranges: ChunkRanges::empty(),
-            size: u64::MAX,
-        }
-        .into())
+        Ok(BitfieldState::unknown().into())
     }
 }
 
@@ -423,11 +429,7 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
             async move {
                 let event = match recv.await {
                     Ok(ev) => ev,
-                    Err(_) => BitfieldState {
-                        ranges: ChunkRanges::empty(),
-                        size: u64::MAX,
-                    }
-                    .into(),
+                    Err(_) => BitfieldState::unknown().into(),
                 };
                 event
             }

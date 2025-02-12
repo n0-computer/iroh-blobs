@@ -324,6 +324,7 @@ impl DownloaderState {
                 if peer == BitfieldPeer::Local {
                     // we got a new local bitmap, notify local observers
                     // we must notify all local observers, even if the bitmap is empty
+                    state.size = state.size.min(size);
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let ranges = &ranges & &request.ranges;
@@ -331,14 +332,13 @@ impl DownloaderState {
                                 id: *id,
                                 event: BitfieldState {
                                     ranges: ranges.clone(),
-                                    size,
+                                    size: state.size,
                                 }
                                 .into(),
                             });
                         }
                     }
                     state.ranges = ranges;
-                    state.size = state.size.min(size);
                     self.check_completion(hash, None, evs)?;
                 } else {
                     // We got an entirely new peer, mark all affected downloads for rebalancing
@@ -532,11 +532,13 @@ impl DownloaderState {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
+        let mask = ChunkRanges::from(ChunkNum(0)..ChunkNum::chunks(self_state.size));
         let mut completed = vec![];
         for (id, download) in self.downloads.iter_mut_for_hash(hash) {
             if just_id.is_some() && just_id != Some(*id) {
                 continue;
             }
+            download.request.ranges &= mask.clone();
             // check if the entire download is complete. If this is the case, peer downloads will be cleaned up later
             if self_state.ranges.is_superset(&download.request.ranges) {
                 // notify the user that the download is complete
@@ -886,6 +888,9 @@ struct PeerState {
 }
 
 /// Information about one blob on one peer
+///
+/// Note that for remote peers we can't really trust this information.
+/// They could lie about the size, and the ranges could be either wrong or outdated.
 struct PeerBlobState {
     /// The subscription id for the subscription
     subscription_id: BitfieldSubscriptionId,
@@ -1117,11 +1122,7 @@ mod tests {
         state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldState {
-                ranges: ChunkRanges::empty(),
-                size: u64::MAX,
-            }
-            .into(),
+            event: BitfieldState::unknown().into(),
         });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
@@ -1357,11 +1358,7 @@ mod tests {
         state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            event: BitfieldState {
-                ranges: ChunkRanges::empty(),
-                size: u64::MAX,
-            }
-            .into(),
+            event: BitfieldState::unknown().into(),
         });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
