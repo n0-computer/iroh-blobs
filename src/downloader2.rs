@@ -547,12 +547,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_chunk_ranges() -> TestResult<()> {
+    async fn test_valid_ranges() -> TestResult<()> {
         let store = crate::store::mem::Store::new();
         let tt = store.import_bytes(vec![0u8;1025].into(), crate::BlobFormat::Raw).await?;
         let entry = store.get_mut(tt.hash()).await?.unwrap();
         let valid = crate::get::db::valid_ranges::<crate::store::mem::Store>(&entry).await?;
-        println!("{valid:?}");
+        assert!(valid == ChunkRanges::from(ChunkNum(0)..ChunkNum(2)));
         Ok(())
     }
 
