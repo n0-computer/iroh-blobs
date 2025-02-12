@@ -17,28 +17,17 @@ pub(super) enum Command {
     },
     /// A user request to abort a download.
     StopDownload { id: DownloadId },
-    /// A full bitfield for a blob and a peer
-    Bitfield {
-        /// The peer that sent the bitfield.
-        peer: BitfieldPeer,
-        /// The blob for which the bitfield is
-        hash: Hash,
-        /// The complete bitfield
-        ranges: ChunkRanges,
-    },
     /// An update of a bitfield for a hash
     ///
     /// This is used both to update the bitfield of remote peers, and to update
     /// the local bitfield.
-    BitfieldUpdate {
+    BitfieldInfo {
         /// The peer that sent the update.
         peer: BitfieldPeer,
         /// The blob that was updated.
         hash: Hash,
-        /// The ranges that were added
-        added: ChunkRanges,
-        /// The ranges that were removed
-        removed: ChunkRanges,
+        /// The state or update event
+        event: BitfieldEvent,
     },
     /// A chunk was downloaded, but not yet stored
     ///
@@ -88,14 +77,9 @@ pub(super) enum Event {
         /// The unique id of the subscription
         id: BitfieldSubscriptionId,
     },
-    LocalBitfield {
+    LocalBitfieldInfo {
         id: ObserveId,
-        ranges: ChunkRanges,
-    },
-    LocalBitfieldUpdate {
-        id: ObserveId,
-        added: ChunkRanges,
-        removed: ChunkRanges,
+        event: BitfieldEvent,
     },
     StartDiscovery {
         hash: Hash,
@@ -328,7 +312,11 @@ impl DownloaderState {
                 });
                 self.peers.remove(&peer);
             }
-            Command::Bitfield { peer, hash, ranges } => {
+            Command::BitfieldInfo {
+                peer,
+                hash,
+                event: BitfieldEvent::State { ranges, size },
+            } => {
                 let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
                     "bitfields for unknown peer {peer:?} and hash {hash}"
                 ))?;
@@ -339,7 +327,7 @@ impl DownloaderState {
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let ranges = &ranges & &request.ranges;
-                            evs.push(Event::LocalBitfield { id: *id, ranges });
+                            evs.push(Event::LocalBitfieldInfo { id: *id, event: BitfieldEvent::State { ranges: ranges.clone(), size } });
                         }
                     }
                     state.ranges = ranges;
@@ -356,11 +344,10 @@ impl DownloaderState {
                 // we have to call start_downloads even if the local bitfield set, since we don't know in which order local and remote bitfields arrive
                 self.start_downloads(hash, None, evs)?;
             }
-            Command::BitfieldUpdate {
+            Command::BitfieldInfo {
                 peer,
                 hash,
-                added,
-                removed,
+                event: BitfieldEvent::Update { added, removed },
             } => {
                 let state = self.bitfields.get_mut(&(peer, hash)).context(format!(
                     "bitfield update for unknown peer {peer:?} and hash {hash}"
@@ -373,10 +360,12 @@ impl DownloaderState {
                             let added = &added & &request.ranges;
                             let removed = &removed & &request.ranges;
                             if !added.is_empty() || !removed.is_empty() {
-                                evs.push(Event::LocalBitfieldUpdate {
+                                evs.push(Event::LocalBitfieldInfo {
                                     id: *id,
-                                    added: &added & &request.ranges,
-                                    removed: &removed & &request.ranges,
+                                    event: BitfieldEvent::Update {
+                                        added: &added & &request.ranges,
+                                        removed: &removed & &request.ranges,
+                                    }
                                 });
                             }
                         }
@@ -463,9 +452,12 @@ impl DownloaderState {
                     // just increment the count
                     state.subscription_count += 1;
                     // emit the current bitfield
-                    evs.push(Event::LocalBitfield {
+                    evs.push(Event::LocalBitfieldInfo {
                         id,
-                        ranges: state.ranges.clone(),
+                        event: BitfieldEvent::State {
+                            ranges: state.ranges.clone(),
+                            size: u64::MAX,
+                        }
                     });
                 } else {
                     // create a new subscription
@@ -952,10 +944,13 @@ mod tests {
             "starting a download should subscribe to the local bitfield"
         );
         let initial_bitfield = ChunkRanges::from(ChunkNum(0)..ChunkNum(16));
-        let evs = state.apply(Command::Bitfield {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            ranges: initial_bitfield.clone(),
+            event: BitfieldEvent::State {
+                ranges: initial_bitfield.clone(),
+                size: u64::MAX,
+            },
         });
         assert!(evs.is_empty());
         assert_eq!(
@@ -976,11 +971,13 @@ mod tests {
             1,
             "we have one download interested in the bitfield"
         );
-        let evs = state.apply(Command::BitfieldUpdate {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            added: chunk_ranges([16..32]),
-            removed: ChunkRanges::empty(),
+            event: BitfieldEvent::Update {
+                added: chunk_ranges([16..32]),
+                removed: ChunkRanges::empty(),
+            },
         });
         assert!(evs.is_empty());
         assert_eq!(
@@ -1004,10 +1001,13 @@ mod tests {
             ),
             "adding a new peer for a hash we are interested in should subscribe to the bitfield"
         );
-        let evs = state.apply(Command::Bitfield {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            ranges: chunk_ranges([0..64]),
+            event: BitfieldEvent::State {
+                ranges: chunk_ranges([0..64]),
+                size: u64::MAX,
+            },
         });
         assert!(
             has_one_event(
@@ -1030,11 +1030,13 @@ mod tests {
         });
         assert!(evs.is_empty());
         // Bitfield update does not yet complete the download
-        let evs = state.apply(Command::BitfieldUpdate {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            added: chunk_ranges([32..48]),
-            removed: ChunkRanges::empty(),
+            event: BitfieldEvent::Update {
+                added: chunk_ranges([32..48]),
+                removed: ChunkRanges::empty(),
+            },
         });
         assert!(evs.is_empty());
         // ChunksDownloaded just updates the peer stats
@@ -1046,11 +1048,13 @@ mod tests {
         });
         assert!(evs.is_empty());
         // Final bitfield update for the local bitfield should complete the download
-        let evs = state.apply(Command::BitfieldUpdate {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            added: chunk_ranges([48..64]),
-            removed: ChunkRanges::empty(),
+            event: BitfieldEvent::Update {
+                added: chunk_ranges([48..64]),
+                removed: ChunkRanges::empty(),
+            },
         });
         assert!(
             has_one_event_matching(&evs, |e| matches!(e, Event::DownloadComplete { .. })),
@@ -1080,18 +1084,24 @@ mod tests {
             id: DownloadId(0),
         });
         // Initially, we have nothing
-        state.apply(Command::Bitfield {
+        state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            ranges: ChunkRanges::empty(),
+            event: BitfieldEvent::State {
+                ranges: ChunkRanges::empty(),
+                size: u64::MAX,
+            },
         });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
         // We have a bitfield from the peer
-        let evs = state.apply(Command::Bitfield {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            ranges: chunk_ranges([0..32]),
+            event: BitfieldEvent::State {
+                ranges: chunk_ranges([0..32]),
+                size: u64::MAX,
+            },
         });
         assert!(
             has_one_event(
@@ -1113,17 +1123,22 @@ mod tests {
             added: chunk_ranges([0..16]),
         });
         // Bitfield update does not yet complete the download
-        state.apply(Command::BitfieldUpdate {
+        state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            added: chunk_ranges([0..16]),
-            removed: ChunkRanges::empty(),
+            event: BitfieldEvent::Update {
+                added: chunk_ranges([0..16]),
+                removed: ChunkRanges::empty(),
+            },
         });
         // The peer now has more data
-        state.apply(Command::Bitfield {
+        state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            ranges: chunk_ranges([32..64]),
+            event: BitfieldEvent::State {
+                ranges: chunk_ranges([32..64]),
+                size: u64::MAX,
+            },
         });
         // ChunksDownloaded just updates the peer stats
         state.apply(Command::ChunksDownloaded {
@@ -1133,11 +1148,13 @@ mod tests {
             added: chunk_ranges([16..32]),
         });
         // Complete the first part of the download
-        let evs = state.apply(Command::BitfieldUpdate {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            added: chunk_ranges([16..32]),
-            removed: ChunkRanges::empty(),
+            event: BitfieldEvent::Update {
+                added: chunk_ranges([16..32]),
+                removed: ChunkRanges::empty(),
+            },
         });
         // This triggers cancellation of the first peer download and starting a new one for the remaining data
         assert!(
@@ -1164,11 +1181,13 @@ mod tests {
             added: chunk_ranges([32..64]),
         });
         // Final bitfield update for the local bitfield should complete the download
-        let evs = state.apply(Command::BitfieldUpdate {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            added: chunk_ranges([32..64]),
-            removed: ChunkRanges::empty(),
+            event: BitfieldEvent::Update {
+                added: chunk_ranges([32..64]),
+                removed: ChunkRanges::empty(),
+            },
         });
         assert!(
             has_all_events(
@@ -1231,10 +1250,13 @@ mod tests {
 
         // --- Simulate some progress for the first download.
         // Let’s say only chunks 0..32 are available locally.
-        let evs1 = state.apply(Command::Bitfield {
+        let evs1 = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            ranges: chunk_ranges([0..32]),
+            event: BitfieldEvent::State {
+                ranges: chunk_ranges([0..32]),
+                size: u64::MAX,
+            },
         });
         // No completion event should be generated for download0 because its full range 0..64 is not yet met.
         assert!(
@@ -1292,18 +1314,24 @@ mod tests {
             id: 0.into(),
         });
         // Initially, we have nothing
-        state.apply(Command::Bitfield {
+        state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            ranges: ChunkRanges::empty(),
+            event: BitfieldEvent::State {
+                ranges: ChunkRanges::empty(),
+                size: u64::MAX,
+            },
         });
         // We have a peer for the hash
         state.apply(Command::PeerDiscovered { peer: peer_a, hash });
         // We have a bitfield from the peer
-        let evs = state.apply(Command::Bitfield {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Remote(peer_a),
             hash,
-            ranges: chunk_ranges([0..32]),
+            event: BitfieldEvent::State {
+                ranges: chunk_ranges([0..32]),
+                size: u64::MAX,
+            },
         });
         assert!(
             has_one_event(
@@ -1346,19 +1374,25 @@ mod tests {
         let unknown_hash =
             "0000000000000000000000000000000000000000000000000000000000000002".parse()?;
         let mut state = DownloaderState::new(noop_planner());
-        let evs = state.apply(Command::Bitfield {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash,
-            ranges: ChunkRanges::all(),
+            event: BitfieldEvent::State {
+                ranges: ChunkRanges::all(),
+                size: u64::MAX,
+            },
         });
         assert!(
             has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),
             "adding an open bitfield should produce an error!"
         );
-        let evs = state.apply(Command::Bitfield {
+        let evs = state.apply(Command::BitfieldInfo {
             peer: Local,
             hash: unknown_hash,
-            ranges: ChunkRanges::all(),
+            event: BitfieldEvent::State {
+                ranges: ChunkRanges::all(),
+                size: u64::MAX,
+            },
         });
         assert!(
             has_one_event_matching(&evs, |e| matches!(e, Event::Error { .. })),

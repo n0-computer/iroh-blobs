@@ -142,18 +142,8 @@ impl<S: Store> DownloaderActor<S> {
                 let send = self.command_tx.clone();
                 let mut stream = self.subscribe_bitfield.subscribe(peer, hash);
                 let task = spawn(async move {
-                    while let Some(ev) = stream.next().await {
-                        let cmd = match ev {
-                            BitfieldEvent::State { ranges } => {
-                                Command::Bitfield { peer, hash, ranges }
-                            }
-                            BitfieldEvent::Update { added, removed } => Command::BitfieldUpdate {
-                                peer,
-                                hash,
-                                added,
-                                removed,
-                            },
-                        };
+                    while let Some(event) = stream.next().await {
+                        let cmd = Command::BitfieldInfo { peer, hash, event };
                         send.send(cmd).await.ok();
                     }
                 });
@@ -204,23 +194,11 @@ impl<S: Store> DownloaderActor<S> {
                     done.send(()).ok();
                 }
             }
-            Event::LocalBitfield { id, ranges } => {
+            Event::LocalBitfieldInfo { id, event } => {
                 let Some(sender) = self.observers.get(&id) else {
                     return;
                 };
-                if sender.try_send(BitfieldEvent::State { ranges }).is_err() {
-                    // the observer has been dropped
-                    self.observers.remove(&id);
-                }
-            }
-            Event::LocalBitfieldUpdate { id, added, removed } => {
-                let Some(sender) = self.observers.get(&id) else {
-                    return;
-                };
-                if sender
-                    .try_send(BitfieldEvent::Update { added, removed })
-                    .is_err()
-                {
+                if sender.try_send(event).is_err() {
                     // the observer has been dropped
                     self.observers.remove(&id);
                 }
@@ -304,11 +282,13 @@ async fn peer_download<S: Store>(
                         batch.push(leaf.into());
                         writer.write_batch(size, std::mem::take(&mut batch)).await?;
                         sender
-                            .send(Command::BitfieldUpdate {
+                            .send(Command::BitfieldInfo {
                                 peer: BitfieldPeer::Local,
                                 hash,
-                                added,
-                                removed: ChunkRanges::empty(),
+                                event: BitfieldEvent::Update {
+                                    added,
+                                    removed: ChunkRanges::empty(),
+                                },
                             })
                             .await
                             .ok();

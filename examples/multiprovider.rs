@@ -117,7 +117,7 @@ impl BlobDownloadProgress {
 
     fn update(&mut self, ev: BitfieldEvent) {
         match ev {
-            BitfieldEvent::State { ranges } => {
+            BitfieldEvent::State { ranges, .. } => {
                 self.current = ranges;
             }
             BitfieldEvent::Update { added, removed } => {

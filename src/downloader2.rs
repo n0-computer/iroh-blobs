@@ -17,7 +17,7 @@ use std::{
     io,
     marker::PhantomData,
     sync::Arc,
-    time::Instant,
+    time::Instant, u64,
 };
 
 use crate::{
@@ -89,12 +89,14 @@ pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
 pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 
 /// Events from observing a local bitfield
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BitfieldEvent {
     /// The full state of the bitfield
     State {
         /// The entire bitfield
         ranges: ChunkRanges,
+        /// The most precise known size of the blob
+        size: u64,
     },
     /// An update to the bitfield
     Update {
@@ -319,7 +321,7 @@ impl BitfieldSubscription for TestBitfieldSubscription {
             }
         };
         Box::pin(
-            futures_lite::stream::once(BitfieldEvent::State { ranges })
+            futures_lite::stream::once(BitfieldEvent::State { ranges, size: 1024 * 1024 * 1024 * 1024 * 1024 })
                 .chain(futures_lite::stream::pending()),
         )
     }
@@ -400,7 +402,7 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
                     Ok(ev) => ev,
                     Err(_) => ChunkRanges::empty(),
                 };
-                BitfieldEvent::State { ranges }
+                BitfieldEvent::State { ranges, size: u64::MAX }
             }
             .into_stream(),
         )
