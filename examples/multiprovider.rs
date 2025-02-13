@@ -10,7 +10,6 @@ use iroh_blobs::{
         ObserveRequest, StaticContentDiscovery,
     },
     store::Store,
-    util::total_bytes,
     Hash,
 };
 
@@ -118,28 +117,28 @@ impl BlobDownloadProgress {
     fn update(&mut self, ev: BitfieldEvent) {
         match ev {
             BitfieldEvent::State(BitfieldState { ranges, size }) => {
-                self.current.size = self.current.size.min(size);
                 self.current.ranges = ranges;
-                self.request.ranges &= ChunkRanges::from(..ChunkNum::chunks(self.current.size));
+                self.current
+                    .size
+                    .update(size)
+                    .expect("verified size changed");
             }
             BitfieldEvent::Update(BitfieldUpdate {
                 added,
                 removed,
                 size,
             }) => {
-                self.current.size = self.current.size.min(size);
-                self.request.ranges &= ChunkRanges::from(..ChunkNum::chunks(self.current.size));
                 self.current.ranges |= added;
                 self.current.ranges -= removed;
+                self.current
+                    .size
+                    .update(size)
+                    .expect("verified size changed");
+                if let Some(size) = self.current.size.value() {
+                    self.request.ranges &= ChunkRanges::from(..ChunkNum::chunks(size));
+                }
             }
         }
-    }
-
-    #[allow(dead_code)]
-    fn get_stats(&self) -> (u64, u64) {
-        let total = total_bytes(&self.request.ranges, self.current.size);
-        let downloaded = total_bytes(&self.current.ranges, self.current.size);
-        (downloaded, total)
     }
 
     #[allow(dead_code)]
@@ -197,7 +196,6 @@ async fn download_impl<S: Store>(args: DownloadArgs, store: S) -> anyhow::Result
             progress.update(chunk);
             let current = progress.current.ranges.boundaries();
             let requested = progress.request.ranges.boundaries();
-            println!("observe print_bitmap {:?} {:?}", current, requested);
             let bitmap = print_bitmap(current, requested, rows as usize);
             print!("\r{bitmap}");
             if progress.is_done() {

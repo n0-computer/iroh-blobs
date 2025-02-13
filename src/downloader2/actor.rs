@@ -267,9 +267,16 @@ async fn peer_download<S: Store>(
                         batch.push(parent.into());
                     }
                     BaoContentItem::Leaf(leaf) => {
-                        let start_chunk = leaf.offset / 1024;
-                        let added =
-                            ChunkRanges::from(ChunkNum(start_chunk)..ChunkNum(start_chunk + 16));
+                        let size_chunks = ChunkNum::chunks(size);
+                        let start_chunk = ChunkNum::full_chunks(leaf.offset);
+                        let end_chunk =
+                            ChunkNum::full_chunks(leaf.offset + 16 * 1024).min(size_chunks);
+                        let last_chunk = size_chunks
+                            .0
+                            .checked_sub(1)
+                            .map(ChunkNum)
+                            .expect("Size must not be 0");
+                        let added = ChunkRanges::from(start_chunk..end_chunk);
                         sender
                             .send(Command::ChunksDownloaded {
                                 time: start.elapsed(),
@@ -281,6 +288,11 @@ async fn peer_download<S: Store>(
                             .ok();
                         batch.push(leaf.into());
                         writer.write_batch(size, std::mem::take(&mut batch)).await?;
+                        let size = if added.contains(&last_chunk) {
+                            BaoBlobSizeOpt::Verified(size)
+                        } else {
+                            BaoBlobSizeOpt::Unverified(size)
+                        };
                         sender
                             .send(Command::BitfieldInfo {
                                 peer: BitfieldPeer::Local,

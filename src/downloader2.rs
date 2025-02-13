@@ -27,7 +27,7 @@ use crate::{
         Stats,
     },
     protocol::{GetRequest, RangeSpec, RangeSpecSeq},
-    store::{BaoBatchWriter, MapEntryMut, Store},
+    store::{BaoBatchWriter, BaoBlobSize, MapEntry, MapEntryMut, Store},
     util::local_pool::{self, LocalPool, LocalPoolHandle},
     Hash,
 };
@@ -89,6 +89,64 @@ pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
 /// A boxed bitfield subscription
 pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 
+/// Knowlege about the size of a blob
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaoBlobSizeOpt {
+    /// We have a size that a peer told us about, but we don't know if it is correct
+    /// It can be off at most by a factor of 2, so it is OK for things like showing
+    /// a progress bar or even for an allocation size
+    Unverified(u64),
+    /// We know the size, and it is verified
+    /// either by having the last chunk locally or by receiving a size proof from a peer
+    Verified(u64),
+    /// We know nothing, e.g. we have never heard of the blob
+    Unknown,
+}
+
+impl BaoBlobSizeOpt {
+    /// Get the value of the size, if known
+    pub fn value(self) -> Option<u64> {
+        match self {
+            BaoBlobSizeOpt::Unverified(x) => Some(x),
+            BaoBlobSizeOpt::Verified(x) => Some(x),
+            BaoBlobSizeOpt::Unknown => None,
+        }
+    }
+
+    /// Update the size information
+    ///
+    /// Unkown sizes are always updated
+    /// Unverified sizes are updated if the new size is verified
+    /// Verified sizes must never change
+    pub fn update(&mut self, size: BaoBlobSizeOpt) -> anyhow::Result<()> {
+        match self {
+            BaoBlobSizeOpt::Verified(old) => {
+                if let BaoBlobSizeOpt::Verified(new) = size {
+                    if *old != new {
+                        anyhow::bail!("mismatched verified sizes: {old} != {new}");
+                    }
+                }
+            }
+            BaoBlobSizeOpt::Unverified(_) => {
+                if let BaoBlobSizeOpt::Verified(new) = size {
+                    *self = BaoBlobSizeOpt::Verified(new);
+                }
+            }
+            BaoBlobSizeOpt::Unknown => *self = size,
+        };
+        Ok(())
+    }
+}
+
+impl From<BaoBlobSize> for BaoBlobSizeOpt {
+    fn from(size: BaoBlobSize) -> Self {
+        match size {
+            BaoBlobSize::Unverified(x) => Self::Unverified(x),
+            BaoBlobSize::Verified(x) => Self::Verified(x),
+        }
+    }
+}
+
 /// Events from observing a local bitfield
 #[derive(Debug, PartialEq, Eq, derive_more::From)]
 pub enum BitfieldEvent {
@@ -98,6 +156,15 @@ pub enum BitfieldEvent {
     Update(BitfieldUpdate),
 }
 
+/// The state of a bitfield
+#[derive(Debug, PartialEq, Eq)]
+pub struct BitfieldState {
+    /// The ranges that are set
+    pub ranges: ChunkRanges,
+    /// Whatever size information is available
+    pub size: BaoBlobSizeOpt,
+}
+
 /// An update to a bitfield
 #[derive(Debug, PartialEq, Eq)]
 pub struct BitfieldUpdate {
@@ -105,17 +172,8 @@ pub struct BitfieldUpdate {
     pub added: ChunkRanges,
     /// The ranges that were removed
     pub removed: ChunkRanges,
-    /// The total size of the bitfield in bytes
-    pub size: u64,
-}
-
-/// The state of a bitfield
-#[derive(Debug, PartialEq, Eq)]
-pub struct BitfieldState {
-    /// The ranges that are set
-    pub ranges: ChunkRanges,
-    /// The total size of the bitfield in bytes
-    pub size: u64,
+    /// Possible update to the size information
+    pub size: BaoBlobSizeOpt,
 }
 
 impl BitfieldState {
@@ -123,7 +181,7 @@ impl BitfieldState {
     pub fn unknown() -> Self {
         Self {
             ranges: ChunkRanges::empty(),
-            size: u64::MAX,
+            size: BaoBlobSizeOpt::Unknown,
         }
     }
 }
@@ -345,7 +403,7 @@ impl BitfieldSubscription for TestBitfieldSubscription {
             futures_lite::stream::once(
                 BitfieldState {
                     ranges,
-                    size: 1024 * 1024 * 1024 * 1024 * 1024,
+                    size: BaoBlobSizeOpt::Unknown,
                 }
                 .into(),
             )
@@ -375,7 +433,24 @@ impl<S> SimpleBitfieldSubscription<S> {
 
 async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<BitfieldEvent> {
     if let Some(entry) = store.get_mut(hash).await? {
-        let (ranges, size) = crate::get::db::valid_ranges_and_size::<S>(&entry).await?;
+        let ranges = crate::get::db::valid_ranges::<S>(&entry).await?;
+        let size = entry.size();
+        let size = match size {
+            size @ BaoBlobSize::Unverified(value) => {
+                if let Some(last_chunk) = ChunkNum::chunks(value).0.checked_sub(1).map(ChunkNum) {
+                    if ranges.contains(&last_chunk) {
+                        BaoBlobSizeOpt::Verified(value)
+                    } else {
+                        size.into()
+                    }
+                } else {
+                    // this branch is just for size == 0
+                    // todo: return BaoBlobSize::Verified(0) if the hash is the hash of the empty blob
+                    BaoBlobSizeOpt::Unknown
+                }
+            }
+            size => size.into(),
+        };
         Ok(BitfieldState { ranges, size }.into())
     } else {
         Ok(BitfieldState::unknown().into())
@@ -391,7 +466,11 @@ async fn get_valid_ranges_remote(
     let (size, _) = crate::get::request::get_verified_size(&conn, hash).await?;
     let chunks = (size + 1023) / 1024;
     let ranges = ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks));
-    Ok(BitfieldState { ranges, size }.into())
+    Ok(BitfieldState {
+        ranges,
+        size: BaoBlobSizeOpt::Verified(size),
+    }
+    .into())
 }
 
 impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {

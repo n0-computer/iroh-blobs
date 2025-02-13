@@ -324,7 +324,7 @@ impl DownloaderState {
                 if peer == BitfieldPeer::Local {
                     // we got a new local bitmap, notify local observers
                     // we must notify all local observers, even if the bitmap is empty
-                    state.size = state.size.min(size);
+                    state.size.update(size)?;
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let ranges = &ranges & &request.ranges;
@@ -348,7 +348,7 @@ impl DownloaderState {
                         }
                     }
                     state.ranges = ranges;
-                    state.size = state.size.min(size);
+                    state.size.update(size)?;
                 }
                 // we have to call start_downloads even if the local bitfield set, since we don't know in which order local and remote bitfields arrive
                 self.start_downloads(hash, None, evs)?;
@@ -369,7 +369,7 @@ impl DownloaderState {
                 if peer == BitfieldPeer::Local {
                     // we got a local bitfield update, notify local observers
                     // for updates we can just notify the observers that have a non-empty intersection with the update
-                    state.size = state.size.min(size);
+                    state.size.update(size)?;
                     if let Some(observers) = self.observers.get_by_hash(&hash) {
                         for (id, request) in observers {
                             let added = &added & &request.ranges;
@@ -400,7 +400,7 @@ impl DownloaderState {
                     }
                     state.ranges |= added;
                     state.ranges &= !removed;
-                    state.size = state.size.min(size);
+                    state.size.update(size)?;
                     // a local bitfield update does not make more data available, so we don't need to start downloads
                     self.start_downloads(hash, None, evs)?;
                 }
@@ -474,7 +474,7 @@ impl DownloaderState {
                         id,
                         event: BitfieldState {
                             ranges: state.ranges.clone(),
-                            size: u64::MAX,
+                            size: BaoBlobSizeOpt::Unknown,
                         }
                         .into(),
                     });
@@ -532,7 +532,10 @@ impl DownloaderState {
             // we don't have the self state yet, so we can't really decide if we need to download anything at all
             return Ok(());
         };
-        let mask = ChunkRanges::from(ChunkNum(0)..ChunkNum::chunks(self_state.size));
+        let mask = match self_state.size {
+            BaoBlobSizeOpt::Verified(size) => ChunkRanges::from(..ChunkNum::chunks(size)),
+            _ => ChunkRanges::all(),
+        };
         let mut completed = vec![];
         for (id, download) in self.downloads.iter_mut_for_hash(hash) {
             if just_id.is_some() && just_id != Some(*id) {
@@ -899,7 +902,7 @@ struct PeerBlobState {
     /// chunk ranges this peer reports to have
     ranges: ChunkRanges,
     /// The minimum reported size of the blob
-    size: u64,
+    size: BaoBlobSizeOpt,
 }
 
 impl PeerBlobState {
@@ -908,7 +911,7 @@ impl PeerBlobState {
             subscription_id,
             subscription_count: 1,
             ranges: ChunkRanges::empty(),
-            size: u64::MAX,
+            size: BaoBlobSizeOpt::Unknown,
         }
     }
 }
@@ -976,7 +979,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: initial_bitfield.clone(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1005,7 +1008,7 @@ mod tests {
             event: BitfieldUpdate {
                 added: chunk_ranges([16..32]),
                 removed: ChunkRanges::empty(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1036,7 +1039,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: chunk_ranges([0..64]),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1067,7 +1070,7 @@ mod tests {
             event: BitfieldUpdate {
                 added: chunk_ranges([32..48]),
                 removed: ChunkRanges::empty(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1087,7 +1090,7 @@ mod tests {
             event: BitfieldUpdate {
                 added: chunk_ranges([48..64]),
                 removed: ChunkRanges::empty(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1132,7 +1135,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: chunk_ranges([0..32]),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1162,7 +1165,7 @@ mod tests {
             event: BitfieldUpdate {
                 added: chunk_ranges([0..16]),
                 removed: ChunkRanges::empty(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1172,7 +1175,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: chunk_ranges([32..64]),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1190,7 +1193,7 @@ mod tests {
             event: BitfieldUpdate {
                 added: chunk_ranges([16..32]),
                 removed: ChunkRanges::empty(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1225,7 +1228,7 @@ mod tests {
             event: BitfieldUpdate {
                 added: chunk_ranges([32..64]),
                 removed: ChunkRanges::empty(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1295,7 +1298,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: chunk_ranges([0..32]),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1368,7 +1371,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: chunk_ranges([0..32]),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1418,7 +1421,7 @@ mod tests {
             hash,
             event: BitfieldState {
                 ranges: ChunkRanges::all(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });
@@ -1431,7 +1434,7 @@ mod tests {
             hash: unknown_hash,
             event: BitfieldState {
                 ranges: ChunkRanges::all(),
-                size: u64::MAX,
+                size: BaoBlobSizeOpt::Unknown,
             }
             .into(),
         });

@@ -237,14 +237,6 @@ async fn get_blob<D: BaoStore>(
 
 /// Given a partial entry, get the valid ranges.
 pub async fn valid_ranges<D: MapMut>(entry: &D::EntryMut) -> anyhow::Result<ChunkRanges> {
-    let (ranges, _) = valid_ranges_and_size::<D>(entry).await?;
-    Ok(ranges)
-}
-
-/// Given a partial entry, get the valid ranges.
-pub async fn valid_ranges_and_size<D: MapMut>(
-    entry: &D::EntryMut,
-) -> anyhow::Result<(ChunkRanges, u64)> {
     use tracing::trace as log;
     // compute the valid range from just looking at the data file
     let mut data_reader = entry.data_reader().await?;
@@ -260,8 +252,8 @@ pub async fn valid_ranges_and_size<D: MapMut>(
     }
     let valid: ChunkRanges = valid_from_data.intersection(&valid_from_outboard);
     log!("valid_from_data: {:?}", valid_from_data);
-    log!("valid_from_outboard: {:?}", valid_from_data);
-    Ok((valid, data_size))
+    log!("valid_from_outboard: {:?}", valid_from_outboard);
+    Ok(valid)
 }
 
 /// Get a blob that was requested completely.
