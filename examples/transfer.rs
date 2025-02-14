@@ -25,6 +25,9 @@ async fn main() -> Result<()> {
         .spawn()
         .await?;
 
+    // We use a blobs client to interact with the blobs protocol we're running locally:
+    let blobs_client = blobs.client();
+
     // Grab all passed in arguments, the first one is the binary itself, so we skip it.
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Convert to &str, so we can pattern-match easily:
@@ -35,12 +38,11 @@ async fn main() -> Result<()> {
             let filename: PathBuf = filename.parse()?;
             let abs_path = std::path::absolute(&filename)?;
 
-            println!("Analyzing file.");
+            println!("Hashing file.");
 
             // keep the file in place and link it, instead of copying it into the in-memory blobs database
             let in_place = true;
-            let blob = blobs
-                .client()
+            let blob = blobs_client
                 .add_from_path(abs_path, in_place, SetTagOption::Auto, WrapOption::NoWrap)
                 .await?
                 .finish()
@@ -49,7 +51,7 @@ async fn main() -> Result<()> {
             let node_id = router.endpoint().node_id();
             let ticket = BlobTicket::new(node_id.into(), blob.hash, blob.format)?;
 
-            println!("File analyzed. Fetch this file by running:");
+            println!("File hashed. Fetch this file by running:");
             println!(
                 "cargo run --example transfer -- receive {ticket} {}",
                 filename.display()
@@ -64,8 +66,7 @@ async fn main() -> Result<()> {
 
             println!("Starting download.");
 
-            blobs
-                .client()
+            blobs_client
                 .download(ticket.hash(), ticket.node_addr().clone())
                 .await?
                 .finish()
@@ -74,8 +75,7 @@ async fn main() -> Result<()> {
             println!("Finished download.");
             println!("Copying to destination.");
 
-            blobs
-                .client()
+            blobs_client
                 .export(
                     ticket.hash(),
                     abs_path,
