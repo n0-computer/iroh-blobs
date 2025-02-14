@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
                 .client()
                 .download(ticket.hash(), ticket.node_addr().clone())
                 .await?
+                .finish()
                 .await?;
 
             println!("Finished download.");
