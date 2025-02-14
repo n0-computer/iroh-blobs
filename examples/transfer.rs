@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{
     net_protocol::Blobs,
-    rpc::client::blobs::{self, WrapOption},
-    store::ExportMode,
+    rpc::client::blobs::WrapOption,
+    store::{ExportFormat, ExportMode},
     ticket::BlobTicket,
     util::SetTagOption,
 };
@@ -26,24 +26,75 @@ async fn main() -> Result<()> {
         .await?;
 
     // Grab all passed in arguments, the first one is the binary itself, so we skip it.
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() < 2 {
-        print_usage();
-        bail!("too few arguments");
-    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Convert to &str, so we can pattern-match easily:
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
-    match &*args[0] {
-        "send" => {
-            send(&router, blobs.client(), &args).await?;
+    match arg_refs.as_slice() {
+        ["send", filename] => {
+            let filename: PathBuf = filename.parse()?;
+            let abs_path = std::path::absolute(&filename)?;
+
+            println!("Analyzing file.");
+
+            // keep the file in place and link it, instead of copying it into the in-memory blobs database
+            let in_place = true;
+            let blob = blobs
+                .client()
+                .add_from_path(abs_path, in_place, SetTagOption::Auto, WrapOption::NoWrap)
+                .await?
+                .await?;
+
+            let node_id = router.endpoint().node_id();
+            let ticket = BlobTicket::new(node_id.into(), blob.hash, blob.format)?;
+
+            println!("File analyzed. Fetch this file by running:");
+            println!(
+                "cargo run --example transfer -- receive {ticket} {}",
+                filename.display()
+            );
 
             tokio::signal::ctrl_c().await?;
         }
-        "receive" => {
-            receive(blobs.client(), &args).await?;
+        ["receive", ticket, filename] => {
+            let filename: PathBuf = filename.parse()?;
+            let abs_path = std::path::absolute(filename)?;
+            let ticket: BlobTicket = ticket.parse()?;
+
+            println!("Starting download.");
+
+            blobs
+                .client()
+                .download(ticket.hash(), ticket.node_addr().clone())
+                .await?
+                .await?;
+
+            println!("Finished download.");
+            println!("Copying to destination.");
+
+            blobs
+                .client()
+                .export(
+                    ticket.hash(),
+                    abs_path,
+                    ExportFormat::Blob,
+                    ExportMode::Copy,
+                )
+                .await?
+                .finish()
+                .await?;
+
+            println!("Finished copying.");
         }
-        cmd => {
-            print_usage();
-            bail!("unknown command {}", cmd);
+        _ => {
+            println!("Couldn't parse command line arguments: {args:?}");
+            println!("Usage:");
+            println!("    # to send:");
+            println!("    cargo run --example transfer -- send [FILE]");
+            println!("    # this will print a ticket.");
+            println!();
+            println!("    # to receive:");
+            println!("    cargo run --example transfer -- receive [TICKET] [FILE]");
         }
     }
 
@@ -52,71 +103,4 @@ async fn main() -> Result<()> {
     router.shutdown().await?;
 
     Ok(())
-}
-
-async fn send(router: &Router, blobs: &blobs::MemClient, args: &[String]) -> Result<()> {
-    let path: PathBuf = args[1].parse()?;
-    let abs_path = path.canonicalize()?;
-
-    println!("Analyzing file.");
-
-    // keep the file in place, and link it
-    let in_place = true;
-    let blob = blobs
-        .add_from_path(abs_path, in_place, SetTagOption::Auto, WrapOption::NoWrap)
-        .await?
-        .await?;
-
-    let node_id = router.endpoint().node_id();
-    let ticket = BlobTicket::new(node_id.into(), blob.hash, blob.format)?;
-
-    println!("File analyzed. Fetch this file by running:");
-    println!(
-        "cargo run --example transfer -- receive {ticket} {}",
-        path.display()
-    );
-    Ok(())
-}
-
-async fn receive(blobs: &blobs::MemClient, args: &[String]) -> Result<()> {
-    if args.len() < 3 {
-        print_usage();
-        bail!("too few arguments");
-    }
-    let path_buf: PathBuf = args[1].parse()?;
-    let ticket: BlobTicket = args[2].parse()?;
-
-    println!("Starting download.");
-
-    blobs
-        .download(ticket.hash(), ticket.node_addr().clone())
-        .await?
-        .await?;
-
-    println!("Finished download.");
-    println!("Copying to destination.");
-
-    blobs
-        .export(
-            ticket.hash(),
-            path_buf,
-            ticket.format().into(),
-            ExportMode::Copy,
-        )
-        .await?;
-
-    println!("Finished copying.");
-
-    Ok(())
-}
-
-fn print_usage() {
-    println!("Couldn't parse command line arguments.");
-    println!("Usage:");
-    println!("    # to send:");
-    println!("    cargo run --example transfer -- send [FILE]");
-    println!("    # this will print a ticket.");
-    println!();
-    println!("    # to receive:");
-    println!("    cargo run --example transfer -- receive [TICKET] [FILE]");
 }
