@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
                 .client()
                 .add_from_path(abs_path, in_place, SetTagOption::Auto, WrapOption::NoWrap)
                 .await?
+                .finish()
                 .await?;
 
             let node_id = router.endpoint().node_id();
