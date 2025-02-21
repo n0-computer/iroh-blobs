@@ -931,11 +931,14 @@ fn total_chunks(chunks: &ChunkRanges) -> Option<u64> {
 mod tests {
     #![allow(clippy::single_range_in_vec_init)]
 
-    use super::super::tests::{
-        chunk_ranges, has_all_events, has_one_event, has_one_event_matching, noop_planner,
-    };
-    use super::*;
     use testresult::TestResult;
+
+    use super::{
+        super::tests::{
+            chunk_ranges, has_all_events, has_one_event, has_one_event_matching, noop_planner,
+        },
+        *,
+    };
 
     /// Test a simple scenario where a download is started and completed
     #[test]

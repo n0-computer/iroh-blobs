@@ -17,10 +17,14 @@ use std::{
     io,
     marker::PhantomData,
     sync::Arc,
-    time::Instant,
-    u64,
+    time::{Duration, Instant},
 };
 
+use anyhow::Context;
+use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
+use futures_lite::StreamExt;
+use futures_util::{stream::BoxStream, FutureExt};
+use iroh::{Endpoint, NodeId};
 use iroh_blobs::{
     get::{
         fsm::{BlobContentNext, ConnectedNext, EndBlobNext},
@@ -31,14 +35,8 @@ use iroh_blobs::{
     util::local_pool::{self, LocalPool, LocalPoolHandle},
     Hash,
 };
-use anyhow::Context;
-use bao_tree::{io::BaoContentItem, ChunkNum, ChunkRanges};
-use futures_lite::StreamExt;
-use futures_util::{stream::BoxStream, FutureExt};
-use iroh::{Endpoint, NodeId};
 use range_collections::range_set::RangeSetRange;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace};
@@ -259,6 +257,7 @@ pub struct DownloaderBuilder<S> {
     planner: Option<BoxedDownloadPlanner>,
 }
 
+#[allow(dead_code)]
 impl<S> DownloaderBuilder<S> {
     /// Set the content discovery
     pub fn discovery<D: ContentDiscovery>(self, discovery: D) -> Self {
@@ -506,11 +505,10 @@ impl<S: Store> BitfieldSubscription for SimpleBitfieldSubscription<S> {
         }
         Box::pin(
             async move {
-                let event = match recv.await {
+                match recv.await {
                     Ok(ev) => ev,
                     Err(_) => BitfieldState::unknown().into(),
-                };
-                event
+                }
             }
             .into_stream(),
         )
@@ -591,12 +589,12 @@ mod tests {
     #![allow(clippy::single_range_in_vec_init)]
     use std::ops::Range;
 
-    use crate::{net_protocol::Blobs, store::MapMut};
-
-    use super::*;
     use bao_tree::ChunkNum;
     use iroh::{protocol::Router, SecretKey};
     use testresult::TestResult;
+
+    use super::*;
+    use crate::{net_protocol::Blobs, store::MapMut};
 
     fn print_bitfield(iter: impl IntoIterator<Item = bool>) -> String {
         let mut chars = String::new();

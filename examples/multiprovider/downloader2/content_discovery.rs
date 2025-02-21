@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
-use crate::Hash;
 use futures_lite::stream::StreamExt;
 use futures_util::stream::BoxStream;
 use iroh::NodeId;
 use serde::{Deserialize, Serialize};
+
+use crate::Hash;
 
 /// Announce kind
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -20,6 +21,7 @@ pub enum AnnounceKind {
 #[derive(Debug, Default)]
 pub struct FindPeersOpts {
     /// Kind of announce
+    #[allow(dead_code)]
     pub kind: AnnounceKind,
 }
 

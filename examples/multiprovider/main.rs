@@ -9,10 +9,7 @@ use downloader2::{
     print_bitmap, BitfieldEvent, BitfieldState, BitfieldUpdate, DownloadRequest, Downloader,
     ObserveRequest, StaticContentDiscovery,
 };
-use iroh_blobs::{
-    store::Store,
-    Hash,
-};
+use iroh_blobs::{store::Store, Hash};
 
 #[derive(Debug, Parser)]
 struct Args {
