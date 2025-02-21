@@ -301,7 +301,7 @@ impl<S> DownloaderBuilder<S> {
         let local_pool = self.local_pool.unwrap_or_else(LocalPool::single);
         let planner = self
             .planner
-            .unwrap_or_else(|| Box::new(StripePlanner2::new(0, 10)));
+            .unwrap_or_else(|| Box::new(StripePlanner2::new(0, 18)));
         let subscribe_bitfield = self.subscribe_bitfield.unwrap_or_else(|| {
             Box::new(SimpleBitfieldSubscription::new(
                 self.endpoint.clone(),
