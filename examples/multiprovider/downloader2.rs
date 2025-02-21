@@ -87,7 +87,7 @@ pub trait BitfieldSubscription: std::fmt::Debug + Send + 'static {
 /// A boxed bitfield subscription
 pub type BoxedBitfieldSubscription = Box<dyn BitfieldSubscription>;
 
-/// Knowlege about the size of a blob
+/// Knowledge about the size of a blob
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaoBlobSizeOpt {
     /// We have a size that a peer told us about, but we don't know if it is correct
@@ -113,7 +113,7 @@ impl BaoBlobSizeOpt {
 
     /// Update the size information
     ///
-    /// Unkown sizes are always updated
+    /// Unknown sizes are always updated
     /// Unverified sizes are updated if the new size is verified
     /// Verified sizes must never change
     pub fn update(&mut self, size: BaoBlobSizeOpt) -> anyhow::Result<()> {
