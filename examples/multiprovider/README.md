@@ -81,7 +81,7 @@ rebalance the download as a new peer becomes available. It will currently
 download from each peer in "stripes".
 
 When running without `--path` argument it will download into a memory store.
-When providing a `--path` argument it will download into a persitent store at the
+When providing a `--path` argument it will download into a persistent store at the
 given path, and the download will resume if you interrupt the download process.
 
 ## Notes on the current state
@@ -90,3 +90,7 @@ The current state of the downloader is highly experimental. While peers that don
 respond at all are handled properly, peers that are slow or become slow over time
 are not properly punished. Also, there is not yet a mechanism to limit the number
 of peers to download from.
+
+In addition, the current blob store does not have the ability to watch a bitfield
+of available chunks for a blob. The current multiprovider downloader just fakes
+this by assuming that all remote stores have the full file.
