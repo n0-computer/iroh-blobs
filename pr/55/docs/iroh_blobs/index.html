@@ -2,7 +2,7 @@
 <p>This crate provides blob and blob sequence transfer support for iroh. It implements a simple request-response protocol based on BLAKE3 verified streaming.</p>
 <p>A request describes data in terms of BLAKE3 hashes and byte ranges. It is possible to request blobs or ranges of blobs, as well as entire sequences of blobs in one request.</p>
 <p>The requester opens a QUIC stream to the provider and sends the request. The provider answers with the requested data, encoded as <a href="https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf">BLAKE3</a> verified streams, on the same QUIC stream.</p>
-<p>This crate is used together with <a href="https://crates.io/crates/iroh">iroh</a>. Connection establishment is left up to the user or a higher level APIs such as the iroh CLI.</p>
+<p>This crate is used together with <a href="https://crates.io/crates/iroh">iroh</a>. Connection establishment is left up to the user or higher level APIs.</p>
 <h3 id="concepts"><a class="doc-anchor" href="#concepts">§</a>Concepts</h3>
 <ul>
 <li>
