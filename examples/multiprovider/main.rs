@@ -4,11 +4,12 @@ use bao_tree::{ChunkNum, ChunkRanges};
 use clap::Parser;
 use console::Term;
 use iroh::{NodeId, SecretKey};
+mod downloader2;
+use downloader2::{
+    print_bitmap, BitfieldEvent, BitfieldState, BitfieldUpdate, DownloadRequest, Downloader,
+    ObserveRequest, StaticContentDiscovery,
+};
 use iroh_blobs::{
-    downloader2::{
-        print_bitmap, BitfieldEvent, BitfieldState, BitfieldUpdate, DownloadRequest, Downloader,
-        ObserveRequest, StaticContentDiscovery,
-    },
     store::Store,
     Hash,
 };

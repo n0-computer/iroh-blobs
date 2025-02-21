@@ -238,13 +238,13 @@ async fn peer_download<S: Store>(
     start: Instant,
 ) -> anyhow::Result<Stats> {
     info!("Connecting to peer {peer}");
-    let conn = endpoint.connect(peer, crate::ALPN).await?;
+    let conn = endpoint.connect(peer, iroh_blobs::ALPN).await?;
     info!("Got connection to peer {peer}");
     let spec = RangeSpec::new(ranges);
     let ranges = RangeSpecSeq::new([spec, RangeSpec::EMPTY]);
     info!("starting download from {peer} for {hash} {ranges:?}");
     let request = GetRequest::new(hash, ranges);
-    let initial = crate::get::fsm::start(conn, request);
+    let initial = iroh_blobs::get::fsm::start(conn, request);
     // connect
     let connected = initial.next().await?;
     // read the first bytes

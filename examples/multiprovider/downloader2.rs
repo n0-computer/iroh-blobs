@@ -21,7 +21,7 @@ use std::{
     u64,
 };
 
-use crate::{
+use iroh_blobs::{
     get::{
         fsm::{BlobContentNext, ConnectedNext, EndBlobNext},
         Stats,
@@ -433,7 +433,7 @@ impl<S> SimpleBitfieldSubscription<S> {
 
 async fn get_valid_ranges_local<S: Store>(hash: &Hash, store: S) -> anyhow::Result<BitfieldEvent> {
     if let Some(entry) = store.get_mut(hash).await? {
-        let ranges = crate::get::db::valid_ranges::<S>(&entry).await?;
+        let ranges = iroh_blobs::get::db::valid_ranges::<S>(&entry).await?;
         let size = entry.size();
         let size = match size {
             size @ BaoBlobSize::Unverified(value) => {
@@ -462,8 +462,8 @@ async fn get_valid_ranges_remote(
     id: NodeId,
     hash: &Hash,
 ) -> anyhow::Result<BitfieldEvent> {
-    let conn = endpoint.connect(id, crate::ALPN).await?;
-    let (size, _) = crate::get::request::get_verified_size(&conn, hash).await?;
+    let conn = endpoint.connect(id, iroh_blobs::ALPN).await?;
+    let (size, _) = iroh_blobs::get::request::get_verified_size(&conn, hash).await?;
     let chunks = (size + 1023) / 1024;
     let ranges = ChunkRanges::from(ChunkNum(0)..ChunkNum(chunks));
     Ok(BitfieldState {
