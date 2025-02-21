@@ -1247,7 +1247,7 @@ impl super::Map for Store {
     type Entry = Entry;
 
     async fn get(&self, hash: &Hash) -> io::Result<Option<Self::Entry>> {
-        Ok(self.0.get(*hash).await?.map(From::from))
+        Ok(self.0.get(*hash).await?)
     }
 }
 
