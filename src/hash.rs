@@ -5,8 +5,6 @@ use std::{borrow::Borrow, fmt, str::FromStr};
 use postcard::experimental::max_size::MaxSize;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::store::ExportFormat;
-
 /// Hash type used throughout.
 #[derive(PartialEq, Eq, Copy, Clone, Hash)]
 pub struct Hash(blake3::Hash);
@@ -241,15 +239,6 @@ impl BlobFormat {
     /// Is hash seq format
     pub const fn is_hash_seq(&self) -> bool {
         matches!(self, BlobFormat::HashSeq)
-    }
-}
-
-impl From<BlobFormat> for ExportFormat {
-    fn from(value: BlobFormat) -> Self {
-        match value {
-            BlobFormat::Raw => ExportFormat::Blob,
-            BlobFormat::HashSeq => ExportFormat::Collection,
-        }
     }
 }
 
