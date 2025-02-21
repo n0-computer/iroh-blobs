@@ -6,7 +6,7 @@ A request describes data in terms of BLAKE3 hashes and byte ranges. It is possib
 
 The requester opens a QUIC stream to the provider and sends the request. The provider answers with the requested data, encoded as [BLAKE3](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf) verified streams, on the same QUIC stream.
 
-This crate is used together with [iroh](https://crates.io/crates/iroh). Connection establishment is left up to the user or a higher level APIs such as the iroh CLI.
+This crate is used together with [iroh](https://crates.io/crates/iroh). Connection establishment is left up to the user or higher level APIs.
 
 ## Concepts
 
