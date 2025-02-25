@@ -2,6 +2,21 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.33.0](https://github.com/n0-computer/iroh-blobs/compare/v0.32.0..0.33.0) - 2025-02-25
+
+### 📚 Documentation
+
+- Update readme ([#55](https://github.com/n0-computer/iroh-blobs/issues/55)) - ([d8d2b48](https://github.com/n0-computer/iroh-blobs/commit/d8d2b48fbaaaf4d604e8583e87c874cdc9c5b3c6))
+
+### ⚙️ Miscellaneous Tasks
+
+- Patch to use main branch of iroh dependencies ([#58](https://github.com/n0-computer/iroh-blobs/issues/58)) - ([57cb626](https://github.com/n0-computer/iroh-blobs/commit/57cb62696bbad313d497c4a33821657fb6bf53ee))
+- Upgrade to latest `iroh` and `quic-rpc` ([#63](https://github.com/n0-computer/iroh-blobs/issues/63)) - ([a198ccc](https://github.com/n0-computer/iroh-blobs/commit/a198cccbde55071973e2b637e7e3ea56908f5d7d))
+
+### Example
+
+- Simplify transfer example ([#53](https://github.com/n0-computer/iroh-blobs/issues/53)) - ([bbbb636](https://github.com/n0-computer/iroh-blobs/commit/bbbb63679794345ed9e6155e67d0423667bfbf26))
+
 ## [0.32.0](https://github.com/n0-computer/iroh-blobs/compare/v0.31.0..0.32.0) - 2025-02-04
 
 ### ⛰️  Features
