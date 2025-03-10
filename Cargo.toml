@@ -187,5 +187,5 @@ incremental = false
 
 [patch.crates-io]
 iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-quic-rpc = { git = "https://github.com/n0-computer/quic-rpc.git", branch = "main" }
 iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+quic-rpc = { git = "https://github.com/n0-computer/quic-rpc", branch = "fuse-oneshot-channel" }
