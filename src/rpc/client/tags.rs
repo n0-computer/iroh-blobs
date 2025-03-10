@@ -11,6 +11,7 @@
 //!
 //! [`Client::delete`] can be used to delete a tag.
 use anyhow::Result;
+use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,15 @@ where
     pub async fn get(&self, name: Tag) -> Result<Option<TagInfo>> {
         let mut stream = self.rpc.server_streaming(ListRequest::single(name)).await?;
         Ok(stream.next().await.transpose()?)
+    }
+
+    /// Lists all tags.
+    pub async fn list_prefix(&self, prefix: &[u8]) -> Result<impl Stream<Item = Result<TagInfo>>> {
+        let stream = self
+            .rpc
+            .server_streaming(ListRequest::prefix(Bytes::copy_from_slice(prefix).into()))
+            .await?;
+        Ok(stream.map(|res| res.map_err(anyhow::Error::from)))
     }
 
     /// Lists all tags.

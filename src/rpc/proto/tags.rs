@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{RpcResult, RpcService};
 use crate::{
-    net_protocol::BatchId, rpc::client::tags::TagInfo, util::increment_vec, HashAndFormat, Tag,
+    net_protocol::BatchId,
+    rpc::client::tags::TagInfo,
+    util::{increment_vec, next_prefix},
+    HashAndFormat, Tag,
 };
 
 #[allow(missing_docs)]
@@ -83,6 +86,22 @@ pub struct ListRequest {
 }
 
 impl ListRequest {
+    /// List tags with a prefix
+    pub fn prefix(prefix: Tag) -> Self {
+        let mut to = prefix.0.to_vec();
+        let to = if next_prefix(&mut to) {
+            Some(Bytes::from(to).into())
+        } else {
+            None
+        };
+        Self {
+            raw: true,
+            hash_seq: true,
+            from: Some(prefix),
+            to,
+        }
+    }
+
     /// List a single tag
     pub fn single(name: Tag) -> Self {
         let mut next = name.0.to_vec();

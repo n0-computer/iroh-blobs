@@ -302,6 +302,21 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
     BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
 }
 
+/// Given a prefix, increment it lexographically.
+///
+/// If the prefix is all FF, this will return false because there is no
+/// higher prefix than that.
+pub(crate) fn next_prefix(bytes: &mut [u8]) -> bool {
+    for byte in bytes.iter_mut().rev() {
+        if *byte < 255 {
+            *byte += 1;
+            return true;
+        }
+        *byte = 0;
+    }
+    false
+}
+
 /// Increment a byte vector, lexographically.
 pub(crate) fn increment_vec(bytes: &mut Vec<u8>) {
     for byte in bytes.iter_mut().rev() {
