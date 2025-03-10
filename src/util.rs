@@ -306,6 +306,7 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
 ///
 /// If the prefix is all FF, this will return false because there is no
 /// higher prefix than that.
+#[allow(dead_code)]
 pub(crate) fn next_prefix(bytes: &mut [u8]) -> bool {
     for byte in bytes.iter_mut().rev() {
         if *byte < 255 {
@@ -318,6 +319,7 @@ pub(crate) fn next_prefix(bytes: &mut [u8]) -> bool {
 }
 
 /// Increment a byte vector, lexographically.
+#[allow(dead_code)]
 pub(crate) fn increment_vec(bytes: &mut Vec<u8>) {
     for byte in bytes.iter_mut().rev() {
         if *byte < 255 {
