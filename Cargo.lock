@@ -3475,7 +3475,7 @@ dependencies = [
 [[package]]
 name = "quic-rpc"
 version = "0.18.2"
-source = "git+https://github.com/n0-computer/quic-rpc?branch=fuse-oneshot-channel#c47fef2a0cf5f94643e45034b15f9ccababf6a79"
+source = "git+https://github.com/n0-computer/quic-rpc?branch=fuse-oneshot-channel#95ce856c5bfa818f9a607f8c00ef44322ec0b989"
 dependencies = [
  "anyhow",
  "bytes",
