@@ -77,7 +77,17 @@
 <a href="#76" id="76">76</a>
 <a href="#77" id="77">77</a>
 <a href="#78" id="78">78</a>
-<a href="#79" id="79">79</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for tag management.
+<a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
+<a href="#83" id="83">83</a>
+<a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
+<a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for tag management.
 //!
 //! The purpose of tags is to mark information as important to prevent it
 //! from being garbage-collected (if the garbage collector is turned on).
@@ -90,6 +100,7 @@
 //!
 //! [`Client::delete`] can be used to delete a tag.
 </span><span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>bytes::Bytes;
 <span class="kw">use </span>futures_lite::{Stream, StreamExt};
 <span class="kw">use </span>quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -125,6 +136,15 @@
     </span><span class="kw">pub async fn </span>get(<span class="kw-2">&amp;</span><span class="self">self</span>, name: Tag) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;TagInfo&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>stream = <span class="self">self</span>.rpc.server_streaming(ListRequest::single(name)).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(stream.next().<span class="kw">await</span>.transpose()<span class="question-mark">?</span>)
+    }
+
+    <span class="doccomment">/// Lists all tags.
+    </span><span class="kw">pub async fn </span>list_prefix(<span class="kw-2">&amp;</span><span class="self">self</span>, prefix: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;TagInfo&gt;&gt;&gt; {
+        <span class="kw">let </span>stream = <span class="self">self
+            </span>.rpc
+            .server_streaming(ListRequest::prefix(Bytes::copy_from_slice(prefix).into()))
+            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(stream.map(|res| res.map_err(anyhow::Error::from)))
     }
 
     <span class="doccomment">/// Lists all tags.

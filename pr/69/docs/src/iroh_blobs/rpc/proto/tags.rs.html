@@ -133,7 +133,26 @@
 <a href="#132" id="132">132</a>
 <a href="#133" id="133">133</a>
 <a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
 </span><span class="kw">use </span>bytes::Bytes;
 <span class="kw">use </span>nested_enum_utils::enum_conversions;
 <span class="kw">use </span>quic_rpc_derive::rpc_requests;
@@ -141,7 +160,10 @@
 
 <span class="kw">use super</span>::{RpcResult, RpcService};
 <span class="kw">use crate</span>::{
-    net_protocol::BatchId, rpc::client::tags::TagInfo, util::increment_vec, HashAndFormat, Tag,
+    net_protocol::BatchId,
+    rpc::client::tags::TagInfo,
+    util::{increment_vec, next_prefix},
+    HashAndFormat, Tag,
 };
 
 <span class="attr">#[allow(missing_docs)]
@@ -218,6 +240,22 @@
 }
 
 <span class="kw">impl </span>ListRequest {
+    <span class="doccomment">/// List tags with a prefix
+    </span><span class="kw">pub fn </span>prefix(prefix: Tag) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>to = prefix.<span class="number">0</span>.to_vec();
+        <span class="kw">let </span>to = <span class="kw">if </span>next_prefix(<span class="kw-2">&amp;mut </span>to) {
+            <span class="prelude-val">Some</span>(Bytes::from(to).into())
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+        <span class="self">Self </span>{
+            raw: <span class="bool-val">true</span>,
+            hash_seq: <span class="bool-val">true</span>,
+            from: <span class="prelude-val">Some</span>(prefix),
+            to,
+        }
+    }
+
     <span class="doccomment">/// List a single tag
     </span><span class="kw">pub fn </span>single(name: Tag) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span><span class="kw-2">mut </span>next = name.<span class="number">0</span>.to_vec();
