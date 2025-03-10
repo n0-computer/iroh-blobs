@@ -302,6 +302,19 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
     BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
 }
 
+/// Increment a byte vector, lexographically.
+pub(crate) fn increment_vec(bytes: &mut Vec<u8>) {
+    for byte in bytes.iter_mut().rev() {
+        if *byte < 255 {
+            *byte += 1;
+            return;
+        }
+        *byte = 0;
+    }
+
+    bytes.push(0);
+}
+
 /// Synchronously compute the outboard of a file, and return hash and outboard.
 ///
 /// It is assumed that the file is not modified while this is running.

@@ -1,10 +1,13 @@
 //! Tags RPC protocol
+use bytes::Bytes;
 use nested_enum_utils::enum_conversions;
 use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
 
 use super::{RpcResult, RpcService};
-use crate::{net_protocol::BatchId, rpc::client::tags::TagInfo, HashAndFormat, Tag};
+use crate::{
+    net_protocol::BatchId, rpc::client::tags::TagInfo, util::increment_vec, HashAndFormat, Tag,
+};
 
 #[allow(missing_docs)]
 #[derive(strum::Display, Debug, Serialize, Deserialize)]
@@ -73,14 +76,33 @@ pub struct ListRequest {
     pub raw: bool,
     /// List hash seq tags
     pub hash_seq: bool,
+    /// From tag
+    pub from: Option<Tag>,
+    /// To tag (exclusive)
+    pub to: Option<Tag>,
 }
 
 impl ListRequest {
+    /// List a single tag
+    pub fn single(name: Tag) -> Self {
+        let mut next = name.0.to_vec();
+        increment_vec(&mut next);
+        let next = Bytes::from(next).into();
+        Self {
+            raw: true,
+            hash_seq: true,
+            from: Some(name),
+            to: Some(next),
+        }
+    }
+
     /// List all tags
     pub fn all() -> Self {
         Self {
             raw: true,
             hash_seq: true,
+            from: None,
+            to: None,
         }
     }
 
@@ -89,6 +111,8 @@ impl ListRequest {
         Self {
             raw: true,
             hash_seq: false,
+            from: None,
+            to: None,
         }
     }
 
@@ -97,6 +121,8 @@ impl ListRequest {
         Self {
             raw: false,
             hash_seq: true,
+            from: None,
+            to: None,
         }
     }
 }

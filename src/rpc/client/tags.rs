@@ -42,6 +42,12 @@ where
         Self { rpc }
     }
 
+    /// Get the value of a single tag
+    pub async fn get(&self, name: Tag) -> Result<Option<TagInfo>> {
+        let mut stream = self.rpc.server_streaming(ListRequest::single(name)).await?;
+        Ok(stream.next().await.transpose()?)
+    }
+
     /// Lists all tags.
     pub async fn list(&self) -> Result<impl Stream<Item = Result<TagInfo>>> {
         let stream = self.rpc.server_streaming(ListRequest::all()).await?;
