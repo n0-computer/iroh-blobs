@@ -87,8 +87,10 @@ pub struct ListRequest {
 
 impl ListRequest {
     /// List tags with a prefix
-    pub fn prefix(prefix: Tag) -> Self {
-        let mut to = prefix.0.to_vec();
+    pub fn prefix(prefix: &[u8]) -> Self {
+        let from = prefix.to_vec();
+        let mut to = from.clone();
+        let from = Bytes::from(from).into();
         let to = if next_prefix(&mut to) {
             Some(Bytes::from(to).into())
         } else {
@@ -97,21 +99,23 @@ impl ListRequest {
         Self {
             raw: true,
             hash_seq: true,
-            from: Some(prefix),
+            from: Some(from),
             to,
         }
     }
 
     /// List a single tag
-    pub fn single(name: Tag) -> Self {
-        let mut next = name.0.to_vec();
+    pub fn single(name: &[u8]) -> Self {
+        let from = name.to_vec();
+        let mut next = from.clone();
         increment_vec(&mut next);
-        let next = Bytes::from(next).into();
+        let from = Bytes::from(from).into();
+        let to = Bytes::from(next).into();
         Self {
             raw: true,
             hash_seq: true,
-            from: Some(name),
-            to: Some(next),
+            from: Some(from),
+            to: Some(to),
         }
     }
 
