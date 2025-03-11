@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     rpc::proto::{
-        tags::{DeleteRequest, ListRequest},
+        tags::{DeleteRequest, ListRequest, SetRequest, SyncMode},
         RpcService,
     },
-    BlobFormat, Hash, Tag,
+    BlobFormat, Hash, HashAndFormat, Tag,
 };
 
 /// Iroh tags client.
@@ -179,12 +179,25 @@ where
         Ok(stream.map(|res| res.map_err(anyhow::Error::from)))
     }
 
+    /// Set the value for a single tag
+    pub async fn set(&self, name: impl AsRef<[u8]>, value: impl Into<HashAndFormat>) -> Result<()> {
+        self.rpc
+            .rpc(SetRequest {
+                name: Tag::from(name.as_ref()),
+                value: value.into(),
+                batch: None,
+                sync: SyncMode::Full,
+            })
+            .await??;
+        Ok(())
+    }
+
     /// Get the value of a single tag
     pub async fn get(&self, name: impl AsRef<[u8]>) -> Result<Option<TagInfo>> {
         let mut stream = self
             .list_with_opts(ListOptions::single(name.as_ref()))
             .await?;
-        Ok(stream.next().await.transpose()?)
+        stream.next().await.transpose()
     }
 
     /// List a range of tags
