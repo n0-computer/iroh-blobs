@@ -189,16 +189,7 @@ impl FileStorage {
     }
 
     fn current_size(&self) -> io::Result<u64> {
-        let len = self.sizes.metadata()?.len();
-        if len < 8 {
-            Ok(0)
-        } else {
-            // todo: use the last full u64 in case the sizes file is not a multiple of 8
-            // bytes. Not sure how that would happen, but we should handle it.
-            let mut buf = [0u8; 8];
-            self.sizes.read_exact_at(len - 8, &mut buf)?;
-            Ok(u64::from_le_bytes(buf))
-        }
+        read_current_size(&self.sizes)
     }
 
     fn write_batch(&mut self, size: u64, batch: &[BaoContentItem]) -> io::Result<()> {
@@ -467,6 +458,18 @@ impl AsyncSliceReader for OutboardReader {
             },
         )
         .await
+    }
+}
+
+pub fn read_current_size(sizes: &File) -> io::Result<u64> {
+    let len = sizes.metadata()?.len();
+    if len < 8 {
+        Ok(0)
+    } else {
+        let len = len & !7;
+        let mut buf = [0u8; 8];
+        sizes.read_exact_at(len - 8, &mut buf)?;
+        Ok(u64::from_le_bytes(buf))
     }
 }
 
