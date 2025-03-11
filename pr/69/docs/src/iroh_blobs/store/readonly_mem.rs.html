@@ -343,7 +343,11 @@
 <a href="#342" id="342">342</a>
 <a href="#343" id="343">343</a>
 <a href="#344" id="344">344</a>
-<a href="#345" id="345">345</a></pre></div><pre class="rust"><code><span class="doccomment">//! A readonly in memory database for iroh-blobs, usable for testing and sharing static data.
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a></pre></div><pre class="rust"><code><span class="doccomment">//! A readonly in memory database for iroh-blobs, usable for testing and sharing static data.
 //!
 //! Main entry point is [Store].
 </span><span class="kw">use </span>std::{
@@ -658,7 +662,11 @@
         <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
     }
 
-    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, _name: Tag, _hash: <span class="prelude-ty">Option</span>&lt;HashAndFormat&gt;) -&gt; io::Result&lt;()&gt; {
+    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, _name: Tag, _hash: HashAndFormat) -&gt; io::Result&lt;()&gt; {
+        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
+    }
+
+    <span class="kw">async fn </span>delete_tags(<span class="kw-2">&amp;</span><span class="self">self</span>, _from: <span class="prelude-ty">Option</span>&lt;Tag&gt;, _to: <span class="prelude-ty">Option</span>&lt;Tag&gt;) -&gt; io::Result&lt;()&gt; {
         <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
     }
 

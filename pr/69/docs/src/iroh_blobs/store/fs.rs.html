@@ -2610,7 +2610,34 @@
 <a href="#2609" id="2609">2609</a>
 <a href="#2610" id="2610">2610</a>
 <a href="#2611" id="2611">2611</a>
-<a href="#2612" id="2612">2612</a></pre></div><pre class="rust"><code><span class="doccomment">//! redb backed storage
+<a href="#2612" id="2612">2612</a>
+<a href="#2613" id="2613">2613</a>
+<a href="#2614" id="2614">2614</a>
+<a href="#2615" id="2615">2615</a>
+<a href="#2616" id="2616">2616</a>
+<a href="#2617" id="2617">2617</a>
+<a href="#2618" id="2618">2618</a>
+<a href="#2619" id="2619">2619</a>
+<a href="#2620" id="2620">2620</a>
+<a href="#2621" id="2621">2621</a>
+<a href="#2622" id="2622">2622</a>
+<a href="#2623" id="2623">2623</a>
+<a href="#2624" id="2624">2624</a>
+<a href="#2625" id="2625">2625</a>
+<a href="#2626" id="2626">2626</a>
+<a href="#2627" id="2627">2627</a>
+<a href="#2628" id="2628">2628</a>
+<a href="#2629" id="2629">2629</a>
+<a href="#2630" id="2630">2630</a>
+<a href="#2631" id="2631">2631</a>
+<a href="#2632" id="2632">2632</a>
+<a href="#2633" id="2633">2633</a>
+<a href="#2634" id="2634">2634</a>
+<a href="#2635" id="2635">2635</a>
+<a href="#2636" id="2636">2636</a>
+<a href="#2637" id="2637">2637</a>
+<a href="#2638" id="2638">2638</a>
+<a href="#2639" id="2639">2639</a></pre></div><pre class="rust"><code><span class="doccomment">//! redb backed storage
 //!
 //! Data can get into the store in two ways:
 //!
@@ -2679,6 +2706,7 @@
     collections::{BTreeMap, BTreeSet},
     future::Future,
     io,
+    ops::Bound,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::{Duration, SystemTime},
@@ -2697,7 +2725,6 @@
 <span class="kw">use </span>smallvec::SmallVec;
 <span class="kw">use </span>tokio::io::AsyncWriteExt;
 <span class="kw">use </span>tracing::trace_span;
-
 <span class="kw">mod </span>tables;
 <span class="attr">#[doc(hidden)]
 </span><span class="kw">pub mod </span>test_support;
@@ -3220,10 +3247,16 @@
             ActorResult&lt;Vec&lt;std::result::Result&lt;(Tag, HashAndFormat), StorageError&gt;&gt;&gt;,
         &gt;,
     },
-    <span class="doccomment">/// Modification method: set a tag to a value, or remove it.
+    <span class="doccomment">/// Modification method: set a tag to a value.
     </span>SetTag {
         tag: Tag,
-        value: <span class="prelude-ty">Option</span>&lt;HashAndFormat&gt;,
+        value: HashAndFormat,
+        tx: oneshot::Sender&lt;ActorResult&lt;()&gt;&gt;,
+    },
+    <span class="doccomment">/// Modification method: set a tag to a value.
+    </span>DeleteTags {
+        from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+        to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
         tx: oneshot::Sender&lt;ActorResult&lt;()&gt;&gt;,
     },
     <span class="doccomment">/// Modification method: create a new unique tag and set it to a value.
@@ -3285,6 +3318,7 @@
             | <span class="self">Self</span>::CreateTag { .. }
             | <span class="self">Self</span>::SetFullEntryState { .. }
             | <span class="self">Self</span>::Delete { .. }
+            | <span class="self">Self</span>::DeleteTags { .. }
             | <span class="self">Self</span>::GcDelete { .. } =&gt; MessageCategory::ReadWrite,
             <span class="self">Self</span>::UpdateInlineOptions { .. }
             | <span class="self">Self</span>::Sync { .. }
@@ -3482,10 +3516,18 @@
         <span class="prelude-val">Ok</span>(tags)
     }
 
-    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, tag: Tag, value: <span class="prelude-ty">Option</span>&lt;HashAndFormat&gt;) -&gt; OuterResult&lt;()&gt; {
+    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, tag: Tag, value: HashAndFormat) -&gt; OuterResult&lt;()&gt; {
         <span class="kw">let </span>(tx, rx) = oneshot::channel();
         <span class="self">self</span>.tx
             .send(ActorMessage::SetTag { tag, value, tx })
+            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(rx.<span class="kw">await</span><span class="question-mark">??</span>)
+    }
+
+    <span class="kw">async fn </span>delete_tags(<span class="kw-2">&amp;</span><span class="self">self</span>, from: <span class="prelude-ty">Option</span>&lt;Tag&gt;, to: <span class="prelude-ty">Option</span>&lt;Tag&gt;) -&gt; OuterResult&lt;()&gt; {
+        <span class="kw">let </span>(tx, rx) = oneshot::channel();
+        <span class="self">self</span>.tx
+            .send(ActorMessage::DeleteTags { from, to, tx })
             .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(rx.<span class="kw">await</span><span class="question-mark">??</span>)
     }
@@ -3983,8 +4025,12 @@
         .<span class="kw">await</span><span class="question-mark">??</span>)
     }
 
-    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, name: Tag, hash: <span class="prelude-ty">Option</span>&lt;HashAndFormat&gt;) -&gt; io::Result&lt;()&gt; {
+    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, name: Tag, hash: HashAndFormat) -&gt; io::Result&lt;()&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.<span class="number">0</span>.set_tag(name, hash).<span class="kw">await</span><span class="question-mark">?</span>)
+    }
+
+    <span class="kw">async fn </span>delete_tags(<span class="kw-2">&amp;</span><span class="self">self</span>, from: <span class="prelude-ty">Option</span>&lt;Tag&gt;, to: <span class="prelude-ty">Option</span>&lt;Tag&gt;) -&gt; io::Result&lt;()&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.<span class="number">0</span>.delete_tags(from, to).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="kw">async fn </span>create_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: HashAndFormat) -&gt; io::Result&lt;Tag&gt; {
@@ -4610,19 +4656,23 @@
         <span class="prelude-val">Ok</span>(tag)
     }
 
-    <span class="kw">fn </span>set_tag(
+    <span class="kw">fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, tables: <span class="kw-2">&amp;mut </span>Tables, tag: Tag, value: HashAndFormat) -&gt; ActorResult&lt;()&gt; {
+        tables.tags.insert(tag, value)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">fn </span>delete_tags(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         tables: <span class="kw-2">&amp;mut </span>Tables,
-        tag: Tag,
-        value: <span class="prelude-ty">Option</span>&lt;HashAndFormat&gt;,
+        from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+        to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
     ) -&gt; ActorResult&lt;()&gt; {
-        <span class="kw">match </span>value {
-            <span class="prelude-val">Some</span>(value) =&gt; {
-                tables.tags.insert(tag, value)<span class="question-mark">?</span>;
-            }
-            <span class="prelude-val">None </span>=&gt; {
-                tables.tags.remove(tag)<span class="question-mark">?</span>;
-            }
+        <span class="kw">let </span>from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        <span class="kw">let </span>to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        <span class="kw">let </span>removing = tables.tags.extract_from_if((from, to), |<span class="kw">_</span>, <span class="kw">_</span>| <span class="bool-val">true</span>)<span class="question-mark">?</span>;
+        <span class="comment">// drain the iterator to actually remove the tags
+        </span><span class="kw">for </span>res <span class="kw">in </span>removing {
+            res<span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(())
     }
@@ -4968,6 +5018,10 @@
             }
             ActorMessage::SetTag { tag, value, tx } =&gt; {
                 <span class="kw">let </span>res = <span class="self">self</span>.set_tag(tables, tag, value);
+                tx.send(res).ok();
+            }
+            ActorMessage::DeleteTags { from, to, tx } =&gt; {
+                <span class="kw">let </span>res = <span class="self">self</span>.delete_tags(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::CreateTag { hash, tx } =&gt; {
