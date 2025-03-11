@@ -601,8 +601,8 @@ pub(crate) enum ActorMessage {
     },
     /// Bulk query method: get the entire tags table
     Tags {
-        #[debug(skip)]
-        filter: FilterPredicate<Tag, HashAndFormat>,
+        from: Option<Tag>,
+        to: Option<Tag>,
         #[allow(clippy::type_complexity)]
         tx: oneshot::Sender<
             ActorResult<Vec<std::result::Result<(Tag, HashAndFormat), StorageError>>>,
@@ -863,11 +863,13 @@ impl StoreInner {
         Ok(res)
     }
 
-    async fn tags(&self) -> OuterResult<Vec<io::Result<(Tag, HashAndFormat)>>> {
+    async fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> OuterResult<Vec<io::Result<(Tag, HashAndFormat)>>> {
         let (tx, rx) = oneshot::channel();
-        let filter: FilterPredicate<Tag, HashAndFormat> =
-            Box::new(|_i, k, v| Some((k.value(), v.value())));
-        self.tx.send(ActorMessage::Tags { filter, tx }).await?;
+        self.tx.send(ActorMessage::Tags { from, to, tx }).await?;
         let tags = rx.await?;
         // transform the internal error type into io::Error
         let tags = tags?
@@ -1299,8 +1301,12 @@ impl super::ReadableStore for Store {
         Ok(Box::new(self.0.partial_blobs().await?.into_iter()))
     }
 
-    async fn tags(&self) -> io::Result<super::DbIter<(Tag, HashAndFormat)>> {
-        Ok(Box::new(self.0.tags().await?.into_iter()))
+    async fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> io::Result<super::DbIter<(Tag, HashAndFormat)>> {
+        Ok(Box::new(self.0.tags(from, to).await?.into_iter()))
     }
 
     fn temp_tags(&self) -> Box<dyn Iterator<Item = HashAndFormat> + Send + Sync + 'static> {
@@ -1985,23 +1991,21 @@ impl ActorState {
     fn tags(
         &mut self,
         tables: &impl ReadableTables,
-        filter: FilterPredicate<Tag, HashAndFormat>,
+        from: Option<Tag>,
+        to: Option<Tag>,
     ) -> ActorResult<Vec<std::result::Result<(Tag, HashAndFormat), StorageError>>> {
         let mut res = Vec::new();
-        let mut index = 0u64;
-        #[allow(clippy::explicit_counter_loop)]
-        for item in tables.tags().iter()? {
+        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        for item in tables.tags().range((from, to))? {
             match item {
                 Ok((k, v)) => {
-                    if let Some(item) = filter(index, k, v) {
-                        res.push(Ok(item));
-                    }
+                    res.push(Ok((k.value(), v.value())));
                 }
                 Err(e) => {
                     res.push(Err(e));
                 }
             }
-            index += 1;
         }
         Ok(res)
     }
@@ -2342,8 +2346,8 @@ impl ActorState {
                 let res = self.blobs(tables, filter);
                 tx.send(res).ok();
             }
-            ActorMessage::Tags { filter, tx } => {
-                let res = self.tags(tables, filter);
+            ActorMessage::Tags { from, to, tx } => {
+                let res = self.tags(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::GcStart { tx } => {

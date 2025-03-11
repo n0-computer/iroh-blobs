@@ -144,10 +144,31 @@ pub struct DeleteOptions {
 
 impl DeleteOptions {
     /// Delete a single tag
-    pub fn single(name: Tag) -> Self {
+    pub fn single(name: &[u8]) -> Self {
+        let name = Tag::from(name);
         Self {
             to: Some(name.successor()),
             from: Some(name),
+        }
+    }
+
+    /// Delete a range of tags
+    pub fn range<R, E>(range: R) -> Self
+    where
+        R: RangeBounds<E>,
+        E: AsRef<[u8]>,
+    {
+        let (from, to) = tags_from_range(range);
+        Self { from, to }
+    }
+
+    /// Delete tags with a prefix
+    pub fn prefix(prefix: &[u8]) -> Self {
+        let from = Tag::from(prefix);
+        let to = from.next_prefix();
+        Self {
+            from: Some(from),
+            to,
         }
     }
 }
@@ -209,7 +230,7 @@ where
         self.list_with_opts(ListOptions::range(range)).await
     }
 
-    /// Lists all tags.
+    /// Lists all tags with the given prefix.
     pub async fn list_prefix(
         &self,
         prefix: impl AsRef<[u8]>,
@@ -235,13 +256,29 @@ where
     }
 
     /// Deletes a tag.
-    pub async fn delete(&self, name: Tag) -> Result<()> {
-        self.delete_with_opts(DeleteOptions::single(name)).await
+    pub async fn delete(&self, name: impl AsRef<[u8]>) -> Result<()> {
+        self.delete_with_opts(DeleteOptions::single(name.as_ref()))
+            .await
+    }
+
+    /// Deletes a range of tags.
+    pub async fn delete_range<R, E>(&self, range: R) -> Result<()>
+    where
+        R: RangeBounds<E>,
+        E: AsRef<[u8]>,
+    {
+        self.delete_with_opts(DeleteOptions::range(range)).await
+    }
+
+    /// Lists all tags with the given prefix.
+    pub async fn delete_prefix(&self, prefix: impl AsRef<[u8]>) -> Result<()> {
+        self.delete_with_opts(DeleteOptions::prefix(prefix.as_ref()))
+            .await
     }
 }
 
 /// Information about a tag.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TagInfo {
     /// Name of the tag
     pub name: Tag,

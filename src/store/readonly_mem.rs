@@ -232,7 +232,11 @@ impl ReadableStore for Store {
         ))
     }
 
-    async fn tags(&self) -> io::Result<DbIter<(Tag, HashAndFormat)>> {
+    async fn tags(
+        &self,
+        _from: Option<Tag>,
+        _to: Option<Tag>,
+    ) -> io::Result<DbIter<(Tag, HashAndFormat)>> {
         Ok(Box::new(std::iter::empty()))
     }
 

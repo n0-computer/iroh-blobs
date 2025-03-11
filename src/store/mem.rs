@@ -446,10 +446,30 @@ impl ReadableStore for Store {
         ))
     }
 
-    async fn tags(&self) -> io::Result<crate::store::DbIter<(crate::Tag, crate::HashAndFormat)>> {
+    async fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> io::Result<crate::store::DbIter<(crate::Tag, crate::HashAndFormat)>> {
         #[allow(clippy::mutable_key_type)]
         let tags = self.read_lock().tags.clone();
-        Ok(Box::new(tags.into_iter().map(Ok)))
+        let tags = tags
+            .into_iter()
+            .filter(move |(tag, _)| {
+                if let Some(from) = &from {
+                    if tag < from {
+                        return false;
+                    }
+                }
+                if let Some(to) = &to {
+                    if tag >= to {
+                        return false;
+                    }
+                }
+                true
+            })
+            .map(Ok);
+        Ok(Box::new(tags))
     }
 
     fn temp_tags(&self) -> Box<dyn Iterator<Item = crate::HashAndFormat> + Send + Sync + 'static> {

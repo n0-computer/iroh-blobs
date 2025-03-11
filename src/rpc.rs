@@ -313,20 +313,10 @@ impl<D: crate::store::Store> Handler<D> {
         tracing::info!("blob_list_tags");
         let blobs = self;
         Gen::new(|co| async move {
-            let tags = blobs.store().tags().await.unwrap();
+            let tags = blobs.store().tags(msg.from, msg.to).await.unwrap();
             #[allow(clippy::manual_flatten)]
             for item in tags {
                 if let Ok((name, HashAndFormat { hash, format })) = item {
-                    if let Some(from) = msg.from.as_ref() {
-                        if &name < from {
-                            continue;
-                        }
-                    }
-                    if let Some(to) = msg.to.as_ref() {
-                        if &name >= to {
-                            break;
-                        }
-                    }
                     if (format.is_raw() && msg.raw) || (format.is_hash_seq() && msg.hash_seq) {
                         co.yield_(TagInfo { name, hash, format }).await;
                     }
