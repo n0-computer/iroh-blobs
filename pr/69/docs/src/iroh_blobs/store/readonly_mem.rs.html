@@ -347,7 +347,11 @@
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
 <a href="#348" id="348">348</a>
-<a href="#349" id="349">349</a></pre></div><pre class="rust"><code><span class="doccomment">//! A readonly in memory database for iroh-blobs, usable for testing and sharing static data.
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a></pre></div><pre class="rust"><code><span class="doccomment">//! A readonly in memory database for iroh-blobs, usable for testing and sharing static data.
 //!
 //! Main entry point is [Store].
 </span><span class="kw">use </span>std::{
@@ -581,7 +585,11 @@
         ))
     }
 
-    <span class="kw">async fn </span>tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;DbIter&lt;(Tag, HashAndFormat)&gt;&gt; {
+    <span class="kw">async fn </span>tags(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+        _to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+    ) -&gt; io::Result&lt;DbIter&lt;(Tag, HashAndFormat)&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(std::iter::empty()))
     }
 

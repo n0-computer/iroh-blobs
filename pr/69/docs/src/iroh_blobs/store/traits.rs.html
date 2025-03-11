@@ -969,7 +969,11 @@
 <a href="#968" id="968">968</a>
 <a href="#969" id="969">969</a>
 <a href="#970" id="970">970</a>
-<a href="#971" id="971">971</a></pre></div><pre class="rust"><code><span class="doccomment">//! Traits for in-memory or persistent maps of blob with bao encoded outboards.
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a></pre></div><pre class="rust"><code><span class="doccomment">//! Traits for in-memory or persistent maps of blob with bao encoded outboards.
 </span><span class="kw">use </span>std::{collections::BTreeSet, future::Future, io, path::PathBuf, time::Duration};
 
 <span class="kw">pub use </span>bao_tree;
@@ -1233,7 +1237,11 @@
     /// been imported, and hash sequences that have been created internally.
     </span><span class="kw">fn </span>blobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = io::Result&lt;DbIter&lt;Hash&gt;&gt;&gt; + Send;
     <span class="doccomment">/// list all tags (collections or other explicitly added things) in the database
-    </span><span class="kw">fn </span>tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = io::Result&lt;DbIter&lt;(Tag, HashAndFormat)&gt;&gt;&gt; + Send;
+    </span><span class="kw">fn </span>tags(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+        to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+    ) -&gt; <span class="kw">impl </span>Future&lt;Output = io::Result&lt;DbIter&lt;(Tag, HashAndFormat)&gt;&gt;&gt; + Send;
 
     <span class="doccomment">/// Temp tags
     </span><span class="kw">fn </span>temp_tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = HashAndFormat&gt; + Send + Sync + <span class="lifetime">'static</span>&gt;;
@@ -1606,7 +1614,7 @@
     }
     <span class="kw">let </span><span class="kw-2">mut </span>roots = BTreeSet::new();
     <span class="macro">debug!</span>(<span class="string">"traversing tags"</span>);
-    <span class="kw">for </span>item <span class="kw">in </span>store.tags().<span class="kw">await</span><span class="question-mark">? </span>{
+    <span class="kw">for </span>item <span class="kw">in </span>store.tags(<span class="prelude-val">None</span>, <span class="prelude-val">None</span>).<span class="kw">await</span><span class="question-mark">? </span>{
         <span class="kw">let </span>(name, haf) = item<span class="question-mark">?</span>;
         <span class="macro">debug!</span>(<span class="string">"adding root {:?} {:?}"</span>, name, haf);
         roots.insert(haf);

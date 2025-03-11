@@ -1096,17 +1096,7 @@
 <a href="#1095" id="1095">1095</a>
 <a href="#1096" id="1096">1096</a>
 <a href="#1097" id="1097">1097</a>
-<a href="#1098" id="1098">1098</a>
-<a href="#1099" id="1099">1099</a>
-<a href="#1100" id="1100">1100</a>
-<a href="#1101" id="1101">1101</a>
-<a href="#1102" id="1102">1102</a>
-<a href="#1103" id="1103">1103</a>
-<a href="#1104" id="1104">1104</a>
-<a href="#1105" id="1105">1105</a>
-<a href="#1106" id="1106">1106</a>
-<a href="#1107" id="1107">1107</a>
-<a href="#1108" id="1108">1108</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
+<a href="#1098" id="1098">1098</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
     io,
@@ -1421,20 +1411,10 @@
         <span class="macro">tracing::info!</span>(<span class="string">"blob_list_tags"</span>);
         <span class="kw">let </span>blobs = <span class="self">self</span>;
         Gen::new(|co| <span class="kw">async move </span>{
-            <span class="kw">let </span>tags = blobs.store().tags().<span class="kw">await</span>.unwrap();
+            <span class="kw">let </span>tags = blobs.store().tags(msg.from, msg.to).<span class="kw">await</span>.unwrap();
             <span class="attr">#[allow(clippy::manual_flatten)]
             </span><span class="kw">for </span>item <span class="kw">in </span>tags {
                 <span class="kw">if let </span><span class="prelude-val">Ok</span>((name, HashAndFormat { hash, format })) = item {
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(from) = msg.from.as_ref() {
-                        <span class="kw">if </span><span class="kw-2">&amp;</span>name &lt; from {
-                            <span class="kw">continue</span>;
-                        }
-                    }
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(to) = msg.to.as_ref() {
-                        <span class="kw">if </span><span class="kw-2">&amp;</span>name &gt;= to {
-                            <span class="kw">break</span>;
-                        }
-                    }
                     <span class="kw">if </span>(format.is_raw() &amp;&amp; msg.raw) || (format.is_hash_seq() &amp;&amp; msg.hash_seq) {
                         co.yield_(TagInfo { name, hash, format }).<span class="kw">await</span>;
                     }
