@@ -207,13 +207,28 @@ impl super::Store for Store {
         .await?
     }
 
-    async fn set_tag(&self, name: Tag, value: Option<HashAndFormat>) -> io::Result<()> {
+    async fn set_tag(&self, name: Tag, value: HashAndFormat) -> io::Result<()> {
         let mut state = self.write_lock();
-        if let Some(value) = value {
-            state.tags.insert(name, value);
-        } else {
-            state.tags.remove(&name);
-        }
+        state.tags.insert(name, value);
+        Ok(())
+    }
+
+    async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> io::Result<()> {
+        let mut state = self.write_lock();
+        // todo: more efficient impl
+        state.tags.retain(|tag, _| {
+            if let Some(from) = &from {
+                if tag < from {
+                    return true;
+                }
+            }
+            if let Some(to) = &to {
+                if tag >= to {
+                    return true;
+                }
+            }
+            false
+        });
         Ok(())
     }
 

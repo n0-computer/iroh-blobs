@@ -67,6 +67,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     io,
+    ops::Bound,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::{Duration, SystemTime},
@@ -608,10 +609,16 @@ pub(crate) enum ActorMessage {
             ActorResult<Vec<std::result::Result<(Tag, HashAndFormat), StorageError>>>,
         >,
     },
-    /// Modification method: set a tag to a value, or remove it.
+    /// Modification method: set a tag to a value.
     SetTag {
         tag: Tag,
-        value: Option<HashAndFormat>,
+        value: HashAndFormat,
+        tx: oneshot::Sender<ActorResult<()>>,
+    },
+    /// Modification method: set a tag to a value.
+    DeleteTags {
+        from: Option<Tag>,
+        to: Option<Tag>,
         tx: oneshot::Sender<ActorResult<()>>,
     },
     /// Modification method: create a new unique tag and set it to a value.
@@ -673,6 +680,7 @@ impl ActorMessage {
             | Self::CreateTag { .. }
             | Self::SetFullEntryState { .. }
             | Self::Delete { .. }
+            | Self::DeleteTags { .. }
             | Self::GcDelete { .. } => MessageCategory::ReadWrite,
             Self::UpdateInlineOptions { .. }
             | Self::Sync { .. }
@@ -870,10 +878,18 @@ impl StoreInner {
         Ok(tags)
     }
 
-    async fn set_tag(&self, tag: Tag, value: Option<HashAndFormat>) -> OuterResult<()> {
+    async fn set_tag(&self, tag: Tag, value: HashAndFormat) -> OuterResult<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(ActorMessage::SetTag { tag, value, tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> OuterResult<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(ActorMessage::DeleteTags { from, to, tx })
             .await?;
         Ok(rx.await??)
     }
@@ -1371,8 +1387,12 @@ impl super::Store for Store {
         .await??)
     }
 
-    async fn set_tag(&self, name: Tag, hash: Option<HashAndFormat>) -> io::Result<()> {
+    async fn set_tag(&self, name: Tag, hash: HashAndFormat) -> io::Result<()> {
         Ok(self.0.set_tag(name, hash).await?)
+    }
+
+    async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> io::Result<()> {
+        Ok(self.0.delete_tags(from, to).await?)
     }
 
     async fn create_tag(&self, hash: HashAndFormat) -> io::Result<Tag> {
@@ -1998,19 +2018,23 @@ impl ActorState {
         Ok(tag)
     }
 
-    fn set_tag(
+    fn set_tag(&self, tables: &mut Tables, tag: Tag, value: HashAndFormat) -> ActorResult<()> {
+        tables.tags.insert(tag, value)?;
+        Ok(())
+    }
+
+    fn delete_tags(
         &self,
         tables: &mut Tables,
-        tag: Tag,
-        value: Option<HashAndFormat>,
+        from: Option<Tag>,
+        to: Option<Tag>,
     ) -> ActorResult<()> {
-        match value {
-            Some(value) => {
-                tables.tags.insert(tag, value)?;
-            }
-            None => {
-                tables.tags.remove(tag)?;
-            }
+        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        let removing = tables.tags.extract_from_if((from, to), |_, _| true)?;
+        // drain the iterator to actually remove the tags
+        for res in removing {
+            res?;
         }
         Ok(())
     }
@@ -2356,6 +2380,10 @@ impl ActorState {
             }
             ActorMessage::SetTag { tag, value, tx } => {
                 let res = self.set_tag(tables, tag, value);
+                tx.send(res).ok();
+            }
+            ActorMessage::DeleteTags { from, to, tx } => {
+                let res = self.delete_tags(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::CreateTag { hash, tx } => {

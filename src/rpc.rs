@@ -295,7 +295,7 @@ impl<D: crate::store::Store> Handler<D> {
 
     async fn blob_delete_tag(self, msg: TagDeleteRequest) -> RpcResult<()> {
         self.store()
-            .set_tag(msg.name, None)
+            .delete_tags(msg.from, msg.to)
             .await
             .map_err(|e| RpcError::new(&e))?;
         Ok(())
@@ -403,13 +403,11 @@ impl<D: crate::store::Store> Handler<D> {
             blobs.store().sync().await.map_err(|e| RpcError::new(&e))?;
         }
         if let Some(batch) = msg.batch {
-            if let Some(content) = msg.value.as_ref() {
-                blobs
-                    .batches()
-                    .await
-                    .remove_one(batch, content)
-                    .map_err(|e| RpcError::new(&*e))?;
-            }
+            blobs
+                .batches()
+                .await
+                .remove_one(batch, &msg.value)
+                .map_err(|e| RpcError::new(&*e))?;
         }
         Ok(())
     }
@@ -582,10 +580,7 @@ impl<D: crate::store::Store> Handler<D> {
         let HashAndFormat { hash, format } = *hash_and_format;
         let tag = match tag {
             SetTagOption::Named(tag) => {
-                blobs
-                    .store()
-                    .set_tag(tag.clone(), Some(*hash_and_format))
-                    .await?;
+                blobs.store().set_tag(tag.clone(), *hash_and_format).await?;
                 tag
             }
             SetTagOption::Auto => blobs.store().create_tag(*hash_and_format).await?,
@@ -774,10 +769,7 @@ impl<D: crate::store::Store> Handler<D> {
         let HashAndFormat { hash, format } = hash_and_format;
         let tag = match msg.tag {
             SetTagOption::Named(tag) => {
-                blobs
-                    .store()
-                    .set_tag(tag.clone(), Some(hash_and_format))
-                    .await?;
+                blobs.store().set_tag(tag.clone(), hash_and_format).await?;
                 tag
             }
             SetTagOption::Auto => blobs.store().create_tag(hash_and_format).await?,
@@ -917,7 +909,7 @@ impl<D: crate::store::Store> Handler<D> {
             SetTagOption::Named(tag) => {
                 blobs
                     .store()
-                    .set_tag(tag.clone(), Some(*hash_and_format))
+                    .set_tag(tag.clone(), *hash_and_format)
                     .await
                     .map_err(|e| RpcError::new(&e))?;
                 tag
@@ -932,7 +924,7 @@ impl<D: crate::store::Store> Handler<D> {
         for tag in tags_to_delete {
             blobs
                 .store()
-                .set_tag(tag, None)
+                .delete_tags(Some(tag.clone()), Some(tag.successor()))
                 .await
                 .map_err(|e| RpcError::new(&e))?;
         }
@@ -969,7 +961,7 @@ impl<D: crate::store::Store> Handler<D> {
         progress.send(DownloadProgress::AllDone(stats)).await.ok();
         match tag {
             SetTagOption::Named(tag) => {
-                self.store().set_tag(tag, Some(hash_and_format)).await?;
+                self.store().set_tag(tag, hash_and_format).await?;
             }
             SetTagOption::Auto => {
                 self.store().create_tag(hash_and_format).await?;

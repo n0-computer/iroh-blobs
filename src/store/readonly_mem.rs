@@ -313,7 +313,11 @@ impl super::Store for Store {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
     }
 
-    async fn set_tag(&self, _name: Tag, _hash: Option<HashAndFormat>) -> io::Result<()> {
+    async fn set_tag(&self, _name: Tag, _hash: HashAndFormat) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
+    async fn delete_tags(&self, _from: Option<Tag>, _to: Option<Tag>) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
     }
 

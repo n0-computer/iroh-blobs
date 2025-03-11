@@ -441,7 +441,7 @@ where
             .rpc
             .rpc(tags::SetRequest {
                 name: tag,
-                value: Some(tt.hash_and_format()),
+                value: tt.hash_and_format(),
                 batch: Some(self.0.batch),
                 sync: SyncMode::Full,
             })

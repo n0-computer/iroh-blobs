@@ -143,6 +143,7 @@ pub struct DeleteOptions {
 }
 
 impl DeleteOptions {
+    /// Delete a single tag
     pub fn single(name: Tag) -> Self {
         Self {
             to: Some(name.successor()),

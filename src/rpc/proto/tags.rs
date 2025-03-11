@@ -60,8 +60,8 @@ pub struct CreateRequest {
 pub struct SetRequest {
     /// Name of the tag
     pub name: Tag,
-    /// Value of the tag, None to delete
-    pub value: Option<HashAndFormat>,
+    /// Value of the tag
+    pub value: HashAndFormat,
     /// Batch to use, none for global
     pub batch: Option<BatchId>,
     /// Sync mode
