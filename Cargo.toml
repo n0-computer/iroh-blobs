@@ -1,6 +1,6 @@
 [package]
 name = "iroh-blobs"
-version = "0.33.0"
+version = "0.33.1"
 edition = "2021"
 readme = "README.md"
 description = "blob and collection transfer support for iroh"
@@ -54,7 +54,7 @@ postcard = { version = "1", default-features = false, features = [
     "use-std",
     "experimental-derive",
 ] }
-quic-rpc = { version = "0.18", optional = true }
+quic-rpc = { version = "0.18.3", optional = true }
 quic-rpc-derive = { version = "0.18", optional = true }
 rand = "0.8"
 range-collections = "0.4.0"
@@ -187,5 +187,5 @@ incremental = false
 
 [patch.crates-io]
 iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-quic-rpc = { git = "https://github.com/n0-computer/quic-rpc.git", branch = "main" }
 iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+quic-rpc = { git = "https://github.com/n0-computer/quic-rpc", branch = "main" }

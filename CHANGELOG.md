@@ -2,6 +2,42 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.33.1](https://github.com/n0-computer/iroh-blobs/compare/v0.33.0..0.33.1) - 2025-03-11
+
+### 🐛 Bug Fixes
+
+- Do not panic when parsing invalid hashes ([#68](https://github.com/n0-computer/iroh-blobs/issues/68)) - ([cfdfca0](https://github.com/n0-computer/iroh-blobs/commit/cfdfca04760369a9457ea09b4085ab63588398c1))
+
+### ⚙️ Miscellaneous Tasks
+
+- Patch to use main branch of iroh dependencies ([#64](https://github.com/n0-computer/iroh-blobs/issues/64)) - ([d739d52](https://github.com/n0-computer/iroh-blobs/commit/d739d5225029d40749150ad4f2d5e1c1c6f1c0c4))
+- Release ([#70](https://github.com/n0-computer/iroh-blobs/issues/70)) - ([4c282fe](https://github.com/n0-computer/iroh-blobs/commit/4c282fea5536f142fe6aab78de1c58d2871c912f))
+- Update change log ([#71](https://github.com/n0-computer/iroh-blobs/issues/71)) - ([f4feff7](https://github.com/n0-computer/iroh-blobs/commit/f4feff72c79559ff09ddc8091e15996cf2df0c27))
+- Release iroh-blobs version 0.33.1 - ([e4aa724](https://github.com/n0-computer/iroh-blobs/commit/e4aa7245a3ec31a652a5573b70928d0dffd7fbc7))
+
+## [0.33.1](https://github.com/n0-computer/iroh-blobs/compare/v0.33.0..0.33.1) - 2025-03-11
+
+### 🐛 Bug Fixes
+
+- Do not panic when parsing invalid hashes ([#68](https://github.com/n0-computer/iroh-blobs/issues/68)) - ([cfdfca0](https://github.com/n0-computer/iroh-blobs/commit/cfdfca04760369a9457ea09b4085ab63588398c1))
+
+### ⚙️ Miscellaneous Tasks
+
+- Patch to use main branch of iroh dependencies ([#64](https://github.com/n0-computer/iroh-blobs/issues/64)) - ([d739d52](https://github.com/n0-computer/iroh-blobs/commit/d739d5225029d40749150ad4f2d5e1c1c6f1c0c4))
+- Release ([#70](https://github.com/n0-computer/iroh-blobs/issues/70)) - ([4c282fe](https://github.com/n0-computer/iroh-blobs/commit/4c282fea5536f142fe6aab78de1c58d2871c912f))
+- Update change log ([#71](https://github.com/n0-computer/iroh-blobs/issues/71)) - ([f4feff7](https://github.com/n0-computer/iroh-blobs/commit/f4feff72c79559ff09ddc8091e15996cf2df0c27))
+
+## [0.33.1](https://github.com/n0-computer/iroh-blobs/compare/v0.33.0..0.33.1) - 2025-03-11
+
+### 🐛 Bug Fixes
+
+- Do not panic when parsing invalid hashes ([#68](https://github.com/n0-computer/iroh-blobs/issues/68)) - ([cfdfca0](https://github.com/n0-computer/iroh-blobs/commit/cfdfca04760369a9457ea09b4085ab63588398c1))
+
+### ⚙️ Miscellaneous Tasks
+
+- Patch to use main branch of iroh dependencies ([#64](https://github.com/n0-computer/iroh-blobs/issues/64)) - ([d739d52](https://github.com/n0-computer/iroh-blobs/commit/d739d5225029d40749150ad4f2d5e1c1c6f1c0c4))
+- Release ([#70](https://github.com/n0-computer/iroh-blobs/issues/70)) - ([4c282fe](https://github.com/n0-computer/iroh-blobs/commit/4c282fea5536f142fe6aab78de1c58d2871c912f))
+
 ## [0.33.0](https://github.com/n0-computer/iroh-blobs/compare/v0.32.0..0.33.0) - 2025-02-25
 
 ### 📚 Documentation
