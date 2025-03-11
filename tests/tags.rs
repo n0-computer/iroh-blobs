@@ -87,10 +87,21 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
     tags.set("b", Hash::new("b")).await?;
     tags.set("c", Hash::new("c")).await?;
 
+    assert_eq!(
+        tags.get("b").await?,
+        Some(TagInfo {
+            name: "b".into(),
+            hash: Hash::new("b"),
+            format: BlobFormat::Raw,
+        })
+    );
+
     tags.delete("b").await?;
     let stream = tags.list().await?;
     let res = to_vec(stream).await?;
     assert_eq!(res, expected(["a", "c"]));
+
+    assert_eq!(tags.get("b").await?, None);
 
     Ok(())
 }
