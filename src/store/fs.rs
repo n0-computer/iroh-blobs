@@ -98,9 +98,9 @@ use tables::{ReadOnlyTables, ReadableTables, Tables};
 
 use self::{tables::DeleteSet, test_support::EntryData, util::PeekableFlumeReceiver};
 use super::{
-    bao_file::{BaoFileConfig, BaoFileHandle, BaoFileHandleWeak, CreateCb},
-    temp_name, BaoBatchWriter, BaoBlobSize, ConsistencyCheckProgress, EntryStatus, ExportMode,
-    ExportProgressCb, ImportMode, ImportProgress, Map, ReadableStore, TempCounterMap,
+    bao_file::{read_current_size, BaoFileConfig, BaoFileHandle, BaoFileHandleWeak, CreateCb},
+    temp_name, BaoBatchWriter, BaoBlobSize, ConsistencyCheckProgress, EntryPathOrData, EntryStatus,
+    ExportMode, ExportProgressCb, ImportMode, ImportProgress, Map, ReadableStore, TempCounterMap,
 };
 use crate::{
     store::{
@@ -532,6 +532,10 @@ pub(crate) enum ActorMessage {
         hash: Hash,
         tx: oneshot::Sender<ActorResult<EntryStatus>>,
     },
+    EntryPathOrData {
+        hash: Hash,
+        tx: oneshot::Sender<ActorResult<Option<EntryPathOrData>>>,
+    },
     #[cfg(test)]
     /// Query method: get the full entry state for a hash, both in memory and in redb.
     /// This is everything we got about the entry, including the actual inline outboard and data.
@@ -664,6 +668,7 @@ impl ActorMessage {
             | Self::Tags { .. }
             | Self::GcStart { .. }
             | Self::GetFullEntryState { .. }
+            | Self::EntryPathOrData { .. }
             | Self::Dump => MessageCategory::ReadOnly,
             Self::Import { .. }
             | Self::Export { .. }
@@ -868,6 +873,14 @@ impl StoreInner {
             .map(|r| r.map_err(|e| ActorError::from(e).into()))
             .collect();
         Ok(tags)
+    }
+
+    async fn entry_path_or_data(&self, hash: Hash) -> OuterResult<Option<EntryPathOrData>> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(ActorMessage::EntryPathOrData { hash, tx })
+            .await?;
+        Ok(rx.await??)
     }
 
     async fn set_tag(&self, tag: Tag, value: Option<HashAndFormat>) -> OuterResult<()> {
@@ -1369,6 +1382,10 @@ impl super::Store for Store {
             this.0.finalize_import_sync(file, format, id, progress)
         })
         .await??)
+    }
+
+    async fn entry_path_or_data(&self, hash: Hash) -> io::Result<Option<EntryPathOrData>> {
+        Ok(self.0.entry_path_or_data(hash).await?)
     }
 
     async fn set_tag(&self, name: Tag, hash: Option<HashAndFormat>) -> io::Result<()> {
@@ -2266,6 +2283,65 @@ impl ActorState {
         Ok(())
     }
 
+    fn entry_path_or_data(
+        &mut self,
+        tables: &impl ReadableTables,
+        hash: Hash,
+    ) -> ActorResult<Option<EntryPathOrData>> {
+        let data_path = || self.options.path.owned_data_path(&hash);
+        let outboard_path = || self.options.path.owned_outboard_path(&hash);
+        let sizes_path = || self.options.path.owned_sizes_path(&hash);
+        Ok(match tables.blobs().get(hash)? {
+            Some(guard) => match guard.value() {
+                EntryState::Complete {
+                    data_location,
+                    outboard_location,
+                } => {
+                    let data = match data_location {
+                        DataLocation::External(paths, size) => {
+                            let path = paths.first().ok_or_else(|| {
+                                ActorError::Inconsistent("external data missing".to_owned())
+                            })?;
+                            MemOrFile::File((path.clone(), size))
+                        }
+                        DataLocation::Owned(size) => MemOrFile::File((data_path(), size)),
+                        DataLocation::Inline(_) => {
+                            let data = tables.inline_data().get(hash)?.ok_or_else(|| {
+                                ActorError::Inconsistent("inline data missing".to_owned())
+                            })?;
+                            MemOrFile::Mem(data.value().to_vec().into())
+                        }
+                    };
+                    let outboard = match outboard_location {
+                        OutboardLocation::Owned => MemOrFile::File(outboard_path()),
+                        OutboardLocation::Inline(_) => MemOrFile::Mem(
+                            tables
+                                .inline_outboard()
+                                .get(hash)?
+                                .ok_or_else(|| {
+                                    ActorError::Inconsistent("inline outboard missing".to_owned())
+                                })?
+                                .value()
+                                .to_vec()
+                                .into(),
+                        ),
+                        OutboardLocation::NotNeeded => MemOrFile::Mem(Bytes::new()),
+                    };
+                    Some(EntryPathOrData { data, outboard })
+                }
+                EntryState::Partial { .. } => {
+                    let sizes = std::fs::File::open(sizes_path())?;
+                    let size = read_current_size(&sizes)?;
+                    Some(EntryPathOrData {
+                        data: MemOrFile::File((data_path(), size)),
+                        outboard: MemOrFile::File(outboard_path()),
+                    })
+                }
+            },
+            None => None,
+        })
+    }
+
     fn handle_toplevel(&mut self, db: &redb::Database, msg: ActorMessage) -> ActorResult<()> {
         match msg {
             ActorMessage::UpdateInlineOptions {
@@ -2337,6 +2413,10 @@ impl ActorState {
             }
             ActorMessage::GetFullEntryState { hash, tx } => {
                 let res = self.get_full_entry_state(tables, hash);
+                tx.send(res).ok();
+            }
+            ActorMessage::EntryPathOrData { hash, tx } => {
+                let res = self.entry_path_or_data(tables, hash);
                 tx.send(res).ok();
             }
             x => return Ok(Err(x)),

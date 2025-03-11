@@ -23,10 +23,10 @@ use proto::{
         AddPathRequest, AddPathResponse, AddStreamRequest, AddStreamResponse, AddStreamUpdate,
         BatchAddPathRequest, BatchAddPathResponse, BatchAddStreamRequest, BatchAddStreamResponse,
         BatchAddStreamUpdate, BatchCreateRequest, BatchCreateResponse, BatchCreateTempTagRequest,
-        BatchUpdate, BlobStatusRequest, BlobStatusResponse, ConsistencyCheckRequest,
-        CreateCollectionRequest, CreateCollectionResponse, DeleteRequest, DownloadResponse,
-        ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest, ReadAtRequest,
-        ReadAtResponse, ValidateRequest,
+        BatchUpdate, BlobEntryInfoRequest, BlobStatusRequest, BlobStatusResponse,
+        ConsistencyCheckRequest, CreateCollectionRequest, CreateCollectionResponse, DeleteRequest,
+        DownloadResponse, ExportRequest, ExportResponse, ListIncompleteRequest, ListRequest,
+        ReadAtRequest, ReadAtResponse, ValidateRequest,
     },
     tags::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
@@ -51,7 +51,9 @@ use crate::{
     },
     net_protocol::{BlobDownloadRequest, Blobs, BlobsInner},
     provider::{AddProgress, BatchAddPathProgress},
-    store::{ConsistencyCheckProgress, ImportProgress, MapEntry, ValidateProgress},
+    store::{
+        ConsistencyCheckProgress, EntryPathOrData, ImportProgress, MapEntry, ValidateProgress,
+    },
     util::{
         local_pool::LocalPoolHandle,
         progress::{AsyncChannelProgressSender, ProgressSender},
@@ -203,6 +205,7 @@ impl<D: crate::store::Store> Handler<D> {
                     .await
             }
             BatchCreateTempTag(msg) => chan.rpc(msg, self, Self::batch_create_temp_tag).await,
+            EntryInfo(msg) => chan.rpc(msg, self, Self::blob_entry_info).await,
         }
     }
 
@@ -307,6 +310,17 @@ impl<D: crate::store::Store> Handler<D> {
             .await
             .map_err(|e| RpcError::new(&e))?;
         Ok(())
+    }
+
+    async fn blob_entry_info(
+        self,
+        msg: BlobEntryInfoRequest,
+    ) -> RpcResult<Option<EntryPathOrData>> {
+        Ok(self
+            .store()
+            .entry_path_or_data(msg.hash)
+            .await
+            .map_err(|e| RpcError::new(&e))?)
     }
 
     fn blob_list_tags(self, msg: TagListRequest) -> impl Stream<Item = TagInfo> + Send + 'static {

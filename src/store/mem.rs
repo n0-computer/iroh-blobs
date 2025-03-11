@@ -19,8 +19,8 @@ use futures_lite::{Stream, StreamExt};
 use iroh_io::AsyncSliceReader;
 
 use super::{
-    temp_name, BaoBatchWriter, ConsistencyCheckProgress, ExportMode, ExportProgressCb, ImportMode,
-    ImportProgress, Map, TempCounterMap,
+    temp_name, BaoBatchWriter, ConsistencyCheckProgress, EntryPathOrData, ExportMode,
+    ExportProgressCb, ImportMode, ImportProgress, Map, TempCounterMap,
 };
 use crate::{
     store::{
@@ -28,7 +28,7 @@ use crate::{
     },
     util::{
         progress::{BoxedProgressSender, IdGenerator, IgnoreProgressSender, ProgressSender},
-        TagCounter, TagDrop,
+        MemOrFile, TagCounter, TagDrop,
     },
     BlobFormat, Hash, HashAndFormat, Tag, TempTag, IROH_BLOCK_SIZE,
 };
@@ -244,6 +244,22 @@ impl super::Store for Store {
             }
         }
         Ok(())
+    }
+
+    async fn entry_path_or_data(&self, hash: Hash) -> io::Result<Option<EntryPathOrData>> {
+        let state = self.read_lock();
+        match state.entries.get(&hash) {
+            Some(entry) => {
+                let inner = entry.inner.data.read().unwrap();
+                let data = inner.data.to_vec().into();
+                let outboard = inner.outboard.to_vec().into();
+                Ok(Some(EntryPathOrData {
+                    data: MemOrFile::Mem(data),
+                    outboard: MemOrFile::Mem(outboard),
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn shutdown(&self) {}

@@ -18,6 +18,7 @@ async-channel = "2.3.1"
 bao-tree = { version = "0.13", features = [
     "tokio_fsm",
     "validate",
+    "experimental-mixed",
 ], default-features = false }
 blake3 = { version = "1.4.5", package = "iroh-blake3" }
 bytes = { version = "1.7", features = ["serde"] }
@@ -77,6 +78,7 @@ walkdir = { version = "2.5.0", optional = true }
 # Examples
 console = { version = "0.15.8", optional = true }
 tracing-test = "0.2.5"
+positioned-io = "0.3.3"
 
 [dev-dependencies]
 http-body = "1.0"
@@ -189,3 +191,4 @@ incremental = false
 iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
 iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
 quic-rpc = { git = "https://github.com/n0-computer/quic-rpc", branch = "main" }
+bao-tree = { git = "https://github.com/n0-computer/bao-tree", branch = "read_and_seek" }

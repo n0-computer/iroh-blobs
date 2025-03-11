@@ -20,7 +20,7 @@ use crate::{
     util::{
         local_pool::{self, LocalPool},
         progress::{BoxedProgressSender, IdGenerator, ProgressSender},
-        Tag,
+        MemOrFile, Tag,
     },
     BlobFormat, Hash, HashAndFormat, TempTag, IROH_BLOCK_SIZE,
 };
@@ -40,6 +40,15 @@ pub enum EntryStatus {
     Partial,
     /// The entry is not in the store.
     NotFound,
+}
+
+/// Get the path or data for an entry
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct EntryPathOrData {
+    /// The path to the data file or the inline data
+    pub data: MemOrFile<Bytes, (PathBuf, u64)>,
+    /// The path to the outboard file, or the inline outboard
+    pub outboard: MemOrFile<Bytes, PathBuf>,
 }
 
 /// The size of a bao file
@@ -384,6 +393,12 @@ pub trait Store: ReadableStore + MapMut + std::fmt::Debug {
     ) -> impl Future<Output = io::Result<()>> + Send {
         validate_impl(self, repair, tx)
     }
+
+    /// Get the info needed to open an entry independently of the store.
+    fn entry_path_or_data(
+        &self,
+        hash: Hash,
+    ) -> impl Future<Output = io::Result<Option<EntryPathOrData>>> + Send;
 }
 
 async fn validate_impl(

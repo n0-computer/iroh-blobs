@@ -1,17 +1,34 @@
 use std::{fs::File, io};
 
-use bao_tree::io::sync::{ReadAt, Size};
+use bao_tree::io::{
+    mixed::ReadBytesAt,
+    sync::{ReadAt, Size},
+};
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 /// This is a general purpose Either, just like Result, except that the two cases
 /// are Mem for something that is in memory, and File for something that is somewhere
 /// external and only available via io.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemOrFile<M, F> {
     /// We got it all in memory
     Mem(M),
     /// A file
     File(F),
+}
+
+impl<M, F> ReadBytesAt for MemOrFile<M, F>
+where
+    M: ReadBytesAt,
+    F: ReadBytesAt,
+{
+    fn read_bytes_at(&self, offset: u64, size: usize) -> io::Result<Bytes> {
+        match self {
+            MemOrFile::Mem(mem) => mem.read_bytes_at(offset, size),
+            MemOrFile::File(file) => file.read_bytes_at(offset, size),
+        }
+    }
 }
 
 /// Helper methods for a common way to use MemOrFile, where the memory part is something

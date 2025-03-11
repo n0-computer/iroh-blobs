@@ -18,7 +18,10 @@ use futures_lite::Stream;
 use iroh_io::AsyncSliceReader;
 use tokio::io::AsyncWriteExt;
 
-use super::{BaoBatchWriter, BaoBlobSize, ConsistencyCheckProgress, DbIter, ExportProgressCb};
+use super::{
+    BaoBatchWriter, BaoBlobSize, ConsistencyCheckProgress, DbIter, EntryPathOrData,
+    ExportProgressCb,
+};
 use crate::{
     store::{
         EntryStatus, ExportMode, ImportMode, ImportProgress, Map, MapEntry, MapEntryMut,
@@ -26,7 +29,7 @@ use crate::{
     },
     util::{
         progress::{BoxedProgressSender, IdGenerator, ProgressSender},
-        Tag,
+        MemOrFile, Tag,
     },
     BlobFormat, Hash, HashAndFormat, TempTag, IROH_BLOCK_SIZE,
 };
@@ -319,6 +322,24 @@ impl super::Store for Store {
 
     async fn create_tag(&self, _hash: HashAndFormat) -> io::Result<Tag> {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
+    fn entry_path_or_data(
+        &self,
+        hash: Hash,
+    ) -> impl Future<Output = io::Result<Option<super::EntryPathOrData>>> + Send {
+        let res = match self.0.get(&hash) {
+            Some((outboard, data)) => {
+                let outboard = outboard.data.clone();
+                let data = data.clone();
+                Ok(Some(EntryPathOrData {
+                    outboard: MemOrFile::Mem(outboard),
+                    data: MemOrFile::Mem(data),
+                }))
+            }
+            None => Ok(None),
+        };
+        futures_lite::future::ready(res)
     }
 
     fn temp_tag(&self, inner: HashAndFormat) -> TempTag {
