@@ -270,7 +270,7 @@ where
         self.delete_with_opts(DeleteOptions::range(range)).await
     }
 
-    /// Lists all tags with the given prefix.
+    /// Delete all tags with the given prefix.
     pub async fn delete_prefix(&self, prefix: impl AsRef<[u8]>) -> Result<()> {
         self.delete_with_opts(DeleteOptions::prefix(prefix.as_ref()))
             .await

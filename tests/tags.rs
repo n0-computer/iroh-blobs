@@ -8,7 +8,7 @@ use iroh_blobs::{
         client::tags::{self, TagInfo},
         proto::RpcService,
     },
-    BlobFormat, Hash,
+    BlobFormat, Hash, HashAndFormat,
 };
 use testresult::TestResult;
 
@@ -27,12 +27,18 @@ fn expected(tags: impl IntoIterator<Item = &'static str>) -> Vec<TagInfo> {
         .collect()
 }
 
+async fn set<C: quic_rpc::Connector<RpcService>>(
+    tags: &tags::Client<C>,
+    names: impl IntoIterator<Item = &str>,
+) -> TestResult<()> {
+    for name in names {
+        tags.set(name, Hash::new(name)).await?;
+    }
+    Ok(())
+}
+
 async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -> TestResult<()> {
-    tags.set("a", Hash::new("a")).await?;
-    tags.set("b", Hash::new("b")).await?;
-    tags.set("c", Hash::new("c")).await?;
-    tags.set("d", Hash::new("d")).await?;
-    tags.set("e", Hash::new("e")).await?;
+    set(&tags, ["a", "b", "c", "d", "e"]).await?;
     let stream = tags.list().await?;
     let res = to_vec(stream).await?;
     assert_eq!(res, expected(["a", "b", "c", "d", "e"]));
@@ -63,11 +69,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
     let res = to_vec(stream).await?;
     assert_eq!(res, expected([]));
 
-    tags.set("a", Hash::new("a")).await?;
-    tags.set("aa", Hash::new("aa")).await?;
-    tags.set("aaa", Hash::new("aaa")).await?;
-    tags.set("aab", Hash::new("aab")).await?;
-    tags.set("b", Hash::new("b")).await?;
+    set(&tags, ["a", "aa", "aaa", "aab", "b"]).await?;
 
     let stream = tags.list_prefix("aa").await?;
     let res = to_vec(stream).await?;
@@ -83,9 +85,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
     let res = to_vec(stream).await?;
     assert_eq!(res, expected([]));
 
-    tags.set("a", Hash::new("a")).await?;
-    tags.set("b", Hash::new("b")).await?;
-    tags.set("c", Hash::new("c")).await?;
+    set(&tags, ["a", "b", "c"]).await?;
 
     assert_eq!(
         tags.get("b").await?,
@@ -103,6 +103,21 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
 
     assert_eq!(tags.get("b").await?, None);
 
+    tags.delete_prefix("").await?;
+
+    tags.set("a", HashAndFormat::hash_seq(Hash::new("a")))
+        .await?;
+    tags.set("b", HashAndFormat::raw(Hash::new("b"))).await?;
+    let stream = tags.list_hash_seq().await?;
+    let res = to_vec(stream).await?;
+    assert_eq!(
+        res,
+        vec![TagInfo {
+            name: "a".into(),
+            hash: Hash::new("a"),
+            format: BlobFormat::HashSeq,
+        },]
+    );
     Ok(())
 }
 
