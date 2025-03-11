@@ -148,7 +148,8 @@ impl Tag {
     /// The successor of this tag in lexicographic order.
     pub fn successor(&self) -> Self {
         let mut bytes = self.0.to_vec();
-        increment_vec(&mut bytes);
+        // increment_vec(&mut bytes);
+        bytes.push(0);
         Self(bytes.into())
     }
 
@@ -347,20 +348,6 @@ pub(crate) fn next_prefix(bytes: &mut [u8]) -> bool {
         *byte = 0;
     }
     false
-}
-
-/// Increment a byte vector, lexographically.
-#[allow(dead_code)]
-pub(crate) fn increment_vec(bytes: &mut Vec<u8>) {
-    for byte in bytes.iter_mut().rev() {
-        if *byte < 255 {
-            *byte += 1;
-            return;
-        }
-        *byte = 0;
-    }
-
-    bytes.push(0);
 }
 
 /// Synchronously compute the outboard of a file, and return hash and outboard.

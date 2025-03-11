@@ -86,7 +86,6 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use tokio::io::AsyncWriteExt;
 use tracing::trace_span;
-
 mod tables;
 #[doc(hidden)]
 pub mod test_support;

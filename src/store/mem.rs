@@ -17,6 +17,7 @@ use bao_tree::{
 use bytes::{Bytes, BytesMut};
 use futures_lite::{Stream, StreamExt};
 use iroh_io::AsyncSliceReader;
+use tracing::info;
 
 use super::{
     temp_name, BaoBatchWriter, ConsistencyCheckProgress, ExportMode, ExportProgressCb, ImportMode,
@@ -215,6 +216,8 @@ impl super::Store for Store {
 
     async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> io::Result<()> {
         let mut state = self.write_lock();
+        info!("deleting tags from {:?} to {:?}", from, to);
+        // state.tags.remove(&from.unwrap());
         // todo: more efficient impl
         state.tags.retain(|tag, _| {
             if let Some(from) = &from {
@@ -227,6 +230,7 @@ impl super::Store for Store {
                     return true;
                 }
             }
+            info!("    removing {:?}", tag);
             false
         });
         Ok(())
