@@ -74,6 +74,18 @@ mod redb_support {
     }
 }
 
+impl From<&[u8]> for Tag {
+    fn from(value: &[u8]) -> Self {
+        Self(Bytes::copy_from_slice(value))
+    }
+}
+
+impl AsRef<[u8]> for Tag {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 impl Borrow<[u8]> for Tag {
     fn borrow(&self) -> &[u8] {
         self.0.as_ref()
@@ -130,6 +142,25 @@ impl Tag {
                 return Self::from(text);
             }
             i += 1;
+        }
+    }
+
+    /// The successor of this tag in lexicographic order.
+    pub fn successor(&self) -> Self {
+        let mut bytes = self.0.to_vec();
+        increment_vec(&mut bytes);
+        Self(bytes.into())
+    }
+
+    /// If this is a prefix, get the next prefix.
+    ///
+    /// This is like successor, except that it will return None if the prefix is all 0xFF instead of appending a 0 byte.
+    pub fn next_prefix(&self) -> Option<Self> {
+        let mut bytes = self.0.to_vec();
+        if next_prefix(&mut bytes) {
+            Some(Self(bytes.into()))
+        } else {
+            None
         }
     }
 }

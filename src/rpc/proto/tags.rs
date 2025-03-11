@@ -1,5 +1,4 @@
 //! Tags RPC protocol
-use bytes::Bytes;
 use nested_enum_utils::enum_conversions;
 use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
@@ -7,8 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{RpcResult, RpcService};
 use crate::{
     net_protocol::BatchId,
-    rpc::client::tags::TagInfo,
-    util::{increment_vec, next_prefix},
+    rpc::client::tags::{DeleteOptions, ListOptions, TagInfo},
     HashAndFormat, Tag,
 };
 
@@ -79,73 +77,19 @@ pub struct ListRequest {
     pub raw: bool,
     /// List hash seq tags
     pub hash_seq: bool,
-    /// From tag
+    /// From tag (inclusive)
     pub from: Option<Tag>,
     /// To tag (exclusive)
     pub to: Option<Tag>,
 }
 
-impl ListRequest {
-    /// List tags with a prefix
-    pub fn prefix(prefix: &[u8]) -> Self {
-        let from = prefix.to_vec();
-        let mut to = from.clone();
-        let from = Bytes::from(from).into();
-        let to = if next_prefix(&mut to) {
-            Some(Bytes::from(to).into())
-        } else {
-            None
-        };
+impl From<ListOptions> for ListRequest {
+    fn from(options: ListOptions) -> Self {
         Self {
-            raw: true,
-            hash_seq: true,
-            from: Some(from),
-            to,
-        }
-    }
-
-    /// List a single tag
-    pub fn single(name: &[u8]) -> Self {
-        let from = name.to_vec();
-        let mut next = from.clone();
-        increment_vec(&mut next);
-        let from = Bytes::from(from).into();
-        let to = Bytes::from(next).into();
-        Self {
-            raw: true,
-            hash_seq: true,
-            from: Some(from),
-            to: Some(to),
-        }
-    }
-
-    /// List all tags
-    pub fn all() -> Self {
-        Self {
-            raw: true,
-            hash_seq: true,
-            from: None,
-            to: None,
-        }
-    }
-
-    /// List raw tags
-    pub fn raw() -> Self {
-        Self {
-            raw: true,
-            hash_seq: false,
-            from: None,
-            to: None,
-        }
-    }
-
-    /// List hash seq tags
-    pub fn hash_seq() -> Self {
-        Self {
-            raw: false,
-            hash_seq: true,
-            from: None,
-            to: None,
+            raw: options.raw,
+            hash_seq: options.hash_seq,
+            from: options.from,
+            to: options.to,
         }
     }
 }
@@ -153,6 +97,17 @@ impl ListRequest {
 /// Delete a tag
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeleteRequest {
-    /// Name of the tag
-    pub name: Tag,
+    /// From tag (inclusive)
+    pub from: Option<Tag>,
+    /// To tag (exclusive)
+    pub to: Option<Tag>,
+}
+
+impl From<DeleteOptions> for DeleteRequest {
+    fn from(options: DeleteOptions) -> Self {
+        Self {
+            from: options.from,
+            to: options.to,
+        }
+    }
 }
