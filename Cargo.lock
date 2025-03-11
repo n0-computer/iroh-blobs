@@ -349,8 +349,7 @@ dependencies = [
 [[package]]
 name = "bao-tree"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1f7a89a8ee5889d2593ae422ce6e1bb03e48a0e8a16e4fa0882dfcbe7e182ef"
+source = "git+https://github.com/n0-computer/bao-tree?branch=read_and_seek#bff3195faa89636b8bdb2ff69bf7e9d532565df6"
 dependencies = [
  "bytes",
  "futures-lite",
@@ -361,6 +360,7 @@ dependencies = [
  "range-collections",
  "self_cell",
  "smallvec",
+ "tokio",
 ]
 
 [[package]]
@@ -2103,6 +2103,7 @@ dependencies = [
  "oneshot",
  "parking_lot",
  "portable-atomic",
+ "positioned-io",
  "postcard",
  "proptest",
  "quic-rpc",
@@ -3277,6 +3278,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccabfeeb89c73adf4081f0dca7f8e28dbda90981a222ceea37f619e93ea6afe9"
 dependencies = [
+ "byteorder",
  "libc",
  "winapi",
 ]

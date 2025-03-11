@@ -66,6 +66,10 @@ use std::{
 };
 
 use anyhow::{anyhow, Context as _, Result};
+use bao_tree::{
+    io::{baofile::BaoFile, outboard::PreOrderOutboard},
+    BaoTree,
+};
 use bytes::Bytes;
 use futures_lite::{Stream, StreamExt};
 use futures_util::SinkExt;
@@ -87,10 +91,10 @@ use crate::{
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress as BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
-    rpc::proto::RpcService,
+    rpc::proto::{blobs::BlobEntryInfoRequest, RpcService},
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
-    util::SetTagOption,
-    BlobFormat, Hash, Tag,
+    util::{MemOrFile, SetTagOption},
+    BlobFormat, Hash, Tag, IROH_BLOCK_SIZE,
 };
 
 mod batch;
@@ -378,6 +382,31 @@ where
         Ok(DownloadProgress::new(
             stream.map(|res| res.map_err(anyhow::Error::from)),
         ))
+    }
+
+    /// Open a blob as an independent bao file
+    pub async fn open(&self, hash: Hash) -> Result<impl std::io::Read + std::io::Seek> {
+        let Some(info) = self.rpc.rpc(BlobEntryInfoRequest { hash }).await?? else {
+            return Err(anyhow!("Blob not found"));
+        };
+        let (data, size) = match info.data {
+            MemOrFile::Mem(data) => (MemOrFile::Mem(data.clone()), data.len() as u64),
+            MemOrFile::File((path, size)) => (MemOrFile::File(std::fs::File::open(path)?), size),
+        };
+        let outboard = match info.outboard {
+            MemOrFile::Mem(data) => MemOrFile::Mem(data.clone()),
+            MemOrFile::File(path) => MemOrFile::File(std::fs::File::open(path)?),
+        };
+        let file = BaoFile {
+            data,
+            outboard: PreOrderOutboard {
+                tree: BaoTree::new(size, IROH_BLOCK_SIZE),
+                root: hash.into(),
+                data: outboard,
+            },
+        };
+        let file = positioned_io::Cursor::new(file);
+        Ok(file)
     }
 
     /// Export a blob from the internal blob store to a path on the node's filesystem.

@@ -15,8 +15,8 @@ use crate::{
     provider::{AddProgress, BatchAddPathProgress},
     rpc::client::blobs::{BlobInfo, BlobStatus, IncompleteBlobInfo, ReadAtLen, WrapOption},
     store::{
-        BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ImportMode,
-        ValidateProgress,
+        BaoBlobSize, ConsistencyCheckProgress, EntryPathOrData, ExportFormat, ExportMode,
+        ImportMode, ValidateProgress,
     },
     util::SetTagOption,
     BlobFormat, Hash, HashAndFormat, Tag,
@@ -63,6 +63,8 @@ pub enum Request {
     BatchAddPath(BatchAddPathRequest),
     #[rpc(response = RpcResult<()>)]
     BatchCreateTempTag(BatchCreateTempTagRequest),
+    #[rpc(response = RpcResult<Option<EntryPathOrData>>)]
+    EntryInfo(BlobEntryInfoRequest),
 }
 
 #[allow(missing_docs)]
@@ -83,6 +85,7 @@ pub enum Response {
     BatchCreate(BatchCreateResponse),
     BatchAddStream(BatchAddStreamResponse),
     BatchAddPath(BatchAddPathResponse),
+    EntryInfo(RpcResult<Option<EntryPathOrData>>),
 }
 
 /// A request to the node to provide the data at the given path
@@ -311,6 +314,13 @@ pub struct BatchAddPathRequest {
     pub format: BlobFormat,
     /// Batch to create the temp tag in
     pub batch: BatchId,
+}
+
+/// Write a blob from a byte stream
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BlobEntryInfoRequest {
+    /// The hash of the blob
+    pub hash: Hash,
 }
 
 /// Response to a batch add path request

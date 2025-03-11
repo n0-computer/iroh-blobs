@@ -43,7 +43,7 @@ pub enum EntryStatus {
 }
 
 /// Get the path or data for an entry
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct EntryPathOrData {
     /// The path to the data file or the inline data
     pub data: MemOrFile<Bytes, (PathBuf, u64)>,
