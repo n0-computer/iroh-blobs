@@ -152,7 +152,11 @@
 <a href="#151" id="151">151</a>
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
-<a href="#154" id="154">154</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
 </span><span class="kw">use </span>bytes::Bytes;
 <span class="kw">use </span>nested_enum_utils::enum_conversions;
 <span class="kw">use </span>quic_rpc_derive::rpc_requests;
@@ -241,8 +245,10 @@
 
 <span class="kw">impl </span>ListRequest {
     <span class="doccomment">/// List tags with a prefix
-    </span><span class="kw">pub fn </span>prefix(prefix: Tag) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span><span class="kw-2">mut </span>to = prefix.<span class="number">0</span>.to_vec();
+    </span><span class="kw">pub fn </span>prefix(prefix: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>from = prefix.to_vec();
+        <span class="kw">let </span><span class="kw-2">mut </span>to = from.clone();
+        <span class="kw">let </span>from = Bytes::from(from).into();
         <span class="kw">let </span>to = <span class="kw">if </span>next_prefix(<span class="kw-2">&amp;mut </span>to) {
             <span class="prelude-val">Some</span>(Bytes::from(to).into())
         } <span class="kw">else </span>{
@@ -251,21 +257,23 @@
         <span class="self">Self </span>{
             raw: <span class="bool-val">true</span>,
             hash_seq: <span class="bool-val">true</span>,
-            from: <span class="prelude-val">Some</span>(prefix),
+            from: <span class="prelude-val">Some</span>(from),
             to,
         }
     }
 
     <span class="doccomment">/// List a single tag
-    </span><span class="kw">pub fn </span>single(name: Tag) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span><span class="kw-2">mut </span>next = name.<span class="number">0</span>.to_vec();
+    </span><span class="kw">pub fn </span>single(name: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>from = name.to_vec();
+        <span class="kw">let </span><span class="kw-2">mut </span>next = from.clone();
         increment_vec(<span class="kw-2">&amp;mut </span>next);
-        <span class="kw">let </span>next = Bytes::from(next).into();
+        <span class="kw">let </span>from = Bytes::from(from).into();
+        <span class="kw">let </span>to = Bytes::from(next).into();
         <span class="self">Self </span>{
             raw: <span class="bool-val">true</span>,
             hash_seq: <span class="bool-val">true</span>,
-            from: <span class="prelude-val">Some</span>(name),
-            to: <span class="prelude-val">Some</span>(next),
+            from: <span class="prelude-val">Some</span>(from),
+            to: <span class="prelude-val">Some</span>(to),
         }
     }
 
