@@ -151,7 +151,12 @@ impl FromStr for Hash {
             // hex
             data_encoding::HEXLOWER.decode_mut(s.as_bytes(), &mut bytes)
         } else {
-            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), &mut bytes)
+            let input = s.to_ascii_uppercase();
+            let input = input.as_bytes();
+            if data_encoding::BASE32_NOPAD.decode_len(input.len())? != bytes.len() {
+                return Err(HexOrBase32ParseError::DecodeInvalidLength);
+            }
+            data_encoding::BASE32_NOPAD.decode_mut(input, &mut bytes)
         };
         match res {
             Ok(len) => {
@@ -582,5 +587,10 @@ mod tests {
         let ser = serde_json::to_string(&haf).unwrap();
         let de = serde_json::from_str(&ser).unwrap();
         assert_eq!(haf, de);
+    }
+
+    #[test]
+    fn test_hash_invalid() {
+        let _ = Hash::from_str("invalid").unwrap_err();
     }
 }
