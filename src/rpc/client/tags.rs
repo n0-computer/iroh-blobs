@@ -13,7 +13,7 @@
 use std::ops::{Bound, RangeBounds};
 
 use anyhow::Result;
-use futures_lite::{Stream, StreamExt};
+use futures_lite::{io, Stream, StreamExt};
 use quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 use serde::{Deserialize, Serialize};
 
@@ -221,6 +221,20 @@ where
         stream.next().await.transpose()
     }
 
+    /// Rename a tag
+    ///
+    /// This is done in steps, so it is not atomic!
+    pub async fn rename(&self, from: impl AsRef<[u8]>, to: impl AsRef<[u8]>) -> Result<()> {
+        let from = from.as_ref();
+        let to = to.as_ref();
+        let Some(old) = self.get(from.as_ref()).await? else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Tag not found").into());
+        };
+        self.set(to.as_ref(), old.hash_and_format()).await?;
+        self.delete(from.as_ref()).await?;
+        Ok(())
+    }
+
     /// List a range of tags
     pub async fn list_range<R, E>(&self, range: R) -> Result<impl Stream<Item = Result<TagInfo>>>
     where
@@ -286,4 +300,14 @@ pub struct TagInfo {
     pub format: BlobFormat,
     /// Hash of the data
     pub hash: Hash,
+}
+
+impl TagInfo {
+    /// Get the hash and format of the tag.
+    pub fn hash_and_format(&self) -> HashAndFormat {
+        HashAndFormat {
+            hash: self.hash,
+            format: self.format,
+        }
+    }
 }
