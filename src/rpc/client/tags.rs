@@ -289,6 +289,15 @@ where
         self.delete_with_opts(DeleteOptions::prefix(prefix.as_ref()))
             .await
     }
+
+    /// Delete all tags. Use with care. After this, all data will be garbage collected.
+    pub async fn delete_all(&self) -> Result<()> {
+        self.delete_with_opts(DeleteOptions {
+            from: None,
+            to: None,
+        })
+        .await
+    }
 }
 
 /// Information about a tag.
@@ -303,6 +312,17 @@ pub struct TagInfo {
 }
 
 impl TagInfo {
+    /// Create a new tag info.
+    pub fn new(name: impl AsRef<[u8]>, value: impl Into<HashAndFormat>) -> Self {
+        let name = name.as_ref();
+        let value = value.into();
+        Self {
+            name: Tag::from(name),
+            hash: value.hash,
+            format: value.format,
+        }
+    }
+
     /// Get the hash and format of the tag.
     pub fn hash_and_format(&self) -> HashAndFormat {
         HashAndFormat {

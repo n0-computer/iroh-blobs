@@ -8,7 +8,7 @@ use iroh_blobs::{
         client::tags::{self, TagInfo},
         proto::RpcService,
     },
-    BlobFormat, Hash, HashAndFormat,
+    Hash, HashAndFormat,
 };
 use testresult::TestResult;
 
@@ -19,11 +19,7 @@ async fn to_vec<T>(stream: impl Stream<Item = anyhow::Result<T>>) -> anyhow::Res
 
 fn expected(tags: impl IntoIterator<Item = &'static str>) -> Vec<TagInfo> {
     tags.into_iter()
-        .map(|tag| TagInfo {
-            name: tag.into(),
-            hash: Hash::new(tag),
-            format: BlobFormat::Raw,
-        })
+        .map(|tag| TagInfo::new(tag, Hash::new(tag)))
         .collect()
 }
 
@@ -89,11 +85,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
 
     assert_eq!(
         tags.get("b").await?,
-        Some(TagInfo {
-            name: "b".into(),
-            hash: Hash::new("b"),
-            format: BlobFormat::Raw,
-        })
+        Some(TagInfo::new("b", Hash::new("b")))
     );
 
     tags.delete("b").await?;
@@ -103,7 +95,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
 
     assert_eq!(tags.get("b").await?, None);
 
-    tags.delete_prefix("").await?;
+    tags.delete_all().await?;
 
     tags.set("a", HashAndFormat::hash_seq(Hash::new("a")))
         .await?;
@@ -115,9 +107,26 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
         vec![TagInfo {
             name: "a".into(),
             hash: Hash::new("a"),
-            format: BlobFormat::HashSeq,
-        },]
+            format: iroh_blobs::BlobFormat::HashSeq,
+        }]
     );
+
+    tags.delete_all().await?;
+    set(&tags, ["c"]).await?;
+    tags.rename("c", "f").await?;
+    let stream = tags.list().await?;
+    let res = to_vec(stream).await?;
+    assert_eq!(
+        res,
+        vec![TagInfo {
+            name: "f".into(),
+            hash: Hash::new("c"),
+            format: iroh_blobs::BlobFormat::Raw,
+        }]
+    );
+
+    let res = tags.rename("y", "z").await;
+    assert!(res.is_err());
     Ok(())
 }
 
