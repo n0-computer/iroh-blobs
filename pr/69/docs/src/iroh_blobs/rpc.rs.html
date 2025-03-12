@@ -1096,7 +1096,18 @@
 <a href="#1095" id="1095">1095</a>
 <a href="#1096" id="1096">1096</a>
 <a href="#1097" id="1097">1097</a>
-<a href="#1098" id="1098">1098</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a>
+<a href="#1100" id="1100">1100</a>
+<a href="#1101" id="1101">1101</a>
+<a href="#1102" id="1102">1102</a>
+<a href="#1103" id="1103">1103</a>
+<a href="#1104" id="1104">1104</a>
+<a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a>
+<a href="#1109" id="1109">1109</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
     io,
@@ -1128,7 +1139,7 @@
     },
     tags::{
         CreateRequest <span class="kw">as </span>TagsCreateRequest, DeleteRequest <span class="kw">as </span>TagDeleteRequest,
-        ListRequest <span class="kw">as </span>TagListRequest, SetRequest <span class="kw">as </span>TagsSetRequest, SyncMode,
+        ListRequest <span class="kw">as </span>TagListRequest, RenameRequest, SetRequest <span class="kw">as </span>TagsSetRequest, SyncMode,
     },
     Request, RpcError, RpcResult, RpcService,
 };
@@ -1256,6 +1267,7 @@
             Set(msg) =&gt; chan.rpc(msg, <span class="self">self</span>, <span class="self">Self</span>::tags_set).<span class="kw">await</span>,
             DeleteTag(msg) =&gt; chan.rpc(msg, <span class="self">self</span>, <span class="self">Self</span>::blob_delete_tag).<span class="kw">await</span>,
             ListTags(msg) =&gt; chan.server_streaming(msg, <span class="self">self</span>, <span class="self">Self</span>::blob_list_tags).<span class="kw">await</span>,
+            Rename(msg) =&gt; chan.rpc(msg, <span class="self">self</span>, <span class="self">Self</span>::tags_rename).<span class="kw">await</span>,
         }
     }
 
@@ -1478,6 +1490,16 @@
             }
         });
         rx.map(AddPathResponse)
+    }
+
+    <span class="kw">async fn </span>tags_rename(<span class="self">self</span>, msg: RenameRequest) -&gt; RpcResult&lt;()&gt; {
+        <span class="kw">let </span>blobs = <span class="self">self</span>;
+        blobs
+            .store()
+            .rename_tag(msg.from, msg.to)
+            .<span class="kw">await
+            </span>.map_err(|e| RpcError::new(<span class="kw-2">&amp;</span>e))<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">async fn </span>tags_set(<span class="self">self</span>, msg: TagsSetRequest) -&gt; RpcResult&lt;()&gt; {

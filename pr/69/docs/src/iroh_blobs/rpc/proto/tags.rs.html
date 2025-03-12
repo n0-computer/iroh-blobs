@@ -111,7 +111,18 @@
 <a href="#110" id="110">110</a>
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
-<a href="#113" id="113">113</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
 </span><span class="kw">use </span>nested_enum_utils::enum_conversions;
 <span class="kw">use </span>quic_rpc_derive::rpc_requests;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -132,6 +143,8 @@
     </span>Create(CreateRequest),
     <span class="attr">#[rpc(response = RpcResult&lt;()&gt;)]
     </span>Set(SetRequest),
+    <span class="attr">#[rpc(response = RpcResult&lt;()&gt;)]
+    </span>Rename(RenameRequest),
     <span class="attr">#[rpc(response = RpcResult&lt;()&gt;)]
     </span>DeleteTag(DeleteRequest),
     <span class="attr">#[server_streaming(response = TagInfo)]
@@ -223,5 +236,14 @@
             to: options.to,
         }
     }
+}
+
+<span class="doccomment">/// Rename a tag atomically
+</span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
+</span><span class="kw">pub struct </span>RenameRequest {
+    <span class="doccomment">/// Old tag name
+    </span><span class="kw">pub </span>from: Tag,
+    <span class="doccomment">/// New tag name
+    </span><span class="kw">pub </span>to: Tag,
 }
 </code></pre></div></section></main></body></html>

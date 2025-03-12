@@ -2641,7 +2641,42 @@
 <a href="#2640" id="2640">2640</a>
 <a href="#2641" id="2641">2641</a>
 <a href="#2642" id="2642">2642</a>
-<a href="#2643" id="2643">2643</a></pre></div><pre class="rust"><code><span class="doccomment">//! redb backed storage
+<a href="#2643" id="2643">2643</a>
+<a href="#2644" id="2644">2644</a>
+<a href="#2645" id="2645">2645</a>
+<a href="#2646" id="2646">2646</a>
+<a href="#2647" id="2647">2647</a>
+<a href="#2648" id="2648">2648</a>
+<a href="#2649" id="2649">2649</a>
+<a href="#2650" id="2650">2650</a>
+<a href="#2651" id="2651">2651</a>
+<a href="#2652" id="2652">2652</a>
+<a href="#2653" id="2653">2653</a>
+<a href="#2654" id="2654">2654</a>
+<a href="#2655" id="2655">2655</a>
+<a href="#2656" id="2656">2656</a>
+<a href="#2657" id="2657">2657</a>
+<a href="#2658" id="2658">2658</a>
+<a href="#2659" id="2659">2659</a>
+<a href="#2660" id="2660">2660</a>
+<a href="#2661" id="2661">2661</a>
+<a href="#2662" id="2662">2662</a>
+<a href="#2663" id="2663">2663</a>
+<a href="#2664" id="2664">2664</a>
+<a href="#2665" id="2665">2665</a>
+<a href="#2666" id="2666">2666</a>
+<a href="#2667" id="2667">2667</a>
+<a href="#2668" id="2668">2668</a>
+<a href="#2669" id="2669">2669</a>
+<a href="#2670" id="2670">2670</a>
+<a href="#2671" id="2671">2671</a>
+<a href="#2672" id="2672">2672</a>
+<a href="#2673" id="2673">2673</a>
+<a href="#2674" id="2674">2674</a>
+<a href="#2675" id="2675">2675</a>
+<a href="#2676" id="2676">2676</a>
+<a href="#2677" id="2677">2677</a>
+<a href="#2678" id="2678">2678</a></pre></div><pre class="rust"><code><span class="doccomment">//! redb backed storage
 //!
 //! Data can get into the store in two ways:
 //!
@@ -3268,6 +3303,12 @@
         hash: HashAndFormat,
         tx: oneshot::Sender&lt;ActorResult&lt;Tag&gt;&gt;,
     },
+    <span class="doccomment">/// Modification method: rename a tag atomically.
+    </span>RenameTag {
+        from: Tag,
+        to: Tag,
+        tx: oneshot::Sender&lt;ActorResult&lt;()&gt;&gt;,
+    },
     <span class="doccomment">/// Modification method: unconditional delete the data for a number of hashes
     </span>Delete {
         hashes: Vec&lt;Hash&gt;,
@@ -3323,6 +3364,7 @@
             | <span class="self">Self</span>::SetFullEntryState { .. }
             | <span class="self">Self</span>::Delete { .. }
             | <span class="self">Self</span>::DeleteTags { .. }
+            | <span class="self">Self</span>::RenameTag { .. }
             | <span class="self">Self</span>::GcDelete { .. } =&gt; MessageCategory::ReadWrite,
             <span class="self">Self</span>::UpdateInlineOptions { .. }
             | <span class="self">Self</span>::Sync { .. }
@@ -3541,6 +3583,14 @@
     <span class="kw">async fn </span>create_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: HashAndFormat) -&gt; OuterResult&lt;Tag&gt; {
         <span class="kw">let </span>(tx, rx) = oneshot::channel();
         <span class="self">self</span>.tx.send(ActorMessage::CreateTag { hash, tx }).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(rx.<span class="kw">await</span><span class="question-mark">??</span>)
+    }
+
+    <span class="kw">async fn </span>rename_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, from: Tag, to: Tag) -&gt; OuterResult&lt;()&gt; {
+        <span class="kw">let </span>(tx, rx) = oneshot::channel();
+        <span class="self">self</span>.tx
+            .send(ActorMessage::RenameTag { from, to, tx })
+            .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(rx.<span class="kw">await</span><span class="question-mark">??</span>)
     }
 
@@ -4045,6 +4095,10 @@
 
     <span class="kw">async fn </span>create_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: HashAndFormat) -&gt; io::Result&lt;Tag&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.<span class="number">0</span>.create_tag(hash).<span class="kw">await</span><span class="question-mark">?</span>)
+    }
+
+    <span class="kw">async fn </span>rename_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, from: Tag, to: Tag) -&gt; io::Result&lt;()&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.<span class="number">0</span>.rename_tag(from, to).<span class="kw">await</span><span class="question-mark">?</span>)
     }
 
     <span class="kw">async fn </span>delete(<span class="kw-2">&amp;</span><span class="self">self</span>, hashes: Vec&lt;Hash&gt;) -&gt; io::Result&lt;()&gt; {
@@ -4664,6 +4718,18 @@
         <span class="prelude-val">Ok</span>(tag)
     }
 
+    <span class="kw">fn </span>rename_tag(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tables: <span class="kw-2">&amp;mut </span>Tables, from: Tag, to: Tag) -&gt; ActorResult&lt;()&gt; {
+        <span class="kw">let </span>value = tables
+            .tags
+            .get(from)<span class="question-mark">?
+            </span>.ok_or_else(|| {
+                ActorError::Io(io::Error::new(io::ErrorKind::NotFound, <span class="string">"tag not found"</span>))
+            })<span class="question-mark">?
+            </span>.value();
+        tables.tags.insert(to, value)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
+    }
+
     <span class="kw">fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, tables: <span class="kw-2">&amp;mut </span>Tables, tag: Tag, value: HashAndFormat) -&gt; ActorResult&lt;()&gt; {
         tables.tags.insert(tag, value)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
@@ -5034,6 +5100,10 @@
             }
             ActorMessage::CreateTag { hash, tx } =&gt; {
                 <span class="kw">let </span>res = <span class="self">self</span>.create_tag(tables, hash);
+                tx.send(res).ok();
+            }
+            ActorMessage::RenameTag { from, to, tx } =&gt; {
+                <span class="kw">let </span>res = <span class="self">self</span>.rename_tag(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::Delete { hashes, tx } =&gt; {
