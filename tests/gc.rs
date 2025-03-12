@@ -188,7 +188,7 @@ async fn gc_basics() -> Result<()> {
     // create an explicit tag for h1 (as raw) and then delete the temp tag. Entry should still be there.
     let tag = Tag::from("test");
     bao_store
-        .set_tag(tag.clone(), Some(HashAndFormat::raw(h2)))
+        .set_tag(tag.clone(), HashAndFormat::raw(h2))
         .await?;
     drop(tt2);
     tracing::info!("dropped tt2");
@@ -196,7 +196,7 @@ async fn gc_basics() -> Result<()> {
     assert_eq!(bao_store.entry_status(&h2).await?, EntryStatus::Complete);
 
     // delete the explicit tag, entry should be gone
-    bao_store.set_tag(tag, None).await?;
+    bao_store.delete_tag(tag).await?;
     step(&evs).await;
     assert_eq!(bao_store.entry_status(&h2).await?, EntryStatus::NotFound);
 
@@ -234,7 +234,7 @@ async fn gc_hashseq_impl() -> Result<()> {
     // make a permanent tag for the link seq, then delete the temp tag. Entries should still be there.
     let tag = Tag::from("test");
     bao_store
-        .set_tag(tag.clone(), Some(HashAndFormat::hash_seq(hr)))
+        .set_tag(tag.clone(), HashAndFormat::hash_seq(hr))
         .await?;
     drop(ttr);
     step(&evs).await;
@@ -244,7 +244,7 @@ async fn gc_hashseq_impl() -> Result<()> {
 
     // change the permanent tag to be just for the linkseq itself as a blob. Only the linkseq should be there, not the entries.
     bao_store
-        .set_tag(tag.clone(), Some(HashAndFormat::raw(hr)))
+        .set_tag(tag.clone(), HashAndFormat::raw(hr))
         .await?;
     step(&evs).await;
     assert_eq!(bao_store.entry_status(&h1).await?, EntryStatus::NotFound);
@@ -252,7 +252,7 @@ async fn gc_hashseq_impl() -> Result<()> {
     assert_eq!(bao_store.entry_status(&hr).await?, EntryStatus::Complete);
 
     // delete the permanent tag, everything should be gone
-    bao_store.set_tag(tag, None).await?;
+    bao_store.delete_tag(tag).await?;
     step(&evs).await;
     assert_eq!(bao_store.entry_status(&h1).await?, EntryStatus::NotFound);
     assert_eq!(bao_store.entry_status(&h2).await?, EntryStatus::NotFound);
@@ -339,7 +339,7 @@ async fn gc_file_basics() -> Result<()> {
     drop(tt2);
     let tag = Tag::from("test");
     bao_store
-        .set_tag(tag.clone(), Some(HashAndFormat::hash_seq(*ttr.hash())))
+        .set_tag(tag.clone(), HashAndFormat::hash_seq(*ttr.hash()))
         .await?;
     drop(ttr);
 
@@ -359,7 +359,7 @@ async fn gc_file_basics() -> Result<()> {
 
     tracing::info!("changing tag from hashseq to raw, this should orphan the children");
     bao_store
-        .set_tag(tag.clone(), Some(HashAndFormat::raw(hr)))
+        .set_tag(tag.clone(), HashAndFormat::raw(hr))
         .await?;
 
     // now only hr itself should be protected, but not its children
@@ -376,7 +376,7 @@ async fn gc_file_basics() -> Result<()> {
     assert!(!path(&hr).exists());
     assert!(!outboard_path(&hr).exists());
 
-    bao_store.set_tag(tag, None).await?;
+    bao_store.delete_tag(tag).await?;
     step(&evs).await;
     bao_store.sync().await?;
     assert!(check_consistency(&bao_store).await? <= ReportLevel::Info);
@@ -504,7 +504,7 @@ async fn gc_file_stress() -> Result<()> {
         if i % 100 == 0 {
             let tag = Tag::from(format!("test{}", i));
             bao_store
-                .set_tag(tag.clone(), Some(HashAndFormat::raw(*tt.hash())))
+                .set_tag(tag.clone(), HashAndFormat::raw(*tt.hash()))
                 .await?;
             live.push(*tt.hash());
         } else {

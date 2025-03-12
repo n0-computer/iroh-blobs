@@ -256,6 +256,12 @@ pub struct HashAndFormat {
     pub format: BlobFormat,
 }
 
+impl From<Hash> for HashAndFormat {
+    fn from(hash: Hash) -> Self {
+        Self::raw(hash)
+    }
+}
+
 #[cfg(feature = "redb")]
 mod redb_support {
     use postcard::experimental::max_size::MaxSize;
