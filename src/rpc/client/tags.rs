@@ -2,14 +2,24 @@
 //!
 //! The purpose of tags is to mark information as important to prevent it
 //! from being garbage-collected (if the garbage collector is turned on).
-//! Currently this is used for blobs.
+//!
+//! A tag has a name that is an arbitrary byte string. In many cases this will be
+//! a valid UTF8 string, but there are also use cases where it is useful to have
+//! non string data like integer ids in the tag name.
+//!
+//! Tags point to a [`HashAndFormat`].
+//!
+//! A tag can point to a hash with format [`BlobFormat::Raw`]. In that case it will
+//! protect *just this blob* from being garbage-collected.
+//!
+//! It can also point to a hash in format [`BlobFormat::HashSeq`]. In that case it will
+//! protect the blob itself and all hashes in the blob (the blob must be just a sequence of hashes).
+//! Using this format it is possible to protect a large number of blobs with a single tag.
+//!
+//! Tags can be created, read, renamed and deleted. Tags *do not* have to correspond to
+//! already existing data. It is perfectly valid to create a tag for data you don't have yet.
 //!
 //! The main entry point is the [`Client`].
-//!
-//! [`Client::list`] can be used to list all tags.
-//! [`Client::list_hash_seq`] can be used to list all tags with a hash_seq format.
-//!
-//! [`Client::delete`] can be used to delete a tag.
 use std::ops::{Bound, RangeBounds};
 
 use anyhow::Result;
@@ -221,9 +231,9 @@ where
         stream.next().await.transpose()
     }
 
-    /// Rename a tag
+    /// Rename a tag atomically
     ///
-    /// This is done in steps, so it is not atomic!
+    /// If the tag does not exist, this will return an error.
     pub async fn rename(&self, from: impl AsRef<[u8]>, to: impl AsRef<[u8]>) -> Result<()> {
         let from = from.as_ref();
         let to = to.as_ref();
