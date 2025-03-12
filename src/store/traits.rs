@@ -352,6 +352,9 @@ pub trait Store: ReadableStore + MapMut + std::fmt::Debug {
         hash: HashAndFormat,
     ) -> impl Future<Output = io::Result<()>> + Send;
 
+    /// Rename a tag
+    fn rename_tag(&self, from: Tag, to: Tag) -> impl Future<Output = io::Result<()>> + Send;
+
     /// Delete a single tag
     fn delete_tag(&self, name: Tag) -> impl Future<Output = io::Result<()>> + Send {
         self.delete_tags(Some(name.clone()), Some(name.successor()))

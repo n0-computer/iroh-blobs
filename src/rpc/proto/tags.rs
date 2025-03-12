@@ -20,6 +20,8 @@ pub enum Request {
     #[rpc(response = RpcResult<()>)]
     Set(SetRequest),
     #[rpc(response = RpcResult<()>)]
+    Rename(RenameRequest),
+    #[rpc(response = RpcResult<()>)]
     DeleteTag(DeleteRequest),
     #[server_streaming(response = TagInfo)]
     ListTags(ListRequest),
@@ -110,4 +112,13 @@ impl From<DeleteOptions> for DeleteRequest {
             to: options.to,
         }
     }
+}
+
+/// Rename a tag atomically
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RenameRequest {
+    /// Old tag name
+    pub from: Tag,
+    /// New tag name
+    pub to: Tag,
 }

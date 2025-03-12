@@ -625,6 +625,12 @@ pub(crate) enum ActorMessage {
         hash: HashAndFormat,
         tx: oneshot::Sender<ActorResult<Tag>>,
     },
+    /// Modification method: rename a tag atomically.
+    RenameTag {
+        from: Tag,
+        to: Tag,
+        tx: oneshot::Sender<ActorResult<()>>,
+    },
     /// Modification method: unconditional delete the data for a number of hashes
     Delete {
         hashes: Vec<Hash>,
@@ -680,6 +686,7 @@ impl ActorMessage {
             | Self::SetFullEntryState { .. }
             | Self::Delete { .. }
             | Self::DeleteTags { .. }
+            | Self::RenameTag { .. }
             | Self::GcDelete { .. } => MessageCategory::ReadWrite,
             Self::UpdateInlineOptions { .. }
             | Self::Sync { .. }
@@ -898,6 +905,14 @@ impl StoreInner {
     async fn create_tag(&self, hash: HashAndFormat) -> OuterResult<Tag> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(ActorMessage::CreateTag { hash, tx }).await?;
+        Ok(rx.await??)
+    }
+
+    async fn rename_tag(&self, from: Tag, to: Tag) -> OuterResult<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(ActorMessage::RenameTag { from, to, tx })
+            .await?;
         Ok(rx.await??)
     }
 
@@ -1402,6 +1417,10 @@ impl super::Store for Store {
 
     async fn create_tag(&self, hash: HashAndFormat) -> io::Result<Tag> {
         Ok(self.0.create_tag(hash).await?)
+    }
+
+    async fn rename_tag(&self, from: Tag, to: Tag) -> io::Result<()> {
+        Ok(self.0.rename_tag(from, to).await?)
     }
 
     async fn delete(&self, hashes: Vec<Hash>) -> io::Result<()> {
@@ -2021,6 +2040,18 @@ impl ActorState {
         Ok(tag)
     }
 
+    fn rename_tag(&mut self, tables: &mut Tables, from: Tag, to: Tag) -> ActorResult<()> {
+        let value = tables
+            .tags
+            .get(from)?
+            .ok_or_else(|| {
+                ActorError::Io(io::Error::new(io::ErrorKind::NotFound, "tag not found"))
+            })?
+            .value();
+        tables.tags.insert(to, value)?;
+        Ok(())
+    }
+
     fn set_tag(&self, tables: &mut Tables, tag: Tag, value: HashAndFormat) -> ActorResult<()> {
         tables.tags.insert(tag, value)?;
         Ok(())
@@ -2391,6 +2422,10 @@ impl ActorState {
             }
             ActorMessage::CreateTag { hash, tx } => {
                 let res = self.create_tag(tables, hash);
+                tx.send(res).ok();
+            }
+            ActorMessage::RenameTag { from, to, tx } => {
+                let res = self.rename_tag(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::Delete { hashes, tx } => {

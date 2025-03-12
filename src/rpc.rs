@@ -30,7 +30,7 @@ use proto::{
     },
     tags::{
         CreateRequest as TagsCreateRequest, DeleteRequest as TagDeleteRequest,
-        ListRequest as TagListRequest, SetRequest as TagsSetRequest, SyncMode,
+        ListRequest as TagListRequest, RenameRequest, SetRequest as TagsSetRequest, SyncMode,
     },
     Request, RpcError, RpcResult, RpcService,
 };
@@ -158,6 +158,7 @@ impl<D: crate::store::Store> Handler<D> {
             Set(msg) => chan.rpc(msg, self, Self::tags_set).await,
             DeleteTag(msg) => chan.rpc(msg, self, Self::blob_delete_tag).await,
             ListTags(msg) => chan.server_streaming(msg, self, Self::blob_list_tags).await,
+            Rename(msg) => chan.rpc(msg, self, Self::tags_rename).await,
         }
     }
 
@@ -380,6 +381,16 @@ impl<D: crate::store::Store> Handler<D> {
             }
         });
         rx.map(AddPathResponse)
+    }
+
+    async fn tags_rename(self, msg: RenameRequest) -> RpcResult<()> {
+        let blobs = self;
+        blobs
+            .store()
+            .rename_tag(msg.from, msg.to)
+            .await
+            .map_err(|e| RpcError::new(&e))?;
+        Ok(())
     }
 
     async fn tags_set(self, msg: TagsSetRequest) -> RpcResult<()> {

@@ -208,6 +208,18 @@ impl super::Store for Store {
         .await?
     }
 
+    async fn rename_tag(&self, from: Tag, to: Tag) -> io::Result<()> {
+        let mut state = self.write_lock();
+        let value = state.tags.remove(&from).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("tag not found: {:?}", from),
+            )
+        })?;
+        state.tags.insert(to, value);
+        Ok(())
+    }
+
     async fn set_tag(&self, name: Tag, value: HashAndFormat) -> io::Result<()> {
         let mut state = self.write_lock();
         state.tags.insert(name, value);

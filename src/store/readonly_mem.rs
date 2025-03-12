@@ -307,6 +307,10 @@ impl super::Store for Store {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
     }
 
+    async fn rename_tag(&self, _from: Tag, _to: Tag) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
     async fn import_stream(
         &self,
         data: impl Stream<Item = io::Result<Bytes>> + Unpin + Send,
