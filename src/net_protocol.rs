@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
-    downloader::Downloader,
+    downloader::{ConcurrencyLimits, Downloader, RetryConfig},
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -148,6 +148,8 @@ pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
     rt: Option<LocalPoolHandle>,
+    concurrency_limits: Option<ConcurrencyLimits>,
+    retry_config: Option<RetryConfig>,
 }
 
 impl<S: crate::store::Store> Builder<S> {
@@ -157,9 +159,21 @@ impl<S: crate::store::Store> Builder<S> {
         self
     }
 
-    /// Set a custom `LocalPoolHandle` to use.
+    /// Set a custom [`LocalPoolHandle`] to use.
     pub fn local_pool(mut self, rt: LocalPoolHandle) -> Self {
         self.rt = Some(rt);
+        self
+    }
+
+    /// Set custom [`ConcurrencyLimits`] to use.
+    pub fn concurrency_limits(mut self, concurrency_limits: ConcurrencyLimits) -> Self {
+        self.concurrency_limits = Some(concurrency_limits);
+        self
+    }
+
+    /// Set a custom [`RetryConfig`] to use.
+    pub fn retry_config(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = Some(retry_config);
         self
     }
 
@@ -170,7 +184,13 @@ impl<S: crate::store::Store> Builder<S> {
             .rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
-        let downloader = Downloader::new(self.store.clone(), endpoint.clone(), rt.clone());
+        let downloader = Downloader::with_config(
+            self.store.clone(),
+            endpoint.clone(),
+            rt.clone(),
+            self.concurrency_limits.unwrap_or_default(),
+            self.retry_config.unwrap_or_default(),
+        );
         Blobs::new(
             self.store,
             rt,
@@ -188,6 +208,8 @@ impl<S> Blobs<S> {
             store,
             events: None,
             rt: None,
+            concurrency_limits: None,
+            retry_config: None,
         }
     }
 }
