@@ -172,14 +172,18 @@ impl<S: crate::store::Store> Builder<S> {
 
     /// Set custom [`ConcurrencyLimits`] to use.
     pub fn concurrency_limits(mut self, concurrency_limits: ConcurrencyLimits) -> Self {
-        let downloader_config = self.downloader_config.get_or_insert_default();
+        let downloader_config = self
+            .downloader_config
+            .get_or_insert_with(|| Default::default());
         downloader_config.concurrency = concurrency_limits;
         self
     }
 
     /// Set a custom [`RetryConfig`] to use.
     pub fn retry_config(mut self, retry_config: RetryConfig) -> Self {
-        let downloader_config = self.downloader_config.get_or_insert_default();
+        let downloader_config = self
+            .downloader_config
+            .get_or_insert_with(|| Default::default());
         downloader_config.retry = retry_config;
         self
     }
