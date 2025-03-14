@@ -4721,7 +4721,7 @@
     <span class="kw">fn </span>rename_tag(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tables: <span class="kw-2">&amp;mut </span>Tables, from: Tag, to: Tag) -&gt; ActorResult&lt;()&gt; {
         <span class="kw">let </span>value = tables
             .tags
-            .get(from)<span class="question-mark">?
+            .remove(from)<span class="question-mark">?
             </span>.ok_or_else(|| {
                 ActorError::Io(io::Error::new(io::ErrorKind::NotFound, <span class="string">"tag not found"</span>))
             })<span class="question-mark">?

@@ -340,8 +340,7 @@
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
-<a href="#342" id="342">342</a>
-<a href="#343" id="343">343</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for tag management.
+<a href="#342" id="342">342</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for tag management.
 //!
 //! The purpose of tags is to mark information as important to prevent it
 //! from being garbage-collected (if the garbage collector is turned on).
@@ -366,13 +365,13 @@
 </span><span class="kw">use </span>std::ops::{Bound, RangeBounds};
 
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>futures_lite::{io, Stream, StreamExt};
+<span class="kw">use </span>futures_lite::{Stream, StreamExt};
 <span class="kw">use </span>quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use crate</span>::{
     rpc::proto::{
-        tags::{DeleteRequest, ListRequest, SetRequest, SyncMode},
+        tags::{DeleteRequest, ListRequest, RenameRequest, SetRequest, SyncMode},
         RpcService,
     },
     BlobFormat, Hash, HashAndFormat, Tag,
@@ -578,13 +577,12 @@
     ///
     /// If the tag does not exist, this will return an error.
     </span><span class="kw">pub async fn </span>rename(<span class="kw-2">&amp;</span><span class="self">self</span>, from: <span class="kw">impl </span>AsRef&lt;[u8]&gt;, to: <span class="kw">impl </span>AsRef&lt;[u8]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>from = from.as_ref();
-        <span class="kw">let </span>to = to.as_ref();
-        <span class="kw">let </span><span class="prelude-val">Some</span>(old) = <span class="self">self</span>.get(from.as_ref()).<span class="kw">await</span><span class="question-mark">? </span><span class="kw">else </span>{
-            <span class="kw">return </span><span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::NotFound, <span class="string">"Tag not found"</span>).into());
-        };
-        <span class="self">self</span>.set(to.as_ref(), old.hash_and_format()).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="self">self</span>.delete(from.as_ref()).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="self">self</span>.rpc
+            .rpc(RenameRequest {
+                from: Tag::from(from.as_ref()),
+                to: Tag::from(to.as_ref()),
+            })
+            .<span class="kw">await</span><span class="question-mark">??</span>;
         <span class="prelude-val">Ok</span>(())
     }
 
