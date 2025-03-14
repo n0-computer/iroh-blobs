@@ -47,16 +47,24 @@ impl Downloader {
         let (msg_tx, msg_rx) = mpsc::channel(super::SERVICE_CHANNEL_CAPACITY);
 
         let lp = LocalPool::default();
+        let config = Arc::new(Config {
+            concurrency: concurrency_limits,
+            retry: retry_config,
+        });
+        let config2 = config.clone();
         lp.spawn_detached(move || async move {
             // we want to see the logs of the service
-            let service = Service::new(getter, dialer, concurrency_limits, retry_config, msg_rx);
+            let service = Service::new(getter, dialer, config2, msg_rx);
             service.run().await
         });
 
         (
             Downloader {
-                next_id: Arc::new(AtomicU64::new(0)),
-                msg_tx,
+                inner: Arc::new(Inner {
+                    next_id: AtomicU64::new(0),
+                    msg_tx,
+                    config,
+                }),
             },
             lp,
         )
