@@ -103,7 +103,9 @@ async fn downloader_config() -> TestResult<()> {
             initial_retry_delay: std::time::Duration::from_secs(1),
         },
     };
-    let blobs = Blobs::builder(store).downloader(expected).build(&endpoint);
+    let blobs = Blobs::builder(store)
+        .downloader_config(expected)
+        .build(&endpoint);
     let actual = blobs.downloader().config();
     assert_eq!(&expected, actual);
     Ok(())

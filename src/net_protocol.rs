@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
-    downloader::{self, Downloader},
+    downloader::{self, ConcurrencyLimits, Downloader, RetryConfig},
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -147,7 +147,7 @@ impl BlobBatches {
 pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
-    downloader: Option<crate::downloader::Config>,
+    downloader_config: Option<crate::downloader::Config>,
     rt: Option<LocalPoolHandle>,
 }
 
@@ -158,15 +158,29 @@ impl<S: crate::store::Store> Builder<S> {
         self
     }
 
-    /// Set a custom `LocalPoolHandle` to use.
+    /// Set a custom [`LocalPoolHandle`] to use.
     pub fn local_pool(mut self, rt: LocalPoolHandle) -> Self {
         self.rt = Some(rt);
         self
     }
 
-    /// Set a custom downloader configuration.
-    pub fn downloader(mut self, config: downloader::Config) -> Self {
-        self.downloader = Some(config);
+    /// Set custom downloader config
+    pub fn downloader_config(mut self, downloader_config: downloader::Config) -> Self {
+        self.downloader_config = Some(downloader_config);
+        self
+    }
+
+    /// Set custom [`ConcurrencyLimits`] to use.
+    pub fn concurrency_limits(mut self, concurrency_limits: ConcurrencyLimits) -> Self {
+        let downloader_config = self.downloader_config.get_or_insert_default();
+        downloader_config.concurrency = concurrency_limits;
+        self
+    }
+
+    /// Set a custom [`RetryConfig`] to use.
+    pub fn retry_config(mut self, retry_config: RetryConfig) -> Self {
+        let downloader_config = self.downloader_config.get_or_insert_default();
+        downloader_config.retry = retry_config;
         self
     }
 
@@ -177,7 +191,7 @@ impl<S: crate::store::Store> Builder<S> {
             .rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
-        let downloader_config = self.downloader.unwrap_or_default();
+        let downloader_config = self.downloader_config.unwrap_or_default();
         let downloader = Downloader::with_config(
             self.store.clone(),
             endpoint.clone(),
@@ -200,7 +214,7 @@ impl<S> Blobs<S> {
         Builder {
             store,
             events: None,
-            downloader: None,
+            downloader_config: None,
             rt: None,
         }
     }
