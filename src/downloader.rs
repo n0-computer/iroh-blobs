@@ -141,7 +141,7 @@ pub enum GetOutput<N> {
 }
 
 /// Concurrency limits for the [`Downloader`].
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConcurrencyLimits {
     /// Maximum number of requests the service performs concurrently.
     pub max_concurrent_requests: usize,
@@ -193,7 +193,7 @@ impl ConcurrencyLimits {
 }
 
 /// Configuration for retry behavior of the [`Downloader`].
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryConfig {
     /// Maximum number of retry attempts for a node that failed to dial or failed with IO errors.
     pub max_retries_per_node: u32,
@@ -325,6 +325,15 @@ impl Future for DownloadHandle {
     }
 }
 
+/// All numerical config options for the downloader.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Config {
+    /// Concurrency limits for the downloader.
+    pub concurrency: ConcurrencyLimits,
+    /// Retry configuration for the downloader.
+    pub retry: RetryConfig,
+}
+
 /// Handle for the download services.
 #[derive(Clone, Debug)]
 pub struct Downloader {
@@ -372,6 +381,15 @@ impl Downloader {
             next_id: Arc::new(AtomicU64::new(0)),
             msg_tx,
         }
+    }
+
+    /// Get the current configuration.
+    pub async fn get_config(&self) -> anyhow::Result<Config> {
+        let (tx, rx) = oneshot::channel();
+        let msg = Message::GetConfig { tx };
+        self.msg_tx.send(msg).await?;
+        let config = rx.await?;
+        Ok(config)
     }
 
     /// Queue a download.
@@ -441,6 +459,11 @@ enum Message {
     /// Cancel an intent. The associated request will be cancelled when the last intent is
     /// cancelled.
     CancelIntent { id: IntentId, kind: DownloadKind },
+    /// Get the config
+    GetConfig {
+        #[debug(skip)]
+        tx: oneshot::Sender<Config>,
+    },
 }
 
 #[derive(derive_more::Debug)]
@@ -667,6 +690,13 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
                 if updated {
                     self.queue.unpark_hash(hash);
                 }
+            }
+            Message::GetConfig { tx } => {
+                let config = Config {
+                    concurrency: self.concurrency_limits,
+                    retry: self.retry_config,
+                };
+                tx.send(config).ok();
             }
         }
     }

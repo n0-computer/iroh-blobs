@@ -142,18 +142,12 @@ impl BlobBatches {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct DownloaderConfig {
-    pub concurrency: downloader::ConcurrencyLimits,
-    pub retry: downloader::RetryConfig,
-}
-
 /// Builder for the Blobs protocol handler
 #[derive(Debug)]
 pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
-    downloader: Option<DownloaderConfig>,
+    downloader: Option<crate::downloader::Config>,
     rt: Option<LocalPoolHandle>,
 }
 
@@ -171,7 +165,7 @@ impl<S: crate::store::Store> Builder<S> {
     }
 
     /// Set a custom downloader configuration.
-    pub fn downloader(mut self, config: DownloaderConfig) -> Self {
+    pub fn downloader(mut self, config: downloader::Config) -> Self {
         self.downloader = Some(config);
         self
     }
@@ -183,7 +177,7 @@ impl<S: crate::store::Store> Builder<S> {
             .rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
-        let DownloaderConfig { concurrency, retry } = self.downloader.unwrap_or_default();
+        let downloader::Config { concurrency, retry } = self.downloader.unwrap_or_default();
         let downloader = Downloader::with_config(
             self.store.clone(),
             endpoint.clone(),
