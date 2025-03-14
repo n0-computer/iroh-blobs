@@ -22,6 +22,17 @@
 //! The [downloader] module provides a component to download blobs from
 //! multiple sources and store them in a store.
 //!
+//! # Feature flags
+//!
+//! - rpc: Enable the rpc server and client. Enabled by default.
+//! - net_protocol: Enable the network protocol. Enabled by default.
+//! - downloader: Enable the downloader. Enabled by default.
+//! - fs-store: Enable the filesystem store. Enabled by default.
+//!
+//! - cli: Enable the cli. Disabled by default.
+//! - example-iroh: dependencies for examples in this crate. Disabled by default.
+//! - test: test utilities. Disabled by default.
+//!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
 //! [iroh]: https://docs.rs/iroh
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]

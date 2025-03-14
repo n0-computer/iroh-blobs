@@ -17,6 +17,7 @@ use bao_tree::{
 use bytes::{Bytes, BytesMut};
 use futures_lite::{Stream, StreamExt};
 use iroh_io::AsyncSliceReader;
+use tracing::info;
 
 use super::{
     temp_name, BaoBatchWriter, ConsistencyCheckProgress, ExportMode, ExportProgressCb, ImportMode,
@@ -207,13 +208,43 @@ impl super::Store for Store {
         .await?
     }
 
-    async fn set_tag(&self, name: Tag, value: Option<HashAndFormat>) -> io::Result<()> {
+    async fn rename_tag(&self, from: Tag, to: Tag) -> io::Result<()> {
         let mut state = self.write_lock();
-        if let Some(value) = value {
-            state.tags.insert(name, value);
-        } else {
-            state.tags.remove(&name);
-        }
+        let value = state.tags.remove(&from).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("tag not found: {:?}", from),
+            )
+        })?;
+        state.tags.insert(to, value);
+        Ok(())
+    }
+
+    async fn set_tag(&self, name: Tag, value: HashAndFormat) -> io::Result<()> {
+        let mut state = self.write_lock();
+        state.tags.insert(name, value);
+        Ok(())
+    }
+
+    async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> io::Result<()> {
+        let mut state = self.write_lock();
+        info!("deleting tags from {:?} to {:?}", from, to);
+        // state.tags.remove(&from.unwrap());
+        // todo: more efficient impl
+        state.tags.retain(|tag, _| {
+            if let Some(from) = &from {
+                if tag < from {
+                    return true;
+                }
+            }
+            if let Some(to) = &to {
+                if tag >= to {
+                    return true;
+                }
+            }
+            info!("    removing {:?}", tag);
+            false
+        });
         Ok(())
     }
 
@@ -427,10 +458,30 @@ impl ReadableStore for Store {
         ))
     }
 
-    async fn tags(&self) -> io::Result<crate::store::DbIter<(crate::Tag, crate::HashAndFormat)>> {
+    async fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> io::Result<crate::store::DbIter<(crate::Tag, crate::HashAndFormat)>> {
         #[allow(clippy::mutable_key_type)]
         let tags = self.read_lock().tags.clone();
-        Ok(Box::new(tags.into_iter().map(Ok)))
+        let tags = tags
+            .into_iter()
+            .filter(move |(tag, _)| {
+                if let Some(from) = &from {
+                    if tag < from {
+                        return false;
+                    }
+                }
+                if let Some(to) = &to {
+                    if tag >= to {
+                        return false;
+                    }
+                }
+                true
+            })
+            .map(Ok);
+        Ok(Box::new(tags))
     }
 
     fn temp_tags(&self) -> Box<dyn Iterator<Item = crate::HashAndFormat> + Send + Sync + 'static> {

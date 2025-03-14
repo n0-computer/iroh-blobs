@@ -232,7 +232,11 @@ impl ReadableStore for Store {
         ))
     }
 
-    async fn tags(&self) -> io::Result<DbIter<(Tag, HashAndFormat)>> {
+    async fn tags(
+        &self,
+        _from: Option<Tag>,
+        _to: Option<Tag>,
+    ) -> io::Result<DbIter<(Tag, HashAndFormat)>> {
         Ok(Box::new(std::iter::empty()))
     }
 
@@ -303,6 +307,10 @@ impl super::Store for Store {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
     }
 
+    async fn rename_tag(&self, _from: Tag, _to: Tag) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
     async fn import_stream(
         &self,
         data: impl Stream<Item = io::Result<Bytes>> + Unpin + Send,
@@ -313,7 +321,11 @@ impl super::Store for Store {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
     }
 
-    async fn set_tag(&self, _name: Tag, _hash: Option<HashAndFormat>) -> io::Result<()> {
+    async fn set_tag(&self, _name: Tag, _hash: HashAndFormat) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+    }
+
+    async fn delete_tags(&self, _from: Option<Tag>, _to: Option<Tag>) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
     }
 
