@@ -913,7 +913,7 @@
             </span>.rpc
             .rpc(tags::SetRequest {
                 name: tag,
-                value: <span class="prelude-val">Some</span>(tt.hash_and_format()),
+                value: tt.hash_and_format(),
                 batch: <span class="prelude-val">Some</span>(<span class="self">self</span>.<span class="number">0</span>.batch),
                 sync: SyncMode::Full,
             })

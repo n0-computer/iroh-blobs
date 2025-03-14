@@ -107,13 +107,32 @@
 <a href="#106" id="106">106</a>
 <a href="#107" id="107">107</a>
 <a href="#108" id="108">108</a>
-<a href="#109" id="109">109</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags RPC protocol
 </span><span class="kw">use </span>nested_enum_utils::enum_conversions;
 <span class="kw">use </span>quic_rpc_derive::rpc_requests;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use super</span>::{RpcResult, RpcService};
-<span class="kw">use crate</span>::{net_protocol::BatchId, rpc::client::tags::TagInfo, HashAndFormat, Tag};
+<span class="kw">use crate</span>::{
+    net_protocol::BatchId,
+    rpc::client::tags::{DeleteOptions, ListOptions, TagInfo},
+    HashAndFormat, Tag,
+};
 
 <span class="attr">#[allow(missing_docs)]
 #[derive(strum::Display, Debug, Serialize, Deserialize)]
@@ -124,6 +143,8 @@
     </span>Create(CreateRequest),
     <span class="attr">#[rpc(response = RpcResult&lt;()&gt;)]
     </span>Set(SetRequest),
+    <span class="attr">#[rpc(response = RpcResult&lt;()&gt;)]
+    </span>Rename(RenameRequest),
     <span class="attr">#[rpc(response = RpcResult&lt;()&gt;)]
     </span>DeleteTag(DeleteRequest),
     <span class="attr">#[server_streaming(response = TagInfo)]
@@ -165,8 +186,8 @@
 </span><span class="kw">pub struct </span>SetRequest {
     <span class="doccomment">/// Name of the tag
     </span><span class="kw">pub </span>name: Tag,
-    <span class="doccomment">/// Value of the tag, None to delete
-    </span><span class="kw">pub </span>value: <span class="prelude-ty">Option</span>&lt;HashAndFormat&gt;,
+    <span class="doccomment">/// Value of the tag
+    </span><span class="kw">pub </span>value: HashAndFormat,
     <span class="doccomment">/// Batch to use, none for global
     </span><span class="kw">pub </span>batch: <span class="prelude-ty">Option</span>&lt;BatchId&gt;,
     <span class="doccomment">/// Sync mode
@@ -182,30 +203,19 @@
     </span><span class="kw">pub </span>raw: bool,
     <span class="doccomment">/// List hash seq tags
     </span><span class="kw">pub </span>hash_seq: bool,
+    <span class="doccomment">/// From tag (inclusive)
+    </span><span class="kw">pub </span>from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+    <span class="doccomment">/// To tag (exclusive)
+    </span><span class="kw">pub </span>to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
 }
 
-<span class="kw">impl </span>ListRequest {
-    <span class="doccomment">/// List all tags
-    </span><span class="kw">pub fn </span>all() -&gt; <span class="self">Self </span>{
+<span class="kw">impl </span>From&lt;ListOptions&gt; <span class="kw">for </span>ListRequest {
+    <span class="kw">fn </span>from(options: ListOptions) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            raw: <span class="bool-val">true</span>,
-            hash_seq: <span class="bool-val">true</span>,
-        }
-    }
-
-    <span class="doccomment">/// List raw tags
-    </span><span class="kw">pub fn </span>raw() -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            raw: <span class="bool-val">true</span>,
-            hash_seq: <span class="bool-val">false</span>,
-        }
-    }
-
-    <span class="doccomment">/// List hash seq tags
-    </span><span class="kw">pub fn </span>hash_seq() -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            raw: <span class="bool-val">false</span>,
-            hash_seq: <span class="bool-val">true</span>,
+            raw: options.raw,
+            hash_seq: options.hash_seq,
+            from: options.from,
+            to: options.to,
         }
     }
 }
@@ -213,7 +223,27 @@
 <span class="doccomment">/// Delete a tag
 </span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
 </span><span class="kw">pub struct </span>DeleteRequest {
-    <span class="doccomment">/// Name of the tag
-    </span><span class="kw">pub </span>name: Tag,
+    <span class="doccomment">/// From tag (inclusive)
+    </span><span class="kw">pub </span>from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+    <span class="doccomment">/// To tag (exclusive)
+    </span><span class="kw">pub </span>to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
+}
+
+<span class="kw">impl </span>From&lt;DeleteOptions&gt; <span class="kw">for </span>DeleteRequest {
+    <span class="kw">fn </span>from(options: DeleteOptions) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            from: options.from,
+            to: options.to,
+        }
+    }
+}
+
+<span class="doccomment">/// Rename a tag atomically
+</span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
+</span><span class="kw">pub struct </span>RenameRequest {
+    <span class="doccomment">/// Old tag name
+    </span><span class="kw">pub </span>from: Tag,
+    <span class="doccomment">/// New tag name
+    </span><span class="kw">pub </span>to: Tag,
 }
 </code></pre></div></section></main></body></html>

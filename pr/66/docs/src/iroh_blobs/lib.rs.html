@@ -60,7 +60,18 @@
 <a href="#59" id="59">59</a>
 <a href="#60" id="60">60</a>
 <a href="#61" id="61">61</a>
-<a href="#62" id="62">62</a></pre></div><pre class="rust"><code><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../README.md"</span>)]
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a>
+<a href="#66" id="66">66</a>
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a></pre></div><pre class="rust"><code><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../README.md"</span>)]
 </span><span class="doccomment">//! Blobs layer for iroh.
 //!
 //! The crate is designed to be used from the [iroh] crate, which provides a
@@ -83,6 +94,17 @@
 //!
 //! The [downloader] module provides a component to download blobs from
 //! multiple sources and store them in a store.
+//!
+//! # Feature flags
+//!
+//! - rpc: Enable the rpc server and client. Enabled by default.
+//! - net_protocol: Enable the network protocol. Enabled by default.
+//! - downloader: Enable the downloader. Enabled by default.
+//! - fs-store: Enable the filesystem store. Enabled by default.
+//!
+//! - cli: Enable the cli. Disabled by default.
+//! - example-iroh: dependencies for examples in this crate. Disabled by default.
+//! - test: test utilities. Disabled by default.
 //!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
 //! [iroh]: https://docs.rs/iroh

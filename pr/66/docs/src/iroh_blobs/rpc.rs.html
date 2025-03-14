@@ -1104,7 +1104,10 @@
 <a href="#1103" id="1103">1103</a>
 <a href="#1104" id="1104">1104</a>
 <a href="#1105" id="1105">1105</a>
-<a href="#1106" id="1106">1106</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a>
+<a href="#1109" id="1109">1109</a></pre></div><pre class="rust"><code><span class="doccomment">//! Provides a rpc protocol as well as a client for the protocol
 
 </span><span class="kw">use </span>std::{
     io,
@@ -1136,7 +1139,7 @@
     },
     tags::{
         CreateRequest <span class="kw">as </span>TagsCreateRequest, DeleteRequest <span class="kw">as </span>TagDeleteRequest,
-        ListRequest <span class="kw">as </span>TagListRequest, SetRequest <span class="kw">as </span>TagsSetRequest, SyncMode,
+        ListRequest <span class="kw">as </span>TagListRequest, RenameRequest, SetRequest <span class="kw">as </span>TagsSetRequest, SyncMode,
     },
     Request, RpcError, RpcResult, RpcService,
 };
@@ -1264,6 +1267,7 @@
             Set(msg) =&gt; chan.rpc(msg, <span class="self">self</span>, <span class="self">Self</span>::tags_set).<span class="kw">await</span>,
             DeleteTag(msg) =&gt; chan.rpc(msg, <span class="self">self</span>, <span class="self">Self</span>::blob_delete_tag).<span class="kw">await</span>,
             ListTags(msg) =&gt; chan.server_streaming(msg, <span class="self">self</span>, <span class="self">Self</span>::blob_list_tags).<span class="kw">await</span>,
+            Rename(msg) =&gt; chan.rpc(msg, <span class="self">self</span>, <span class="self">Self</span>::tags_rename).<span class="kw">await</span>,
         }
     }
 
@@ -1401,7 +1405,7 @@
 
     <span class="kw">async fn </span>blob_delete_tag(<span class="self">self</span>, msg: TagDeleteRequest) -&gt; RpcResult&lt;()&gt; {
         <span class="self">self</span>.store()
-            .set_tag(msg.name, <span class="prelude-val">None</span>)
+            .delete_tags(msg.from, msg.to)
             .<span class="kw">await
             </span>.map_err(|e| RpcError::new(<span class="kw-2">&amp;</span>e))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
@@ -1419,7 +1423,7 @@
         <span class="macro">tracing::info!</span>(<span class="string">"blob_list_tags"</span>);
         <span class="kw">let </span>blobs = <span class="self">self</span>;
         Gen::new(|co| <span class="kw">async move </span>{
-            <span class="kw">let </span>tags = blobs.store().tags().<span class="kw">await</span>.unwrap();
+            <span class="kw">let </span>tags = blobs.store().tags(msg.from, msg.to).<span class="kw">await</span>.unwrap();
             <span class="attr">#[allow(clippy::manual_flatten)]
             </span><span class="kw">for </span>item <span class="kw">in </span>tags {
                 <span class="kw">if let </span><span class="prelude-val">Ok</span>((name, HashAndFormat { hash, format })) = item {
@@ -1488,6 +1492,16 @@
         rx.map(AddPathResponse)
     }
 
+    <span class="kw">async fn </span>tags_rename(<span class="self">self</span>, msg: RenameRequest) -&gt; RpcResult&lt;()&gt; {
+        <span class="kw">let </span>blobs = <span class="self">self</span>;
+        blobs
+            .store()
+            .rename_tag(msg.from, msg.to)
+            .<span class="kw">await
+            </span>.map_err(|e| RpcError::new(<span class="kw-2">&amp;</span>e))<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
+    }
+
     <span class="kw">async fn </span>tags_set(<span class="self">self</span>, msg: TagsSetRequest) -&gt; RpcResult&lt;()&gt; {
         <span class="kw">let </span>blobs = <span class="self">self</span>;
         blobs
@@ -1499,13 +1513,11 @@
             blobs.store().sync().<span class="kw">await</span>.map_err(|e| RpcError::new(<span class="kw-2">&amp;</span>e))<span class="question-mark">?</span>;
         }
         <span class="kw">if let </span><span class="prelude-val">Some</span>(batch) = msg.batch {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(content) = msg.value.as_ref() {
-                blobs
-                    .batches()
-                    .<span class="kw">await
-                    </span>.remove_one(batch, content)
-                    .map_err(|e| RpcError::new(<span class="kw-2">&amp;*</span>e))<span class="question-mark">?</span>;
-            }
+            blobs
+                .batches()
+                .<span class="kw">await
+                </span>.remove_one(batch, <span class="kw-2">&amp;</span>msg.value)
+                .map_err(|e| RpcError::new(<span class="kw-2">&amp;*</span>e))<span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(())
     }
@@ -1678,10 +1690,7 @@
         <span class="kw">let </span>HashAndFormat { hash, format } = <span class="kw-2">*</span>hash_and_format;
         <span class="kw">let </span>tag = <span class="kw">match </span>tag {
             SetTagOption::Named(tag) =&gt; {
-                blobs
-                    .store()
-                    .set_tag(tag.clone(), <span class="prelude-val">Some</span>(<span class="kw-2">*</span>hash_and_format))
-                    .<span class="kw">await</span><span class="question-mark">?</span>;
+                blobs.store().set_tag(tag.clone(), <span class="kw-2">*</span>hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>;
                 tag
             }
             SetTagOption::Auto =&gt; blobs.store().create_tag(<span class="kw-2">*</span>hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>,
@@ -1870,10 +1879,7 @@
         <span class="kw">let </span>HashAndFormat { hash, format } = hash_and_format;
         <span class="kw">let </span>tag = <span class="kw">match </span>msg.tag {
             SetTagOption::Named(tag) =&gt; {
-                blobs
-                    .store()
-                    .set_tag(tag.clone(), <span class="prelude-val">Some</span>(hash_and_format))
-                    .<span class="kw">await</span><span class="question-mark">?</span>;
+                blobs.store().set_tag(tag.clone(), hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>;
                 tag
             }
             SetTagOption::Auto =&gt; blobs.store().create_tag(hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>,
@@ -2013,7 +2019,7 @@
             SetTagOption::Named(tag) =&gt; {
                 blobs
                     .store()
-                    .set_tag(tag.clone(), <span class="prelude-val">Some</span>(<span class="kw-2">*</span>hash_and_format))
+                    .set_tag(tag.clone(), <span class="kw-2">*</span>hash_and_format)
                     .<span class="kw">await
                     </span>.map_err(|e| RpcError::new(<span class="kw-2">&amp;</span>e))<span class="question-mark">?</span>;
                 tag
@@ -2028,7 +2034,7 @@
         <span class="kw">for </span>tag <span class="kw">in </span>tags_to_delete {
             blobs
                 .store()
-                .set_tag(tag, <span class="prelude-val">None</span>)
+                .delete_tags(<span class="prelude-val">Some</span>(tag.clone()), <span class="prelude-val">Some</span>(tag.successor()))
                 .<span class="kw">await
                 </span>.map_err(|e| RpcError::new(<span class="kw-2">&amp;</span>e))<span class="question-mark">?</span>;
         }
@@ -2065,7 +2071,7 @@
         progress.send(DownloadProgress::AllDone(stats)).<span class="kw">await</span>.ok();
         <span class="kw">match </span>tag {
             SetTagOption::Named(tag) =&gt; {
-                <span class="self">self</span>.store().set_tag(tag, <span class="prelude-val">Some</span>(hash_and_format)).<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="self">self</span>.store().set_tag(tag, hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>;
             }
             SetTagOption::Auto =&gt; {
                 <span class="self">self</span>.store().create_tag(hash_and_format).<span class="kw">await</span><span class="question-mark">?</span>;
