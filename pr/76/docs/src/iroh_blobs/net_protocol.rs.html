@@ -367,14 +367,7 @@
 <a href="#366" id="366">366</a>
 <a href="#367" id="367">367</a>
 <a href="#368" id="368">368</a>
-<a href="#369" id="369">369</a>
-<a href="#370" id="370">370</a>
-<a href="#371" id="371">371</a>
-<a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+<a href="#369" id="369">369</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
 </span><span class="attr">#![allow(missing_docs)]
@@ -518,18 +511,12 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Default)]
-</span><span class="kw">pub struct </span>DownloaderConfig {
-    <span class="kw">pub </span>concurrency: downloader::ConcurrencyLimits,
-    <span class="kw">pub </span>retry: downloader::RetryConfig,
-}
-
 <span class="doccomment">/// Builder for the Blobs protocol handler
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>Builder&lt;S&gt; {
     store: S,
     events: <span class="prelude-ty">Option</span>&lt;EventSender&gt;,
-    downloader: <span class="prelude-ty">Option</span>&lt;DownloaderConfig&gt;,
+    downloader: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::downloader::Config&gt;,
     rt: <span class="prelude-ty">Option</span>&lt;LocalPoolHandle&gt;,
 }
 
@@ -547,7 +534,7 @@
     </span>}
 
     <span class="doccomment">/// Set a custom downloader configuration.
-    </span><span class="kw">pub fn </span>downloader(<span class="kw-2">mut </span><span class="self">self</span>, config: DownloaderConfig) -&gt; <span class="self">Self </span>{
+    </span><span class="kw">pub fn </span>downloader(<span class="kw-2">mut </span><span class="self">self</span>, config: downloader::Config) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.downloader = <span class="prelude-val">Some</span>(config);
         <span class="self">self
     </span>}
@@ -559,13 +546,12 @@
             </span>.rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
-        <span class="kw">let </span>DownloaderConfig { concurrency, retry } = <span class="self">self</span>.downloader.unwrap_or_default();
+        <span class="kw">let </span>downloader_config = <span class="self">self</span>.downloader.unwrap_or_default();
         <span class="kw">let </span>downloader = Downloader::with_config(
             <span class="self">self</span>.store.clone(),
             endpoint.clone(),
             rt.clone(),
-            concurrency,
-            retry,
+            downloader_config,
         );
         Blobs::new(
             <span class="self">self</span>.store,

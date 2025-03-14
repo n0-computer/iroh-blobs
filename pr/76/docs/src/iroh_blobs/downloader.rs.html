@@ -1591,7 +1591,19 @@
 <a href="#1590" id="1590">1590</a>
 <a href="#1591" id="1591">1591</a>
 <a href="#1592" id="1592">1592</a>
-<a href="#1593" id="1593">1593</a></pre></div><pre class="rust"><code><span class="doccomment">//! Handle downloading blobs and collections concurrently and from nodes.
+<a href="#1593" id="1593">1593</a>
+<a href="#1594" id="1594">1594</a>
+<a href="#1595" id="1595">1595</a>
+<a href="#1596" id="1596">1596</a>
+<a href="#1597" id="1597">1597</a>
+<a href="#1598" id="1598">1598</a>
+<a href="#1599" id="1599">1599</a>
+<a href="#1600" id="1600">1600</a>
+<a href="#1601" id="1601">1601</a>
+<a href="#1602" id="1602">1602</a>
+<a href="#1603" id="1603">1603</a>
+<a href="#1604" id="1604">1604</a>
+<a href="#1605" id="1605">1605</a></pre></div><pre class="rust"><code><span class="doccomment">//! Handle downloading blobs and collections concurrently and from nodes.
 //!
 //! The [`Downloader`] interacts with four main components to this end.
 //! - `ProviderMap`: Where the downloader obtains information about nodes that could be
@@ -1734,7 +1746,7 @@
 }
 
 <span class="doccomment">/// Concurrency limits for the [`Downloader`].
-</span><span class="attr">#[derive(Debug)]
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 </span><span class="kw">pub struct </span>ConcurrencyLimits {
     <span class="doccomment">/// Maximum number of requests the service performs concurrently.
     </span><span class="kw">pub </span>max_concurrent_requests: usize,
@@ -1786,7 +1798,7 @@
 }
 
 <span class="doccomment">/// Configuration for retry behavior of the [`Downloader`].
-</span><span class="attr">#[derive(Debug)]
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 </span><span class="kw">pub struct </span>RetryConfig {
     <span class="doccomment">/// Maximum number of retry attempts for a node that failed to dial or failed with IO errors.
     </span><span class="kw">pub </span>max_retries_per_node: u32,
@@ -1918,13 +1930,29 @@
     }
 }
 
+<span class="doccomment">/// All numerical config options for the downloader.
+</span><span class="attr">#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+</span><span class="kw">pub struct </span>Config {
+    <span class="doccomment">/// Concurrency limits for the downloader.
+    </span><span class="kw">pub </span>concurrency: ConcurrencyLimits,
+    <span class="doccomment">/// Retry configuration for the downloader.
+    </span><span class="kw">pub </span>retry: RetryConfig,
+}
+
 <span class="doccomment">/// Handle for the download services.
-</span><span class="attr">#[derive(Clone, Debug)]
+</span><span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>Downloader {
+    inner: Arc&lt;Inner&gt;,
+}
+
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>Inner {
     <span class="doccomment">/// Next id to use for a download intent.
-    </span>next_id: Arc&lt;AtomicU64&gt;,
+    </span>next_id: AtomicU64,
     <span class="doccomment">/// Channel to communicate with the service.
     </span>msg_tx: mpsc::Sender&lt;Message&gt;,
+    <span class="doccomment">/// Configuration for the downloader.
+    </span>config: Arc&lt;Config&gt;,
 }
 
 <span class="kw">impl </span>Downloader {
@@ -1933,44 +1961,46 @@
     </span><span class="kw">where
         </span>S: Store,
     {
-        <span class="self">Self</span>::with_config(store, endpoint, rt, Default::default(), Default::default())
+        <span class="self">Self</span>::with_config(store, endpoint, rt, Default::default())
     }
 
     <span class="doccomment">/// Create a new Downloader with custom [`ConcurrencyLimits`] and [`RetryConfig`].
-    </span><span class="kw">pub fn </span>with_config&lt;S&gt;(
-        store: S,
-        endpoint: Endpoint,
-        rt: LocalPoolHandle,
-        concurrency_limits: ConcurrencyLimits,
-        retry_config: RetryConfig,
-    ) -&gt; <span class="self">Self
+    </span><span class="kw">pub fn </span>with_config&lt;S&gt;(store: S, endpoint: Endpoint, rt: LocalPoolHandle, config: Config) -&gt; <span class="self">Self
     </span><span class="kw">where
         </span>S: Store,
     {
+        <span class="kw">let </span>config = Arc::new(config);
         <span class="kw">let </span>me = endpoint.node_id().fmt_short();
         <span class="kw">let </span>(msg_tx, msg_rx) = mpsc::channel(SERVICE_CHANNEL_CAPACITY);
         <span class="kw">let </span>dialer = Dialer::new(endpoint);
-
+        <span class="kw">let </span>config2 = config.clone();
         <span class="kw">let </span>create_future = <span class="kw">move </span>|| {
             <span class="kw">let </span>getter = get::IoGetter {
                 store: store.clone(),
             };
-
-            <span class="kw">let </span>service = Service::new(getter, dialer, concurrency_limits, retry_config, msg_rx);
+            <span class="kw">let </span>service = Service::new(getter, dialer, config2, msg_rx);
 
             service.run().instrument(<span class="macro">error_span!</span>(<span class="string">"downloader"</span>, %me))
         };
         rt.spawn_detached(create_future);
         <span class="self">Self </span>{
-            next_id: Arc::new(AtomicU64::new(<span class="number">0</span>)),
-            msg_tx,
+            inner: Arc::new(Inner {
+                next_id: AtomicU64::new(<span class="number">0</span>),
+                msg_tx,
+                config,
+            }),
         }
+    }
+
+    <span class="doccomment">/// Get the current configuration.
+    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Config {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.config
     }
 
     <span class="doccomment">/// Queue a download.
     </span><span class="kw">pub async fn </span>queue(<span class="kw-2">&amp;</span><span class="self">self</span>, request: DownloadRequest) -&gt; DownloadHandle {
         <span class="kw">let </span>kind = request.kind;
-        <span class="kw">let </span>intent_id = IntentId(<span class="self">self</span>.next_id.fetch_add(<span class="number">1</span>, Ordering::SeqCst));
+        <span class="kw">let </span>intent_id = IntentId(<span class="self">self</span>.inner.next_id.fetch_add(<span class="number">1</span>, Ordering::SeqCst));
         <span class="kw">let </span>(sender, receiver) = oneshot::channel();
         <span class="kw">let </span>handle = DownloadHandle {
             id: intent_id,
@@ -1984,7 +2014,7 @@
         };
         <span class="comment">// if this fails polling the handle will fail as well since the sender side of the oneshot
         // will be dropped
-        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(send_err) = <span class="self">self</span>.msg_tx.send(msg).<span class="kw">await </span>{
+        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(send_err) = <span class="self">self</span>.inner.msg_tx.send(msg).<span class="kw">await </span>{
             <span class="kw">let </span>msg = send_err.<span class="number">0</span>;
             <span class="macro">debug!</span>(<span class="question-mark">?</span>msg, <span class="string">"download not sent"</span>);
         }
@@ -2000,7 +2030,7 @@
             receiver: <span class="kw">_</span>,
         } = handle;
         <span class="kw">let </span>msg = Message::CancelIntent { id, kind };
-        <span class="kw">if let </span><span class="prelude-val">Err</span>(send_err) = <span class="self">self</span>.msg_tx.send(msg).<span class="kw">await </span>{
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(send_err) = <span class="self">self</span>.inner.msg_tx.send(msg).<span class="kw">await </span>{
             <span class="kw">let </span>msg = send_err.<span class="number">0</span>;
             <span class="macro">debug!</span>(<span class="question-mark">?</span>msg, <span class="string">"cancel not sent"</span>);
         }
@@ -2012,7 +2042,7 @@
     /// downloads. Use [`Self::queue`] to queue a download.
     </span><span class="kw">pub async fn </span>nodes_have(<span class="kw-2">&amp;mut </span><span class="self">self</span>, hash: Hash, nodes: Vec&lt;NodeId&gt;) {
         <span class="kw">let </span>msg = Message::NodesHave { hash, nodes };
-        <span class="kw">if let </span><span class="prelude-val">Err</span>(send_err) = <span class="self">self</span>.msg_tx.send(msg).<span class="kw">await </span>{
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(send_err) = <span class="self">self</span>.inner.msg_tx.send(msg).<span class="kw">await </span>{
             <span class="kw">let </span>msg = send_err.<span class="number">0</span>;
             <span class="macro">debug!</span>(<span class="question-mark">?</span>msg, <span class="string">"nodes have not been sent"</span>)
         }
@@ -2160,19 +2190,13 @@
     </span>progress_tracker: ProgressTracker,
 }
 <span class="kw">impl</span>&lt;G: Getter&lt;Connection = D::Connection&gt;, D: DialerT&gt; Service&lt;G, D&gt; {
-    <span class="kw">fn </span>new(
-        getter: G,
-        dialer: D,
-        concurrency_limits: ConcurrencyLimits,
-        retry_config: RetryConfig,
-        msg_rx: mpsc::Receiver&lt;Message&gt;,
-    ) -&gt; <span class="self">Self </span>{
+    <span class="kw">fn </span>new(getter: G, dialer: D, config: Arc&lt;Config&gt;, msg_rx: mpsc::Receiver&lt;Message&gt;) -&gt; <span class="self">Self </span>{
         Service {
             getter,
             dialer,
             msg_rx,
-            concurrency_limits,
-            retry_config,
+            concurrency_limits: config.concurrency,
+            retry_config: config.retry,
             connected_nodes: Default::default(),
             retry_node_state: Default::default(),
             providers: Default::default(),
