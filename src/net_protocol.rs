@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
-    downloader::Downloader,
+    downloader::{self, Downloader},
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -142,11 +142,18 @@ impl BlobBatches {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct DownloaderConfig {
+    pub concurrency: downloader::ConcurrencyLimits,
+    pub retry: downloader::RetryConfig,
+}
+
 /// Builder for the Blobs protocol handler
 #[derive(Debug)]
 pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
+    downloader: Option<DownloaderConfig>,
     rt: Option<LocalPoolHandle>,
 }
 
@@ -163,6 +170,12 @@ impl<S: crate::store::Store> Builder<S> {
         self
     }
 
+    /// Set a custom downloader configuration.
+    pub fn downloader(mut self, config: DownloaderConfig) -> Self {
+        self.downloader = Some(config);
+        self
+    }
+
     /// Build the Blobs protocol handler.
     /// You need to provide a the endpoint.
     pub fn build(self, endpoint: &Endpoint) -> Blobs<S> {
@@ -170,7 +183,14 @@ impl<S: crate::store::Store> Builder<S> {
             .rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
-        let downloader = Downloader::new(self.store.clone(), endpoint.clone(), rt.clone());
+        let DownloaderConfig { concurrency, retry } = self.downloader.unwrap_or_default();
+        let downloader = Downloader::with_config(
+            self.store.clone(),
+            endpoint.clone(),
+            rt.clone(),
+            concurrency,
+            retry,
+        );
         Blobs::new(
             self.store,
             rt,
@@ -187,6 +207,7 @@ impl<S> Blobs<S> {
         Builder {
             store,
             events: None,
+            downloader: None,
             rt: None,
         }
     }
