@@ -381,7 +381,11 @@
 <a href="#380" id="380">380</a>
 <a href="#381" id="381">381</a>
 <a href="#382" id="382">382</a>
-<a href="#383" id="383">383</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
 </span><span class="attr">#![allow(missing_docs)]
@@ -555,14 +559,18 @@
 
     <span class="doccomment">/// Set custom [`ConcurrencyLimits`] to use.
     </span><span class="kw">pub fn </span>concurrency_limits(<span class="kw-2">mut </span><span class="self">self</span>, concurrency_limits: ConcurrencyLimits) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>downloader_config = <span class="self">self</span>.downloader_config.get_or_insert_default();
+        <span class="kw">let </span>downloader_config = <span class="self">self
+            </span>.downloader_config
+            .get_or_insert_with(|| Default::default());
         downloader_config.concurrency = concurrency_limits;
         <span class="self">self
     </span>}
 
     <span class="doccomment">/// Set a custom [`RetryConfig`] to use.
     </span><span class="kw">pub fn </span>retry_config(<span class="kw-2">mut </span><span class="self">self</span>, retry_config: RetryConfig) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>downloader_config = <span class="self">self</span>.downloader_config.get_or_insert_default();
+        <span class="kw">let </span>downloader_config = <span class="self">self
+            </span>.downloader_config
+            .get_or_insert_with(|| Default::default());
         downloader_config.retry = retry_config;
         <span class="self">self
     </span>}
