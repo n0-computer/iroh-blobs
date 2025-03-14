@@ -104,7 +104,7 @@ async fn downloader_config() -> TestResult<()> {
         },
     };
     let blobs = Blobs::builder(store).downloader(expected).build(&endpoint);
-    let actual = blobs.downloader().get_config().await?;
-    assert_eq!(expected, actual);
+    let actual = blobs.downloader().config();
+    assert_eq!(&expected, actual);
     Ok(())
 }

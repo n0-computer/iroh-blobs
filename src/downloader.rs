@@ -335,12 +335,19 @@ pub struct Config {
 }
 
 /// Handle for the download services.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Downloader {
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
     /// Next id to use for a download intent.
-    next_id: Arc<AtomicU64>,
+    next_id: AtomicU64,
     /// Channel to communicate with the service.
     msg_tx: mpsc::Sender<Message>,
+    /// Configuration for the downloader.
+    config: Arc<Config>,
 }
 
 impl Downloader {
@@ -349,53 +356,46 @@ impl Downloader {
     where
         S: Store,
     {
-        Self::with_config(store, endpoint, rt, Default::default(), Default::default())
+        Self::with_config(store, endpoint, rt, Default::default())
     }
 
     /// Create a new Downloader with custom [`ConcurrencyLimits`] and [`RetryConfig`].
-    pub fn with_config<S>(
-        store: S,
-        endpoint: Endpoint,
-        rt: LocalPoolHandle,
-        concurrency_limits: ConcurrencyLimits,
-        retry_config: RetryConfig,
-    ) -> Self
+    pub fn with_config<S>(store: S, endpoint: Endpoint, rt: LocalPoolHandle, config: Config) -> Self
     where
         S: Store,
     {
+        let config = Arc::new(config);
         let me = endpoint.node_id().fmt_short();
         let (msg_tx, msg_rx) = mpsc::channel(SERVICE_CHANNEL_CAPACITY);
         let dialer = Dialer::new(endpoint);
-
+        let config2 = config.clone();
         let create_future = move || {
             let getter = get::IoGetter {
                 store: store.clone(),
             };
-
-            let service = Service::new(getter, dialer, concurrency_limits, retry_config, msg_rx);
+            let service = Service::new(getter, dialer, config2, msg_rx);
 
             service.run().instrument(error_span!("downloader", %me))
         };
         rt.spawn_detached(create_future);
         Self {
-            next_id: Arc::new(AtomicU64::new(0)),
-            msg_tx,
+            inner: Arc::new(Inner {
+                next_id: AtomicU64::new(0),
+                msg_tx,
+                config,
+            }),
         }
     }
 
     /// Get the current configuration.
-    pub async fn get_config(&self) -> anyhow::Result<Config> {
-        let (tx, rx) = oneshot::channel();
-        let msg = Message::GetConfig { tx };
-        self.msg_tx.send(msg).await?;
-        let config = rx.await?;
-        Ok(config)
+    pub fn config(&self) -> &Config {
+        &self.inner.config
     }
 
     /// Queue a download.
     pub async fn queue(&self, request: DownloadRequest) -> DownloadHandle {
         let kind = request.kind;
-        let intent_id = IntentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+        let intent_id = IntentId(self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let (sender, receiver) = oneshot::channel();
         let handle = DownloadHandle {
             id: intent_id,
@@ -409,7 +409,7 @@ impl Downloader {
         };
         // if this fails polling the handle will fail as well since the sender side of the oneshot
         // will be dropped
-        if let Err(send_err) = self.msg_tx.send(msg).await {
+        if let Err(send_err) = self.inner.msg_tx.send(msg).await {
             let msg = send_err.0;
             debug!(?msg, "download not sent");
         }
@@ -425,7 +425,7 @@ impl Downloader {
             receiver: _,
         } = handle;
         let msg = Message::CancelIntent { id, kind };
-        if let Err(send_err) = self.msg_tx.send(msg).await {
+        if let Err(send_err) = self.inner.msg_tx.send(msg).await {
             let msg = send_err.0;
             debug!(?msg, "cancel not sent");
         }
@@ -437,7 +437,7 @@ impl Downloader {
     /// downloads. Use [`Self::queue`] to queue a download.
     pub async fn nodes_have(&mut self, hash: Hash, nodes: Vec<NodeId>) {
         let msg = Message::NodesHave { hash, nodes };
-        if let Err(send_err) = self.msg_tx.send(msg).await {
+        if let Err(send_err) = self.inner.msg_tx.send(msg).await {
             let msg = send_err.0;
             debug!(?msg, "nodes have not been sent")
         }
@@ -459,11 +459,6 @@ enum Message {
     /// Cancel an intent. The associated request will be cancelled when the last intent is
     /// cancelled.
     CancelIntent { id: IntentId, kind: DownloadKind },
-    /// Get the config
-    GetConfig {
-        #[debug(skip)]
-        tx: oneshot::Sender<Config>,
-    },
 }
 
 #[derive(derive_more::Debug)]
@@ -590,19 +585,13 @@ struct Service<G: Getter, D: DialerT> {
     progress_tracker: ProgressTracker,
 }
 impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
-    fn new(
-        getter: G,
-        dialer: D,
-        concurrency_limits: ConcurrencyLimits,
-        retry_config: RetryConfig,
-        msg_rx: mpsc::Receiver<Message>,
-    ) -> Self {
+    fn new(getter: G, dialer: D, config: Arc<Config>, msg_rx: mpsc::Receiver<Message>) -> Self {
         Service {
             getter,
             dialer,
             msg_rx,
-            concurrency_limits,
-            retry_config,
+            concurrency_limits: config.concurrency,
+            retry_config: config.retry,
             connected_nodes: Default::default(),
             retry_node_state: Default::default(),
             providers: Default::default(),
@@ -690,13 +679,6 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
                 if updated {
                     self.queue.unpark_hash(hash);
                 }
-            }
-            Message::GetConfig { tx } => {
-                let config = Config {
-                    concurrency: self.concurrency_limits,
-                    retry: self.retry_config,
-                };
-                tx.send(config).ok();
             }
         }
     }

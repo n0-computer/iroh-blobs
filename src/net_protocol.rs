@@ -177,13 +177,12 @@ impl<S: crate::store::Store> Builder<S> {
             .rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
-        let downloader::Config { concurrency, retry } = self.downloader.unwrap_or_default();
+        let downloader_config = self.downloader.unwrap_or_default();
         let downloader = Downloader::with_config(
             self.store.clone(),
             endpoint.clone(),
             rt.clone(),
-            concurrency,
-            retry,
+            downloader_config,
         );
         Blobs::new(
             self.store,
