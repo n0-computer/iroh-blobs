@@ -149,7 +149,7 @@ name = "hello-world-provide"
 required-features = ["example-iroh"]
 
 [[example]]
-name = "local-swarm-discovery"
+name = "discovery-local-network"
 required-features = ["example-iroh"]
 
 [[example]]
