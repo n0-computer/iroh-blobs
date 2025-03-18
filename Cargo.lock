@@ -1995,8 +1995,9 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
 name = "iroh"
-version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b7224d4eeec6c8b5b1a9b2347a4dff3588834a7fb17233044bff3e90e7b293d"
 dependencies = [
  "aead",
  "anyhow",
@@ -2017,7 +2018,7 @@ dependencies = [
  "igd-next",
  "instant",
  "iroh-base",
- "iroh-metrics 0.32.0",
+ "iroh-metrics",
  "iroh-net-report",
  "iroh-quinn",
  "iroh-quinn-proto",
@@ -2055,8 +2056,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02bf2374c0f1d01cde6e60de7505e42a604acda1a1bb3f7be19806e466055517"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -2107,7 +2109,7 @@ dependencies = [
  "iroh-base",
  "iroh-blake3",
  "iroh-io",
- "iroh-metrics 0.31.0",
+ "iroh-metrics",
  "iroh-quinn",
  "nested_enum_utils",
  "num_cpus",
@@ -2160,25 +2162,6 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "571d177e20f0848a643a2c0f662be0e08968f8743b0776941f83a2152b87a180"
-dependencies = [
- "erased_set",
- "http-body-util",
- "hyper",
- "hyper-util",
- "prometheus-client",
- "reqwest",
- "serde",
- "struct_iterable",
- "thiserror 2.0.12",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "iroh-metrics"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f7cd1ffe3b152a5f4f4c1880e01e07d96001f20e02cc143cb7842987c616b3"
@@ -2198,8 +2181,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-net-report"
-version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63407d73331e8e38980be7e39b1db8e173fc28545b3ea0c48c9a718f95877b8e"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2207,7 +2191,7 @@ dependencies = [
  "derive_more",
  "hickory-resolver",
  "iroh-base",
- "iroh-metrics 0.32.0",
+ "iroh-metrics",
  "iroh-quinn",
  "iroh-relay",
  "n0-future",
@@ -2281,8 +2265,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21d282c04a71a83a90b8fe6872ba30ae341853255aa908375a3e6181f7215d7b"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2299,7 +2284,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "iroh-base",
- "iroh-metrics 0.32.0",
+ "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
  "lru",
@@ -3266,7 +3251,7 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "igd-next",
- "iroh-metrics 0.32.0",
+ "iroh-metrics",
  "libc",
  "netwatch 0.3.0",
  "num_enum",
@@ -3485,8 +3470,9 @@ dependencies = [
 
 [[package]]
 name = "quic-rpc"
-version = "0.18.3"
-source = "git+https://github.com/n0-computer/quic-rpc?branch=main#a5f8a50b3d81c264dafcba4e12492a6884194265"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89561e5343bcad1c9f84321d9d9bd1619128ad44293faad55a0001b0e52d312b"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3512,9 +3498,9 @@ dependencies = [
 
 [[package]]
 name = "quic-rpc-derive"
-version = "0.18.1"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d94974ee26d4e97acfab1fd55df2a1ca676af24021a08354ed1c42b70a39e914"
+checksum = "0a99f334af6f23b3de91f6df9ac17237e8b533b676f596c69dcb3b58c3cf8dea"
 dependencies = [
  "proc-macro2",
  "quic-rpc",
