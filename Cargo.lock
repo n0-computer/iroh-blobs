@@ -319,16 +319,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "backoff"
-version = "0.4.0"
+name = "backon"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
+checksum = "49fef586913a57ff189f25c9b3d034356a5bf6b3fa9a7f067588fe1698ba1f5d"
 dependencies = [
- "futures-core",
- "getrandom 0.2.15",
- "instant",
- "pin-project-lite",
- "rand 0.8.5",
+ "fastrand",
+ "gloo-timers",
+ "tokio",
 ]
 
 [[package]]
@@ -843,6 +841,7 @@ checksum = "f55bf8e7b65898637379c1b74eb1551107c8294ed26d855ceb9fd1a09cfc9bc0"
 dependencies = [
  "const-oid",
  "der_derive",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -1403,6 +1402,18 @@ name = "glob"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
+
+[[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "governor"
@@ -1985,13 +1996,13 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 [[package]]
 name = "iroh"
 version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#493083765083c77fd74c7575236d8b7696b61754"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
 dependencies = [
  "aead",
  "anyhow",
  "atomic-waker",
  "axum",
- "backoff",
+ "backon",
  "bytes",
  "cfg_aliases",
  "concurrent-queue",
@@ -2045,7 +2056,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#493083765083c77fd74c7575236d8b7696b61754"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -2188,7 +2199,7 @@ dependencies = [
 [[package]]
 name = "iroh-net-report"
 version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#493083765083c77fd74c7575236d8b7696b61754"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2271,7 +2282,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.33.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#493083765083c77fd74c7575236d8b7696b61754"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#ef3645e8b7d5700e309de3cd13b745bbf352f151"
 dependencies = [
  "anyhow",
  "bytes",

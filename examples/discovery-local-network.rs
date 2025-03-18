@@ -1,17 +1,17 @@
 //! Example that runs and iroh node with local node discovery and no relay server
 //!
 //! Run the follow command to run the "accept" side, that hosts the content:
-//!  $ cargo run --example local_swarm_discovery --features="discovery-local-network" -- accept [FILE_PATH]
+//!  $ cargo run --example discovery_local_network --features="discovery-local-network" -- accept [FILE_PATH]
 //! Wait for output that looks like the following:
-//!  $ cargo run --example local_swarm_discovery --features="discovery-local-network" -- connect [NODE_ID] [HASH] -o [FILE_PATH]
+//!  $ cargo run --example discovery_local_network --features="discovery-local-network" -- connect [NODE_ID] [HASH] -o [FILE_PATH]
 //! Run that command on another machine in the same local network, replacing [FILE_PATH] to the path on which you want to save the transferred content.
 use std::path::PathBuf;
 
 use anyhow::ensure;
 use clap::{Parser, Subcommand};
 use iroh::{
-    discovery::local_swarm_discovery::LocalSwarmDiscovery, protocol::Router, Endpoint, NodeAddr,
-    PublicKey, RelayMode, SecretKey,
+    discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, NodeAddr, PublicKey, RelayMode,
+    SecretKey,
 };
 use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::WrapOption, Hash};
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -60,9 +60,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let key = SecretKey::generate(rand::rngs::OsRng);
-    let discovery = LocalSwarmDiscovery::new(key.public())?;
+    let discovery = MdnsDiscovery::new(key.public())?;
 
-    println!("Starting iroh node with local node discovery...");
+    println!("Starting iroh node with mdns discovery...");
     // create a new node
     let endpoint = Endpoint::builder()
         .secret_key(key)
@@ -94,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
             let outcome = stream.finish().await?;
-            println!("To fetch the blob:\n\tcargo run --example local_swarm_discovery --features=\"local-swarm-discovery\" -- connect {} {} -o [FILE_PATH]", node.endpoint().node_id(), outcome.hash);
+            println!("To fetch the blob:\n\tcargo run --example discovery_local_network --features=\"discovery-local-network\" -- connect {} {} -o [FILE_PATH]", node.endpoint().node_id(), outcome.hash);
             tokio::signal::ctrl_c().await?;
             node.shutdown().await?;
             std::process::exit(0);
