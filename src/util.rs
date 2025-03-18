@@ -273,7 +273,8 @@ impl Drop for TempTag {
 /// Get the number of bytes given a set of chunk ranges and the total size.
 ///
 /// If some ranges are out of bounds, they will be clamped to the size.
-pub fn total_bytes(ranges: ChunkRanges, size: u64) -> u64 {
+pub fn total_bytes(ranges: &ChunkRanges, size: Option<u64>) -> u64 {
+    let size = size.unwrap_or(u64::MAX);
     ranges
         .iter()
         .map(|range| {
