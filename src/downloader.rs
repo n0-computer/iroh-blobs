@@ -1523,7 +1523,7 @@ impl DialerT for Dialer {
 #[derive(Debug)]
 struct Dialer {
     endpoint: Endpoint,
-    pending: JoinSet<(NodeId, anyhow::Result<quinn::Connection>)>,
+    pending: JoinSet<(NodeId, anyhow::Result<endpoint::Connection>)>,
     pending_dials: HashMap<NodeId, CancellationToken>,
 }
 
@@ -1572,7 +1572,7 @@ impl Dialer {
 }
 
 impl Stream for Dialer {
-    type Item = (NodeId, anyhow::Result<quinn::Connection>);
+    type Item = (NodeId, anyhow::Result<endpoint::Connection>);
 
     fn poll_next(
         mut self: Pin<&mut Self>,

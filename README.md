@@ -1,19 +1,18 @@
 # iroh-blobs
 
-This crate provides blob and collection transfer support for iroh. It implements a simple request-response protocol based on blake3 verified streaming.
+This crate provides blob and blob sequence transfer support for iroh. It implements a simple request-response protocol based on BLAKE3 verified streaming.
 
-A request describes data in terms of blake3 hashes and byte ranges. It is possible to
-request blobs or ranges of blobs, as well as collections.
+A request describes data in terms of BLAKE3 hashes and byte ranges. It is possible to request blobs or ranges of blobs, as well as entire sequences of blobs in one request.
 
-The requester opens a quic stream to the provider and sends the request. The provider answers with the requested data, encoded as [blake3](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf) verified streams, on the same quic stream.
+The requester opens a QUIC stream to the provider and sends the request. The provider answers with the requested data, encoded as [BLAKE3](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf) verified streams, on the same QUIC stream.
 
-This crate is usually used together with [iroh](https://crates.io/crates/iroh), but can also be used with normal [quinn](https://crates.io/crates/quinn) connections. Connection establishment is left up to the user or a higher level APIs such as the iroh CLI.
+This crate is used together with [iroh](https://crates.io/crates/iroh). Connection establishment is left up to the user or higher level APIs.
 
 ## Concepts
 
 - **Blob:** a sequence of bytes of arbitrary size, without any metadata.
 
-- **Link:** a 32 byte blake3 hash of a blob.
+- **Link:** a 32 byte BLAKE3 hash of a blob.
 
 - **HashSeq:** a blob that contains a sequence of links. Its size is a multiple of 32.
 
@@ -32,7 +31,7 @@ Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 
 ```rust
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
+use iroh_blobs::{store::Store, net_protocol::Blobs};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -40,14 +39,10 @@ async fn main() -> anyhow::Result<()> {
     // we've built at number0
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 
-    // spawn a local pool with one thread per CPU
-    // for a single threaded pool use `LocalPool::single`
-    let local_pool = LocalPool::default();
-
     // create an in-memory blob store
     // use `iroh_blobs::net_protocol::Blobs::persistent` to load or create a
     // persistent blob store from a path
-    let blobs = Blobs::memory().build(local_pool.handle(), &endpoint);
+    let blobs = Blobs::memory().build(&endpoint);
 
     // turn on the "rpc" feature if you need to create blobs and tags clients
     let blobs_client = blobs.client();
@@ -60,9 +55,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     // do fun stuff with the blobs protocol!
-    // make sure not to drop the local_pool before you are finished
     router.shutdown().await?;
-    drop(local_pool);
     drop(tags_client);
     Ok(())
 }
@@ -70,8 +63,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Examples
 
-Examples that use `iroh-blobs` can be found in the `iroh` crate. the iroh crate publishes `iroh_blobs` as `iroh::bytes`.
-
+Examples that use `iroh-blobs` can be found in [this repo](https://github.com/n0-computer/iroh-blobs/tree/main/examples).
 
 # License
 
@@ -89,4 +81,3 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license,
 shall be dual licensed as above, without any additional terms or conditions.
-

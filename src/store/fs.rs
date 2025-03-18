@@ -67,6 +67,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     io,
+    ops::Bound,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::{Duration, SystemTime},
@@ -85,7 +86,6 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use tokio::io::AsyncWriteExt;
 use tracing::trace_span;
-
 mod tables;
 #[doc(hidden)]
 pub mod test_support;
@@ -601,23 +601,35 @@ pub(crate) enum ActorMessage {
     },
     /// Bulk query method: get the entire tags table
     Tags {
-        #[debug(skip)]
-        filter: FilterPredicate<Tag, HashAndFormat>,
+        from: Option<Tag>,
+        to: Option<Tag>,
         #[allow(clippy::type_complexity)]
         tx: oneshot::Sender<
             ActorResult<Vec<std::result::Result<(Tag, HashAndFormat), StorageError>>>,
         >,
     },
-    /// Modification method: set a tag to a value, or remove it.
+    /// Modification method: set a tag to a value.
     SetTag {
         tag: Tag,
-        value: Option<HashAndFormat>,
+        value: HashAndFormat,
+        tx: oneshot::Sender<ActorResult<()>>,
+    },
+    /// Modification method: set a tag to a value.
+    DeleteTags {
+        from: Option<Tag>,
+        to: Option<Tag>,
         tx: oneshot::Sender<ActorResult<()>>,
     },
     /// Modification method: create a new unique tag and set it to a value.
     CreateTag {
         hash: HashAndFormat,
         tx: oneshot::Sender<ActorResult<Tag>>,
+    },
+    /// Modification method: rename a tag atomically.
+    RenameTag {
+        from: Tag,
+        to: Tag,
+        tx: oneshot::Sender<ActorResult<()>>,
     },
     /// Modification method: unconditional delete the data for a number of hashes
     Delete {
@@ -673,6 +685,8 @@ impl ActorMessage {
             | Self::CreateTag { .. }
             | Self::SetFullEntryState { .. }
             | Self::Delete { .. }
+            | Self::DeleteTags { .. }
+            | Self::RenameTag { .. }
             | Self::GcDelete { .. } => MessageCategory::ReadWrite,
             Self::UpdateInlineOptions { .. }
             | Self::Sync { .. }
@@ -856,11 +870,13 @@ impl StoreInner {
         Ok(res)
     }
 
-    async fn tags(&self) -> OuterResult<Vec<io::Result<(Tag, HashAndFormat)>>> {
+    async fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> OuterResult<Vec<io::Result<(Tag, HashAndFormat)>>> {
         let (tx, rx) = oneshot::channel();
-        let filter: FilterPredicate<Tag, HashAndFormat> =
-            Box::new(|_i, k, v| Some((k.value(), v.value())));
-        self.tx.send(ActorMessage::Tags { filter, tx }).await?;
+        self.tx.send(ActorMessage::Tags { from, to, tx }).await?;
         let tags = rx.await?;
         // transform the internal error type into io::Error
         let tags = tags?
@@ -870,7 +886,7 @@ impl StoreInner {
         Ok(tags)
     }
 
-    async fn set_tag(&self, tag: Tag, value: Option<HashAndFormat>) -> OuterResult<()> {
+    async fn set_tag(&self, tag: Tag, value: HashAndFormat) -> OuterResult<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(ActorMessage::SetTag { tag, value, tx })
@@ -878,9 +894,25 @@ impl StoreInner {
         Ok(rx.await??)
     }
 
+    async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> OuterResult<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(ActorMessage::DeleteTags { from, to, tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
     async fn create_tag(&self, hash: HashAndFormat) -> OuterResult<Tag> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(ActorMessage::CreateTag { hash, tx }).await?;
+        Ok(rx.await??)
+    }
+
+    async fn rename_tag(&self, from: Tag, to: Tag) -> OuterResult<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(ActorMessage::RenameTag { from, to, tx })
+            .await?;
         Ok(rx.await??)
     }
 
@@ -1247,7 +1279,7 @@ impl super::Map for Store {
     type Entry = Entry;
 
     async fn get(&self, hash: &Hash) -> io::Result<Option<Self::Entry>> {
-        Ok(self.0.get(*hash).await?.map(From::from))
+        Ok(self.0.get(*hash).await?)
     }
 }
 
@@ -1284,8 +1316,12 @@ impl super::ReadableStore for Store {
         Ok(Box::new(self.0.partial_blobs().await?.into_iter()))
     }
 
-    async fn tags(&self) -> io::Result<super::DbIter<(Tag, HashAndFormat)>> {
-        Ok(Box::new(self.0.tags().await?.into_iter()))
+    async fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> io::Result<super::DbIter<(Tag, HashAndFormat)>> {
+        Ok(Box::new(self.0.tags(from, to).await?.into_iter()))
     }
 
     fn temp_tags(&self) -> Box<dyn Iterator<Item = HashAndFormat> + Send + Sync + 'static> {
@@ -1371,12 +1407,20 @@ impl super::Store for Store {
         .await??)
     }
 
-    async fn set_tag(&self, name: Tag, hash: Option<HashAndFormat>) -> io::Result<()> {
+    async fn set_tag(&self, name: Tag, hash: HashAndFormat) -> io::Result<()> {
         Ok(self.0.set_tag(name, hash).await?)
+    }
+
+    async fn delete_tags(&self, from: Option<Tag>, to: Option<Tag>) -> io::Result<()> {
+        Ok(self.0.delete_tags(from, to).await?)
     }
 
     async fn create_tag(&self, hash: HashAndFormat) -> io::Result<Tag> {
         Ok(self.0.create_tag(hash).await?)
+    }
+
+    async fn rename_tag(&self, from: Tag, to: Tag) -> io::Result<()> {
+        Ok(self.0.rename_tag(from, to).await?)
     }
 
     async fn delete(&self, hashes: Vec<Hash>) -> io::Result<()> {
@@ -1468,8 +1512,8 @@ impl super::Store for Store {
     }
 }
 
-pub(super) async fn gc_sweep_task<'a>(
-    store: &'a Store,
+pub(super) async fn gc_sweep_task(
+    store: &Store,
     live: &BTreeSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> anyhow::Result<()> {
@@ -1966,23 +2010,21 @@ impl ActorState {
     fn tags(
         &mut self,
         tables: &impl ReadableTables,
-        filter: FilterPredicate<Tag, HashAndFormat>,
+        from: Option<Tag>,
+        to: Option<Tag>,
     ) -> ActorResult<Vec<std::result::Result<(Tag, HashAndFormat), StorageError>>> {
         let mut res = Vec::new();
-        let mut index = 0u64;
-        #[allow(clippy::explicit_counter_loop)]
-        for item in tables.tags().iter()? {
+        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        for item in tables.tags().range((from, to))? {
             match item {
                 Ok((k, v)) => {
-                    if let Some(item) = filter(index, k, v) {
-                        res.push(Ok(item));
-                    }
+                    res.push(Ok((k.value(), v.value())));
                 }
                 Err(e) => {
                     res.push(Err(e));
                 }
             }
-            index += 1;
         }
         Ok(res)
     }
@@ -1998,19 +2040,35 @@ impl ActorState {
         Ok(tag)
     }
 
-    fn set_tag(
+    fn rename_tag(&mut self, tables: &mut Tables, from: Tag, to: Tag) -> ActorResult<()> {
+        let value = tables
+            .tags
+            .remove(from)?
+            .ok_or_else(|| {
+                ActorError::Io(io::Error::new(io::ErrorKind::NotFound, "tag not found"))
+            })?
+            .value();
+        tables.tags.insert(to, value)?;
+        Ok(())
+    }
+
+    fn set_tag(&self, tables: &mut Tables, tag: Tag, value: HashAndFormat) -> ActorResult<()> {
+        tables.tags.insert(tag, value)?;
+        Ok(())
+    }
+
+    fn delete_tags(
         &self,
         tables: &mut Tables,
-        tag: Tag,
-        value: Option<HashAndFormat>,
+        from: Option<Tag>,
+        to: Option<Tag>,
     ) -> ActorResult<()> {
-        match value {
-            Some(value) => {
-                tables.tags.insert(tag, value)?;
-            }
-            None => {
-                tables.tags.remove(tag)?;
-            }
+        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        let removing = tables.tags.extract_from_if((from, to), |_, _| true)?;
+        // drain the iterator to actually remove the tags
+        for res in removing {
+            res?;
         }
         Ok(())
     }
@@ -2319,8 +2377,8 @@ impl ActorState {
                 let res = self.blobs(tables, filter);
                 tx.send(res).ok();
             }
-            ActorMessage::Tags { filter, tx } => {
-                let res = self.tags(tables, filter);
+            ActorMessage::Tags { from, to, tx } => {
+                let res = self.tags(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::GcStart { tx } => {
@@ -2358,8 +2416,16 @@ impl ActorState {
                 let res = self.set_tag(tables, tag, value);
                 tx.send(res).ok();
             }
+            ActorMessage::DeleteTags { from, to, tx } => {
+                let res = self.delete_tags(tables, from, to);
+                tx.send(res).ok();
+            }
             ActorMessage::CreateTag { hash, tx } => {
                 let res = self.create_tag(tables, hash);
+                tx.send(res).ok();
+            }
+            ActorMessage::RenameTag { from, to, tx } => {
+                let res = self.rename_tag(tables, from, to);
                 tx.send(res).ok();
             }
             ActorMessage::Delete { hashes, tx } => {

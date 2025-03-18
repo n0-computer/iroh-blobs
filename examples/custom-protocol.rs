@@ -44,13 +44,11 @@ use anyhow::Result;
 use clap::Parser;
 use futures_lite::future::Boxed as BoxedFuture;
 use iroh::{
-    endpoint::{get_remote_node_id, Connecting},
+    endpoint::Connection,
     protocol::{ProtocolHandler, Router},
     Endpoint, NodeId,
 };
-use iroh_blobs::{
-    net_protocol::Blobs, rpc::client::blobs::MemClient, util::local_pool::LocalPool, Hash,
-};
+use iroh_blobs::{net_protocol::Blobs, rpc::client::blobs::MemClient, Hash};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -89,8 +87,7 @@ async fn main() -> Result<()> {
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
     let endpoint = Endpoint::builder().bind().await?;
     let builder = Router::builder(endpoint);
-    let local_pool = LocalPool::default();
-    let blobs = Blobs::memory().build(local_pool.handle(), builder.endpoint());
+    let blobs = Blobs::memory().build(builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let blobs_client = blobs.client();
 
@@ -145,14 +142,12 @@ impl ProtocolHandler for BlobSearch {
     ///
     /// The returned future runs on a newly spawned tokio task, so it can run as long as
     /// the connection lasts.
-    fn accept(&self, connecting: Connecting) -> BoxedFuture<Result<()>> {
+    fn accept(&self, connection: Connection) -> BoxedFuture<Result<()>> {
         let this = self.clone();
         // We have to return a boxed future from the handler.
         Box::pin(async move {
-            // Wait for the connection to be fully established.
-            let connection = connecting.await?;
             // We can get the remote's node id from the connection.
-            let node_id = get_remote_node_id(&connection)?;
+            let node_id = connection.remote_node_id()?;
             println!("accepted connection from {node_id}");
 
             // Our protocol is a simple request-response protocol, so we expect the
@@ -228,7 +223,7 @@ impl BlobSearch {
             match recv.read_exact(&mut hash_bytes).await {
                 // FinishedEarly means that the remote side did not send further data,
                 // so in this case we break our loop.
-                Err(quinn::ReadExactError::FinishedEarly(_)) => break,
+                Err(iroh::endpoint::ReadExactError::FinishedEarly(_)) => break,
                 // Other errors are connection errors, so we bail.
                 Err(err) => return Err(err.into()),
                 Ok(_) => {}

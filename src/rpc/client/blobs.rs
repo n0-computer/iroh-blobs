@@ -1002,6 +1002,7 @@ mod tests {
     use rand::RngCore;
     use testresult::TestResult;
     use tokio::{io::AsyncWriteExt, sync::mpsc};
+    use tracing_test::traced_test;
 
     use super::*;
     use crate::{hashseq::HashSeq, ticket::BlobTicket};
@@ -1015,11 +1016,9 @@ mod tests {
 
         use super::RpcService;
         use crate::{
-            downloader::Downloader,
             net_protocol::Blobs,
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
-            util::local_pool::LocalPool,
         };
 
         type RpcClient = quic_rpc::RpcClient<RpcService>;
@@ -1029,7 +1028,6 @@ mod tests {
         pub struct Node {
             router: iroh::protocol::Router,
             client: RpcClient,
-            _local_pool: LocalPool,
             _rpc_task: AbortOnDropHandle<()>,
         }
 
@@ -1067,19 +1065,12 @@ mod tests {
                     .unwrap_or_else(|| Endpoint::builder().discovery_n0())
                     .bind()
                     .await?;
-                let local_pool = LocalPool::single();
                 let mut router = Router::builder(endpoint.clone());
 
                 // Setup blobs
-                let downloader =
-                    Downloader::new(store.clone(), endpoint.clone(), local_pool.handle().clone());
-                let blobs = Blobs::new(
-                    store.clone(),
-                    local_pool.handle().clone(),
-                    events,
-                    downloader,
-                    endpoint.clone(),
-                );
+                let blobs = Blobs::builder(store.clone())
+                    .events(events)
+                    .build(&endpoint);
                 router = router.accept(crate::ALPN, blobs.clone());
 
                 // Build the router
@@ -1096,7 +1087,6 @@ mod tests {
                     router,
                     client,
                     _rpc_task,
-                    _local_pool: local_pool,
                 })
             }
         }
@@ -1150,9 +1140,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_create_collection() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
 
         // create temp file
@@ -1234,9 +1223,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_read_at() -> Result<()> {
-        // let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
 
         // create temp file
@@ -1373,9 +1361,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_get_collection() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
 
         // create temp file
@@ -1439,9 +1426,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_share() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
 
         // create temp file
@@ -1513,9 +1499,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_provide_events() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let (node1_events, mut node1_events_r) = BlobEvents::new(16);
         let node1 = node::Node::memory()
             .blobs_events(node1_events)
@@ -1578,9 +1563,8 @@ mod tests {
     }
     /// Download a existing blob from oneself
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_get_self_existing() -> TestResult<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
         let node_id = node.node_id();
         let blobs = node.blobs();
@@ -1626,9 +1610,8 @@ mod tests {
 
     /// Download a missing blob from oneself
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_get_self_missing() -> TestResult<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
         let node_id = node.node_id();
         let blobs = node.blobs();
@@ -1678,9 +1661,8 @@ mod tests {
 
     /// Download a existing collection. Check that things succeed and no download is performed.
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_get_existing_collection() -> TestResult<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
         // We use a nonexisting node id because we just want to check that this succeeds without
         // hitting the network.
@@ -1750,10 +1732,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     #[cfg_attr(target_os = "windows", ignore = "flaky")]
     async fn test_blob_delete_mem() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = node::Node::memory().spawn().await?;
 
         let res = node.blobs().add_bytes(&b"hello world"[..]).await?;
@@ -1772,9 +1753,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_blob_delete_fs() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let dir = tempfile::tempdir()?;
         let node = node::Node::persistent(dir.path()).await?.spawn().await?;
 
@@ -1794,9 +1774,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_ticket_multiple_addrs() -> TestResult<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = Node::memory().spawn().await?;
         let hash = node
             .blobs()
@@ -1812,9 +1791,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_node_add_blob_stream() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         use std::io::Cursor;
         let node = Node::memory().spawn().await?;
 
@@ -1830,9 +1808,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_node_add_tagged_blob_event() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
-
         let node = Node::memory().spawn().await?;
 
         let _got_hash = tokio::time::timeout(Duration::from_secs(10), async move {
@@ -1867,8 +1844,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_download_via_relay() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
         let (relay_map, relay_url, _guard) = iroh::test_utils::run_relay_server().await?;
 
         let endpoint1 = iroh::Endpoint::builder()
@@ -1897,9 +1874,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     #[ignore = "flaky"]
     async fn test_download_via_relay_with_discovery() -> Result<()> {
-        let _guard = iroh_test::logging::setup();
         let (relay_map, _relay_url, _guard) = iroh::test_utils::run_relay_server().await?;
         let dns_pkarr_server = DnsPkarrServer::run().await?;
 

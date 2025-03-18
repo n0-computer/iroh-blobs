@@ -7,6 +7,7 @@ use std::{
 use anyhow::anyhow;
 use futures_util::future::FutureExt;
 use iroh::SecretKey;
+use tracing_test::traced_test;
 
 use super::*;
 use crate::{
@@ -48,8 +49,6 @@ impl Downloader {
         let lp = LocalPool::default();
         lp.spawn_detached(move || async move {
             // we want to see the logs of the service
-            let _guard = iroh_test::logging::setup();
-
             let service = Service::new(getter, dialer, concurrency_limits, retry_config, msg_rx);
             service.run().await
         });
@@ -66,8 +65,8 @@ impl Downloader {
 
 /// Tests that receiving a download request and performing it doesn't explode.
 #[tokio::test]
+#[traced_test]
 async fn smoke_test() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     let concurrency_limits = ConcurrencyLimits::default();
@@ -90,8 +89,8 @@ async fn smoke_test() {
 
 /// Tests that multiple intents produce a single request.
 #[tokio::test]
+#[traced_test]
 async fn deduplication() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     // make request take some time to ensure the intents are received before completion
@@ -123,8 +122,8 @@ async fn deduplication() {
 /// Tests that the request is cancelled only when all intents are cancelled.
 #[ignore = "flaky"]
 #[tokio::test]
+#[traced_test]
 async fn cancellation() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     // make request take some time to ensure cancellations are received on time
@@ -159,8 +158,8 @@ async fn cancellation() {
 /// maximum number of concurrent requests is not exceed.
 /// NOTE: This is internally tested by [`Service::check_invariants`].
 #[tokio::test]
+#[traced_test]
 async fn max_concurrent_requests_total() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     // make request take some time to ensure concurreny limits are hit
@@ -202,8 +201,8 @@ async fn max_concurrent_requests_total() {
 /// the maximum number of requests per peer is still respected.
 /// NOTE: This is internally tested by [`Service::check_invariants`].
 #[tokio::test]
+#[traced_test]
 async fn max_concurrent_requests_per_peer() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     // make request take some time to ensure concurreny limits are hit
@@ -239,8 +238,8 @@ async fn max_concurrent_requests_per_peer() {
 /// state. The download then finishes, and we make sure that all events are emitted properly, and
 /// the progress state of the handles converges.
 #[tokio::test]
+#[traced_test]
 async fn concurrent_progress() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
 
@@ -356,8 +355,8 @@ async fn concurrent_progress() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn long_queue() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     let concurrency_limits = ConcurrencyLimits {
@@ -394,8 +393,8 @@ async fn long_queue() {
 /// If a download errors with [`FailureAction::DropPeer`], make sure that the peer is not dropped
 /// while other transfers are still running.
 #[tokio::test]
+#[traced_test]
 async fn fail_while_running() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     let (downloader, _lp) =
@@ -432,8 +431,8 @@ async fn fail_while_running() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn retry_nodes_simple() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     let (downloader, _lp) =
@@ -453,8 +452,8 @@ async fn retry_nodes_simple() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn retry_nodes_fail() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     let config = RetryConfig {
@@ -491,8 +490,8 @@ async fn retry_nodes_fail() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn retry_nodes_jump_queue() {
-    let _guard = iroh_test::logging::setup();
     let dialer = dialer::TestingDialer::default();
     let getter = getter::TestingGetter::default();
     let concurrency_limits = ConcurrencyLimits {

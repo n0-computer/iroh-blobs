@@ -38,6 +38,6 @@ jobs:
           severity: error
           details: |
             Rustc beta tests failed in **${{ github.repository }}**
-            See https://github.com/n0-computer/${{ github.repository }}/actions/workflows/beta.yaml
+            See https://github.com/${{ github.repository }}/actions/workflows/beta.yaml
           webhookUrl: ${{ secrets.DISCORD_N0_GITHUB_CHANNEL_WEBHOOK_URL }}
 

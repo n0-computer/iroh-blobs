@@ -1,7 +1,7 @@
 #![cfg(feature = "test")]
 use std::{net::SocketAddr, path::PathBuf, vec};
 
-use iroh_blobs::{net_protocol::Blobs, util::local_pool::LocalPool};
+use iroh_blobs::net_protocol::Blobs;
 use quic_rpc::client::QuinnConnector;
 use tempfile::TempDir;
 use testresult::TestResult;
@@ -15,16 +15,14 @@ type BlobsClient = iroh_blobs::rpc::client::blobs::Client<QC>;
 pub struct Node {
     pub router: iroh::protocol::Router,
     pub blobs: Blobs<iroh_blobs::store::fs::Store>,
-    pub local_pool: LocalPool,
     pub rpc_task: AbortOnDropHandle<()>,
 }
 
 impl Node {
     pub async fn new(path: PathBuf) -> anyhow::Result<(Self, SocketAddr, Vec<u8>)> {
         let store = iroh_blobs::store::fs::Store::load(path).await?;
-        let local_pool = LocalPool::default();
         let endpoint = iroh::Endpoint::builder().bind().await?;
-        let blobs = Blobs::builder(store).build(local_pool.handle(), &endpoint);
+        let blobs = Blobs::builder(store).build(&endpoint);
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
             .spawn()
@@ -41,7 +39,6 @@ impl Node {
         let node = Self {
             router,
             blobs,
-            local_pool,
             rpc_task,
         };
         Ok((node, local_addr, key))

@@ -1,6 +1,6 @@
 [package]
 name = "iroh-blobs"
-version = "0.30.0"
+version = "0.34.0"
 edition = "2021"
 readme = "README.md"
 description = "blob and collection transfer support for iroh"
@@ -40,10 +40,10 @@ genawaiter = { version = "0.99.1", features = ["futures03"] }
 hashlink = { version = "0.9.0", optional = true }
 hex = "0.4.3"
 indicatif = { version = "0.17.8", optional = true }
-iroh-base = { version = "0.30" }
+iroh-base = { version = "0.34" }
 iroh-io = { version = "0.6.0", features = ["stats"] }
-iroh-metrics = { version = "0.30.0", default-features = false }
-iroh = "0.30"
+iroh-metrics = { version = "0.32", default-features = false }
+iroh = "0.34"
 nested_enum_utils = { version = "0.1.0", optional = true }
 num_cpus = "1.15.0"
 oneshot = "0.1.8"
@@ -54,9 +54,8 @@ postcard = { version = "1", default-features = false, features = [
     "use-std",
     "experimental-derive",
 ] }
-quic-rpc = { version = "0.17.3", optional = true }
-quic-rpc-derive = { version = "0.17", optional = true }
-quinn = { package = "iroh-quinn", version = "0.12", features = ["ring"] }
+quic-rpc = { version = "0.19", optional = true }
+quic-rpc-derive = { version = "0.19", optional = true }
 rand = "0.8"
 range-collections = "0.4.0"
 redb = { version = "2.2.0", optional = true }
@@ -77,11 +76,12 @@ walkdir = { version = "2.5.0", optional = true }
 
 # Examples
 console = { version = "0.15.8", optional = true }
+tracing-test = "0.2.5"
 
 [dev-dependencies]
 http-body = "1.0"
-iroh-test = { version = "0.30" }
-iroh = { version = "0.30", features = ["test-utils"] }
+iroh = { version = "0.34", features = ["test-utils"] }
+quinn = { package = "iroh-quinn", version = "0.13", features = ["ring"] }
 futures-buffered = "0.2.4"
 proptest = "1.0.0"
 serde_json = "1.0.107"
@@ -96,7 +96,7 @@ futures-util = "0.3.30"
 testdir = "0.9.1"
 
 [features]
-default = ["fs-store", "net_protocol"]
+default = ["fs-store", "net_protocol", "rpc"]
 downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
 net_protocol = ["downloader", "dep:futures-util"]
 fs-store = ["dep:reflink-copy", "redb", "dep:tempfile"]
@@ -149,7 +149,7 @@ name = "hello-world-provide"
 required-features = ["example-iroh"]
 
 [[example]]
-name = "local-swarm-discovery"
+name = "discovery-local-network"
 required-features = ["example-iroh"]
 
 [[example]]
