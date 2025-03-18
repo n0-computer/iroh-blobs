@@ -2,6 +2,20 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.34.0](https://github.com/n0-computer/iroh-blobs/compare/v0.33.1..0.34.0) - 2025-03-18
+
+### ⛰️  Features
+
+- Richer tags api ([#69](https://github.com/n0-computer/iroh-blobs/issues/69)) - ([387c68c](https://github.com/n0-computer/iroh-blobs/commit/387c68cc4d084b7067bfedae341abb277eaac8c0))
+- Modify Downloader config through Blobs builder ([#75](https://github.com/n0-computer/iroh-blobs/issues/75)) - ([6e9f06b](https://github.com/n0-computer/iroh-blobs/commit/6e9f06b48a97957550e2343694966ac2fee07f39))
+- Enable RPC by default ([#73](https://github.com/n0-computer/iroh-blobs/issues/73)) - ([b1029e2](https://github.com/n0-computer/iroh-blobs/commit/b1029e2f5542b56525d53365b040d874549d9fe7))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump mozilla-actions/sccache-action from 0.0.7 to 0.0.8 in the github-actions group ([#66](https://github.com/n0-computer/iroh-blobs/issues/66)) - ([3e9662c](https://github.com/n0-computer/iroh-blobs/commit/3e9662c9cdb4948f9f8c59e7c74ce6eca7942cf9))
+- Update to latest iroh ([#77](https://github.com/n0-computer/iroh-blobs/issues/77)) - ([253a8c6](https://github.com/n0-computer/iroh-blobs/commit/253a8c6bf05db30bf39485822f0e2114481e26ce))
+- Update lockfile - ([65a84bb](https://github.com/n0-computer/iroh-blobs/commit/65a84bb011e543e3b752b5d7eda1c5f3c1eba481))
+
 ## [0.33.1](https://github.com/n0-computer/iroh-blobs/compare/v0.33.0..0.33.1) - 2025-03-11
 
 ### 🐛 Bug Fixes
