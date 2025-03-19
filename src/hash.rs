@@ -151,7 +151,12 @@ impl FromStr for Hash {
             // hex
             data_encoding::HEXLOWER.decode_mut(s.as_bytes(), &mut bytes)
         } else {
-            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), &mut bytes)
+            let input = s.to_ascii_uppercase();
+            let input = input.as_bytes();
+            if data_encoding::BASE32_NOPAD.decode_len(input.len())? != bytes.len() {
+                return Err(HexOrBase32ParseError::DecodeInvalidLength);
+            }
+            data_encoding::BASE32_NOPAD.decode_mut(input, &mut bytes)
         };
         match res {
             Ok(len) => {
@@ -249,6 +254,12 @@ pub struct HashAndFormat {
     pub hash: Hash,
     /// The format
     pub format: BlobFormat,
+}
+
+impl From<Hash> for HashAndFormat {
+    fn from(hash: Hash) -> Self {
+        Self::raw(hash)
+    }
 }
 
 #[cfg(feature = "redb")]
@@ -377,7 +388,7 @@ impl FromStr for HashAndFormat {
                 hex::decode_to_slice(s, &mut hash)?;
                 Ok(Self::raw(hash.into()))
             }
-            65 if s[0].to_ascii_lowercase() == b's' => {
+            65 if s[0].eq_ignore_ascii_case(&b's') => {
                 hex::decode_to_slice(&s[1..], &mut hash)?;
                 Ok(Self::hash_seq(hash.into()))
             }
@@ -416,11 +427,10 @@ impl<'de> Deserialize<'de> for HashAndFormat {
 
 #[cfg(test)]
 mod tests {
-
-    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
     use serde_test::{assert_tokens, Configure, Token};
 
     use super::*;
+    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     #[test]
     fn test_display_parse_roundtrip() {
@@ -583,5 +593,10 @@ mod tests {
         let ser = serde_json::to_string(&haf).unwrap();
         let de = serde_json::from_str(&ser).unwrap();
         assert_eq!(haf, de);
+    }
+
+    #[test]
+    fn test_hash_invalid() {
+        let _ = Hash::from_str("invalid").unwrap_err();
     }
 }

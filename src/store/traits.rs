@@ -292,7 +292,11 @@ pub trait ReadableStore: Map {
     /// been imported, and hash sequences that have been created internally.
     fn blobs(&self) -> impl Future<Output = io::Result<DbIter<Hash>>> + Send;
     /// list all tags (collections or other explicitly added things) in the database
-    fn tags(&self) -> impl Future<Output = io::Result<DbIter<(Tag, HashAndFormat)>>> + Send;
+    fn tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
+    ) -> impl Future<Output = io::Result<DbIter<(Tag, HashAndFormat)>>> + Send;
 
     /// Temp tags
     fn temp_tags(&self) -> Box<dyn Iterator<Item = HashAndFormat> + Send + Sync + 'static>;
@@ -443,7 +447,22 @@ pub trait Store: ReadableStore + MapMut + std::fmt::Debug {
     fn set_tag(
         &self,
         name: Tag,
-        hash: Option<HashAndFormat>,
+        hash: HashAndFormat,
+    ) -> impl Future<Output = io::Result<()>> + Send;
+
+    /// Rename a tag
+    fn rename_tag(&self, from: Tag, to: Tag) -> impl Future<Output = io::Result<()>> + Send;
+
+    /// Delete a single tag
+    fn delete_tag(&self, name: Tag) -> impl Future<Output = io::Result<()>> + Send {
+        self.delete_tags(Some(name.clone()), Some(name.successor()))
+    }
+
+    /// Bulk delete tags
+    fn delete_tags(
+        &self,
+        from: Option<Tag>,
+        to: Option<Tag>,
     ) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Create a new tag
@@ -726,7 +745,7 @@ pub(super) async fn gc_mark_task<'a>(
     }
     let mut roots = BTreeSet::new();
     debug!("traversing tags");
-    for item in store.tags().await? {
+    for item in store.tags(None, None).await? {
         let (name, haf) = item?;
         debug!("adding root {:?} {:?}", name, haf);
         roots.insert(haf);
@@ -774,8 +793,8 @@ pub(super) async fn gc_mark_task<'a>(
     Ok(())
 }
 
-async fn gc_sweep_task<'a>(
-    store: &'a impl Store,
+async fn gc_sweep_task(
+    store: &impl Store,
     live: &BTreeSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> anyhow::Result<()> {

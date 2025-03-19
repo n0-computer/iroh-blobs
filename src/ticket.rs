@@ -154,9 +154,9 @@ mod tests {
     use std::net::SocketAddr;
 
     use iroh::{PublicKey, SecretKey};
-    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     use super::*;
+    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     fn make_ticket() -> BlobTicket {
         let hash = Hash::new(b"hi there");

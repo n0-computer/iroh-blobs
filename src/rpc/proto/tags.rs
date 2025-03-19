@@ -4,7 +4,11 @@ use quic_rpc_derive::rpc_requests;
 use serde::{Deserialize, Serialize};
 
 use super::{RpcResult, RpcService};
-use crate::{net_protocol::BatchId, rpc::client::tags::TagInfo, HashAndFormat, Tag};
+use crate::{
+    net_protocol::BatchId,
+    rpc::client::tags::{DeleteOptions, ListOptions, TagInfo},
+    HashAndFormat, Tag,
+};
 
 #[allow(missing_docs)]
 #[derive(strum::Display, Debug, Serialize, Deserialize)]
@@ -15,6 +19,8 @@ pub enum Request {
     Create(CreateRequest),
     #[rpc(response = RpcResult<()>)]
     Set(SetRequest),
+    #[rpc(response = RpcResult<()>)]
+    Rename(RenameRequest),
     #[rpc(response = RpcResult<()>)]
     DeleteTag(DeleteRequest),
     #[server_streaming(response = TagInfo)]
@@ -56,8 +62,8 @@ pub struct CreateRequest {
 pub struct SetRequest {
     /// Name of the tag
     pub name: Tag,
-    /// Value of the tag, None to delete
-    pub value: Option<HashAndFormat>,
+    /// Value of the tag
+    pub value: HashAndFormat,
     /// Batch to use, none for global
     pub batch: Option<BatchId>,
     /// Sync mode
@@ -73,30 +79,19 @@ pub struct ListRequest {
     pub raw: bool,
     /// List hash seq tags
     pub hash_seq: bool,
+    /// From tag (inclusive)
+    pub from: Option<Tag>,
+    /// To tag (exclusive)
+    pub to: Option<Tag>,
 }
 
-impl ListRequest {
-    /// List all tags
-    pub fn all() -> Self {
+impl From<ListOptions> for ListRequest {
+    fn from(options: ListOptions) -> Self {
         Self {
-            raw: true,
-            hash_seq: true,
-        }
-    }
-
-    /// List raw tags
-    pub fn raw() -> Self {
-        Self {
-            raw: true,
-            hash_seq: false,
-        }
-    }
-
-    /// List hash seq tags
-    pub fn hash_seq() -> Self {
-        Self {
-            raw: false,
-            hash_seq: true,
+            raw: options.raw,
+            hash_seq: options.hash_seq,
+            from: options.from,
+            to: options.to,
         }
     }
 }
@@ -104,6 +99,26 @@ impl ListRequest {
 /// Delete a tag
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeleteRequest {
-    /// Name of the tag
-    pub name: Tag,
+    /// From tag (inclusive)
+    pub from: Option<Tag>,
+    /// To tag (exclusive)
+    pub to: Option<Tag>,
+}
+
+impl From<DeleteOptions> for DeleteRequest {
+    fn from(options: DeleteOptions) -> Self {
+        Self {
+            from: options.from,
+            to: options.to,
+        }
+    }
+}
+
+/// Rename a tag atomically
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RenameRequest {
+    /// Old tag name
+    pub from: Tag,
+    /// New tag name
+    pub to: Tag,
 }

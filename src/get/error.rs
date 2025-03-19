@@ -1,6 +1,6 @@
 //! Error returned from get operations
 
-use iroh::endpoint;
+use iroh::endpoint::{self, ClosedStream};
 
 use crate::util::progress::ProgressSendError;
 
@@ -73,7 +73,7 @@ impl From<endpoint::ConnectionError> for GetError {
                 // TODO(@divma): don't see how this is reachable but let's just not use the peer
                 GetError::Io(e.into())
             }
-            e @ quinn::ConnectionError::CidsExhausted => {
+            e @ ConnectionError::CidsExhausted => {
                 // > The connection could not be created because not enough of the CID space
                 // > is available
                 GetError::Io(e.into())
@@ -97,8 +97,8 @@ impl From<endpoint::ReadError> for GetError {
         }
     }
 }
-impl From<quinn::ClosedStream> for GetError {
-    fn from(value: quinn::ClosedStream) -> Self {
+impl From<ClosedStream> for GetError {
+    fn from(value: ClosedStream) -> Self {
         GetError::Io(value.into())
     }
 }

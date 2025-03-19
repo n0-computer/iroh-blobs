@@ -543,6 +543,7 @@ mod tests {
     use std::{sync::atomic::AtomicU64, time::Duration};
 
     use tracing::info;
+    use tracing_test::traced_test;
 
     use super::*;
 
@@ -586,6 +587,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_tracing() {
         // This test wants to make sure that logging inside the pool propagates to the
         // tracing subscriber that was set for the current thread at the time the pool was
@@ -599,7 +601,6 @@ mod tests {
         // cargo nextest run -p iroh-blobs local_pool::tests::test_tracing --success-output final
         //
         // and eyeball the output.  yolo
-        let _guard = iroh_test::logging::setup();
         info!("hello from the test");
         let pool = LocalPool::single();
         pool.spawn(|| async move {

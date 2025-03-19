@@ -334,9 +334,7 @@ impl<'a, R: AsyncSliceReader, F: Fn(u64) -> Event> SendingSliceReader<'a, R, F> 
     }
 }
 
-impl<'a, R: AsyncSliceReader, F: Fn(u64) -> Event> AsyncSliceReader
-    for SendingSliceReader<'a, R, F>
-{
+impl<R: AsyncSliceReader, F: Fn(u64) -> Event> AsyncSliceReader for SendingSliceReader<'_, R, F> {
     async fn read_at(&mut self, offset: u64, len: usize) -> std::io::Result<bytes::Bytes> {
         let res = self.inner.read_at(offset, len).await;
         if let Ok(res) = res.as_ref() {
@@ -414,9 +412,8 @@ pub async fn handle_connection<D: Map>(
     events: EventSender,
     rt: LocalPoolHandle,
 ) {
-    let remote_addr = connection.remote_address();
     let connection_id = connection.stable_id() as u64;
-    let span = debug_span!("connection", connection_id, %remote_addr);
+    let span = debug_span!("connection", connection_id);
     async move {
         while let Ok((writer, reader)) = connection.accept_bi().await {
             // The stream ID index is used to identify this request.  Requests only arrive in
