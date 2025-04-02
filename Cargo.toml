@@ -15,11 +15,11 @@ rust-version = "1.81"
 [dependencies]
 anyhow = { version = "1" }
 async-channel = "2.3.1"
-bao-tree = { version = "0.13", features = [
+bao-tree = { version = "0.15", features = [
     "tokio_fsm",
     "validate",
 ], default-features = false }
-blake3 = { version = "1.4.5", package = "iroh-blake3" }
+blake3 = { version = "1.8" }
 bytes = { version = "1.7", features = ["serde"] }
 chrono = "0.4.31"
 clap = { version = "4.5.20", features = ["derive"], optional = true }
