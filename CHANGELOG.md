@@ -2,6 +2,16 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.34.1](https://github.com/n0-computer/iroh-blobs/compare/v0.34.0..0.34.1) - 2025-04-07
+
+### ⛰️  Features
+
+- Boxed client ([#80](https://github.com/n0-computer/iroh-blobs/issues/80)) - ([d8521b4](https://github.com/n0-computer/iroh-blobs/commit/d8521b44cf148c1f6d700067726c1b4e40a0ac27))
+
+### ⚙️ Miscellaneous Tasks
+
+- Update bao-tree dependency and get rid of iroh-blake3 dep ([#81](https://github.com/n0-computer/iroh-blobs/issues/81)) - ([2e823f6](https://github.com/n0-computer/iroh-blobs/commit/2e823f697a251df8d59fcda7bb3b25aa755eff6c))
+
 ## [0.34.0](https://github.com/n0-computer/iroh-blobs/compare/v0.33.1..0.34.0) - 2025-03-18
 
 ### ⛰️  Features
