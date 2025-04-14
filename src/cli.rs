@@ -570,7 +570,7 @@ pub async fn consistency_check(blobs: &blobs::Client, verbose: u8, repair: bool)
             } => {
                 print(level, entry, message);
             }
-            ConsistencyCheckProgress::Done { .. } => {
+            ConsistencyCheckProgress::Done => {
                 eprintln!("Consistency check done");
             }
             ConsistencyCheckProgress::Abort(error) => {
