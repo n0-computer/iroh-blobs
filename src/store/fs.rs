@@ -455,6 +455,9 @@ pub trait Persistence: Clone {
     /// returning the bytes of the file in the success case
     /// and [Self::Err] in the error case
     fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>>;
+
+    /// recursively ensure that the input path exists
+    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>>;
 }
 
 /// A persistence layer that writes to the local file system
@@ -471,6 +474,11 @@ impl Persistence for FileSystemPersistence {
 
     fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> {
         let res = std::fs::read(path);
+        async move { res }
+    }
+
+    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>> {
+        let res = std::fs::create_dir_all(path);
         async move { res }
     }
 }
@@ -822,6 +830,7 @@ impl<T> StoreInner<T>
 where
     T: Persistence,
     OuterError: From<T::Err>,
+    io::Error: From<T::Err>,
 {
     fn new_sync_with_backend(
         path: PathBuf,
@@ -833,17 +842,17 @@ where
             "creating data directory: {}",
             options.path.data_path.display()
         );
-        std::fs::create_dir_all(&options.path.data_path)?;
+        rt.block_on(fs.create_dir_all(&options.path.data_path))?;
         tracing::trace!(
             "creating temp directory: {}",
             options.path.temp_path.display()
         );
-        std::fs::create_dir_all(&options.path.temp_path)?;
+        rt.block_on(fs.create_dir_all(&options.path.temp_path))?;
         tracing::trace!(
             "creating parent directory for db file{}",
             path.parent().unwrap().display()
         );
-        std::fs::create_dir_all(path.parent().unwrap())?;
+        rt.block_on(fs.create_dir_all(path.parent().unwrap()))?;
         let temp: Arc<RwLock<TempCounterMap>> = Default::default();
         let (actor, tx) = Actor::new(&path, options.clone(), temp.clone(), rt.clone())?;
         let handle = std::thread::Builder::new()
@@ -1036,7 +1045,7 @@ where
                 .into(),
             )
         })?;
-        std::fs::create_dir_all(parent)?;
+        Handle::current().block_on(self.fs.create_dir_all(parent))?;
         let temp_tag = self.temp.temp_tag(HashAndFormat::raw(hash));
         let (tx, rx) = oneshot::channel();
         self.tx
