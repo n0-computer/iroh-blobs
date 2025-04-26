@@ -102,7 +102,7 @@ impl Store {
     }
 }
 
-impl StoreInner {
+impl<T> StoreInner<T> {
     #[cfg(test)]
     async fn entry_state(&self, hash: Hash) -> OuterResult<EntryStateResponse> {
         let (tx, rx) = oneshot::channel();

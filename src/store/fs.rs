@@ -84,7 +84,7 @@ use iroh_io::AsyncSliceReader;
 use redb::{AccessGuard, DatabaseError, ReadableTable, StorageError};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, runtime::Handle};
 use tracing::trace_span;
 mod tables;
 #[doc(hidden)]
@@ -441,6 +441,30 @@ pub(crate) enum ImportSource {
     Memory(#[debug(skip)] Bytes),
 }
 
+/// trait which defines the backend persistence layer
+/// for this store. e.g. filesystem, s3 etc
+pub trait Persistence: Clone {
+    /// the error type that is returned for the persistence layer
+    type Err;
+
+    /// return the size of the file in bytes if it can be found/read
+    /// otherwise return a [Self::Err]
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>>;
+}
+
+/// A persistence layer that writes to the local file system
+#[derive(Debug, Clone, Copy)]
+pub struct FileSystemPersistence;
+
+impl Persistence for FileSystemPersistence {
+    type Err = io::Error;
+
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> {
+        let res = std::fs::metadata(path).map(|m| m.len());
+        async move { res }
+    }
+}
+
 impl ImportSource {
     fn content(&self) -> MemOrFile<&[u8], &Path> {
         match self {
@@ -450,10 +474,10 @@ impl ImportSource {
         }
     }
 
-    fn len(&self) -> io::Result<u64> {
+    async fn len<T: Persistence>(&self, fs: &T) -> Result<u64, T::Err> {
         match self {
-            Self::TempFile(path) => std::fs::metadata(path).map(|m| m.len()),
-            Self::External(path) => std::fs::metadata(path).map(|m| m.len()),
+            Self::TempFile(path) => fs.size(path).await,
+            Self::External(path) => fs.size(path).await,
             Self::Memory(data) => Ok(data.len() as u64),
         }
     }
@@ -711,7 +735,7 @@ pub(crate) type FilterPredicate<K, V> =
 /// Storage that is using a redb database for small files and files for
 /// large files.
 #[derive(Debug, Clone)]
-pub struct Store(Arc<StoreInner>);
+pub struct Store<T = FileSystemPersistence>(Arc<StoreInner<T>>);
 
 impl Store {
     /// Load or create a new store.
@@ -758,11 +782,12 @@ impl Store {
 }
 
 #[derive(Debug)]
-struct StoreInner {
+struct StoreInner<T> {
     tx: async_channel::Sender<ActorMessage>,
     temp: Arc<RwLock<TempCounterMap>>,
     handle: Option<std::thread::JoinHandle<()>>,
     path_options: Arc<PathOptions>,
+    fs: T,
 }
 
 impl TagDrop for RwLock<TempCounterMap> {
@@ -777,8 +802,23 @@ impl TagCounter for RwLock<TempCounterMap> {
     }
 }
 
-impl StoreInner {
+impl StoreInner<FileSystemPersistence> {
     fn new_sync(path: PathBuf, options: Options, rt: tokio::runtime::Handle) -> io::Result<Self> {
+        Self::new_sync_with_backend(path, options, rt, FileSystemPersistence)
+    }
+}
+
+impl<T> StoreInner<T>
+where
+    T: Persistence,
+    OuterError: From<T::Err>,
+{
+    fn new_sync_with_backend(
+        path: PathBuf,
+        options: Options,
+        rt: tokio::runtime::Handle,
+        fs: T,
+    ) -> io::Result<Self> {
         tracing::trace!(
             "creating data directory: {}",
             options.path.data_path.display()
@@ -811,6 +851,7 @@ impl StoreInner {
             temp,
             handle: Some(handle),
             path_options: Arc::new(options.path),
+            fs,
         })
     }
 
@@ -977,10 +1018,13 @@ impl StoreInner {
             .into());
         }
         let parent = target.parent().ok_or_else(|| {
-            OuterError::from(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "target path has no parent directory",
-            ))
+            OuterError::Inner(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "target path has no parent directory",
+                )
+                .into(),
+            )
         })?;
         std::fs::create_dir_all(parent)?;
         let temp_tag = self.temp.temp_tag(HashAndFormat::raw(hash));
@@ -1069,7 +1113,7 @@ impl StoreInner {
         let file = match mode {
             ImportMode::TryReference => ImportSource::External(path),
             ImportMode::Copy => {
-                if std::fs::metadata(&path)?.len() < 16 * 1024 {
+                if Handle::current().block_on(self.fs.size(&path))? < 16 * 1024 {
                     // we don't know if the data will be inlined since we don't
                     // have the inline options here. But still for such a small file
                     // it does not seem worth it do to the temp file ceremony.
@@ -1108,7 +1152,7 @@ impl StoreInner {
         id: u64,
         progress: impl ProgressSender<Msg = ImportProgress> + IdGenerator,
     ) -> OuterResult<(TempTag, u64)> {
-        let data_size = file.len()?;
+        let data_size = Handle::current().block_on(file.len(&self.fs))?;
         tracing::debug!("finalize_import_sync {:?} {}", file, data_size);
         progress.blocking_send(ImportProgress::Size {
             id,
@@ -1161,7 +1205,7 @@ impl StoreInner {
     }
 }
 
-impl Drop for StoreInner {
+impl<T> Drop for StoreInner<T> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             self.tx
