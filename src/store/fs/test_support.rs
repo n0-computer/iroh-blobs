@@ -150,7 +150,7 @@ pub(crate) struct EntryStateResponse {
     pub db: Option<EntryState<Vec<u8>>>,
 }
 
-impl ActorState {
+impl<T> ActorState<T> {
     pub(super) fn get_full_entry_state(
         &mut self,
         tables: &impl ReadableTables,

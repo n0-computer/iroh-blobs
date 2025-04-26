@@ -450,6 +450,11 @@ pub trait Persistence: Clone {
     /// return the size of the file in bytes if it can be found/read
     /// otherwise return a [Self::Err]
     fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>>;
+
+    /// read the contents of the file at the path
+    /// returning the bytes of the file in the success case
+    /// and [Self::Err] in the error case
+    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>>;
 }
 
 /// A persistence layer that writes to the local file system
@@ -461,6 +466,11 @@ impl Persistence for FileSystemPersistence {
 
     fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> {
         let res = std::fs::metadata(path).map(|m| m.len());
+        async move { res }
+    }
+
+    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> {
+        let res = std::fs::read(path);
         async move { res }
     }
 }
@@ -1117,7 +1127,7 @@ where
                     // we don't know if the data will be inlined since we don't
                     // have the inline options here. But still for such a small file
                     // it does not seem worth it do to the temp file ceremony.
-                    let data = std::fs::read(&path)?;
+                    let data = Handle::current().block_on(self.fs.read(&path))?;
                     ImportSource::Memory(data.into())
                 } else {
                     let temp_path = self.temp_file_name();
@@ -1216,7 +1226,7 @@ impl<T> Drop for StoreInner<T> {
     }
 }
 
-struct ActorState {
+struct ActorState<T> {
     handles: BTreeMap<Hash, BaoFileHandleWeak>,
     protected: BTreeSet<Hash>,
     temp: Arc<RwLock<TempCounterMap>>,
@@ -1224,15 +1234,16 @@ struct ActorState {
     create_options: Arc<BaoFileConfig>,
     options: Options,
     rt: tokio::runtime::Handle,
+    fs: T,
 }
 
 /// The actor for the redb store.
 ///
 /// It is split into the database and the rest of the state to allow for split
 /// borrows in the message handlers.
-struct Actor {
+struct Actor<T = FileSystemPersistence> {
     db: redb::Database,
-    state: ActorState,
+    state: ActorState<T>,
 }
 
 /// Error type for message handler functions of the redb actor.
@@ -1586,12 +1597,13 @@ pub(super) async fn gc_sweep_task(
     Ok(())
 }
 
-impl Actor {
-    fn new(
+impl<T> Actor<T> {
+    fn new_with_backend(
         path: &Path,
         options: Options,
         temp: Arc<RwLock<TempCounterMap>>,
         rt: tokio::runtime::Handle,
+        fs: T,
     ) -> ActorResult<(Self, async_channel::Sender<ActorMessage>)> {
         let db = match redb::Database::create(path) {
             Ok(db) => db,
@@ -1635,10 +1647,22 @@ impl Actor {
                     options,
                     create_options: Arc::new(create_options),
                     rt,
+                    fs,
                 },
             },
             tx,
         ))
+    }
+}
+
+impl Actor {
+    fn new(
+        path: &Path,
+        options: Options,
+        temp: Arc<RwLock<TempCounterMap>>,
+        rt: tokio::runtime::Handle,
+    ) -> ActorResult<(Self, async_channel::Sender<ActorMessage>)> {
+        Self::new_with_backend(path, options, temp, rt, FileSystemPersistence)
     }
 
     async fn run_batched(mut self) -> ActorResult<()> {
@@ -1723,7 +1747,11 @@ impl Actor {
     }
 }
 
-impl ActorState {
+impl<T> ActorState<T>
+where
+    T: Persistence,
+    ActorError: From<T::Err>,
+{
     fn entry_status(
         &mut self,
         tables: &impl ReadableTables,
@@ -1914,7 +1942,8 @@ impl ActorState {
                         "reading external data to inline it: {}",
                         external_path.display()
                     );
-                    let data = Bytes::from(std::fs::read(&external_path)?);
+                    let data =
+                        Bytes::from(Handle::current().block_on(self.fs.read(&external_path))?);
                     DataLocation::Inline(data)
                 } else {
                     DataLocation::External(vec![external_path], data_size)
@@ -2167,7 +2196,7 @@ impl ActorState {
                                 // inline
                                 if size <= self.options.inline.max_data_inlined {
                                     let path = self.options.path.owned_data_path(&hash);
-                                    let data = std::fs::read(&path)?;
+                                    let data = Handle::current().block_on(self.fs.read(&path))?;
                                     tables.delete_after_commit.insert(hash, [BaoFilePart::Data]);
                                     tables.inline_data.insert(hash, data.as_slice())?;
                                     (DataLocation::Inline(()), size, true)
@@ -2202,7 +2231,7 @@ impl ActorState {
                                 if outboard_size <= self.options.inline.max_outboard_inlined =>
                             {
                                 let path = self.options.path.owned_outboard_path(&hash);
-                                let outboard = std::fs::read(&path)?;
+                                let outboard = Handle::current().block_on(self.fs.read(&path))?;
                                 tables
                                     .delete_after_commit
                                     .insert(hash, [BaoFilePart::Outboard]);

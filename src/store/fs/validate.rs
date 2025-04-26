@@ -12,7 +12,7 @@ use crate::{
     util::progress::BoxedProgressSender,
 };
 
-impl ActorState {
+impl<T> ActorState<T> {
     //! This performs a full consistency check. Eventually it will also validate
     //! file content again, but that part is not yet implemented.
     //!
