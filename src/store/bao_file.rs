@@ -82,13 +82,12 @@ struct DataPaths {
 /// For the memory variant, it does reading in a zero copy way, since storage
 /// is already a `Bytes`.
 #[derive(derive_more::Debug)]
-#[debug(bound(T: Debug))]
 pub struct CompleteStorage<T> {
     /// data part, which can be in memory or on disk.
-    #[debug("{:?}", data.as_ref().map_mem(|x| x.len()))]
+    #[debug("{:?}", data.as_ref().map_mem(|x| x.len()).map_file(|f| f.size))]
     pub data: MemOrFile<Bytes, FileAndSize<T>>,
     /// outboard part, which can be in memory or on disk.
-    #[debug("{:?}", outboard.as_ref().map_mem(|x| x.len()))]
+    #[debug("{:?}", outboard.as_ref().map_mem(|x| x.len()).map_file(|f| f.size))]
     pub outboard: MemOrFile<Bytes, FileAndSize<T>>,
 }
 
