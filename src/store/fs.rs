@@ -449,7 +449,7 @@ pub trait Persistence {
 
     /// the type which represents a file which was read from the persistence
     /// layer
-    type File;
+    type File: std::io::Read;
 
     /// return the size of the file in bytes if it can be found/read
     /// otherwise return a [Self::Err]
@@ -473,7 +473,7 @@ pub struct FileSystemPersistence;
 
 impl Persistence for FileSystemPersistence {
     type Err = io::Error;
-    type File = tokio::fs::File;
+    type File = std::fs::File;
 
     async fn size(&self, path: &Path) -> Result<u64, Self::Err> {
         tokio::fs::metadata(path).await.map(|m| m.len())
@@ -487,8 +487,9 @@ impl Persistence for FileSystemPersistence {
         tokio::fs::create_dir_all(path)
     }
 
-    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>> {
-        tokio::fs::File::open(path)
+    async fn open(&self, path: &Path) -> Result<Self::File, Self::Err> {
+        let file = tokio::fs::File::open(path).await?;
+        Ok(file.into_std().await)
     }
 }
 
@@ -1191,7 +1192,7 @@ where
             MemOrFile::File(path) => {
                 let span = trace_span!("outboard.compute", path = %path.display());
                 let _guard = span.enter();
-                let file = std::fs::File::open(path)?;
+                let file = Handle::current().block_on(self.fs.open(path))?;
                 compute_outboard(file, data_size, move |offset| {
                     Ok(progress2.try_send(ImportProgress::OutboardProgress { id, offset })?)
                 })?
@@ -1805,7 +1806,7 @@ where
                 data_location,
                 outboard_location,
             } => {
-                let data = load_data(tables, &self.options.path, data_location, &hash)?;
+                let data = load_data(tables, &self.options.path, data_location, &hash, &self.fs)?;
                 let outboard = load_outboard(
                     tables,
                     &self.options.path,
@@ -2049,7 +2050,8 @@ where
                     outboard_location,
                     ..
                 } => {
-                    let data = load_data(tables, &self.options.path, data_location, &hash)?;
+                    let data =
+                        load_data(tables, &self.options.path, data_location, &hash, &self.fs)?;
                     let outboard = load_outboard(
                         tables,
                         &self.options.path,
@@ -2601,12 +2603,16 @@ fn dump(tables: &impl ReadableTables) -> ActorResult<()> {
     Ok(())
 }
 
-fn load_data(
+fn load_data<T>(
     tables: &impl ReadableTables,
     options: &PathOptions,
     location: DataLocation<(), u64>,
     hash: &Hash,
-) -> ActorResult<MemOrFile<Bytes, (std::fs::File, u64)>> {
+    fs: &T,
+) -> ActorResult<MemOrFile<Bytes, (T::File, u64)>>
+where
+    T: Persistence,
+{
     Ok(match location {
         DataLocation::Inline(()) => {
             let Some(data) = tables.inline_data().get(hash)? else {
@@ -2619,7 +2625,7 @@ fn load_data(
         }
         DataLocation::Owned(data_size) => {
             let path = options.owned_data_path(hash);
-            let Ok(file) = std::fs::File::open(&path) else {
+            let Ok(file) = Handle::current().block_on(fs.open(&path)) else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {}", path.display()),

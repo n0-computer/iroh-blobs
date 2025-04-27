@@ -19,7 +19,7 @@ pub mod fs;
 pub mod io;
 mod mem_or_file;
 pub mod progress;
-pub use mem_or_file::MemOrFile;
+pub use mem_or_file::{FileAndSize, MemOrFile};
 mod sparse_mem_file;
 pub use sparse_mem_file::SparseMemFile;
 pub mod local_pool;

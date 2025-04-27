@@ -14,9 +14,19 @@ pub enum MemOrFile<M, F> {
     File(F),
 }
 
+/// A struct which represents a handle to some file which
+/// is _not_ in memory and its size
+#[derive(derive_more::Debug)]
+pub struct FileAndSize<T> {
+    /// the generic file type
+    pub file: T,
+    /// the size in bytes of the file
+    pub size: u64,
+}
+
 /// Helper methods for a common way to use MemOrFile, where the memory part is something
 /// like a slice, and the file part is a tuple consisiting of path or file and size.
-impl<M, F> MemOrFile<M, (F, u64)>
+impl<M, F> MemOrFile<M, FileAndSize<F>>
 where
     M: AsRef<[u8]>,
 {
@@ -24,7 +34,7 @@ where
     pub fn size(&self) -> u64 {
         match self {
             MemOrFile::Mem(mem) => mem.as_ref().len() as u64,
-            MemOrFile::File((_, size)) => *size,
+            MemOrFile::File(FileAndSize { file: _, size }) => *size,
         }
     }
 }
