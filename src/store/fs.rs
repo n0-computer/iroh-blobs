@@ -443,9 +443,13 @@ pub(crate) enum ImportSource {
 
 /// trait which defines the backend persistence layer
 /// for this store. e.g. filesystem, s3 etc
-pub trait Persistence: Clone {
+pub trait Persistence {
     /// the error type that is returned for the persistence layer
     type Err;
+
+    /// the type which represents a file which was read from the persistence
+    /// layer
+    type File;
 
     /// return the size of the file in bytes if it can be found/read
     /// otherwise return a [Self::Err]
@@ -458,6 +462,9 @@ pub trait Persistence: Clone {
 
     /// recursively ensure that the input path exists
     fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>>;
+
+    /// read and return the file at the input path
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>>;
 }
 
 /// A persistence layer that writes to the local file system
@@ -466,20 +473,22 @@ pub struct FileSystemPersistence;
 
 impl Persistence for FileSystemPersistence {
     type Err = io::Error;
+    type File = tokio::fs::File;
 
-    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> {
-        let res = std::fs::metadata(path).map(|m| m.len());
-        async move { res }
+    async fn size(&self, path: &Path) -> Result<u64, Self::Err> {
+        tokio::fs::metadata(path).await.map(|m| m.len())
     }
 
     fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> {
-        let res = std::fs::read(path);
-        async move { res }
+        tokio::fs::read(path)
     }
 
     fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>> {
-        let res = std::fs::create_dir_all(path);
-        async move { res }
+        tokio::fs::create_dir_all(path)
+    }
+
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>> {
+        tokio::fs::File::open(path)
     }
 }
 
