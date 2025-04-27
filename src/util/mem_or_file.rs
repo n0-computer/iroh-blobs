@@ -1,4 +1,4 @@
-use std::{fs::File, io};
+use std::{fs::File, future::Future, io};
 
 use bao_tree::io::sync::{ReadAt, Size};
 use bytes::Bytes;
@@ -38,9 +38,11 @@ impl<T> FileAndSize<T> {
         U::Output: Send + 'static,
     {
         let FileAndSize { file, size } = self;
-        FileAndSize {
-            file: f(file).await,
-            size,
+        async move {
+            FileAndSize {
+                file: f(file).await,
+                size,
+            }
         }
     }
 }

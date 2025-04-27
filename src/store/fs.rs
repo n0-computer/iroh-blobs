@@ -84,7 +84,7 @@ use iroh_io::AsyncSliceReader;
 use redb::{AccessGuard, DatabaseError, ReadableTable, StorageError};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use tokio::{io::AsyncWriteExt, runtime::Handle};
+use tokio::io::AsyncWriteExt;
 use tracing::trace_span;
 mod tables;
 #[doc(hidden)]
@@ -445,7 +445,7 @@ pub(crate) enum ImportSource {
 /// for this store. e.g. filesystem, s3 etc
 pub trait Persistence: Send + Sync + Clone + std::fmt::Debug + 'static {
     /// the error type that is returned for the persistence layer
-    type Err: Into<anyhow::Error>;
+    type Err: Into<io::Error> + Send + 'static;
 
     /// the type which represents a file which was read from the persistence
     /// layer
@@ -453,26 +453,35 @@ pub trait Persistence: Send + Sync + Clone + std::fmt::Debug + 'static {
 
     /// return the size of the file in bytes if it can be found/read
     /// otherwise return a [Self::Err]
-    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>>;
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> + Send + 'static;
 
     /// read the contents of the file at the path
     /// returning the bytes of the file in the success case
     /// and [Self::Err] in the error case
-    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>>;
+    fn read(
+        &self,
+        path: &Path,
+    ) -> impl Future<Output = Result<Vec<u8>, Self::Err>> + Send + 'static;
 
     /// recursively ensure that the input path exists
-    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>>;
+    fn create_dir_all(
+        &self,
+        path: &Path,
+    ) -> impl Future<Output = Result<(), Self::Err>> + Send + 'static;
 
     /// read and return the file at the input path
-    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>>;
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl Future<Output = Result<Self::File, Self::Err>> + Send + 'static;
 
     /// convert from a [std::fs::File] into this persistence layer [Self::File] type.
     /// This is called when converting from a partial file (which exists on disk)
     /// into a complete file (which exists where ever your implementation wants it to)
     fn convert_std_file(
-        &self,
+        self: Arc<Self>,
         file: std::fs::File,
-    ) -> impl Future<Output = Result<Self::File, Self::Err>>;
+    ) -> impl Future<Output = Result<Self::File, Self::Err>> + Send + 'static;
 }
 
 /// A persistence layer that writes to the local file system
@@ -483,24 +492,31 @@ impl Persistence for FileSystemPersistence {
     type Err = io::Error;
     type File = std::fs::File;
 
-    async fn size(&self, path: &Path) -> Result<u64, Self::Err> {
-        tokio::fs::metadata(path).await.map(|m| m.len())
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> + 'static {
+        let fut = tokio::fs::metadata(path.to_owned());
+        async move { fut.await.map(|m| m.len()) }
     }
 
-    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> {
-        tokio::fs::read(path)
+    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> + 'static {
+        tokio::fs::read(path.to_owned())
     }
 
-    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>> {
-        tokio::fs::create_dir_all(path)
+    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>> + 'static {
+        tokio::fs::create_dir_all(path.to_owned())
     }
 
-    async fn open(&self, path: &Path) -> Result<Self::File, Self::Err> {
-        let file = tokio::fs::File::open(path).await?;
-        Ok(file.into_std().await)
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>> + 'static {
+        let fut = tokio::fs::File::open(path.to_owned());
+        async move {
+            let file = fut.await?;
+            Ok(file.into_std().await)
+        }
     }
 
-    async fn convert_std_file(&self, file: std::fs::File) -> Result<Self::File, Self::Err> {
+    async fn convert_std_file(
+        self: Arc<Self>,
+        file: std::fs::File,
+    ) -> Result<Self::File, Self::Err> {
         Ok(file)
     }
 }
@@ -514,11 +530,29 @@ impl ImportSource {
         }
     }
 
-    async fn len<T: Persistence>(&self, fs: &T) -> Result<u64, T::Err> {
-        match self {
-            Self::TempFile(path) => fs.size(path).await,
-            Self::External(path) => fs.size(path).await,
-            Self::Memory(data) => Ok(data.len() as u64),
+    fn len<'a, T: Persistence>(
+        &'a self,
+        fs: &'a T,
+    ) -> impl Future<Output = Result<u64, T::Err>> + 'static {
+        enum Either<T> {
+            Left(u64),
+            Right(T),
+        }
+
+        let output = match self {
+            Self::TempFile(path) | Self::External(path) => {
+                let fut: std::pin::Pin<
+                    Box<dyn Future<Output = Result<u64, <T as Persistence>::Err>> + Send + 'static>,
+                > = Box::pin(fs.size(path));
+                Either::Right(fut)
+            }
+            Self::Memory(data) => Either::Left(data.len() as u64),
+        };
+        async move {
+            match output {
+                Either::Left(size) => Ok(size),
+                Either::Right(fut) => fut.await,
+            }
         }
     }
 }
@@ -1071,7 +1105,7 @@ where
                 .into(),
             )
         })?;
-        Handle::current().block_on(self.fs.create_dir_all(parent))?;
+        block_for(self.fs.create_dir_all(parent))?;
         let temp_tag = self.temp.temp_tag(HashAndFormat::raw(hash));
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -1158,11 +1192,11 @@ where
         let file = match mode {
             ImportMode::TryReference => ImportSource::External(path),
             ImportMode::Copy => {
-                if Handle::current().block_on(self.fs.size(&path))? < 16 * 1024 {
+                if block_for(self.fs.size(&path))? < 16 * 1024 {
                     // we don't know if the data will be inlined since we don't
                     // have the inline options here. But still for such a small file
                     // it does not seem worth it do to the temp file ceremony.
-                    let data = Handle::current().block_on(self.fs.read(&path))?;
+                    let data = block_for(self.fs.read(&path))?;
                     ImportSource::Memory(data.into())
                 } else {
                     let temp_path = self.temp_file_name();
@@ -1197,7 +1231,7 @@ where
         id: u64,
         progress: impl ProgressSender<Msg = ImportProgress> + IdGenerator,
     ) -> OuterResult<(TempTag, u64)> {
-        let data_size = Handle::current().block_on(file.len(&self.fs))?;
+        let data_size = block_for(file.len(&self.fs))?;
         tracing::debug!("finalize_import_sync {:?} {}", file, data_size);
         progress.blocking_send(ImportProgress::Size {
             id,
@@ -1208,7 +1242,7 @@ where
             MemOrFile::File(path) => {
                 let span = trace_span!("outboard.compute", path = %path.display());
                 let _guard = span.enter();
-                let file = Handle::current().block_on(self.fs.open(path))?;
+                let file = block_for(self.fs.open(path))?;
                 compute_outboard(file, data_size, move |offset| {
                     Ok(progress2.try_send(ImportProgress::OutboardProgress { id, offset })?)
                 })?
@@ -1269,7 +1303,7 @@ struct ActorState<T: Persistence> {
     create_options: Arc<BaoFileConfig>,
     options: Options,
     rt: tokio::runtime::Handle,
-    fs: T,
+    fs: Arc<T>,
 }
 
 /// The actor for the redb store.
@@ -1695,7 +1729,7 @@ where
                     options,
                     create_options: Arc::new(create_options),
                     rt,
-                    fs,
+                    fs: Arc::new(fs),
                 },
             },
             tx,
@@ -1838,14 +1872,14 @@ where
                 data_location,
                 outboard_location,
             } => {
-                let data = load_data(tables, &self.options.path, data_location, &hash, &self.fs)?;
+                let data = load_data(tables, &self.options.path, data_location, &hash, &*self.fs)?;
                 let outboard = load_outboard(
                     tables,
                     &self.options.path,
                     outboard_location,
                     data.size(),
                     &hash,
-                    &self.fs,
+                    &*self.fs,
                 )?;
                 BaoFileHandle::new_complete(config, hash, data, outboard)
             }
@@ -1995,8 +2029,7 @@ where
                         external_path.display()
                     );
                     let data = Bytes::from(
-                        Handle::current()
-                            .block_on(self.fs.read(&external_path))
+                        block_for(self.fs.read(&external_path))
                             .map_err(|e| ActorError::Io(e.into()))?,
                     );
                     DataLocation::Inline(data)
@@ -2087,14 +2120,14 @@ where
                     ..
                 } => {
                     let data =
-                        load_data(tables, &self.options.path, data_location, &hash, &self.fs)?;
+                        load_data(tables, &self.options.path, data_location, &hash, &*self.fs)?;
                     let outboard = load_outboard(
                         tables,
                         &self.options.path,
                         outboard_location,
                         data.size(),
                         &hash,
-                        &self.fs,
+                        &*self.fs,
                     )?;
                     tracing::debug!("creating complete entry for {}", hash.to_hex());
                     BaoFileHandle::new_complete(self.create_options.clone(), hash, data, outboard)
@@ -2253,8 +2286,7 @@ where
                                 // inline
                                 if size <= self.options.inline.max_data_inlined {
                                     let path = self.options.path.owned_data_path(&hash);
-                                    let data = Handle::current()
-                                        .block_on(self.fs.read(&path))
+                                    let data = block_for(self.fs.read(&path))
                                         .map_err(|e| ActorError::Io(e.into()))?;
                                     tables.delete_after_commit.insert(hash, [BaoFilePart::Data]);
                                     tables.inline_data.insert(hash, data.as_slice())?;
@@ -2290,8 +2322,7 @@ where
                                 if outboard_size <= self.options.inline.max_outboard_inlined =>
                             {
                                 let path = self.options.path.owned_outboard_path(&hash);
-                                let outboard = Handle::current()
-                                    .block_on(self.fs.read(&path))
+                                let outboard = block_for(self.fs.read(&path))
                                     .map_err(|e| ActorError::Io(e.into()))?;
                                 tables
                                     .delete_after_commit
@@ -2398,14 +2429,14 @@ where
         tracing::trace!("on_complete({})", hash.to_hex());
         entry.transform(|state| {
             tracing::trace!("on_complete transform {:?}", state);
-            let entry = match Handle::current().block_on(complete_storage(
+            let entry = match complete_storage(
                 state,
                 &hash,
                 &self.options.path,
                 &self.options.inline,
                 tables.delete_after_commit,
-                &self.fs,
-            ))? {
+                self.fs.clone(),
+            )? {
                 Ok(entry) => {
                     // store the info so we can insert it into the db later
                     info = Some((
@@ -2653,6 +2684,21 @@ fn dump(tables: &impl ReadableTables) -> ActorResult<()> {
     Ok(())
 }
 
+fn block_for<F>(fut: F) -> F::Output
+where
+    F: Future + Send + 'static,
+    F::Output: Send,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let res = fut.await;
+        tx.send(res)
+            .map_err(|_| format!("Error sending {}", std::any::type_name::<F::Output>()))
+            .expect("rx cannot be dropped yet");
+    });
+    rx.blocking_recv().expect("The sender cannot be dropped")
+}
+
 fn load_data<T>(
     tables: &impl ReadableTables,
     options: &PathOptions,
@@ -2675,7 +2721,7 @@ where
         }
         DataLocation::Owned(data_size) => {
             let path = options.owned_data_path(hash);
-            let Ok(file) = Handle::current().block_on(fs.open(&path)) else {
+            let Ok(file) = block_for(fs.open(&path)) else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {}", path.display()),
@@ -2694,7 +2740,7 @@ where
                 ));
             }
             let path = &paths[0];
-            let Ok(file) = Handle::current().block_on(fs.open(path)) else {
+            let Ok(file) = block_for(fs.open(path)) else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("external file not found: {}", path.display()),
@@ -2731,7 +2777,7 @@ fn load_outboard<T: Persistence>(
         OutboardLocation::Owned => {
             let outboard_size = raw_outboard_size(size);
             let path = options.owned_outboard_path(hash);
-            let Ok(file) = Handle::current().block_on(fs.open(&path)) else {
+            let Ok(file) = block_for(fs.open(&path)) else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {} size={}", path.display(), outboard_size),
@@ -2747,13 +2793,13 @@ fn load_outboard<T: Persistence>(
 }
 
 /// Take a possibly incomplete storage and turn it into complete
-async fn complete_storage<T>(
+fn complete_storage<T>(
     storage: BaoFileStorage<T::File>,
     hash: &Hash,
     path_options: &PathOptions,
     inline_options: &InlineOptions,
     delete_after_commit: &mut DeleteSet,
-    fs: &T,
+    fs: Arc<T>,
 ) -> ActorResult<std::result::Result<CompleteStorage<T::File>, CompleteStorage<T::File>>>
 where
     T: Persistence,
@@ -2796,28 +2842,31 @@ where
     } else {
         // protect the data from previous deletions
         delete_after_commit.remove(*hash, [BaoFilePart::Data]);
+        let fs_2 = fs.clone();
         match data {
             MemOrFile::Mem(data) => {
                 let path = path_options.owned_data_path(hash);
                 let file = overwrite_and_sync(&path, &data)?;
                 MemOrFile::File(
-                    FileAndSize {
-                        file,
-                        size: data_size,
-                    }
-                    .map_async(|f| fs.convert_std_file(f))
-                    .await
+                    block_for(
+                        FileAndSize {
+                            file,
+                            size: data_size,
+                        }
+                        .map_async(move |f| fs_2.convert_std_file(f)),
+                    )
                     .transpose()
                     .map_err(|e| ActorError::Io(e.into()))?,
                 )
             }
             MemOrFile::File(data) => MemOrFile::File(
-                FileAndSize {
-                    file: data,
-                    size: data_size,
-                }
-                .map_async(|f| fs.convert_std_file(f))
-                .await
+                block_for(
+                    FileAndSize {
+                        file: data,
+                        size: data_size,
+                    }
+                    .map_async(move |f| fs_2.convert_std_file(f)),
+                )
                 .transpose()
                 .map_err(|e| ActorError::Io(e.into()))?,
             ),
@@ -2846,23 +2895,25 @@ where
                 let path = path_options.owned_outboard_path(hash);
                 let file = overwrite_and_sync(&path, &outboard)?;
                 MemOrFile::File(
-                    FileAndSize {
-                        file,
-                        size: outboard_size,
-                    }
-                    .map_async(|f| fs.convert_std_file(f))
-                    .await
+                    block_for(
+                        FileAndSize {
+                            file,
+                            size: outboard_size,
+                        }
+                        .map_async(move |f| fs.convert_std_file(f)),
+                    )
                     .transpose()
                     .map_err(|e| ActorError::Io(e.into()))?,
                 )
             }
             MemOrFile::File(outboard) => MemOrFile::File(
-                FileAndSize {
-                    file: outboard,
-                    size: outboard_size,
-                }
-                .map_async(|f| fs.convert_std_file(f))
-                .await
+                block_for(
+                    FileAndSize {
+                        file: outboard,
+                        size: outboard_size,
+                    }
+                    .map_async(|f| fs.convert_std_file(f)),
+                )
                 .transpose()
                 .map_err(|e| ActorError::Io(e.into()))?,
             ),
