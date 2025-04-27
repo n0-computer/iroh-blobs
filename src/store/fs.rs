@@ -512,9 +512,9 @@ impl ImportSource {
 }
 
 /// Use BaoFileHandle as the entry type for the map.
-pub type Entry = BaoFileHandle;
+pub type Entry<T> = BaoFileHandle<T>;
 
-impl super::MapEntry for Entry {
+impl<T> super::MapEntry for Entry<T> {
     fn hash(&self) -> Hash {
         self.hash()
     }
@@ -530,7 +530,7 @@ impl super::MapEntry for Entry {
     }
 
     async fn outboard(&self) -> io::Result<impl Outboard> {
-        self.outboard()
+        BaoFileHandle::outboard(self)
     }
 
     async fn data_reader(&self) -> io::Result<impl AsyncSliceReader> {
@@ -538,7 +538,7 @@ impl super::MapEntry for Entry {
     }
 }
 
-impl super::MapEntryMut for Entry {
+impl<T> super::MapEntryMut for Entry<T> {
     async fn batch_writer(&self) -> io::Result<impl BaoBatchWriter> {
         Ok(self.writer())
     }
@@ -572,12 +572,12 @@ pub(crate) struct Export {
 }
 
 #[derive(derive_more::Debug)]
-pub(crate) enum ActorMessage {
+pub(crate) enum ActorMessage<T> {
     // Query method: get a file handle for a hash, if it exists.
     // This will produce a file handle even for entries that are not yet in redb at all.
     Get {
         hash: Hash,
-        tx: oneshot::Sender<ActorResult<Option<BaoFileHandle>>>,
+        tx: oneshot::Sender<ActorResult<Option<BaoFileHandle<T>>>>,
     },
     /// Query method: get the rough entry status for a hash. Just complete, partial or not found.
     EntryStatus {
@@ -609,7 +609,7 @@ pub(crate) enum ActorMessage {
     /// will be created, but not yet written to redb.
     GetOrCreate {
         hash: Hash,
-        tx: oneshot::Sender<ActorResult<BaoFileHandle>>,
+        tx: oneshot::Sender<ActorResult<BaoFileHandle<T>>>,
     },
     /// Modification method: inline size was exceeded for a partial entry.
     /// If the entry is complete, this is a no-op. If the entry is partial and in
@@ -617,7 +617,7 @@ pub(crate) enum ActorMessage {
     OnMemSizeExceeded { hash: Hash },
     /// Modification method: marks a partial entry as complete.
     /// Calling this on a complete entry is a no-op.
-    OnComplete { handle: BaoFileHandle },
+    OnComplete { handle: BaoFileHandle<T> },
     /// Modification method: import data into a redb store
     ///
     /// At this point the size, hash and outboard must already be known.
@@ -718,7 +718,7 @@ pub(crate) enum ActorMessage {
     Shutdown { tx: Option<oneshot::Sender<()>> },
 }
 
-impl ActorMessage {
+impl<T> ActorMessage<T> {
     fn category(&self) -> MessageCategory {
         match self {
             Self::Get { .. }
@@ -810,8 +810,8 @@ impl Store {
 }
 
 #[derive(Debug)]
-struct StoreInner<T> {
-    tx: async_channel::Sender<ActorMessage>,
+struct StoreInner<T: Persistence> {
+    tx: async_channel::Sender<ActorMessage<T::File>>,
     temp: Arc<RwLock<TempCounterMap>>,
     handle: Option<std::thread::JoinHandle<()>>,
     path_options: Arc<PathOptions>,
@@ -1019,7 +1019,7 @@ where
         Ok(rx.recv()??)
     }
 
-    async fn complete(&self, entry: Entry) -> OuterResult<()> {
+    async fn complete(&self, entry: Entry<T::File>) -> OuterResult<()> {
         self.tx
             .send(ActorMessage::OnComplete { handle: entry })
             .await?;
@@ -1245,11 +1245,11 @@ impl<T> Drop for StoreInner<T> {
     }
 }
 
-struct ActorState<T> {
-    handles: BTreeMap<Hash, BaoFileHandleWeak>,
+struct ActorState<T: Persistence> {
+    handles: BTreeMap<Hash, BaoFileHandleWeak<T::File>>,
     protected: BTreeSet<Hash>,
     temp: Arc<RwLock<TempCounterMap>>,
-    msgs_rx: async_channel::Receiver<ActorMessage>,
+    msgs_rx: async_channel::Receiver<ActorMessage<T::File>>,
     create_options: Arc<BaoFileConfig>,
     options: Options,
     rt: tokio::runtime::Handle,
@@ -1323,8 +1323,8 @@ pub(crate) enum OuterError {
     JoinTask(#[from] tokio::task::JoinError),
 }
 
-impl From<async_channel::SendError<ActorMessage>> for OuterError {
-    fn from(_e: async_channel::SendError<ActorMessage>) -> Self {
+impl<T> From<async_channel::SendError<ActorMessage<T>>> for OuterError {
+    fn from(_e: async_channel::SendError<ActorMessage<T>>) -> Self {
         OuterError::Send
     }
 }
@@ -1616,14 +1616,17 @@ pub(super) async fn gc_sweep_task(
     Ok(())
 }
 
-impl<T> Actor<T> {
+impl<T> Actor<T>
+where
+    T: Persistence,
+{
     fn new_with_backend(
         path: &Path,
         options: Options,
         temp: Arc<RwLock<TempCounterMap>>,
         rt: tokio::runtime::Handle,
         fs: T,
-    ) -> ActorResult<(Self, async_channel::Sender<ActorMessage>)> {
+    ) -> ActorResult<(Self, async_channel::Sender<ActorMessage<T::File>>)> {
         let db = match redb::Database::create(path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
@@ -1790,7 +1793,7 @@ where
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
-    ) -> ActorResult<Option<BaoFileHandle>> {
+    ) -> ActorResult<Option<BaoFileHandle<T::File>>> {
         if let Some(handle) = self.handles.get(&hash).and_then(|weak| weak.upgrade()) {
             return Ok(Some(handle));
         }
@@ -2036,7 +2039,7 @@ where
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
-    ) -> ActorResult<BaoFileHandle> {
+    ) -> ActorResult<BaoFileHandle<T::File>> {
         self.protected.insert(hash);
         if let Some(handle) = self.handles.get(&hash).and_then(|x| x.upgrade()) {
             return Ok(handle);
@@ -2347,7 +2350,11 @@ where
         Ok(())
     }
 
-    fn on_complete(&mut self, tables: &mut Tables, entry: BaoFileHandle) -> ActorResult<()> {
+    fn on_complete(
+        &mut self,
+        tables: &mut Tables,
+        entry: BaoFileHandle<T::File>,
+    ) -> ActorResult<()> {
         let hash = entry.hash();
         let mut info = None;
         tracing::trace!("on_complete({})", hash.to_hex());
@@ -2417,7 +2424,11 @@ where
         Ok(())
     }
 
-    fn handle_toplevel(&mut self, db: &redb::Database, msg: ActorMessage) -> ActorResult<()> {
+    fn handle_toplevel(
+        &mut self,
+        db: &redb::Database,
+        msg: ActorMessage<T::File>,
+    ) -> ActorResult<()> {
         match msg {
             ActorMessage::UpdateInlineOptions {
                 inline_options,
@@ -2451,8 +2462,8 @@ where
     fn handle_readonly(
         &mut self,
         tables: &impl ReadableTables,
-        msg: ActorMessage,
-    ) -> ActorResult<std::result::Result<(), ActorMessage>> {
+        msg: ActorMessage<T::File>,
+    ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
             ActorMessage::Get { hash, tx } => {
                 let res = self.get(tables, hash);
@@ -2498,8 +2509,8 @@ where
     fn handle_readwrite(
         &mut self,
         tables: &mut Tables,
-        msg: ActorMessage,
-    ) -> ActorResult<std::result::Result<(), ActorMessage>> {
+        msg: ActorMessage<T::File>,
+    ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
             ActorMessage::Import { cmd, tx } => {
                 let res = self.import(tables, cmd);

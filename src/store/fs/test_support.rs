@@ -12,7 +12,7 @@ use redb::ReadableTable;
 use super::{
     tables::{ReadableTables, Tables},
     ActorError, ActorMessage, ActorResult, ActorState, DataLocation, EntryState, FilterPredicate,
-    OutboardLocation, OuterResult, Store, StoreInner,
+    OutboardLocation, OuterResult, Persistence, Store, StoreInner,
 };
 use crate::{
     store::{mutable_mem_storage::SizeInfo, DbIter},
@@ -102,7 +102,10 @@ impl Store {
     }
 }
 
-impl<T> StoreInner<T> {
+impl<T> StoreInner<T>
+where
+    T: Persistence,
+{
     #[cfg(test)]
     async fn entry_state(&self, hash: Hash) -> OuterResult<EntryStateResponse> {
         let (tx, rx) = oneshot::channel();
@@ -146,11 +149,14 @@ impl<T> StoreInner<T> {
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct EntryStateResponse {
-    pub mem: Option<crate::store::bao_file::BaoFileHandle>,
+    pub mem: Option<crate::store::bao_file::BaoFileHandle<std::fs::File>>,
     pub db: Option<EntryState<Vec<u8>>>,
 }
 
-impl<T> ActorState<T> {
+impl<T> ActorState<T>
+where
+    T: Persistence,
+{
     pub(super) fn get_full_entry_state(
         &mut self,
         tables: &impl ReadableTables,
