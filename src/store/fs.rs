@@ -1778,7 +1778,7 @@ where
                         tokio::select! {
                             msg = msgs.recv() => {
                                 if let Some(msg) = msg {
-                                    if let Err(msg) = self.state.handle_readonly(&tables, msg)? {
+                                    if let Err(msg) = self.state.handle_readonly(&tables, msg).await? {
                                         msgs.push_back(msg).expect("just recv'd");
                                         break;
                                     }
@@ -1807,7 +1807,7 @@ where
                         tokio::select! {
                             msg = msgs.recv() => {
                                 if let Some(msg) = msg {
-                                    if let Err(msg) = self.state.handle_readwrite(&mut tables, msg)? {
+                                    if let Err(msg) = self.state.handle_readwrite(&mut tables, msg).await? {
                                         msgs.push_back(msg).expect("just recv'd");
                                         break;
                                     }
@@ -1852,7 +1852,7 @@ where
         Ok(status)
     }
 
-    fn get(
+    async fn get(
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
@@ -1872,7 +1872,8 @@ where
                 data_location,
                 outboard_location,
             } => {
-                let data = load_data(tables, &self.options.path, data_location, &hash, &*self.fs)?;
+                let data =
+                    load_data(tables, &self.options.path, data_location, &hash, &*self.fs).await?;
                 let outboard = load_outboard(
                     tables,
                     &self.options.path,
@@ -1880,7 +1881,8 @@ where
                     data.size(),
                     &hash,
                     &*self.fs,
-                )?;
+                )
+                .await?;
                 BaoFileHandle::new_complete(config, hash, data, outboard)
             }
             EntryState::Partial { .. } => BaoFileHandle::incomplete_file(config, hash)?,
@@ -2101,7 +2103,7 @@ where
         Ok((tag, data_size))
     }
 
-    fn get_or_create(
+    async fn get_or_create(
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
@@ -2120,7 +2122,8 @@ where
                     ..
                 } => {
                     let data =
-                        load_data(tables, &self.options.path, data_location, &hash, &*self.fs)?;
+                        load_data(tables, &self.options.path, data_location, &hash, &*self.fs)
+                            .await?;
                     let outboard = load_outboard(
                         tables,
                         &self.options.path,
@@ -2128,7 +2131,8 @@ where
                         data.size(),
                         &hash,
                         &*self.fs,
-                    )?;
+                    )
+                    .await?;
                     tracing::debug!("creating complete entry for {}", hash.to_hex());
                     BaoFileHandle::new_complete(self.create_options.clone(), hash, data, outboard)
                 }
@@ -2529,18 +2533,18 @@ where
         Ok(())
     }
 
-    fn handle_readonly(
+    async fn handle_readonly(
         &mut self,
         tables: &impl ReadableTables,
         msg: ActorMessage<T::File>,
     ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
             ActorMessage::Get { hash, tx } => {
-                let res = self.get(tables, hash);
+                let res = self.get(tables, hash).await;
                 tx.send(res).ok();
             }
             ActorMessage::GetOrCreate { hash, tx } => {
-                let res = self.get_or_create(tables, hash);
+                let res = self.get_or_create(tables, hash).await;
                 tx.send(res).ok();
             }
             ActorMessage::EntryStatus { hash, tx } => {
@@ -2576,9 +2580,9 @@ where
         Ok(Ok(()))
     }
 
-    fn handle_readwrite(
+    async fn handle_readwrite(
         &mut self,
-        tables: &mut Tables,
+        tables: &mut Tables<'_>,
         msg: ActorMessage<T::File>,
     ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
@@ -2631,7 +2635,7 @@ where
             }
             msg => {
                 // try to handle it as readonly
-                if let Err(msg) = self.handle_readonly(tables, msg)? {
+                if let Err(msg) = self.handle_readonly(tables, msg).await? {
                     return Ok(Err(msg));
                 }
             }
@@ -2699,7 +2703,7 @@ where
     rx.blocking_recv().expect("The sender cannot be dropped")
 }
 
-fn load_data<T>(
+async fn load_data<T>(
     tables: &impl ReadableTables,
     options: &PathOptions,
     location: DataLocation<(), u64>,
@@ -2721,7 +2725,7 @@ where
         }
         DataLocation::Owned(data_size) => {
             let path = options.owned_data_path(hash);
-            let Ok(file) = block_for(fs.open(&path)) else {
+            let Ok(file) = fs.open(&path).await else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {}", path.display()),
@@ -2740,7 +2744,7 @@ where
                 ));
             }
             let path = &paths[0];
-            let Ok(file) = block_for(fs.open(path)) else {
+            let Ok(file) = fs.open(path).await else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("external file not found: {}", path.display()),
@@ -2755,7 +2759,7 @@ where
     })
 }
 
-fn load_outboard<T: Persistence>(
+async fn load_outboard<T: Persistence>(
     tables: &impl ReadableTables,
     options: &PathOptions,
     location: OutboardLocation,
@@ -2777,7 +2781,7 @@ fn load_outboard<T: Persistence>(
         OutboardLocation::Owned => {
             let outboard_size = raw_outboard_size(size);
             let path = options.owned_outboard_path(hash);
-            let Ok(file) = block_for(fs.open(&path)) else {
+            let Ok(file) = fs.open(&path).await else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {} size={}", path.display(), outboard_size),
