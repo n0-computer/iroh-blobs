@@ -1105,7 +1105,7 @@ where
                 .into(),
             )
         })?;
-        block_for(self.fs.create_dir_all(parent))?;
+        self.fs.create_dir_all(parent).await?;
         let temp_tag = self.temp.temp_tag(HashAndFormat::raw(hash));
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -2006,7 +2006,11 @@ where
         Ok(())
     }
 
-    fn import(&mut self, tables: &mut Tables, cmd: Import) -> ActorResult<(TempTag, u64)> {
+    async fn import(
+        &mut self,
+        tables: &mut Tables<'_>,
+        cmd: Import,
+    ) -> ActorResult<(TempTag, u64)> {
         let Import {
             content_id,
             source: file,
@@ -2031,7 +2035,9 @@ where
                         external_path.display()
                     );
                     let data = Bytes::from(
-                        block_for(self.fs.read(&external_path))
+                        self.fs
+                            .read(&external_path)
+                            .await
                             .map_err(|e| ActorError::Io(e.into()))?,
                     );
                     DataLocation::Inline(data)
@@ -2423,41 +2429,47 @@ where
         Ok(())
     }
 
-    fn on_complete(
+    async fn on_complete(
         &mut self,
-        tables: &mut Tables,
+        tables: &mut Tables<'_>,
         entry: BaoFileHandle<T::File>,
     ) -> ActorResult<()> {
         let hash = entry.hash();
         let mut info = None;
         tracing::trace!("on_complete({})", hash.to_hex());
-        entry.transform(|state| {
-            tracing::trace!("on_complete transform {:?}", state);
-            let entry = match complete_storage(
-                state,
-                &hash,
-                &self.options.path,
-                &self.options.inline,
-                tables.delete_after_commit,
-                self.fs.clone(),
-            )? {
-                Ok(entry) => {
-                    // store the info so we can insert it into the db later
-                    info = Some((
-                        entry.data_size(),
-                        entry.data.mem().cloned(),
-                        entry.outboard_size(),
-                        entry.outboard.mem().cloned(),
-                    ));
-                    entry
-                }
-                Err(entry) => {
-                    // the entry was already complete, nothing to do
-                    entry
-                }
-            };
-            Ok(BaoFileStorage::Complete(entry))
-        })?;
+        entry
+            // TODO: this errors on edition 2024, it should be changed to
+            // an async closure as they are now stable
+            .transform(|state| async {
+                tracing::trace!("on_complete transform {:?}", state);
+                let entry = match complete_storage(
+                    state,
+                    &hash,
+                    &self.options.path,
+                    &self.options.inline,
+                    tables.delete_after_commit,
+                    self.fs.clone(),
+                )
+                .await?
+                {
+                    Ok(entry) => {
+                        // store the info so we can insert it into the db later
+                        info = Some((
+                            entry.data_size(),
+                            entry.data.mem().cloned(),
+                            entry.outboard_size(),
+                            entry.outboard.mem().cloned(),
+                        ));
+                        entry
+                    }
+                    Err(entry) => {
+                        // the entry was already complete, nothing to do
+                        entry
+                    }
+                };
+                Ok(BaoFileStorage::Complete(entry))
+            })
+            .await?;
         if let Some((data_size, data, outboard_size, outboard)) = info {
             let data_location = if data.is_some() {
                 DataLocation::Inline(())
@@ -2587,7 +2599,7 @@ where
     ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
             ActorMessage::Import { cmd, tx } => {
-                let res = self.import(tables, cmd);
+                let res = self.import(tables, cmd).await;
                 tx.send(res).ok();
             }
             ActorMessage::SetTag { tag, value, tx } => {
@@ -2615,7 +2627,7 @@ where
                 tx.send(res).ok();
             }
             ActorMessage::OnComplete { handle } => {
-                let res = self.on_complete(tables, handle);
+                let res = self.on_complete(tables, handle).await;
                 res.ok();
             }
             ActorMessage::Export { cmd, tx } => {
@@ -2797,7 +2809,7 @@ async fn load_outboard<T: Persistence>(
 }
 
 /// Take a possibly incomplete storage and turn it into complete
-fn complete_storage<T>(
+async fn complete_storage<T>(
     storage: BaoFileStorage<T::File>,
     hash: &Hash,
     path_options: &PathOptions,
@@ -2864,13 +2876,12 @@ where
                 )
             }
             MemOrFile::File(data) => MemOrFile::File(
-                block_for(
-                    FileAndSize {
-                        file: data,
-                        size: data_size,
-                    }
-                    .map_async(move |f| fs_2.convert_std_file(f)),
-                )
+                FileAndSize {
+                    file: data,
+                    size: data_size,
+                }
+                .map_async(move |f| fs_2.convert_std_file(f))
+                .await
                 .transpose()
                 .map_err(|e| ActorError::Io(e.into()))?,
             ),

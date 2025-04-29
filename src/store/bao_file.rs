@@ -14,7 +14,7 @@ use std::{
     io,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    sync::{Arc, RwLock, Weak},
+    sync::{Arc, Weak},
 };
 
 use bao_tree::{
@@ -343,7 +343,7 @@ impl<T> BaoFileHandleWeak<T> {
 /// The inner part of a bao file handle.
 #[derive(Debug)]
 pub struct BaoFileHandleInner<T> {
-    pub(crate) storage: RwLock<BaoFileStorage<T>>,
+    pub(crate) storage: tokio::sync::RwLock<BaoFileStorage<T>>,
     config: Arc<BaoFileConfig>,
     hash: Hash,
 }
@@ -432,15 +432,9 @@ where
             return res;
         }
     };
-    // otherwise, we have to spawn a task.
-    let (handle, res) = tokio::task::spawn_blocking(move || {
-        let storage = handle.storage.read().unwrap();
-        let res = f(storage.deref());
-        drop(storage);
-        (handle, res)
-    })
-    .await
-    .expect("spawn_blocking failed");
+    let storage_guard = handle.storage.read().await;
+    let res = f(storage_guard.deref());
+    drop(storage_guard);
     *opt = Some(handle);
     res
 }
@@ -528,7 +522,7 @@ where
     pub fn incomplete_mem(config: Arc<BaoFileConfig>, hash: Hash) -> Self {
         let storage = BaoFileStorage::incomplete_mem();
         Self(Arc::new(BaoFileHandleInner {
-            storage: RwLock::new(storage),
+            storage: tokio::sync::RwLock::new(storage),
             config,
             hash,
         }))
@@ -543,7 +537,7 @@ where
             sizes: create_read_write(&paths.sizes)?,
         });
         Ok(Self(Arc::new(BaoFileHandleInner {
-            storage: RwLock::new(storage),
+            storage: tokio::sync::RwLock::new(storage),
             config,
             hash,
         })))
@@ -558,7 +552,7 @@ where
     ) -> Self {
         let storage = BaoFileStorage::Complete(CompleteStorage { data, outboard });
         Self(Arc::new(BaoFileHandleInner {
-            storage: RwLock::new(storage),
+            storage: tokio::sync::RwLock::new(storage),
             config,
             hash,
         }))
@@ -567,20 +561,20 @@ where
     /// Transform the storage in place. If the transform fails, the storage will
     /// be an immutable empty storage.
     #[cfg(feature = "fs-store")]
-    pub(crate) fn transform(
+    pub(crate) async fn transform(
         &self,
-        f: impl FnOnce(BaoFileStorage<T>) -> io::Result<BaoFileStorage<T>>,
+        f: impl std::ops::AsyncFnOnce(BaoFileStorage<T>) -> io::Result<BaoFileStorage<T>>,
     ) -> io::Result<()> {
-        let mut lock = self.storage.write().unwrap();
+        let mut lock = self.storage.write().await;
         let storage = lock.take();
-        *lock = f(storage)?;
+        *lock = f(storage).await?;
         Ok(())
     }
 
     /// True if the file is complete.
     pub fn is_complete(&self) -> bool {
         matches!(
-            self.storage.read().unwrap().deref(),
+            self.storage.try_read().unwrap().deref(),
             BaoFileStorage::Complete(_)
         )
     }
@@ -603,7 +597,7 @@ where
 
     /// The most precise known total size of the data file.
     pub fn current_size(&self) -> io::Result<u64> {
-        match self.storage.read().unwrap().deref() {
+        match self.storage.try_read().unwrap().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.data_size()),
             BaoFileStorage::IncompleteMem(mem) => Ok(mem.current_size()),
             BaoFileStorage::IncompleteFile(file) => file.current_size(),
@@ -633,8 +627,8 @@ where
     }
 
     /// This is the synchronous impl for writing a batch.
-    fn write_batch(&self, size: u64, batch: &[BaoContentItem]) -> io::Result<HandleChange> {
-        let mut storage = self.storage.write().unwrap();
+    async fn write_batch(&self, size: u64, batch: &[BaoContentItem]) -> io::Result<HandleChange> {
+        let mut storage = self.storage.write().await;
         match storage.deref_mut() {
             BaoFileStorage::IncompleteMem(mem) => {
                 // check if we need to switch to file mode, otherwise write to memory
@@ -730,12 +724,7 @@ where
         let Some(handle) = self.0.take() else {
             return Err(io::Error::new(io::ErrorKind::Other, "deferred batch busy"));
         };
-        let (handle, change) = tokio::task::spawn_blocking(move || {
-            let change = handle.write_batch(size, &batch);
-            (handle, change)
-        })
-        .await
-        .expect("spawn_blocking failed");
+        let change = handle.write_batch(size, &batch).await;
         match change? {
             HandleChange::None => {}
             HandleChange::MemToFile => {
@@ -752,12 +741,7 @@ where
         let Some(handle) = self.0.take() else {
             return Err(io::Error::new(io::ErrorKind::Other, "deferred batch busy"));
         };
-        let (handle, res) = tokio::task::spawn_blocking(move || {
-            let res = handle.storage.write().unwrap().sync_all();
-            (handle, res)
-        })
-        .await
-        .expect("spawn_blocking failed");
+        let res = handle.storage.write().await.sync_all();
         self.0 = Some(handle);
         res
     }
