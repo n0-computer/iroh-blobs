@@ -46,7 +46,6 @@ use anyhow::anyhow;
 use futures_lite::{future::BoxedLocal, Stream, StreamExt};
 use hashlink::LinkedHashSet;
 use iroh::{endpoint, Endpoint, NodeAddr, NodeId};
-use iroh_metrics::inc;
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
@@ -55,7 +54,7 @@ use tokio_util::{either::Either, sync::CancellationToken, time::delay_queue};
 use tracing::{debug, error, error_span, trace, warn, Instrument};
 
 use crate::{
-    get::{db::DownloadProgress, Stats},
+    get::{db::DownloadProgress, error::GetError, Stats},
     metrics::Metrics,
     store::Store,
     util::{local_pool::LocalPoolHandle, progress::ProgressSender},
@@ -98,7 +97,7 @@ pub enum FailureAction {
     /// The request was cancelled by us.
     AllIntentsDropped,
     /// An error occurred that prevents the request from being retried at all.
-    AbortRequest(anyhow::Error),
+    AbortRequest(GetError),
     /// An error occurred that suggests the node should not be used in general.
     DropPeer(anyhow::Error),
     /// An error occurred in which neither the node nor the request are at fault.
@@ -332,6 +331,7 @@ pub struct Downloader {
     next_id: Arc<AtomicU64>,
     /// Channel to communicate with the service.
     msg_tx: mpsc::Sender<Message>,
+    metrics: Arc<Metrics>,
 }
 
 impl Downloader {
@@ -354,16 +354,25 @@ impl Downloader {
     where
         S: Store,
     {
+        let metrics = Arc::new(Metrics::default());
         let me = endpoint.node_id().fmt_short();
         let (msg_tx, msg_rx) = mpsc::channel(SERVICE_CHANNEL_CAPACITY);
         let dialer = Dialer::new(endpoint);
 
+        let metrics_clone = metrics.clone();
         let create_future = move || {
             let getter = get::IoGetter {
                 store: store.clone(),
             };
 
-            let service = Service::new(getter, dialer, concurrency_limits, retry_config, msg_rx);
+            let service = Service::new(
+                getter,
+                dialer,
+                concurrency_limits,
+                retry_config,
+                msg_rx,
+                metrics_clone,
+            );
 
             service.run().instrument(error_span!("downloader", %me))
         };
@@ -371,6 +380,7 @@ impl Downloader {
         Self {
             next_id: Arc::new(AtomicU64::new(0)),
             msg_tx,
+            metrics,
         }
     }
 
@@ -423,6 +433,11 @@ impl Downloader {
             let msg = send_err.0;
             debug!(?msg, "nodes have not been sent")
         }
+    }
+
+    /// Returns the metrics collected for this downloader.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 }
 
@@ -565,6 +580,7 @@ struct Service<G: Getter, D: DialerT> {
     in_progress_downloads: JoinSet<(DownloadKind, InternalDownloadResult)>,
     /// Progress tracker
     progress_tracker: ProgressTracker,
+    metrics: Arc<Metrics>,
 }
 impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
     fn new(
@@ -573,6 +589,7 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
         concurrency_limits: ConcurrencyLimits,
         retry_config: RetryConfig,
         msg_rx: mpsc::Receiver<Message>,
+        metrics: Arc<Metrics>,
     ) -> Self {
         Service {
             getter,
@@ -590,6 +607,7 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
             in_progress_downloads: Default::default(),
             progress_tracker: ProgressTracker::new(),
             queue: Default::default(),
+            metrics,
         }
     }
 
@@ -597,16 +615,16 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
     async fn run(mut self) {
         loop {
             trace!("wait for tick");
-            inc!(Metrics, downloader_tick_main);
+            self.metrics.downloader_tick_main.inc();
             tokio::select! {
                 Some((node, conn_result)) = self.dialer.next() => {
                     trace!(node=%node.fmt_short(), "tick: connection ready");
-                    inc!(Metrics, downloader_tick_connection_ready);
+                    self.metrics.downloader_tick_connection_ready.inc();
                     self.on_connection_ready(node, conn_result);
                 }
                 maybe_msg = self.msg_rx.recv() => {
                     trace!(msg=?maybe_msg, "tick: message received");
-                    inc!(Metrics, downloader_tick_message_received);
+                    self.metrics.downloader_tick_message_received.inc();
                     match maybe_msg {
                         Some(msg) => self.handle_message(msg).await,
                         None => return self.shutdown().await,
@@ -616,25 +634,26 @@ impl<G: Getter<Connection = D::Connection>, D: DialerT> Service<G, D> {
                     match res {
                         Ok((kind, result)) => {
                             trace!(%kind, "tick: transfer completed");
-                            inc!(Metrics, downloader_tick_transfer_completed);
+                            self::get::track_metrics(&result, &self.metrics);
+                            self.metrics.downloader_tick_transfer_completed.inc();
                             self.on_download_completed(kind, result);
                         }
                         Err(err) => {
                             warn!(?err, "transfer task panicked");
-                            inc!(Metrics, downloader_tick_transfer_failed);
+                            self.metrics.downloader_tick_transfer_failed.inc();
                         }
                     }
                 }
                 Some(expired) = self.retry_nodes_queue.next() => {
                     let node = expired.into_inner();
                     trace!(node=%node.fmt_short(), "tick: retry node");
-                    inc!(Metrics, downloader_tick_retry_node);
+                    self.metrics.downloader_tick_retry_node.inc();
                     self.on_retry_wait_elapsed(node);
                 }
                 Some(expired) = self.goodbye_nodes_queue.next() => {
                     let node = expired.into_inner();
                     trace!(node=%node.fmt_short(), "tick: goodbye node");
-                    inc!(Metrics, downloader_tick_goodbye_node);
+                    self.metrics.downloader_tick_goodbye_node.inc();
                     self.disconnect_idle_node(node, "idle expired");
                 }
             }
