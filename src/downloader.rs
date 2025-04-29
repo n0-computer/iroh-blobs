@@ -436,7 +436,7 @@ impl Downloader {
     }
 
     /// Returns the metrics collected for this downloader.
-    pub fn metrics(&self) -> &Metrics {
+    pub fn metrics(&self) -> &Arc<Metrics> {
         &self.metrics
     }
 }
