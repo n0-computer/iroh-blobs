@@ -375,7 +375,12 @@
 <a href="#374" id="374">374</a>
 <a href="#375" id="375">375</a>
 <a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
 </span><span class="attr">#![allow(missing_docs)]
@@ -396,6 +401,7 @@
 
 <span class="kw">use crate</span>::{
     downloader::{ConcurrencyLimits, Downloader, RetryConfig},
+    metrics::Metrics,
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -633,6 +639,10 @@
 
     <span class="kw">pub fn </span>store(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>S {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.store
+    }
+
+    <span class="kw">pub fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Arc&lt;Metrics&gt; {
+        <span class="self">self</span>.downloader().metrics()
     }
 
     <span class="kw">pub fn </span>events(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EventSender {
