@@ -19,6 +19,7 @@ use tracing::debug;
 
 use crate::{
     downloader::{ConcurrencyLimits, Downloader, RetryConfig},
+    metrics::Metrics,
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -256,6 +257,10 @@ impl<S: crate::store::Store> Blobs<S> {
 
     pub fn store(&self) -> &S {
         &self.inner.store
+    }
+
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        self.downloader().metrics()
     }
 
     pub fn events(&self) -> &EventSender {
