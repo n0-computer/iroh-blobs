@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "iroh-blobs"
-version = "0.34.1"
+version = "0.35.1"
 dependencies = [
  "anyhow",
  "async-channel",
