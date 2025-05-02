@@ -8,6 +8,7 @@ use iroh_blobs::{
         client::tags::{self, TagInfo},
         proto::RpcService,
     },
+    store::fs::FileSystemPersistence,
     Hash, HashAndFormat,
 };
 use testresult::TestResult;
@@ -142,7 +143,7 @@ async fn tags_smoke_mem() -> TestResult<()> {
 async fn tags_smoke_fs() -> TestResult<()> {
     let td = tempfile::tempdir()?;
     let endpoint = Endpoint::builder().bind().await?;
-    let blobs = Blobs::persistent(td.path().join("blobs.db"))
+    let blobs = Blobs::persistent(td.path(), td.path().join("blobs.db"), FileSystemPersistence)
         .await?
         .build(&endpoint);
     let client = blobs.client();

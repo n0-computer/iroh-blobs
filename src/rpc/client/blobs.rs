@@ -1028,6 +1028,7 @@ mod tests {
             net_protocol::Blobs,
             provider::{CustomEventSender, EventSender},
             rpc::client::{blobs, tags},
+            store::fs::FileSystemPersistence,
         };
 
         type RpcClient = quic_rpc::RpcClient<RpcService>;
@@ -1113,7 +1114,8 @@ mod tests {
             /// Creates a new node with persistent storage
             pub async fn persistent(
                 path: impl AsRef<Path>,
-            ) -> anyhow::Result<Builder<crate::store::fs::Store>> {
+            ) -> anyhow::Result<Builder<crate::store::fs::Store<FileSystemPersistence>>>
+            {
                 Ok(Builder {
                     store: crate::store::fs::Store::load(path).await?,
                     events: Default::default(),

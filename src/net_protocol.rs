@@ -7,6 +7,7 @@ use std::{
     collections::BTreeSet,
     fmt::Debug,
     ops::{Deref, DerefMut},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -20,7 +21,7 @@ use tracing::debug;
 use crate::{
     downloader::{ConcurrencyLimits, Downloader, RetryConfig},
     provider::EventSender,
-    store::GcConfig,
+    store::{fs::Persistence, GcConfig},
     util::{
         local_pool::{self, LocalPool, LocalPoolHandle},
         SetTagOption,
@@ -221,12 +222,19 @@ impl Blobs<crate::store::mem::Store> {
     }
 }
 
-impl Blobs<crate::store::fs::Store> {
+impl<T> Blobs<crate::store::fs::Store<T>>
+where
+    T: Persistence,
+{
     /// Load a persistent Blobs protocol handler from a path.
     pub async fn persistent(
         path: impl AsRef<std::path::Path>,
-    ) -> anyhow::Result<Builder<crate::store::fs::Store>> {
-        Ok(Self::builder(crate::store::fs::Store::load(path).await?))
+        db_path: PathBuf,
+        backend: T,
+    ) -> anyhow::Result<Builder<crate::store::fs::Store<T>>> {
+        Ok(Self::builder(
+            crate::store::fs::Store::load_with_backend(path, db_path, backend).await?,
+        ))
     }
 }
 

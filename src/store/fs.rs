@@ -443,37 +443,34 @@ pub(crate) enum ImportSource {
 
 /// trait which defines the backend persistence layer
 /// for this store. e.g. filesystem, s3 etc
-pub trait Persistence: Send + Sync + Clone + std::fmt::Debug + 'static {
-    /// the error type that is returned for the persistence layer
-    type Err: Into<io::Error> + Send + 'static;
-
+pub trait Persistence: Send + Sync + Clone + 'static {
     /// the type which represents a file which was read from the persistence
     /// layer
     type File: IrohFile + std::io::Read + std::fmt::Debug;
 
     /// return the size of the file in bytes if it can be found/read
-    /// otherwise return a [Self::Err]
-    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> + Send + 'static;
+    /// otherwise return a [io::Error]
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, io::Error>> + Send + 'static;
 
     /// read the contents of the file at the path
     /// returning the bytes of the file in the success case
-    /// and [Self::Err] in the error case
+    /// and [io::Error] in the error case
     fn read(
         &self,
         path: &Path,
-    ) -> impl Future<Output = Result<Vec<u8>, Self::Err>> + Send + 'static;
+    ) -> impl Future<Output = Result<Vec<u8>, io::Error>> + Send + 'static;
 
     /// recursively ensure that the input path exists
     fn create_dir_all(
         &self,
         path: &Path,
-    ) -> impl Future<Output = Result<(), Self::Err>> + Send + 'static;
+    ) -> impl Future<Output = Result<(), io::Error>> + Send + 'static;
 
     /// read and return the file at the input path
     fn open<'a>(
         &'a self,
         path: &'a Path,
-    ) -> impl Future<Output = Result<Self::File, Self::Err>> + Send + 'static;
+    ) -> impl Future<Output = Result<Self::File, io::Error>> + Send + 'static;
 
     /// convert from a [std::fs::File] into this persistence layer [Self::File] type.
     /// This is called when converting from a partial file (which exists on disk)
@@ -481,7 +478,7 @@ pub trait Persistence: Send + Sync + Clone + std::fmt::Debug + 'static {
     fn convert_std_file(
         self: Arc<Self>,
         file: std::fs::File,
-    ) -> impl Future<Output = Result<Self::File, Self::Err>> + Send + 'static;
+    ) -> impl Future<Output = Result<Self::File, io::Error>> + Send + 'static;
 }
 
 /// A persistence layer that writes to the local file system
@@ -489,23 +486,22 @@ pub trait Persistence: Send + Sync + Clone + std::fmt::Debug + 'static {
 pub struct FileSystemPersistence;
 
 impl Persistence for FileSystemPersistence {
-    type Err = io::Error;
     type File = std::fs::File;
 
-    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> + 'static {
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, io::Error>> + 'static {
         let fut = tokio::fs::metadata(path.to_owned());
         async move { fut.await.map(|m| m.len()) }
     }
 
-    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> + 'static {
+    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, io::Error>> + 'static {
         tokio::fs::read(path.to_owned())
     }
 
-    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>> + 'static {
+    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), io::Error>> + 'static {
         tokio::fs::create_dir_all(path.to_owned())
     }
 
-    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>> + 'static {
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, io::Error>> + 'static {
         let fut = tokio::fs::File::open(path.to_owned());
         async move {
             let file = fut.await?;
@@ -516,7 +512,7 @@ impl Persistence for FileSystemPersistence {
     async fn convert_std_file(
         self: Arc<Self>,
         file: std::fs::File,
-    ) -> Result<Self::File, Self::Err> {
+    ) -> Result<Self::File, io::Error> {
         Ok(file)
     }
 }
@@ -533,7 +529,7 @@ impl ImportSource {
     fn len<'a, T: Persistence>(
         &'a self,
         fs: &'a T,
-    ) -> impl Future<Output = Result<u64, T::Err>> + 'static {
+    ) -> impl Future<Output = Result<u64, io::Error>> + 'static {
         enum Either<T> {
             Left(u64),
             Right(T),
@@ -542,7 +538,7 @@ impl ImportSource {
         let output = match self {
             Self::TempFile(path) | Self::External(path) => {
                 let fut: std::pin::Pin<
-                    Box<dyn Future<Output = Result<u64, <T as Persistence>::Err>> + Send + 'static>,
+                    Box<dyn Future<Output = Result<u64, io::Error>> + Send + 'static>,
                 > = Box::pin(fs.size(path));
                 Either::Right(fut)
             }
@@ -813,28 +809,45 @@ pub(crate) type FilterPredicate<K, V> =
 /// Storage that is using a redb database for small files and files for
 /// large files.
 #[derive(Debug, Clone)]
-pub struct Store<T: Persistence = FileSystemPersistence>(Arc<StoreInner<T>>);
+pub struct Store<T: Persistence>(Arc<StoreInner<T>>);
 
-impl Store {
-    /// Load or create a new store.
-    pub async fn load(root: impl AsRef<Path>) -> io::Result<Self> {
+impl Store<FileSystemPersistence> {
+    /// load a new instance of a file system backed store at the given path
+    pub fn load(root: impl AsRef<Path>) -> impl Future<Output = io::Result<Self>> {
         let path = root.as_ref();
         let db_path = path.join("blobs.db");
+
+        Store::load_with_backend(root, db_path, FileSystemPersistence)
+    }
+}
+
+impl<T> Store<T>
+where
+    T: Persistence,
+{
+    /// Load or create a new store.
+    pub async fn load_with_backend(
+        root: impl AsRef<Path>,
+        db_path: PathBuf,
+        backend: T,
+    ) -> io::Result<Self> {
         let options = Options {
-            path: PathOptions::new(path),
+            path: PathOptions::new(root.as_ref()),
             inline: Default::default(),
             batch: Default::default(),
         };
-        Self::new(db_path, options).await
+        Self::new(db_path, options, backend).await
     }
 
     /// Create a new store with custom options.
-    pub async fn new(path: PathBuf, options: Options) -> io::Result<Self> {
+    pub async fn new(path: PathBuf, options: Options, backend: T) -> io::Result<Self> {
         // spawn_blocking because StoreInner::new creates directories
         let rt = tokio::runtime::Handle::try_current()
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "no tokio runtime"))?;
-        let inner =
-            tokio::task::spawn_blocking(move || StoreInner::new_sync(path, options, rt)).await??;
+        let inner = tokio::task::spawn_blocking(move || {
+            StoreInner::new_sync_with_backend(path, options, rt, backend)
+        })
+        .await??;
         Ok(Self(Arc::new(inner)))
     }
 
@@ -880,17 +893,9 @@ impl TagCounter for RwLock<TempCounterMap> {
     }
 }
 
-impl StoreInner<FileSystemPersistence> {
-    fn new_sync(path: PathBuf, options: Options, rt: tokio::runtime::Handle) -> io::Result<Self> {
-        Self::new_sync_with_backend(path, options, rt, FileSystemPersistence)
-    }
-}
-
 impl<T> StoreInner<T>
 where
     T: Persistence,
-    OuterError: From<T::Err>,
-    io::Error: From<T::Err>,
 {
     fn new_sync_with_backend(
         path: PathBuf,
@@ -1402,8 +1407,6 @@ impl From<OuterError> for io::Error {
 impl<T> super::Map for Store<T>
 where
     T: Persistence,
-    OuterError: From<T::Err>,
-    io::Error: From<T::Err>,
 {
     type Entry = Entry<T::File>;
 
@@ -1415,8 +1418,6 @@ where
 impl<T> super::MapMut for Store<T>
 where
     T: Persistence,
-    OuterError: From<T::Err>,
-    io::Error: From<T::Err>,
 {
     type EntryMut = Entry<T::File>;
 
@@ -1441,7 +1442,10 @@ where
     }
 }
 
-impl super::ReadableStore for Store {
+impl<T> super::ReadableStore for Store<T>
+where
+    T: Persistence,
+{
     async fn blobs(&self) -> io::Result<super::DbIter<Hash>> {
         Ok(Box::new(self.0.blobs().await?.into_iter()))
     }
@@ -1482,7 +1486,10 @@ impl super::ReadableStore for Store {
     }
 }
 
-impl super::Store for Store {
+impl<T> super::Store for Store<T>
+where
+    T: Persistence + std::fmt::Debug,
+{
     async fn import_file(
         &self,
         path: PathBuf,
@@ -1646,11 +1653,14 @@ impl super::Store for Store {
     }
 }
 
-pub(super) async fn gc_sweep_task(
-    store: &Store,
+pub(super) async fn gc_sweep_task<T>(
+    store: &Store<T>,
     live: &BTreeSet<Hash>,
     co: &Co<GcSweepEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    T: Persistence,
+{
     let blobs = store.blobs().await?.chain(store.partial_blobs().await?);
     let mut count = 0;
     let mut batch = Vec::new();
@@ -2034,12 +2044,8 @@ where
                         "reading external data to inline it: {}",
                         external_path.display()
                     );
-                    let data = Bytes::from(
-                        self.fs
-                            .read(&external_path)
-                            .await
-                            .map_err(|e| ActorError::Io(e.into()))?,
-                    );
+                    let data =
+                        Bytes::from(self.fs.read(&external_path).await.map_err(ActorError::Io)?);
                     DataLocation::Inline(data)
                 } else {
                     DataLocation::External(vec![external_path], data_size)
@@ -2296,8 +2302,8 @@ where
                                 // inline
                                 if size <= self.options.inline.max_data_inlined {
                                     let path = self.options.path.owned_data_path(&hash);
-                                    let data = block_for(self.fs.read(&path))
-                                        .map_err(|e| ActorError::Io(e.into()))?;
+                                    let data =
+                                        block_for(self.fs.read(&path)).map_err(ActorError::Io)?;
                                     tables.delete_after_commit.insert(hash, [BaoFilePart::Data]);
                                     tables.inline_data.insert(hash, data.as_slice())?;
                                     (DataLocation::Inline(()), size, true)
@@ -2332,8 +2338,9 @@ where
                                 if outboard_size <= self.options.inline.max_outboard_inlined =>
                             {
                                 let path = self.options.path.owned_outboard_path(&hash);
-                                let outboard = block_for(self.fs.read(&path))
-                                    .map_err(|e| ActorError::Io(e.into()))?;
+                                let outboard =
+                                    block_for(self.fs.read(&path)).map_err(ActorError::Io)?;
+
                                 tables
                                     .delete_after_commit
                                     .insert(hash, [BaoFilePart::Outboard]);
@@ -2870,7 +2877,7 @@ where
                         .map_async(move |f| fs_2.convert_std_file(f)),
                     )
                     .transpose()
-                    .map_err(|e| ActorError::Io(e.into()))?,
+                    .map_err(ActorError::Io)?,
                 )
             }
             MemOrFile::File(data) => MemOrFile::File(
@@ -2881,7 +2888,7 @@ where
                 .map_async(move |f| fs_2.convert_std_file(f))
                 .await
                 .transpose()
-                .map_err(|e| ActorError::Io(e.into()))?,
+                .map_err(ActorError::Io)?,
             ),
         }
     };
@@ -2916,7 +2923,7 @@ where
                         .map_async(move |f| fs.convert_std_file(f)),
                     )
                     .transpose()
-                    .map_err(|e| ActorError::Io(e.into()))?,
+                    .map_err(ActorError::Io)?,
                 )
             }
             MemOrFile::File(outboard) => MemOrFile::File(
@@ -2928,7 +2935,7 @@ where
                     .map_async(|f| fs.convert_std_file(f)),
                 )
                 .transpose()
-                .map_err(|e| ActorError::Io(e.into()))?,
+                .map_err(ActorError::Io)?,
             ),
         }
     };

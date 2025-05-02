@@ -50,7 +50,7 @@ pub fn to_stream(
         .boxed()
 }
 
-async fn create_test_db() -> (tempfile::TempDir, Store) {
+async fn create_test_db() -> (tempfile::TempDir, Store<FileSystemPersistence>) {
     let _ = tracing_subscriber::fmt::try_init();
     let testdir = tempfile::tempdir().unwrap();
     let db_path = testdir.path().join("db.redb");
@@ -59,7 +59,9 @@ async fn create_test_db() -> (tempfile::TempDir, Store) {
         batch: Default::default(),
         inline: Default::default(),
     };
-    let db = Store::new(db_path, options).await.unwrap();
+    let db = Store::new(db_path, options, FileSystemPersistence)
+        .await
+        .unwrap();
     (testdir, db)
 }
 
@@ -788,7 +790,9 @@ async fn actor_store_smoke() {
         batch: Default::default(),
         inline: Default::default(),
     };
-    let db = Store::new(db_path, options).await.unwrap();
+    let db = Store::new(db_path, options, FileSystemPersistence)
+        .await
+        .unwrap();
     db.dump().await.unwrap();
     let data = random_test_data(1024 * 1024);
     #[allow(clippy::single_range_in_vec_init)]
