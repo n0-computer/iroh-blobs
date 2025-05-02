@@ -2438,9 +2438,7 @@ where
         let mut info = None;
         tracing::trace!("on_complete({})", hash.to_hex());
         entry
-            // TODO: this errors on edition 2024, it should be changed to
-            // an async closure as they are now stable
-            .transform(|state| async {
+            .transform(async |state| {
                 tracing::trace!("on_complete transform {:?}", state);
                 let entry = match complete_storage(
                     state,
