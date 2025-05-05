@@ -35,7 +35,7 @@ async fn create_expiring_tag(
         let hash = hashes[0];
         batch.temp_tag(HashAndFormat::raw(hash)).await?
     } else {
-        let hs = hashes.into_iter().copied().collect::<HashSeq>();
+        let hs = hashes.iter().copied().collect::<HashSeq>();
         batch
             .add_bytes_with_opts(hs.into_inner(), BlobFormat::HashSeq)
             .await?
