@@ -97,7 +97,10 @@ async fn info_task(blobs: BlobsClient) -> anyhow::Result<()> {
     loop {
         let now = chrono::Utc::now();
         let mut tags = blobs.tags().list().await?;
-        println!("Current time: {}", now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        println!(
+            "Current time: {}",
+            now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
         println!("Tags:");
         while let Some(tag) = tags.next().await {
             let tag = tag?;
