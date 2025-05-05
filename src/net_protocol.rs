@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
-    downloader::{ConcurrencyLimits, Downloader, RetryConfig},
+    downloader::{self, ConcurrencyLimits, Downloader, RetryConfig},
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -147,9 +147,8 @@ impl BlobBatches {
 pub struct Builder<S> {
     store: S,
     events: Option<EventSender>,
+    downloader_config: Option<crate::downloader::Config>,
     rt: Option<LocalPoolHandle>,
-    concurrency_limits: Option<ConcurrencyLimits>,
-    retry_config: Option<RetryConfig>,
 }
 
 impl<S: crate::store::Store> Builder<S> {
@@ -165,15 +164,23 @@ impl<S: crate::store::Store> Builder<S> {
         self
     }
 
+    /// Set custom downloader config
+    pub fn downloader_config(mut self, downloader_config: downloader::Config) -> Self {
+        self.downloader_config = Some(downloader_config);
+        self
+    }
+
     /// Set custom [`ConcurrencyLimits`] to use.
     pub fn concurrency_limits(mut self, concurrency_limits: ConcurrencyLimits) -> Self {
-        self.concurrency_limits = Some(concurrency_limits);
+        let downloader_config = self.downloader_config.get_or_insert_with(Default::default);
+        downloader_config.concurrency = concurrency_limits;
         self
     }
 
     /// Set a custom [`RetryConfig`] to use.
     pub fn retry_config(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = Some(retry_config);
+        let downloader_config = self.downloader_config.get_or_insert_with(Default::default);
+        downloader_config.retry = retry_config;
         self
     }
 
@@ -184,12 +191,12 @@ impl<S: crate::store::Store> Builder<S> {
             .rt
             .map(Rt::Handle)
             .unwrap_or_else(|| Rt::Owned(LocalPool::default()));
+        let downloader_config = self.downloader_config.unwrap_or_default();
         let downloader = Downloader::with_config(
             self.store.clone(),
             endpoint.clone(),
             rt.clone(),
-            self.concurrency_limits.unwrap_or_default(),
-            self.retry_config.unwrap_or_default(),
+            downloader_config,
         );
         Blobs::new(
             self.store,
@@ -207,9 +214,8 @@ impl<S> Blobs<S> {
         Builder {
             store,
             events: None,
+            downloader_config: None,
             rt: None,
-            concurrency_limits: None,
-            retry_config: None,
         }
     }
 }
