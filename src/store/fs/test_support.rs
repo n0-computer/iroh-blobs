@@ -12,7 +12,7 @@ use redb::ReadableTable;
 use super::{
     tables::{ReadableTables, Tables},
     ActorError, ActorMessage, ActorResult, ActorState, DataLocation, EntryState, FilterPredicate,
-    OutboardLocation, OuterResult, Store, StoreInner,
+    OutboardLocation, OuterResult, Persistence, Store, StoreInner,
 };
 use crate::{
     store::{mutable_mem_storage::SizeInfo, DbIter},
@@ -46,10 +46,13 @@ pub enum EntryData {
     },
 }
 
-impl Store {
+impl<T> Store<T>
+where
+    T: Persistence,
+{
     /// Get the complete state of an entry, both in memory and in redb.
     #[cfg(test)]
-    pub(crate) async fn entry_state(&self, hash: Hash) -> io::Result<EntryStateResponse> {
+    pub(crate) async fn entry_state(&self, hash: Hash) -> io::Result<EntryStateResponse<T::File>> {
         Ok(self.0.entry_state(hash).await?)
     }
 
@@ -102,9 +105,12 @@ impl Store {
     }
 }
 
-impl StoreInner {
+impl<T> StoreInner<T>
+where
+    T: Persistence,
+{
     #[cfg(test)]
-    async fn entry_state(&self, hash: Hash) -> OuterResult<EntryStateResponse> {
+    async fn entry_state(&self, hash: Hash) -> OuterResult<EntryStateResponse<T::File>> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(ActorMessage::EntryState { hash, tx }).await?;
         Ok(rx.await??)
@@ -145,12 +151,15 @@ impl StoreInner {
 
 #[cfg(test)]
 #[derive(Debug)]
-pub(crate) struct EntryStateResponse {
-    pub mem: Option<crate::store::bao_file::BaoFileHandle>,
+pub(crate) struct EntryStateResponse<T> {
+    pub mem: Option<crate::store::bao_file::BaoFileHandle<T>>,
     pub db: Option<EntryState<Vec<u8>>>,
 }
 
-impl ActorState {
+impl<T> ActorState<T>
+where
+    T: Persistence,
+{
     pub(super) fn get_full_entry_state(
         &mut self,
         tables: &impl ReadableTables,
@@ -297,7 +306,7 @@ impl ActorState {
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
-    ) -> ActorResult<EntryStateResponse> {
+    ) -> ActorResult<EntryStateResponse<T::File>> {
         let mem = self.handles.get(&hash).and_then(|weak| weak.upgrade());
         let db = match tables.blobs().get(hash)? {
             Some(entry) => Some({

@@ -117,7 +117,7 @@ use crate::{
             BoxedProgressSender, IdGenerator, IgnoreProgressSender, ProgressSendError,
             ProgressSender,
         },
-        raw_outboard_size, MemOrFile, TagCounter, TagDrop,
+        raw_outboard_size, FileAndSize, MemOrFile, TagCounter, TagDrop,
     },
     BlobFormat, Hash, HashAndFormat, Tag, TempTag,
 };
@@ -441,6 +441,86 @@ pub(crate) enum ImportSource {
     Memory(#[debug(skip)] Bytes),
 }
 
+/// trait which defines the backend persistence layer
+/// for this store. e.g. filesystem, s3 etc
+pub trait Persistence: Send + Sync + Clone + std::fmt::Debug + 'static {
+    /// the error type that is returned for the persistence layer
+    type Err: Into<io::Error> + Send + 'static;
+
+    /// the type which represents a file which was read from the persistence
+    /// layer
+    type File: IrohFile + std::io::Read + std::fmt::Debug;
+
+    /// return the size of the file in bytes if it can be found/read
+    /// otherwise return a [Self::Err]
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> + Send + 'static;
+
+    /// read the contents of the file at the path
+    /// returning the bytes of the file in the success case
+    /// and [Self::Err] in the error case
+    fn read(
+        &self,
+        path: &Path,
+    ) -> impl Future<Output = Result<Vec<u8>, Self::Err>> + Send + 'static;
+
+    /// recursively ensure that the input path exists
+    fn create_dir_all(
+        &self,
+        path: &Path,
+    ) -> impl Future<Output = Result<(), Self::Err>> + Send + 'static;
+
+    /// read and return the file at the input path
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl Future<Output = Result<Self::File, Self::Err>> + Send + 'static;
+
+    /// convert from a [std::fs::File] into this persistence layer [Self::File] type.
+    /// This is called when converting from a partial file (which exists on disk)
+    /// into a complete file (which exists where ever your implementation wants it to)
+    fn convert_std_file(
+        self: Arc<Self>,
+        file: std::fs::File,
+    ) -> impl Future<Output = Result<Self::File, Self::Err>> + Send + 'static;
+}
+
+/// A persistence layer that writes to the local file system
+#[derive(Debug, Clone, Copy)]
+pub struct FileSystemPersistence;
+
+impl Persistence for FileSystemPersistence {
+    type Err = io::Error;
+    type File = std::fs::File;
+
+    fn size(&self, path: &Path) -> impl Future<Output = Result<u64, Self::Err>> + 'static {
+        let fut = tokio::fs::metadata(path.to_owned());
+        async move { fut.await.map(|m| m.len()) }
+    }
+
+    fn read(&self, path: &Path) -> impl Future<Output = Result<Vec<u8>, Self::Err>> + 'static {
+        tokio::fs::read(path.to_owned())
+    }
+
+    fn create_dir_all(&self, path: &Path) -> impl Future<Output = Result<(), Self::Err>> + 'static {
+        tokio::fs::create_dir_all(path.to_owned())
+    }
+
+    fn open(&self, path: &Path) -> impl Future<Output = Result<Self::File, Self::Err>> + 'static {
+        let fut = tokio::fs::File::open(path.to_owned());
+        async move {
+            let file = fut.await?;
+            Ok(file.into_std().await)
+        }
+    }
+
+    async fn convert_std_file(
+        self: Arc<Self>,
+        file: std::fs::File,
+    ) -> Result<Self::File, Self::Err> {
+        Ok(file)
+    }
+}
+
 impl ImportSource {
     fn content(&self) -> MemOrFile<&[u8], &Path> {
         match self {
@@ -450,19 +530,41 @@ impl ImportSource {
         }
     }
 
-    fn len(&self) -> io::Result<u64> {
-        match self {
-            Self::TempFile(path) => std::fs::metadata(path).map(|m| m.len()),
-            Self::External(path) => std::fs::metadata(path).map(|m| m.len()),
-            Self::Memory(data) => Ok(data.len() as u64),
+    fn len<'a, T: Persistence>(
+        &'a self,
+        fs: &'a T,
+    ) -> impl Future<Output = Result<u64, T::Err>> + 'static {
+        enum Either<T> {
+            Left(u64),
+            Right(T),
+        }
+
+        let output = match self {
+            Self::TempFile(path) | Self::External(path) => {
+                let fut: std::pin::Pin<
+                    Box<dyn Future<Output = Result<u64, <T as Persistence>::Err>> + Send + 'static>,
+                > = Box::pin(fs.size(path));
+                Either::Right(fut)
+            }
+            Self::Memory(data) => Either::Left(data.len() as u64),
+        };
+        async move {
+            match output {
+                Either::Left(size) => Ok(size),
+                Either::Right(fut) => fut.await,
+            }
         }
     }
 }
 
 /// Use BaoFileHandle as the entry type for the map.
-pub type Entry = BaoFileHandle;
+pub type Entry<T> = BaoFileHandle<T>;
 
-impl super::MapEntry for Entry {
+/// a trait which defines the interface which any [Persistence::File] type must adhere to
+pub trait IrohFile: bao_tree::io::sync::ReadAt + Send + Sync + 'static {}
+impl<T> IrohFile for T where T: bao_tree::io::sync::ReadAt + Send + Sync + 'static {}
+
+impl<T: IrohFile> super::MapEntry for Entry<T> {
     fn hash(&self) -> Hash {
         self.hash()
     }
@@ -478,7 +580,7 @@ impl super::MapEntry for Entry {
     }
 
     async fn outboard(&self) -> io::Result<impl Outboard> {
-        self.outboard()
+        BaoFileHandle::outboard(self)
     }
 
     async fn data_reader(&self) -> io::Result<impl AsyncSliceReader> {
@@ -486,7 +588,7 @@ impl super::MapEntry for Entry {
     }
 }
 
-impl super::MapEntryMut for Entry {
+impl<T: IrohFile> super::MapEntryMut for Entry<T> {
     async fn batch_writer(&self) -> io::Result<impl BaoBatchWriter> {
         Ok(self.writer())
     }
@@ -520,12 +622,12 @@ pub(crate) struct Export {
 }
 
 #[derive(derive_more::Debug)]
-pub(crate) enum ActorMessage {
+pub(crate) enum ActorMessage<T> {
     // Query method: get a file handle for a hash, if it exists.
     // This will produce a file handle even for entries that are not yet in redb at all.
     Get {
         hash: Hash,
-        tx: oneshot::Sender<ActorResult<Option<BaoFileHandle>>>,
+        tx: oneshot::Sender<ActorResult<Option<BaoFileHandle<T>>>>,
     },
     /// Query method: get the rough entry status for a hash. Just complete, partial or not found.
     EntryStatus {
@@ -537,7 +639,7 @@ pub(crate) enum ActorMessage {
     /// This is everything we got about the entry, including the actual inline outboard and data.
     EntryState {
         hash: Hash,
-        tx: oneshot::Sender<ActorResult<test_support::EntryStateResponse>>,
+        tx: oneshot::Sender<ActorResult<test_support::EntryStateResponse<T>>>,
     },
     /// Query method: get the full entry state for a hash.
     GetFullEntryState {
@@ -557,7 +659,7 @@ pub(crate) enum ActorMessage {
     /// will be created, but not yet written to redb.
     GetOrCreate {
         hash: Hash,
-        tx: oneshot::Sender<ActorResult<BaoFileHandle>>,
+        tx: oneshot::Sender<ActorResult<BaoFileHandle<T>>>,
     },
     /// Modification method: inline size was exceeded for a partial entry.
     /// If the entry is complete, this is a no-op. If the entry is partial and in
@@ -565,7 +667,7 @@ pub(crate) enum ActorMessage {
     OnMemSizeExceeded { hash: Hash },
     /// Modification method: marks a partial entry as complete.
     /// Calling this on a complete entry is a no-op.
-    OnComplete { handle: BaoFileHandle },
+    OnComplete { handle: BaoFileHandle<T> },
     /// Modification method: import data into a redb store
     ///
     /// At this point the size, hash and outboard must already be known.
@@ -666,7 +768,7 @@ pub(crate) enum ActorMessage {
     Shutdown { tx: Option<oneshot::Sender<()>> },
 }
 
-impl ActorMessage {
+impl<T> ActorMessage<T> {
     fn category(&self) -> MessageCategory {
         match self {
             Self::Get { .. }
@@ -711,7 +813,7 @@ pub(crate) type FilterPredicate<K, V> =
 /// Storage that is using a redb database for small files and files for
 /// large files.
 #[derive(Debug, Clone)]
-pub struct Store(Arc<StoreInner>);
+pub struct Store<T: Persistence = FileSystemPersistence>(Arc<StoreInner<T>>);
 
 impl Store {
     /// Load or create a new store.
@@ -758,11 +860,12 @@ impl Store {
 }
 
 #[derive(Debug)]
-struct StoreInner {
-    tx: async_channel::Sender<ActorMessage>,
+struct StoreInner<T: Persistence> {
+    tx: async_channel::Sender<ActorMessage<T::File>>,
     temp: Arc<RwLock<TempCounterMap>>,
     handle: Option<std::thread::JoinHandle<()>>,
     path_options: Arc<PathOptions>,
+    fs: T,
 }
 
 impl TagDrop for RwLock<TempCounterMap> {
@@ -777,25 +880,41 @@ impl TagCounter for RwLock<TempCounterMap> {
     }
 }
 
-impl StoreInner {
+impl StoreInner<FileSystemPersistence> {
     fn new_sync(path: PathBuf, options: Options, rt: tokio::runtime::Handle) -> io::Result<Self> {
+        Self::new_sync_with_backend(path, options, rt, FileSystemPersistence)
+    }
+}
+
+impl<T> StoreInner<T>
+where
+    T: Persistence,
+    OuterError: From<T::Err>,
+    io::Error: From<T::Err>,
+{
+    fn new_sync_with_backend(
+        path: PathBuf,
+        options: Options,
+        rt: tokio::runtime::Handle,
+        fs: T,
+    ) -> io::Result<Self> {
         tracing::trace!(
             "creating data directory: {}",
             options.path.data_path.display()
         );
-        std::fs::create_dir_all(&options.path.data_path)?;
+        rt.block_on(fs.create_dir_all(&options.path.data_path))?;
         tracing::trace!(
             "creating temp directory: {}",
             options.path.temp_path.display()
         );
-        std::fs::create_dir_all(&options.path.temp_path)?;
+        rt.block_on(fs.create_dir_all(&options.path.temp_path))?;
         tracing::trace!(
             "creating parent directory for db file{}",
             path.parent().unwrap().display()
         );
-        std::fs::create_dir_all(path.parent().unwrap())?;
+        rt.block_on(fs.create_dir_all(path.parent().unwrap()))?;
         let temp: Arc<RwLock<TempCounterMap>> = Default::default();
-        let (actor, tx) = Actor::new(&path, options.clone(), temp.clone(), rt.clone())?;
+        let (actor, tx) = Actor::new(&path, options.clone(), temp.clone(), rt.clone(), fs.clone())?;
         let handle = std::thread::Builder::new()
             .name("redb-actor".to_string())
             .spawn(move || {
@@ -811,16 +930,17 @@ impl StoreInner {
             temp,
             handle: Some(handle),
             path_options: Arc::new(options.path),
+            fs,
         })
     }
 
-    pub async fn get(&self, hash: Hash) -> OuterResult<Option<BaoFileHandle>> {
+    pub async fn get(&self, hash: Hash) -> OuterResult<Option<BaoFileHandle<T::File>>> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(ActorMessage::Get { hash, tx }).await?;
         Ok(rx.await??)
     }
 
-    async fn get_or_create(&self, hash: Hash) -> OuterResult<BaoFileHandle> {
+    async fn get_or_create(&self, hash: Hash) -> OuterResult<BaoFileHandle<T::File>> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(ActorMessage::GetOrCreate { hash, tx }).await?;
         Ok(rx.await??)
@@ -949,7 +1069,7 @@ impl StoreInner {
         Ok(rx.recv()??)
     }
 
-    async fn complete(&self, entry: Entry) -> OuterResult<()> {
+    async fn complete(&self, entry: Entry<T::File>) -> OuterResult<()> {
         self.tx
             .send(ActorMessage::OnComplete { handle: entry })
             .await?;
@@ -977,12 +1097,15 @@ impl StoreInner {
             .into());
         }
         let parent = target.parent().ok_or_else(|| {
-            OuterError::from(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "target path has no parent directory",
-            ))
+            OuterError::Inner(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "target path has no parent directory",
+                )
+                .into(),
+            )
         })?;
-        std::fs::create_dir_all(parent)?;
+        self.fs.create_dir_all(parent).await?;
         let temp_tag = self.temp.temp_tag(HashAndFormat::raw(hash));
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -1069,11 +1192,11 @@ impl StoreInner {
         let file = match mode {
             ImportMode::TryReference => ImportSource::External(path),
             ImportMode::Copy => {
-                if std::fs::metadata(&path)?.len() < 16 * 1024 {
+                if block_for(self.fs.size(&path))? < 16 * 1024 {
                     // we don't know if the data will be inlined since we don't
                     // have the inline options here. But still for such a small file
                     // it does not seem worth it do to the temp file ceremony.
-                    let data = std::fs::read(&path)?;
+                    let data = block_for(self.fs.read(&path))?;
                     ImportSource::Memory(data.into())
                 } else {
                     let temp_path = self.temp_file_name();
@@ -1108,7 +1231,7 @@ impl StoreInner {
         id: u64,
         progress: impl ProgressSender<Msg = ImportProgress> + IdGenerator,
     ) -> OuterResult<(TempTag, u64)> {
-        let data_size = file.len()?;
+        let data_size = block_for(file.len(&self.fs))?;
         tracing::debug!("finalize_import_sync {:?} {}", file, data_size);
         progress.blocking_send(ImportProgress::Size {
             id,
@@ -1119,7 +1242,7 @@ impl StoreInner {
             MemOrFile::File(path) => {
                 let span = trace_span!("outboard.compute", path = %path.display());
                 let _guard = span.enter();
-                let file = std::fs::File::open(path)?;
+                let file = block_for(self.fs.open(path))?;
                 compute_outboard(file, data_size, move |offset| {
                     Ok(progress2.try_send(ImportProgress::OutboardProgress { id, offset })?)
                 })?
@@ -1161,7 +1284,7 @@ impl StoreInner {
     }
 }
 
-impl Drop for StoreInner {
+impl<T: Persistence> Drop for StoreInner<T> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             self.tx
@@ -1172,23 +1295,24 @@ impl Drop for StoreInner {
     }
 }
 
-struct ActorState {
-    handles: BTreeMap<Hash, BaoFileHandleWeak>,
+struct ActorState<T: Persistence> {
+    handles: BTreeMap<Hash, BaoFileHandleWeak<T::File>>,
     protected: BTreeSet<Hash>,
     temp: Arc<RwLock<TempCounterMap>>,
-    msgs_rx: async_channel::Receiver<ActorMessage>,
+    msgs_rx: async_channel::Receiver<ActorMessage<T::File>>,
     create_options: Arc<BaoFileConfig>,
     options: Options,
     rt: tokio::runtime::Handle,
+    fs: Arc<T>,
 }
 
 /// The actor for the redb store.
 ///
 /// It is split into the database and the rest of the state to allow for split
 /// borrows in the message handlers.
-struct Actor {
+struct Actor<T: Persistence = FileSystemPersistence> {
     db: redb::Database,
-    state: ActorState,
+    state: ActorState<T>,
 }
 
 /// Error type for message handler functions of the redb actor.
@@ -1249,8 +1373,8 @@ pub(crate) enum OuterError {
     JoinTask(#[from] tokio::task::JoinError),
 }
 
-impl From<async_channel::SendError<ActorMessage>> for OuterError {
-    fn from(_e: async_channel::SendError<ActorMessage>) -> Self {
+impl<T> From<async_channel::SendError<ActorMessage<T>>> for OuterError {
+    fn from(_e: async_channel::SendError<ActorMessage<T>>) -> Self {
         OuterError::Send
     }
 }
@@ -1275,16 +1399,26 @@ impl From<OuterError> for io::Error {
     }
 }
 
-impl super::Map for Store {
-    type Entry = Entry;
+impl<T> super::Map for Store<T>
+where
+    T: Persistence,
+    OuterError: From<T::Err>,
+    io::Error: From<T::Err>,
+{
+    type Entry = Entry<T::File>;
 
     async fn get(&self, hash: &Hash) -> io::Result<Option<Self::Entry>> {
         Ok(self.0.get(*hash).await?)
     }
 }
 
-impl super::MapMut for Store {
-    type EntryMut = Entry;
+impl<T> super::MapMut for Store<T>
+where
+    T: Persistence,
+    OuterError: From<T::Err>,
+    io::Error: From<T::Err>,
+{
+    type EntryMut = Entry<T::File>;
 
     async fn get_or_create(&self, hash: Hash, _size: u64) -> io::Result<Self::EntryMut> {
         Ok(self.0.get_or_create(hash).await?)
@@ -1542,13 +1676,17 @@ pub(super) async fn gc_sweep_task(
     Ok(())
 }
 
-impl Actor {
-    fn new(
+impl<T> Actor<T>
+where
+    T: Persistence,
+{
+    fn new_with_backend(
         path: &Path,
         options: Options,
         temp: Arc<RwLock<TempCounterMap>>,
         rt: tokio::runtime::Handle,
-    ) -> ActorResult<(Self, async_channel::Sender<ActorMessage>)> {
+        fs: T,
+    ) -> ActorResult<(Self, async_channel::Sender<ActorMessage<T::File>>)> {
         let db = match redb::Database::create(path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
@@ -1591,10 +1729,26 @@ impl Actor {
                     options,
                     create_options: Arc::new(create_options),
                     rt,
+                    fs: Arc::new(fs),
                 },
             },
             tx,
         ))
+    }
+}
+
+impl<T> Actor<T>
+where
+    T: Persistence,
+{
+    fn new(
+        path: &Path,
+        options: Options,
+        temp: Arc<RwLock<TempCounterMap>>,
+        rt: tokio::runtime::Handle,
+        fs: T,
+    ) -> ActorResult<(Self, async_channel::Sender<ActorMessage<T::File>>)> {
+        Self::new_with_backend(path, options, temp, rt, fs)
     }
 
     async fn run_batched(mut self) -> ActorResult<()> {
@@ -1624,7 +1778,7 @@ impl Actor {
                         tokio::select! {
                             msg = msgs.recv() => {
                                 if let Some(msg) = msg {
-                                    if let Err(msg) = self.state.handle_readonly(&tables, msg)? {
+                                    if let Err(msg) = self.state.handle_readonly(&tables, msg).await? {
                                         msgs.push_back(msg).expect("just recv'd");
                                         break;
                                     }
@@ -1653,7 +1807,7 @@ impl Actor {
                         tokio::select! {
                             msg = msgs.recv() => {
                                 if let Some(msg) = msg {
-                                    if let Err(msg) = self.state.handle_readwrite(&mut tables, msg)? {
+                                    if let Err(msg) = self.state.handle_readwrite(&mut tables, msg).await? {
                                         msgs.push_back(msg).expect("just recv'd");
                                         break;
                                     }
@@ -1679,7 +1833,10 @@ impl Actor {
     }
 }
 
-impl ActorState {
+impl<T> ActorState<T>
+where
+    T: Persistence,
+{
     fn entry_status(
         &mut self,
         tables: &impl ReadableTables,
@@ -1695,11 +1852,11 @@ impl ActorState {
         Ok(status)
     }
 
-    fn get(
+    async fn get(
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
-    ) -> ActorResult<Option<BaoFileHandle>> {
+    ) -> ActorResult<Option<BaoFileHandle<T::File>>> {
         if let Some(handle) = self.handles.get(&hash).and_then(|weak| weak.upgrade()) {
             return Ok(Some(handle));
         }
@@ -1715,14 +1872,17 @@ impl ActorState {
                 data_location,
                 outboard_location,
             } => {
-                let data = load_data(tables, &self.options.path, data_location, &hash)?;
+                let data =
+                    load_data(tables, &self.options.path, data_location, &hash, &*self.fs).await?;
                 let outboard = load_outboard(
                     tables,
                     &self.options.path,
                     outboard_location,
                     data.size(),
                     &hash,
-                )?;
+                    &*self.fs,
+                )
+                .await?;
                 BaoFileHandle::new_complete(config, hash, data, outboard)
             }
             EntryState::Partial { .. } => BaoFileHandle::incomplete_file(config, hash)?,
@@ -1846,7 +2006,11 @@ impl ActorState {
         Ok(())
     }
 
-    fn import(&mut self, tables: &mut Tables, cmd: Import) -> ActorResult<(TempTag, u64)> {
+    async fn import(
+        &mut self,
+        tables: &mut Tables<'_>,
+        cmd: Import,
+    ) -> ActorResult<(TempTag, u64)> {
         let Import {
             content_id,
             source: file,
@@ -1870,7 +2034,12 @@ impl ActorState {
                         "reading external data to inline it: {}",
                         external_path.display()
                     );
-                    let data = Bytes::from(std::fs::read(&external_path)?);
+                    let data = Bytes::from(
+                        self.fs
+                            .read(&external_path)
+                            .await
+                            .map_err(|e| ActorError::Io(e.into()))?,
+                    );
                     DataLocation::Inline(data)
                 } else {
                     DataLocation::External(vec![external_path], data_size)
@@ -1940,11 +2109,11 @@ impl ActorState {
         Ok((tag, data_size))
     }
 
-    fn get_or_create(
+    async fn get_or_create(
         &mut self,
         tables: &impl ReadableTables,
         hash: Hash,
-    ) -> ActorResult<BaoFileHandle> {
+    ) -> ActorResult<BaoFileHandle<T::File>> {
         self.protected.insert(hash);
         if let Some(handle) = self.handles.get(&hash).and_then(|x| x.upgrade()) {
             return Ok(handle);
@@ -1958,14 +2127,18 @@ impl ActorState {
                     outboard_location,
                     ..
                 } => {
-                    let data = load_data(tables, &self.options.path, data_location, &hash)?;
+                    let data =
+                        load_data(tables, &self.options.path, data_location, &hash, &*self.fs)
+                            .await?;
                     let outboard = load_outboard(
                         tables,
                         &self.options.path,
                         outboard_location,
                         data.size(),
                         &hash,
-                    )?;
+                        &*self.fs,
+                    )
+                    .await?;
                     tracing::debug!("creating complete entry for {}", hash.to_hex());
                     BaoFileHandle::new_complete(self.create_options.clone(), hash, data, outboard)
                 }
@@ -2123,7 +2296,8 @@ impl ActorState {
                                 // inline
                                 if size <= self.options.inline.max_data_inlined {
                                     let path = self.options.path.owned_data_path(&hash);
-                                    let data = std::fs::read(&path)?;
+                                    let data = block_for(self.fs.read(&path))
+                                        .map_err(|e| ActorError::Io(e.into()))?;
                                     tables.delete_after_commit.insert(hash, [BaoFilePart::Data]);
                                     tables.inline_data.insert(hash, data.as_slice())?;
                                     (DataLocation::Inline(()), size, true)
@@ -2158,7 +2332,8 @@ impl ActorState {
                                 if outboard_size <= self.options.inline.max_outboard_inlined =>
                             {
                                 let path = self.options.path.owned_outboard_path(&hash);
-                                let outboard = std::fs::read(&path)?;
+                                let outboard = block_for(self.fs.read(&path))
+                                    .map_err(|e| ActorError::Io(e.into()))?;
                                 tables
                                     .delete_after_commit
                                     .insert(hash, [BaoFilePart::Outboard]);
@@ -2254,36 +2429,47 @@ impl ActorState {
         Ok(())
     }
 
-    fn on_complete(&mut self, tables: &mut Tables, entry: BaoFileHandle) -> ActorResult<()> {
+    async fn on_complete(
+        &mut self,
+        tables: &mut Tables<'_>,
+        entry: BaoFileHandle<T::File>,
+    ) -> ActorResult<()> {
         let hash = entry.hash();
         let mut info = None;
         tracing::trace!("on_complete({})", hash.to_hex());
-        entry.transform(|state| {
-            tracing::trace!("on_complete transform {:?}", state);
-            let entry = match complete_storage(
-                state,
-                &hash,
-                &self.options.path,
-                &self.options.inline,
-                tables.delete_after_commit,
-            )? {
-                Ok(entry) => {
-                    // store the info so we can insert it into the db later
-                    info = Some((
-                        entry.data_size(),
-                        entry.data.mem().cloned(),
-                        entry.outboard_size(),
-                        entry.outboard.mem().cloned(),
-                    ));
-                    entry
-                }
-                Err(entry) => {
-                    // the entry was already complete, nothing to do
-                    entry
-                }
-            };
-            Ok(BaoFileStorage::Complete(entry))
-        })?;
+        entry
+            // TODO: this errors on edition 2024, it should be changed to
+            // an async closure as they are now stable
+            .transform(|state| async {
+                tracing::trace!("on_complete transform {:?}", state);
+                let entry = match complete_storage(
+                    state,
+                    &hash,
+                    &self.options.path,
+                    &self.options.inline,
+                    tables.delete_after_commit,
+                    self.fs.clone(),
+                )
+                .await?
+                {
+                    Ok(entry) => {
+                        // store the info so we can insert it into the db later
+                        info = Some((
+                            entry.data_size(),
+                            entry.data.mem().cloned(),
+                            entry.outboard_size(),
+                            entry.outboard.mem().cloned(),
+                        ));
+                        entry
+                    }
+                    Err(entry) => {
+                        // the entry was already complete, nothing to do
+                        entry
+                    }
+                };
+                Ok(BaoFileStorage::Complete(entry))
+            })
+            .await?;
         if let Some((data_size, data, outboard_size, outboard)) = info {
             let data_location = if data.is_some() {
                 DataLocation::Inline(())
@@ -2324,7 +2510,11 @@ impl ActorState {
         Ok(())
     }
 
-    fn handle_toplevel(&mut self, db: &redb::Database, msg: ActorMessage) -> ActorResult<()> {
+    fn handle_toplevel(
+        &mut self,
+        db: &redb::Database,
+        msg: ActorMessage<T::File>,
+    ) -> ActorResult<()> {
         match msg {
             ActorMessage::UpdateInlineOptions {
                 inline_options,
@@ -2355,18 +2545,18 @@ impl ActorState {
         Ok(())
     }
 
-    fn handle_readonly(
+    async fn handle_readonly(
         &mut self,
         tables: &impl ReadableTables,
-        msg: ActorMessage,
-    ) -> ActorResult<std::result::Result<(), ActorMessage>> {
+        msg: ActorMessage<T::File>,
+    ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
             ActorMessage::Get { hash, tx } => {
-                let res = self.get(tables, hash);
+                let res = self.get(tables, hash).await;
                 tx.send(res).ok();
             }
             ActorMessage::GetOrCreate { hash, tx } => {
-                let res = self.get_or_create(tables, hash);
+                let res = self.get_or_create(tables, hash).await;
                 tx.send(res).ok();
             }
             ActorMessage::EntryStatus { hash, tx } => {
@@ -2402,14 +2592,14 @@ impl ActorState {
         Ok(Ok(()))
     }
 
-    fn handle_readwrite(
+    async fn handle_readwrite(
         &mut self,
-        tables: &mut Tables,
-        msg: ActorMessage,
-    ) -> ActorResult<std::result::Result<(), ActorMessage>> {
+        tables: &mut Tables<'_>,
+        msg: ActorMessage<T::File>,
+    ) -> ActorResult<std::result::Result<(), ActorMessage<T::File>>> {
         match msg {
             ActorMessage::Import { cmd, tx } => {
-                let res = self.import(tables, cmd);
+                let res = self.import(tables, cmd).await;
                 tx.send(res).ok();
             }
             ActorMessage::SetTag { tag, value, tx } => {
@@ -2437,7 +2627,7 @@ impl ActorState {
                 tx.send(res).ok();
             }
             ActorMessage::OnComplete { handle } => {
-                let res = self.on_complete(tables, handle);
+                let res = self.on_complete(tables, handle).await;
                 res.ok();
             }
             ActorMessage::Export { cmd, tx } => {
@@ -2457,7 +2647,7 @@ impl ActorState {
             }
             msg => {
                 // try to handle it as readonly
-                if let Err(msg) = self.handle_readonly(tables, msg)? {
+                if let Err(msg) = self.handle_readonly(tables, msg).await? {
                     return Ok(Err(msg));
                 }
             }
@@ -2510,12 +2700,31 @@ fn dump(tables: &impl ReadableTables) -> ActorResult<()> {
     Ok(())
 }
 
-fn load_data(
+fn block_for<F>(fut: F) -> F::Output
+where
+    F: Future + Send + 'static,
+    F::Output: Send,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let res = fut.await;
+        tx.send(res)
+            .map_err(|_| format!("Error sending {}", std::any::type_name::<F::Output>()))
+            .expect("rx cannot be dropped yet");
+    });
+    rx.blocking_recv().expect("The sender cannot be dropped")
+}
+
+async fn load_data<T>(
     tables: &impl ReadableTables,
     options: &PathOptions,
     location: DataLocation<(), u64>,
     hash: &Hash,
-) -> ActorResult<MemOrFile<Bytes, (std::fs::File, u64)>> {
+    fs: &T,
+) -> ActorResult<MemOrFile<Bytes, FileAndSize<T::File>>>
+where
+    T: Persistence,
+{
     Ok(match location {
         DataLocation::Inline(()) => {
             let Some(data) = tables.inline_data().get(hash)? else {
@@ -2528,14 +2737,17 @@ fn load_data(
         }
         DataLocation::Owned(data_size) => {
             let path = options.owned_data_path(hash);
-            let Ok(file) = std::fs::File::open(&path) else {
+            let Ok(file) = fs.open(&path).await else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {}", path.display()),
                 )
                 .into());
             };
-            MemOrFile::File((file, data_size))
+            MemOrFile::File(FileAndSize {
+                file,
+                size: data_size,
+            })
         }
         DataLocation::External(paths, data_size) => {
             if paths.is_empty() {
@@ -2544,25 +2756,29 @@ fn load_data(
                 ));
             }
             let path = &paths[0];
-            let Ok(file) = std::fs::File::open(path) else {
+            let Ok(file) = fs.open(path).await else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("external file not found: {}", path.display()),
                 )
                 .into());
             };
-            MemOrFile::File((file, data_size))
+            MemOrFile::File(FileAndSize {
+                file,
+                size: data_size,
+            })
         }
     })
 }
 
-fn load_outboard(
+async fn load_outboard<T: Persistence>(
     tables: &impl ReadableTables,
     options: &PathOptions,
     location: OutboardLocation,
     size: u64,
     hash: &Hash,
-) -> ActorResult<MemOrFile<Bytes, (std::fs::File, u64)>> {
+    fs: &T,
+) -> ActorResult<MemOrFile<Bytes, FileAndSize<T::File>>> {
     Ok(match location {
         OutboardLocation::NotNeeded => MemOrFile::Mem(Bytes::new()),
         OutboardLocation::Inline(_) => {
@@ -2577,26 +2793,33 @@ fn load_outboard(
         OutboardLocation::Owned => {
             let outboard_size = raw_outboard_size(size);
             let path = options.owned_outboard_path(hash);
-            let Ok(file) = std::fs::File::open(&path) else {
+            let Ok(file) = fs.open(&path).await else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("file not found: {} size={}", path.display(), outboard_size),
                 )
                 .into());
             };
-            MemOrFile::File((file, outboard_size))
+            MemOrFile::File(FileAndSize {
+                file,
+                size: outboard_size,
+            })
         }
     })
 }
 
 /// Take a possibly incomplete storage and turn it into complete
-fn complete_storage(
-    storage: BaoFileStorage,
+async fn complete_storage<T>(
+    storage: BaoFileStorage<T::File>,
     hash: &Hash,
     path_options: &PathOptions,
     inline_options: &InlineOptions,
     delete_after_commit: &mut DeleteSet,
-) -> ActorResult<std::result::Result<CompleteStorage, CompleteStorage>> {
+    fs: Arc<T>,
+) -> ActorResult<std::result::Result<CompleteStorage<T::File>, CompleteStorage<T::File>>>
+where
+    T: Persistence,
+{
     let (data, outboard, _sizes) = match storage {
         BaoFileStorage::Complete(c) => return Ok(Err(c)),
         BaoFileStorage::IncompleteMem(storage) => {
@@ -2635,13 +2858,33 @@ fn complete_storage(
     } else {
         // protect the data from previous deletions
         delete_after_commit.remove(*hash, [BaoFilePart::Data]);
+        let fs_2 = fs.clone();
         match data {
             MemOrFile::Mem(data) => {
                 let path = path_options.owned_data_path(hash);
                 let file = overwrite_and_sync(&path, &data)?;
-                MemOrFile::File((file, data_size))
+                MemOrFile::File(
+                    block_for(
+                        FileAndSize {
+                            file,
+                            size: data_size,
+                        }
+                        .map_async(move |f| fs_2.convert_std_file(f)),
+                    )
+                    .transpose()
+                    .map_err(|e| ActorError::Io(e.into()))?,
+                )
             }
-            MemOrFile::File(data) => MemOrFile::File((data, data_size)),
+            MemOrFile::File(data) => MemOrFile::File(
+                FileAndSize {
+                    file: data,
+                    size: data_size,
+                }
+                .map_async(move |f| fs_2.convert_std_file(f))
+                .await
+                .transpose()
+                .map_err(|e| ActorError::Io(e.into()))?,
+            ),
         }
     };
     // inline outboard if needed, or write to file if needed
@@ -2666,9 +2909,29 @@ fn complete_storage(
             MemOrFile::Mem(outboard) => {
                 let path = path_options.owned_outboard_path(hash);
                 let file = overwrite_and_sync(&path, &outboard)?;
-                MemOrFile::File((file, outboard_size))
+                MemOrFile::File(
+                    block_for(
+                        FileAndSize {
+                            file,
+                            size: outboard_size,
+                        }
+                        .map_async(move |f| fs.convert_std_file(f)),
+                    )
+                    .transpose()
+                    .map_err(|e| ActorError::Io(e.into()))?,
+                )
             }
-            MemOrFile::File(outboard) => MemOrFile::File((outboard, outboard_size)),
+            MemOrFile::File(outboard) => MemOrFile::File(
+                block_for(
+                    FileAndSize {
+                        file: outboard,
+                        size: outboard_size,
+                    }
+                    .map_async(|f| fs.convert_std_file(f)),
+                )
+                .transpose()
+                .map_err(|e| ActorError::Io(e.into()))?,
+            ),
         }
     };
     // mark sizes for deletion after commit in any case - a complete entry

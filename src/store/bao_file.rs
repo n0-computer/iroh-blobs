@@ -14,7 +14,7 @@ use std::{
     io,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    sync::{Arc, RwLock, Weak},
+    sync::{Arc, Weak},
 };
 
 use bao_tree::{
@@ -32,7 +32,7 @@ use iroh_io::AsyncSliceReader;
 use super::mutable_mem_storage::{MutableMemStorage, SizeInfo};
 use crate::{
     store::BaoBatchWriter,
-    util::{get_limited_slice, MemOrFile, SparseMemFile},
+    util::{callback_lock::CallbackLock, get_limited_slice, FileAndSize, MemOrFile, SparseMemFile},
     Hash, IROH_BLOCK_SIZE,
 };
 
@@ -81,22 +81,36 @@ struct DataPaths {
 ///
 /// For the memory variant, it does reading in a zero copy way, since storage
 /// is already a `Bytes`.
-#[derive(Default, derive_more::Debug)]
-pub struct CompleteStorage {
+#[derive(derive_more::Debug)]
+pub struct CompleteStorage<T> {
     /// data part, which can be in memory or on disk.
-    #[debug("{:?}", data.as_ref().map_mem(|x| x.len()))]
-    pub data: MemOrFile<Bytes, (File, u64)>,
+    #[debug("{:?}", data.as_ref().map_mem(|x| x.len()).map_file(|f| f.size))]
+    pub data: MemOrFile<Bytes, FileAndSize<T>>,
     /// outboard part, which can be in memory or on disk.
-    #[debug("{:?}", outboard.as_ref().map_mem(|x| x.len()))]
-    pub outboard: MemOrFile<Bytes, (File, u64)>,
+    #[debug("{:?}", outboard.as_ref().map_mem(|x| x.len()).map_file(|f| f.size))]
+    pub outboard: MemOrFile<Bytes, FileAndSize<T>>,
 }
 
-impl CompleteStorage {
+impl<T> Default for CompleteStorage<T> {
+    fn default() -> Self {
+        Self {
+            data: Default::default(),
+            outboard: Default::default(),
+        }
+    }
+}
+
+impl<T> CompleteStorage<T>
+where
+    T: bao_tree::io::sync::ReadAt,
+{
     /// Read from the data file at the given offset, until end of file or max bytes.
     pub fn read_data_at(&self, offset: u64, len: usize) -> Bytes {
         match &self.data {
             MemOrFile::Mem(mem) => get_limited_slice(mem, offset, len),
-            MemOrFile::File((file, _size)) => read_to_end(file, offset, len).unwrap(),
+            MemOrFile::File(FileAndSize { file, size: _ }) => {
+                read_to_end(file, offset, len).unwrap()
+            }
         }
     }
 
@@ -104,7 +118,9 @@ impl CompleteStorage {
     pub fn read_outboard_at(&self, offset: u64, len: usize) -> Bytes {
         match &self.outboard {
             MemOrFile::Mem(mem) => get_limited_slice(mem, offset, len),
-            MemOrFile::File((file, _size)) => read_to_end(file, offset, len).unwrap(),
+            MemOrFile::File(FileAndSize { file, size: _ }) => {
+                read_to_end(file, offset, len).unwrap()
+            }
         }
     }
 
@@ -112,7 +128,7 @@ impl CompleteStorage {
     pub fn data_size(&self) -> u64 {
         match &self.data {
             MemOrFile::Mem(mem) => mem.len() as u64,
-            MemOrFile::File((_file, size)) => *size,
+            MemOrFile::File(FileAndSize { file: _, size }) => *size,
         }
     }
 
@@ -120,7 +136,7 @@ impl CompleteStorage {
     pub fn outboard_size(&self) -> u64 {
         match &self.outboard {
             MemOrFile::Mem(mem) => mem.len() as u64,
-            MemOrFile::File((_file, size)) => *size,
+            MemOrFile::File(FileAndSize { file: _, size }) => *size,
         }
     }
 }
@@ -244,7 +260,7 @@ impl FileStorage {
 
 /// The storage for a bao file. This can be either in memory or on disk.
 #[derive(Debug)]
-pub(crate) enum BaoFileStorage {
+pub(crate) enum BaoFileStorage<T> {
     /// The entry is incomplete and in memory.
     ///
     /// Since it is incomplete, it must be writeable.
@@ -261,16 +277,16 @@ pub(crate) enum BaoFileStorage {
     /// (memory or file).
     ///
     /// Writing to this is a no-op, since it is already complete.
-    Complete(CompleteStorage),
+    Complete(CompleteStorage<T>),
 }
 
-impl Default for BaoFileStorage {
+impl<T> Default for BaoFileStorage<T> {
     fn default() -> Self {
         BaoFileStorage::Complete(Default::default())
     }
 }
 
-impl BaoFileStorage {
+impl<T> BaoFileStorage<T> {
     /// Take the storage out, leaving an empty storage in its place.
     ///
     /// Be careful to put something back in its place, or you will lose data.
@@ -310,11 +326,11 @@ impl BaoFileStorage {
 
 /// A weak reference to a bao file handle.
 #[derive(Debug, Clone)]
-pub struct BaoFileHandleWeak(Weak<BaoFileHandleInner>);
+pub struct BaoFileHandleWeak<T>(Weak<BaoFileHandleInner<T>>);
 
-impl BaoFileHandleWeak {
+impl<T> BaoFileHandleWeak<T> {
     /// Upgrade to a strong reference if possible.
-    pub fn upgrade(&self) -> Option<BaoFileHandle> {
+    pub fn upgrade(&self) -> Option<BaoFileHandle<T>> {
         self.0.upgrade().map(BaoFileHandle)
     }
 
@@ -324,17 +340,36 @@ impl BaoFileHandleWeak {
     }
 }
 
+/// a type alias which represents the callback which is executed after
+/// the write guard is dropped
+type AfterLockWriteCb<T> = Box<dyn Fn(&BaoFileStorage<T>) + Send + Sync + 'static>;
+
 /// The inner part of a bao file handle.
 #[derive(Debug)]
-pub struct BaoFileHandleInner {
-    pub(crate) storage: RwLock<BaoFileStorage>,
+pub struct BaoFileHandleInner<T> {
+    pub(crate) storage: CallbackLock<BaoFileStorage<T>, AfterLockWriteCb<T>>,
     config: Arc<BaoFileConfig>,
     hash: Hash,
+    rx: tokio::sync::watch::Receiver<StorageMeta>,
 }
 
 /// A cheaply cloneable handle to a bao file, including the hash and the configuration.
-#[derive(Debug, Clone, derive_more::Deref)]
-pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
+#[derive(Debug)]
+pub struct BaoFileHandle<T>(Arc<BaoFileHandleInner<T>>);
+
+impl<T> Deref for BaoFileHandle<T> {
+    type Target = Arc<BaoFileHandleInner<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> Clone for BaoFileHandle<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 pub(crate) type CreateCb = Arc<dyn Fn(&Hash) -> io::Result<()> + Send + Sync>;
 
@@ -375,13 +410,18 @@ impl BaoFileConfig {
 
 /// A reader for a bao file, reading just the data.
 #[derive(Debug)]
-pub struct DataReader(Option<BaoFileHandle>);
+pub struct DataReader<T>(Option<BaoFileHandle<T>>);
 
-async fn with_storage<T, P, F>(opt: &mut Option<BaoFileHandle>, no_io: P, f: F) -> io::Result<T>
+async fn with_storage<T, P, F, H>(
+    opt: &mut Option<BaoFileHandle<H>>,
+    no_io: P,
+    f: F,
+) -> io::Result<T>
 where
-    P: Fn(&BaoFileStorage) -> bool + Send + 'static,
-    F: FnOnce(&BaoFileStorage) -> io::Result<T> + Send + 'static,
+    P: Fn(&BaoFileStorage<H>) -> bool + Send + 'static,
+    F: FnOnce(&BaoFileStorage<H>) -> io::Result<T> + Send + 'static,
     T: Send + 'static,
+    H: Send + Sync + 'static,
 {
     let handle = opt
         .take()
@@ -397,20 +437,17 @@ where
             return res;
         }
     };
-    // otherwise, we have to spawn a task.
-    let (handle, res) = tokio::task::spawn_blocking(move || {
-        let storage = handle.storage.read().unwrap();
-        let res = f(storage.deref());
-        drop(storage);
-        (handle, res)
-    })
-    .await
-    .expect("spawn_blocking failed");
+    let storage_guard = handle.storage.read().await;
+    let res = f(storage_guard.deref());
+    drop(storage_guard);
     *opt = Some(handle);
     res
 }
 
-impl AsyncSliceReader for DataReader {
+impl<T> AsyncSliceReader for DataReader<T>
+where
+    T: Send + Sync + bao_tree::io::sync::ReadAt + 'static,
+{
     async fn read_at(&mut self, offset: u64, len: usize) -> io::Result<Bytes> {
         with_storage(
             &mut self.0,
@@ -440,9 +477,12 @@ impl AsyncSliceReader for DataReader {
 
 /// A reader for the outboard part of a bao file.
 #[derive(Debug)]
-pub struct OutboardReader(Option<BaoFileHandle>);
+pub struct OutboardReader<T>(Option<BaoFileHandle<T>>);
 
-impl AsyncSliceReader for OutboardReader {
+impl<T> AsyncSliceReader for OutboardReader<T>
+where
+    T: Send + Sync + bao_tree::io::sync::ReadAt + 'static,
+{
     async fn read_at(&mut self, offset: u64, len: usize) -> io::Result<Bytes> {
         with_storage(
             &mut self.0,
@@ -476,18 +516,55 @@ enum HandleChange {
     // later: size verified
 }
 
-impl BaoFileHandle {
+/// struct which stores simple metadata about the [BaoFileHandle] in a way that is
+/// accessible in synchronous function calls
+#[derive(Debug)]
+struct StorageMeta {
+    complete: bool,
+    size: Result<u64, io::Error>,
+}
+
+impl StorageMeta {
+    fn new<T: bao_tree::io::sync::ReadAt>(storage: &BaoFileStorage<T>) -> Self {
+        let size = match storage {
+            BaoFileStorage::Complete(mem) => Ok(mem.data_size()),
+            BaoFileStorage::IncompleteMem(mem) => Ok(mem.current_size()),
+            BaoFileStorage::IncompleteFile(file) => file.current_size(),
+        };
+        StorageMeta {
+            complete: matches!(storage, BaoFileStorage::Complete(_)),
+            size,
+        }
+    }
+}
+
+impl<T> BaoFileHandle<T>
+where
+    T: bao_tree::io::sync::ReadAt,
+{
+    /// internal helper function to initialize a new instance of self
+    fn new_inner(storage: BaoFileStorage<T>, config: Arc<BaoFileConfig>, hash: Hash) -> Self {
+        let (tx, rx) = tokio::sync::watch::channel(StorageMeta::new(&storage));
+        Self(Arc::new(BaoFileHandleInner {
+            storage: CallbackLock::new(
+                storage,
+                Box::new(move |storage: &BaoFileStorage<T>| {
+                    let _ = tx.send(StorageMeta::new(storage));
+                }),
+            ),
+            config,
+            hash,
+            rx,
+        }))
+    }
+
     /// Create a new bao file handle.
     ///
     /// This will create a new file handle with an empty memory storage.
     /// Since there are very likely to be many of these, we use an arc rwlock
     pub fn incomplete_mem(config: Arc<BaoFileConfig>, hash: Hash) -> Self {
         let storage = BaoFileStorage::incomplete_mem();
-        Self(Arc::new(BaoFileHandleInner {
-            storage: RwLock::new(storage),
-            config,
-            hash,
-        }))
+        Self::new_inner(storage, config, hash)
     }
 
     /// Create a new bao file handle with a partial file.
@@ -498,54 +575,43 @@ impl BaoFileHandle {
             outboard: create_read_write(&paths.outboard)?,
             sizes: create_read_write(&paths.sizes)?,
         });
-        Ok(Self(Arc::new(BaoFileHandleInner {
-            storage: RwLock::new(storage),
-            config,
-            hash,
-        })))
+        Ok(Self::new_inner(storage, config, hash))
     }
 
     /// Create a new complete bao file handle.
     pub fn new_complete(
         config: Arc<BaoFileConfig>,
         hash: Hash,
-        data: MemOrFile<Bytes, (File, u64)>,
-        outboard: MemOrFile<Bytes, (File, u64)>,
+        data: MemOrFile<Bytes, FileAndSize<T>>,
+        outboard: MemOrFile<Bytes, FileAndSize<T>>,
     ) -> Self {
         let storage = BaoFileStorage::Complete(CompleteStorage { data, outboard });
-        Self(Arc::new(BaoFileHandleInner {
-            storage: RwLock::new(storage),
-            config,
-            hash,
-        }))
+        Self::new_inner(storage, config, hash)
     }
 
     /// Transform the storage in place. If the transform fails, the storage will
     /// be an immutable empty storage.
     #[cfg(feature = "fs-store")]
-    pub(crate) fn transform(
+    pub(crate) async fn transform(
         &self,
-        f: impl FnOnce(BaoFileStorage) -> io::Result<BaoFileStorage>,
+        f: impl std::ops::AsyncFnOnce(BaoFileStorage<T>) -> io::Result<BaoFileStorage<T>>,
     ) -> io::Result<()> {
-        let mut lock = self.storage.write().unwrap();
+        let mut lock = self.storage.write().await;
         let storage = lock.take();
-        *lock = f(storage)?;
+        *lock = f(storage).await?;
         Ok(())
     }
 
     /// True if the file is complete.
     pub fn is_complete(&self) -> bool {
-        matches!(
-            self.storage.read().unwrap().deref(),
-            BaoFileStorage::Complete(_)
-        )
+        self.rx.borrow().deref().complete
     }
 
     /// An AsyncSliceReader for the data file.
     ///
     /// Caution: this is a reader for the unvalidated data file. Reading this
     /// can produce data that does not match the hash.
-    pub fn data_reader(&self) -> DataReader {
+    pub fn data_reader(&self) -> DataReader<T> {
         DataReader(Some(self.clone()))
     }
 
@@ -553,23 +619,30 @@ impl BaoFileHandle {
     ///
     /// The outboard file is used to validate the data file. It is not guaranteed
     /// to be complete.
-    pub fn outboard_reader(&self) -> OutboardReader {
+    pub fn outboard_reader(&self) -> OutboardReader<T> {
         OutboardReader(Some(self.clone()))
     }
 
     /// The most precise known total size of the data file.
-    pub fn current_size(&self) -> io::Result<u64> {
-        match self.storage.read().unwrap().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.data_size()),
-            BaoFileStorage::IncompleteMem(mem) => Ok(mem.current_size()),
-            BaoFileStorage::IncompleteFile(file) => file.current_size(),
-        }
+    pub fn current_size(&self) -> Result<u64, io::ErrorKind> {
+        self.rx
+            .borrow()
+            .size
+            .as_ref()
+            // NB: we return the io::ErrorKind here
+            // because io::Error is !Clone
+            .map_err(|e| e.kind())
+            .copied()
     }
 
     /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
+    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader<T>>> {
         let root = self.hash.into();
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let tree = BaoTree::new(
+            self.current_size()
+                .map_err(|kind| io::Error::new(kind, "an io error has occurred"))?,
+            IROH_BLOCK_SIZE,
+        );
         let outboard = self.outboard_reader();
         Ok(PreOrderOutboard {
             root,
@@ -584,13 +657,13 @@ impl BaoFileHandle {
     }
 
     /// Create a new writer from the handle.
-    pub fn writer(&self) -> BaoFileWriter {
+    pub fn writer(&self) -> BaoFileWriter<T> {
         BaoFileWriter(Some(self.clone()))
     }
 
     /// This is the synchronous impl for writing a batch.
-    fn write_batch(&self, size: u64, batch: &[BaoContentItem]) -> io::Result<HandleChange> {
-        let mut storage = self.storage.write().unwrap();
+    async fn write_batch(&self, size: u64, batch: &[BaoContentItem]) -> io::Result<HandleChange> {
+        let mut storage = self.storage.write().await;
         match storage.deref_mut() {
             BaoFileStorage::IncompleteMem(mem) => {
                 // check if we need to switch to file mode, otherwise write to memory
@@ -625,7 +698,7 @@ impl BaoFileHandle {
     }
 
     /// Downgrade to a weak reference.
-    pub fn downgrade(&self) -> BaoFileHandleWeak {
+    pub fn downgrade(&self) -> BaoFileHandleWeak<T> {
         BaoFileHandleWeak(Arc::downgrade(&self.0))
     }
 }
@@ -676,19 +749,17 @@ impl MutableMemStorage {
 /// It is a BaoFileHandle wrapped in an Option, so that we can take it out
 /// in the future.
 #[derive(Debug)]
-pub struct BaoFileWriter(Option<BaoFileHandle>);
+pub struct BaoFileWriter<T>(Option<BaoFileHandle<T>>);
 
-impl BaoBatchWriter for BaoFileWriter {
+impl<T> BaoBatchWriter for BaoFileWriter<T>
+where
+    T: Send + Sync + bao_tree::io::sync::ReadAt + 'static,
+{
     async fn write_batch(&mut self, size: u64, batch: Vec<BaoContentItem>) -> std::io::Result<()> {
         let Some(handle) = self.0.take() else {
             return Err(io::Error::new(io::ErrorKind::Other, "deferred batch busy"));
         };
-        let (handle, change) = tokio::task::spawn_blocking(move || {
-            let change = handle.write_batch(size, &batch);
-            (handle, change)
-        })
-        .await
-        .expect("spawn_blocking failed");
+        let change = handle.write_batch(size, &batch).await;
         match change? {
             HandleChange::None => {}
             HandleChange::MemToFile => {
@@ -705,12 +776,7 @@ impl BaoBatchWriter for BaoFileWriter {
         let Some(handle) = self.0.take() else {
             return Err(io::Error::new(io::ErrorKind::Other, "deferred batch busy"));
         };
-        let (handle, res) = tokio::task::spawn_blocking(move || {
-            let res = handle.storage.write().unwrap().sync_all();
-            (handle, res)
-        })
-        .await
-        .expect("spawn_blocking failed");
+        let res = handle.storage.write().await.sync_all();
         self.0 = Some(handle);
         res
     }
@@ -828,7 +894,11 @@ pub mod test_support {
         (outboard.root.into(), chunk_ranges, encoded)
     }
 
-    pub async fn validate(handle: &BaoFileHandle, original: &[u8], ranges: &[Range<u64>]) {
+    pub async fn validate(
+        handle: &BaoFileHandle<std::fs::File>,
+        original: &[u8],
+        ranges: &[Range<u64>],
+    ) {
         let mut r = handle.data_reader();
         for range in ranges {
             let start = range.start;

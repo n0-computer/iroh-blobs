@@ -1,4 +1,4 @@
-use std::{fs::File, io};
+use std::{fs::File, future::Future, io};
 
 use bao_tree::io::sync::{ReadAt, Size};
 use bytes::Bytes;
@@ -14,9 +14,54 @@ pub enum MemOrFile<M, F> {
     File(F),
 }
 
+/// A struct which represents a handle to some file which
+/// is _not_ in memory and its size
+#[derive(derive_more::Debug)]
+pub struct FileAndSize<T> {
+    /// the generic file type
+    pub file: T,
+    /// the size in bytes of the file
+    pub size: u64,
+}
+
+impl<T> FileAndSize<T> {
+    /// map the type of file asynchronously.
+    /// This is analogous to [Option::map]
+    pub fn map_async<U, F>(
+        self,
+        f: F,
+    ) -> impl Future<Output = FileAndSize<U::Output>> + use<U, F, T> + 'static
+    where
+        F: FnOnce(T) -> U + Send + 'static,
+        T: 'static,
+        U: Future + Send + 'static,
+        U::Output: Send + 'static,
+    {
+        let FileAndSize { file, size } = self;
+        async move {
+            FileAndSize {
+                file: f(file).await,
+                size,
+            }
+        }
+    }
+}
+
+impl<T, U> FileAndSize<Result<T, U>> {
+    /// factor out the error from inside the [FileAndSize]
+    /// this is analogous to [Option::transpose]
+    pub fn transpose(self) -> Result<FileAndSize<T>, U> {
+        let FileAndSize { file, size } = self;
+        match file {
+            Ok(t) => Ok(FileAndSize { file: t, size }),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// Helper methods for a common way to use MemOrFile, where the memory part is something
 /// like a slice, and the file part is a tuple consisiting of path or file and size.
-impl<M, F> MemOrFile<M, (F, u64)>
+impl<M, F> MemOrFile<M, FileAndSize<F>>
 where
     M: AsRef<[u8]>,
 {
@@ -24,7 +69,7 @@ where
     pub fn size(&self) -> u64 {
         match self {
             MemOrFile::Mem(mem) => mem.as_ref().len() as u64,
-            MemOrFile::File((_, size)) => *size,
+            MemOrFile::File(FileAndSize { file: _, size }) => *size,
         }
     }
 }
