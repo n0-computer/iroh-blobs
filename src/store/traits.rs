@@ -52,7 +52,7 @@ pub enum BaoBlobSize {
 }
 
 impl BaoBlobSize {
-    /// Create a new `BaoFileSize` with the given size and verification status.
+    /// Create a new `BaoBlobSize` with the given size and verification status.
     pub fn new(size: u64, verified: bool) -> Self {
         if verified {
             BaoBlobSize::Verified(size)

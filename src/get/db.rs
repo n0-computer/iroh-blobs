@@ -241,7 +241,7 @@ pub async fn valid_ranges<D: MapMut>(entry: &D::EntryMut) -> anyhow::Result<Chun
     // compute the valid range from just looking at the data file
     let mut data_reader = entry.data_reader().await?;
     let data_size = data_reader.size().await?;
-    let valid_from_data = ChunkRanges::from(..ChunkNum::full_chunks(data_size));
+    let valid_from_data = ChunkRanges::from(..ChunkNum::chunks(data_size));
     // compute the valid range from just looking at the outboard file
     let mut outboard = entry.outboard().await?;
     let all = ChunkRanges::all();
@@ -252,7 +252,7 @@ pub async fn valid_ranges<D: MapMut>(entry: &D::EntryMut) -> anyhow::Result<Chun
     }
     let valid: ChunkRanges = valid_from_data.intersection(&valid_from_outboard);
     log!("valid_from_data: {:?}", valid_from_data);
-    log!("valid_from_outboard: {:?}", valid_from_data);
+    log!("valid_from_outboard: {:?}", valid_from_outboard);
     Ok(valid)
 }
 
