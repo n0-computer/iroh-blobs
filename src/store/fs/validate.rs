@@ -5,14 +5,17 @@ use redb::ReadableTable;
 
 use super::{
     raw_outboard_size, tables::Tables, ActorResult, ActorState, DataLocation, EntryState, Hash,
-    OutboardLocation,
+    OutboardLocation, Persistence,
 };
 use crate::{
     store::{fs::tables::BaoFilePart, ConsistencyCheckProgress, ReportLevel},
     util::progress::BoxedProgressSender,
 };
 
-impl ActorState {
+impl<T> ActorState<T>
+where
+    T: Persistence,
+{
     //! This performs a full consistency check. Eventually it will also validate
     //! file content again, but that part is not yet implemented.
     //!

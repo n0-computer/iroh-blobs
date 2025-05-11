@@ -1,7 +1,7 @@
 #![cfg(feature = "test")]
 use std::{net::SocketAddr, path::PathBuf, vec};
 
-use iroh_blobs::net_protocol::Blobs;
+use iroh_blobs::{net_protocol::Blobs, store::fs::FileSystemPersistence};
 use quic_rpc::client::QuinnConnector;
 use tempfile::TempDir;
 use testresult::TestResult;
@@ -14,7 +14,7 @@ type BlobsClient = iroh_blobs::rpc::client::blobs::Client<QC>;
 #[derive(Debug)]
 pub struct Node {
     pub router: iroh::protocol::Router,
-    pub blobs: Blobs<iroh_blobs::store::fs::Store>,
+    pub blobs: Blobs<iroh_blobs::store::fs::Store<FileSystemPersistence>>,
     pub rpc_task: AbortOnDropHandle<()>,
 }
 

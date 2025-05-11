@@ -22,8 +22,8 @@ use iroh_blobs::{
     net_protocol::Blobs,
     rpc::client::{blobs, tags},
     store::{
-        bao_tree, BaoBatchWriter, ConsistencyCheckProgress, EntryStatus, GcConfig, MapEntryMut,
-        MapMut, ReportLevel, Store,
+        bao_tree, fs::FileSystemPersistence, BaoBatchWriter, ConsistencyCheckProgress, EntryStatus,
+        GcConfig, MapEntryMut, MapMut, ReportLevel, Store,
     },
     util::{
         progress::{AsyncChannelProgressSender, ProgressSender as _},
@@ -127,7 +127,7 @@ async fn persistent_node(
     path: PathBuf,
     gc_period: Duration,
 ) -> (
-    Node<iroh_blobs::store::fs::Store>,
+    Node<iroh_blobs::store::fs::Store<FileSystemPersistence>>,
     async_channel::Receiver<()>,
 ) {
     let store = iroh_blobs::store::fs::Store::load(path).await.unwrap();

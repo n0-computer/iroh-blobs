@@ -38,6 +38,7 @@
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![recursion_limit = "256"]
 #![cfg_attr(iroh_docsrs, feature(doc_auto_cfg))]
+#![feature(async_closure)]
 
 #[cfg(feature = "cli")]
 pub mod cli;
