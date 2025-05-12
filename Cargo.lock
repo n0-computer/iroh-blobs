@@ -2018,7 +2018,7 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 [[package]]
 name = "iroh"
 version = "0.34.1"
-source = "git+https://github.com/n0-computer/iroh?branch=main#a62a2bd25f5280a8d1512bcd261e666731de5d95"
+source = "git+https://github.com/n0-computer/iroh?branch=main#146f423a6805ab0147703832ad98ee6c52797174"
 dependencies = [
  "aead",
  "anyhow",
@@ -2081,7 +2081,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.34.1"
-source = "git+https://github.com/n0-computer/iroh?branch=main#a62a2bd25f5280a8d1512bcd261e666731de5d95"
+source = "git+https://github.com/n0-computer/iroh?branch=main#146f423a6805ab0147703832ad98ee6c52797174"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -2258,7 +2258,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.34.1"
-source = "git+https://github.com/n0-computer/iroh?branch=main#a62a2bd25f5280a8d1512bcd261e666731de5d95"
+source = "git+https://github.com/n0-computer/iroh?branch=main#146f423a6805ab0147703832ad98ee6c52797174"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3446,8 +3446,7 @@ dependencies = [
 [[package]]
 name = "quic-rpc"
 version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89561e5343bcad1c9f84321d9d9bd1619128ad44293faad55a0001b0e52d312b"
+source = "git+https://github.com/n0-computer/quic-rpc.git?branch=main#3e2b3ee982c934ecb3527bb163be4a8570f62483"
 dependencies = [
  "anyhow",
  "bytes",
