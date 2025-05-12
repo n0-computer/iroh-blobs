@@ -25,8 +25,7 @@ impl Node {
         let blobs = Blobs::builder(store).build(&endpoint);
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
-            .spawn()
-            .await?;
+            .spawn();
         let (config, key) = quic_rpc::transport::quinn::configure_server()?;
         let endpoint = quinn::Endpoint::server(config, "127.0.0.1:0".parse().unwrap())?;
         let local_addr = endpoint.local_addr()?;

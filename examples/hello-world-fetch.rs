@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let builder = Router::builder(endpoint);
     let blobs = Blobs::memory().build(builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
-    let node = builder.spawn().await?;
+    let node = builder.spawn();
     let blobs_client = blobs.client();
 
     println!("fetching hash:  {}", ticket.hash());

@@ -1083,7 +1083,7 @@ mod tests {
                 router = router.accept(crate::ALPN, blobs.clone());
 
                 // Build the router
-                let router = router.spawn().await?;
+                let router = router.spawn();
 
                 // Setup RPC
                 let (internal_rpc, controller) = quic_rpc::transport::flume::channel(32);

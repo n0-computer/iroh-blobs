@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
 
     // Add our protocol, identified by our ALPN, to the node, and spawn the node.
     let builder = builder.accept(ALPN, proto.clone());
-    let node = builder.spawn().await?;
+    let node = builder.spawn();
 
     match args.command {
         Command::Listen { text } => {

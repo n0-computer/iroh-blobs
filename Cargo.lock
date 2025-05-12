@@ -3446,7 +3446,7 @@ dependencies = [
 [[package]]
 name = "quic-rpc"
 version = "0.19.0"
-source = "git+https://github.com/n0-computer/quic-rpc.git?branch=main#3e2b3ee982c934ecb3527bb163be4a8570f62483"
+source = "git+https://github.com/n0-computer/quic-rpc.git?branch=patch-iroh-main#7211bf5ccadc2c80fc107e1b6ff093ac27eda85a"
 dependencies = [
  "anyhow",
  "bytes",

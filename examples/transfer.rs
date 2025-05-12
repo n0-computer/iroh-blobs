@@ -22,8 +22,7 @@ async fn main() -> Result<()> {
     // to the blobs protocol.
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // We use a blobs client to interact with the blobs protocol we're running locally:
     let blobs_client = blobs.client();
