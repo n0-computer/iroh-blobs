@@ -3009,7 +3009,7 @@
                 router = router.accept(<span class="kw">crate</span>::ALPN, blobs.clone());
 
                 <span class="comment">// Build the router
-                </span><span class="kw">let </span>router = router.spawn().<span class="kw">await</span><span class="question-mark">?</span>;
+                </span><span class="kw">let </span>router = router.spawn();
 
                 <span class="comment">// Setup RPC
                 </span><span class="kw">let </span>(internal_rpc, controller) = quic_rpc::transport::flume::channel(<span class="number">32</span>);
