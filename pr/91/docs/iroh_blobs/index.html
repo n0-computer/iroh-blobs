@@ -47,8 +47,7 @@
     <span class="comment">// build the router
     </span><span class="kw">let </span>router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn()
-        .<span class="kw">await</span><span class="question-mark">?</span>;
+        .spawn();
 
     <span class="comment">// do fun stuff with the blobs protocol!
     </span>router.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
