@@ -49,24 +49,25 @@ impl Downloader {
 
         let lp = LocalPool::default();
         let metrics_clone = metrics.clone();
+        let config = Arc::new(Config {
+            concurrency: concurrency_limits,
+            retry: retry_config,
+        });
+        let config2 = config.clone();
         lp.spawn_detached(move || async move {
             // we want to see the logs of the service
-            let service = Service::new(
-                getter,
-                dialer,
-                concurrency_limits,
-                retry_config,
-                msg_rx,
-                metrics_clone,
-            );
+            let service = Service::new(getter, dialer, config2, msg_rx, metrics_clone);
             service.run().await
         });
 
         (
             Downloader {
-                next_id: Arc::new(AtomicU64::new(0)),
-                msg_tx,
-                metrics,
+                inner: Arc::new(Inner {
+                    next_id: AtomicU64::new(0),
+                    msg_tx,
+                    config,
+                    metrics,
+                }),
             },
             lp,
         )

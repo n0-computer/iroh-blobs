@@ -1,7 +1,7 @@
 #![cfg(feature = "test")]
 use std::{net::SocketAddr, path::PathBuf, vec};
 
-use iroh_blobs::net_protocol::Blobs;
+use iroh_blobs::{downloader, net_protocol::Blobs};
 use quic_rpc::client::QuinnConnector;
 use tempfile::TempDir;
 use testresult::TestResult;
@@ -82,5 +82,30 @@ async fn quinn_rpc_large() -> TestResult<()> {
     assert_eq!(hash, iroh_blobs::Hash::new(&data));
     let data2 = client.read_to_bytes(hash).await?;
     assert_eq!(data, &data2[..]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn downloader_config() -> TestResult<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+    let endpoint = iroh::Endpoint::builder().bind().await?;
+    let store = iroh_blobs::store::mem::Store::default();
+    let expected = downloader::Config {
+        concurrency: downloader::ConcurrencyLimits {
+            max_concurrent_requests: usize::MAX,
+            max_concurrent_requests_per_node: usize::MAX,
+            max_open_connections: usize::MAX,
+            max_concurrent_dials_per_hash: usize::MAX,
+        },
+        retry: downloader::RetryConfig {
+            max_retries_per_node: u32::MAX,
+            initial_retry_delay: std::time::Duration::from_secs(1),
+        },
+    };
+    let blobs = Blobs::builder(store)
+        .downloader_config(expected)
+        .build(&endpoint);
+    let actual = blobs.downloader().config();
+    assert_eq!(&expected, actual);
     Ok(())
 }
