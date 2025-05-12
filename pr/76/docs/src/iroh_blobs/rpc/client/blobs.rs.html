@@ -1915,7 +1915,16 @@
 <a href="#1914" id="1914">1914</a>
 <a href="#1915" id="1915">1915</a>
 <a href="#1916" id="1916">1916</a>
-<a href="#1917" id="1917">1917</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
+<a href="#1917" id="1917">1917</a>
+<a href="#1918" id="1918">1918</a>
+<a href="#1919" id="1919">1919</a>
+<a href="#1920" id="1920">1920</a>
+<a href="#1921" id="1921">1921</a>
+<a href="#1922" id="1922">1922</a>
+<a href="#1923" id="1923">1923</a>
+<a href="#1924" id="1924">1924</a>
+<a href="#1925" id="1925">1925</a>
+<a href="#1926" id="1926">1926</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for blobs management.
 //!
 //! The main entry point is the [`Client`].
 //!
@@ -1991,6 +2000,7 @@
 <span class="kw">use </span>portable_atomic::{AtomicU64, Ordering};
 <span class="kw">use </span>quic_rpc::{
     client::{BoxStreamSync, BoxedConnector},
+    transport::boxed::BoxableConnector,
     Connector, RpcClient,
 };
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -2004,7 +2014,7 @@
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress <span class="kw">as </span>BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
-    rpc::proto::RpcService,
+    rpc::proto::{Request, Response, RpcService},
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
     util::SetTagOption,
     BlobFormat, Hash, Tag,
@@ -2025,7 +2035,7 @@
 </span><span class="attr">#[derive(Debug, Clone)]
 #[repr(transparent)]
 </span><span class="kw">pub struct </span>Client&lt;C = BoxedConnector&lt;RpcService&gt;&gt; {
-    <span class="kw">pub</span>(<span class="kw">super</span>) rpc: RpcClient&lt;RpcService, C&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) rpc: RpcClient&lt;RpcService, C&gt;,
 }
 
 <span class="doccomment">/// Type alias for a memory-backed client.
@@ -2038,6 +2048,14 @@
     <span class="doccomment">/// Create a new client
     </span><span class="kw">pub fn </span>new(rpc: RpcClient&lt;RpcService, C&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ rpc }
+    }
+
+    <span class="doccomment">/// Box the client to avoid having to provide the connector type.
+    </span><span class="kw">pub fn </span>boxed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Client&lt;BoxedConnector&lt;RpcService&gt;&gt;
+    <span class="kw">where
+        </span>C: BoxableConnector&lt;Response, Request&gt;,
+    {
+        Client::new(<span class="self">self</span>.rpc.clone().boxed())
     }
 
     <span class="doccomment">/// Get a tags client.

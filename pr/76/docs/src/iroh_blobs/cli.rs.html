@@ -1779,7 +1779,7 @@
             } =&gt; {
                 print(level, entry, message);
             }
-            ConsistencyCheckProgress::Done { .. } =&gt; {
+            ConsistencyCheckProgress::Done =&gt; {
                 <span class="macro">eprintln!</span>(<span class="string">"Consistency check done"</span>);
             }
             ConsistencyCheckProgress::Abort(error) =&gt; {

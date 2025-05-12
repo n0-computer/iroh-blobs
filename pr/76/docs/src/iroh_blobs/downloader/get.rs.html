@@ -95,7 +95,10 @@
 <a href="#94" id="94">94</a>
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
-<a href="#97" id="97">97</a></pre></div><pre class="rust"><code><span class="doccomment">//! [`Getter`] implementation that performs requests over [`Connection`]s.
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a></pre></div><pre class="rust"><code><span class="doccomment">//! [`Getter`] implementation that performs requests over [`Connection`]s.
 //!
 //! [`Connection`]: iroh::endpoint::Connection
 
@@ -111,13 +114,13 @@
 <span class="kw">impl </span>From&lt;GetError&gt; <span class="kw">for </span>FailureAction {
     <span class="kw">fn </span>from(e: GetError) -&gt; <span class="self">Self </span>{
         <span class="kw">match </span>e {
-            e @ GetError::NotFound(<span class="kw">_</span>) =&gt; FailureAction::AbortRequest(e.into()),
+            e @ GetError::NotFound(<span class="kw">_</span>) =&gt; FailureAction::AbortRequest(e),
             e @ GetError::RemoteReset(<span class="kw">_</span>) =&gt; FailureAction::RetryLater(e.into()),
             e @ GetError::NoncompliantNode(<span class="kw">_</span>) =&gt; FailureAction::DropPeer(e.into()),
             e @ GetError::Io(<span class="kw">_</span>) =&gt; FailureAction::RetryLater(e.into()),
-            e @ GetError::BadRequest(<span class="kw">_</span>) =&gt; FailureAction::AbortRequest(e.into()),
+            e @ GetError::BadRequest(<span class="kw">_</span>) =&gt; FailureAction::AbortRequest(e),
             <span class="comment">// TODO: what do we want to do on local failures?
-            </span>e @ GetError::LocalFailure(<span class="kw">_</span>) =&gt; FailureAction::AbortRequest(e.into()),
+            </span>e @ GetError::LocalFailure(<span class="kw">_</span>) =&gt; FailureAction::AbortRequest(e),
         }
     }
 }
@@ -158,8 +161,6 @@
     <span class="kw">fn </span>proceed(<span class="self">self</span>, conn: endpoint::Connection) -&gt; <span class="kw">super</span>::GetProceedFut {
         <span class="kw">async move </span>{
             <span class="kw">let </span>res = <span class="self">self</span>.proceed(conn).<span class="kw">await</span>;
-            <span class="attr">#[cfg(feature = <span class="string">"metrics"</span>)]
-            </span>track_metrics(<span class="kw-2">&amp;</span>res);
             <span class="kw">match </span>res {
                 <span class="prelude-val">Ok</span>(stats) =&gt; <span class="prelude-val">Ok</span>(stats),
                 <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(err.into()),
@@ -169,11 +170,10 @@
     }
 }
 
-<span class="attr">#[cfg(feature = <span class="string">"metrics"</span>)]
-</span><span class="kw">fn </span>track_metrics(res: <span class="kw-2">&amp;</span><span class="prelude-ty">Result</span>&lt;<span class="kw">crate</span>::get::Stats, GetError&gt;) {
-    <span class="kw">use </span>iroh_metrics::{inc, inc_by};
-
-    <span class="kw">use </span><span class="kw">crate</span>::metrics::Metrics;
+<span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>track_metrics(
+    res: <span class="kw-2">&amp;</span><span class="prelude-ty">Result</span>&lt;<span class="kw">crate</span>::get::Stats, FailureAction&gt;,
+    metrics: <span class="kw-2">&amp;</span><span class="kw">crate</span>::metrics::Metrics,
+) {
     <span class="kw">match </span>res {
         <span class="prelude-val">Ok</span>(stats) =&gt; {
             <span class="kw">let </span><span class="kw">crate</span>::get::Stats {
@@ -182,13 +182,19 @@
                 elapsed,
             } = stats;
 
-            <span class="macro">inc!</span>(Metrics, downloads_success);
-            <span class="macro">inc_by!</span>(Metrics, download_bytes_total, <span class="kw-2">*</span>bytes_written);
-            <span class="macro">inc_by!</span>(Metrics, download_time_total, elapsed.as_millis() <span class="kw">as </span>u64);
+            metrics.downloads_success.inc();
+            metrics.download_bytes_total.inc_by(<span class="kw-2">*</span>bytes_written);
+            metrics
+                .download_time_total
+                .inc_by(elapsed.as_millis() <span class="kw">as </span>u64);
         }
         <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">match </span><span class="kw-2">&amp;</span>e {
-            GetError::NotFound(<span class="kw">_</span>) =&gt; <span class="macro">inc!</span>(Metrics, downloads_notfound),
-            <span class="kw">_ </span>=&gt; <span class="macro">inc!</span>(Metrics, downloads_error),
+            FailureAction::AbortRequest(GetError::NotFound(<span class="kw">_</span>)) =&gt; {
+                metrics.downloads_notfound.inc();
+            }
+            <span class="kw">_ </span>=&gt; {
+                metrics.downloads_error.inc();
+            }
         },
     }
 }

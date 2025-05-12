@@ -381,7 +381,12 @@
 <a href="#380" id="380">380</a>
 <a href="#381" id="381">381</a>
 <a href="#382" id="382">382</a>
-<a href="#383" id="383">383</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an `iroh` protocol.
 
 </span><span class="comment">// TODO: reduce API surface and add documentation
 </span><span class="attr">#![allow(missing_docs)]
@@ -396,12 +401,13 @@
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>futures_lite::future::Boxed <span class="kw">as </span>BoxedFuture;
 <span class="kw">use </span>futures_util::future::BoxFuture;
-<span class="kw">use </span>iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
+<span class="kw">use </span>iroh::{endpoint::Connection, protocol::ProtocolHandler, Endpoint, NodeAddr};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tracing::debug;
 
 <span class="kw">use crate</span>::{
     downloader::{<span class="self">self</span>, ConcurrencyLimits, Downloader, RetryConfig},
+    metrics::Metrics,
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -647,6 +653,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.store
     }
 
+    <span class="kw">pub fn </span>metrics(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Arc&lt;Metrics&gt; {
+        <span class="self">self</span>.downloader().metrics()
+    }
+
     <span class="kw">pub fn </span>events(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EventSender {
         <span class="kw-2">&amp;</span><span class="self">self</span>.inner.events
     }
@@ -707,13 +717,13 @@
 }
 
 <span class="kw">impl</span>&lt;S: <span class="kw">crate</span>::store::Store&gt; ProtocolHandler <span class="kw">for </span>Blobs&lt;S&gt; {
-    <span class="kw">fn </span>accept(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connecting) -&gt; BoxedFuture&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt; {
+    <span class="kw">fn </span>accept(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connection) -&gt; BoxedFuture&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt; {
         <span class="kw">let </span>db = <span class="self">self</span>.store().clone();
         <span class="kw">let </span>events = <span class="self">self</span>.events().clone();
         <span class="kw">let </span>rt = <span class="self">self</span>.rt().clone();
 
         Box::pin(<span class="kw">async move </span>{
-            <span class="kw">crate</span>::provider::handle_connection(conn.<span class="kw">await</span><span class="question-mark">?</span>, db, events, rt).<span class="kw">await</span>;
+            <span class="kw">crate</span>::provider::handle_connection(conn, db, events, rt).<span class="kw">await</span>;
             <span class="prelude-val">Ok</span>(())
         })
     }
