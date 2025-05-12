@@ -14,13 +14,13 @@ use crate::{
 impl From<GetError> for FailureAction {
     fn from(e: GetError) -> Self {
         match e {
-            e @ GetError::NotFound(_) => FailureAction::AbortRequest(e.into()),
+            e @ GetError::NotFound(_) => FailureAction::AbortRequest(e),
             e @ GetError::RemoteReset(_) => FailureAction::RetryLater(e.into()),
             e @ GetError::NoncompliantNode(_) => FailureAction::DropPeer(e.into()),
             e @ GetError::Io(_) => FailureAction::RetryLater(e.into()),
-            e @ GetError::BadRequest(_) => FailureAction::AbortRequest(e.into()),
+            e @ GetError::BadRequest(_) => FailureAction::AbortRequest(e),
             // TODO: what do we want to do on local failures?
-            e @ GetError::LocalFailure(_) => FailureAction::AbortRequest(e.into()),
+            e @ GetError::LocalFailure(_) => FailureAction::AbortRequest(e),
         }
     }
 }
@@ -61,8 +61,6 @@ impl super::NeedsConn<endpoint::Connection> for crate::get::db::GetStateNeedsCon
     fn proceed(self, conn: endpoint::Connection) -> super::GetProceedFut {
         async move {
             let res = self.proceed(conn).await;
-            #[cfg(feature = "metrics")]
-            track_metrics(&res);
             match res {
                 Ok(stats) => Ok(stats),
                 Err(err) => Err(err.into()),
@@ -72,11 +70,10 @@ impl super::NeedsConn<endpoint::Connection> for crate::get::db::GetStateNeedsCon
     }
 }
 
-#[cfg(feature = "metrics")]
-fn track_metrics(res: &Result<crate::get::Stats, GetError>) {
-    use iroh_metrics::{inc, inc_by};
-
-    use crate::metrics::Metrics;
+pub(super) fn track_metrics(
+    res: &Result<crate::get::Stats, FailureAction>,
+    metrics: &crate::metrics::Metrics,
+) {
     match res {
         Ok(stats) => {
             let crate::get::Stats {
@@ -85,13 +82,19 @@ fn track_metrics(res: &Result<crate::get::Stats, GetError>) {
                 elapsed,
             } = stats;
 
-            inc!(Metrics, downloads_success);
-            inc_by!(Metrics, download_bytes_total, *bytes_written);
-            inc_by!(Metrics, download_time_total, elapsed.as_millis() as u64);
+            metrics.downloads_success.inc();
+            metrics.download_bytes_total.inc_by(*bytes_written);
+            metrics
+                .download_time_total
+                .inc_by(elapsed.as_millis() as u64);
         }
         Err(e) => match &e {
-            GetError::NotFound(_) => inc!(Metrics, downloads_notfound),
-            _ => inc!(Metrics, downloads_error),
+            FailureAction::AbortRequest(GetError::NotFound(_)) => {
+                metrics.downloads_notfound.inc();
+            }
+            _ => {
+                metrics.downloads_error.inc();
+            }
         },
     }
 }

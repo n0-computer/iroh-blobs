@@ -2043,7 +2043,7 @@ impl ActorState {
     fn rename_tag(&mut self, tables: &mut Tables, from: Tag, to: Tag) -> ActorResult<()> {
         let value = tables
             .tags
-            .get(from)?
+            .remove(from)?
             .ok_or_else(|| {
                 ActorError::Io(io::Error::new(io::ErrorKind::NotFound, "tag not found"))
             })?

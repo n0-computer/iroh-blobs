@@ -23,13 +23,13 @@
 use std::ops::{Bound, RangeBounds};
 
 use anyhow::Result;
-use futures_lite::{io, Stream, StreamExt};
+use futures_lite::{Stream, StreamExt};
 use quic_rpc::{client::BoxedConnector, Connector, RpcClient};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     rpc::proto::{
-        tags::{DeleteRequest, ListRequest, SetRequest, SyncMode},
+        tags::{DeleteRequest, ListRequest, RenameRequest, SetRequest, SyncMode},
         RpcService,
     },
     BlobFormat, Hash, HashAndFormat, Tag,
@@ -235,13 +235,12 @@ where
     ///
     /// If the tag does not exist, this will return an error.
     pub async fn rename(&self, from: impl AsRef<[u8]>, to: impl AsRef<[u8]>) -> Result<()> {
-        let from = from.as_ref();
-        let to = to.as_ref();
-        let Some(old) = self.get(from.as_ref()).await? else {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "Tag not found").into());
-        };
-        self.set(to.as_ref(), old.hash_and_format()).await?;
-        self.delete(from.as_ref()).await?;
+        self.rpc
+            .rpc(RenameRequest {
+                from: Tag::from(from.as_ref()),
+                to: Tag::from(to.as_ref()),
+            })
+            .await??;
         Ok(())
     }
 

@@ -74,6 +74,7 @@ use iroh::NodeAddr;
 use portable_atomic::{AtomicU64, Ordering};
 use quic_rpc::{
     client::{BoxStreamSync, BoxedConnector},
+    transport::boxed::BoxableConnector,
     Connector, RpcClient,
 };
 use serde::{Deserialize, Serialize};
@@ -87,7 +88,7 @@ use crate::{
     format::collection::{Collection, SimpleStore},
     get::db::DownloadProgress as BytesDownloadProgress,
     net_protocol::BlobDownloadRequest,
-    rpc::proto::RpcService,
+    rpc::proto::{Request, Response, RpcService},
     store::{BaoBlobSize, ConsistencyCheckProgress, ExportFormat, ExportMode, ValidateProgress},
     util::SetTagOption,
     BlobFormat, Hash, Tag,
@@ -108,7 +109,7 @@ use crate::rpc::proto::blobs::{
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct Client<C = BoxedConnector<RpcService>> {
-    pub(super) rpc: RpcClient<RpcService, C>,
+    pub(crate) rpc: RpcClient<RpcService, C>,
 }
 
 /// Type alias for a memory-backed client.
@@ -121,6 +122,14 @@ where
     /// Create a new client
     pub fn new(rpc: RpcClient<RpcService, C>) -> Self {
         Self { rpc }
+    }
+
+    /// Box the client to avoid having to provide the connector type.
+    pub fn boxed(&self) -> Client<BoxedConnector<RpcService>>
+    where
+        C: BoxableConnector<Response, Request>,
+    {
+        Client::new(self.rpc.clone().boxed())
     }
 
     /// Get a tags client.

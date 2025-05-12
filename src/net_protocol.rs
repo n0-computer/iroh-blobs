@@ -13,12 +13,13 @@ use std::{
 use anyhow::{bail, Result};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_util::future::BoxFuture;
-use iroh::{endpoint::Connecting, protocol::ProtocolHandler, Endpoint, NodeAddr};
+use iroh::{endpoint::Connection, protocol::ProtocolHandler, Endpoint, NodeAddr};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
     downloader::{self, ConcurrencyLimits, Downloader, RetryConfig},
+    metrics::Metrics,
     provider::EventSender,
     store::GcConfig,
     util::{
@@ -264,6 +265,10 @@ impl<S: crate::store::Store> Blobs<S> {
         &self.inner.store
     }
 
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        self.downloader().metrics()
+    }
+
     pub fn events(&self) -> &EventSender {
         &self.inner.events
     }
@@ -324,13 +329,13 @@ impl<S: crate::store::Store> Blobs<S> {
 }
 
 impl<S: crate::store::Store> ProtocolHandler for Blobs<S> {
-    fn accept(&self, conn: Connecting) -> BoxedFuture<Result<()>> {
+    fn accept(&self, conn: Connection) -> BoxedFuture<Result<()>> {
         let db = self.store().clone();
         let events = self.events().clone();
         let rt = self.rt().clone();
 
         Box::pin(async move {
-            crate::provider::handle_connection(conn.await?, db, events, rt).await;
+            crate::provider::handle_connection(conn, db, events, rt).await;
             Ok(())
         })
     }
