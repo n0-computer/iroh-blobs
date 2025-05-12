@@ -101,9 +101,7 @@ async fn node<S: Store>(store: S, gc_period: Duration) -> (Node<S>, async_channe
     let blobs = Blobs::builder(store.clone()).build(&endpoint);
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn()
-        .await
-        .unwrap();
+        .spawn();
     blobs
         .start_gc(GcConfig {
             period: gc_period,

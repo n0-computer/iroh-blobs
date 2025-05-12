@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     let blobs = Blobs::memory().build(builder.endpoint());
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let blobs_client = blobs.client();
-    let node = builder.spawn().await?;
+    let node = builder.spawn();
 
     // add some data and remember the hash
     let res = blobs_client.add_bytes("Hello, world!").await?;
