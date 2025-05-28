@@ -50,7 +50,11 @@ use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
 };
-use tokio_util::{either::Either, sync::CancellationToken, time::delay_queue};
+use tokio_util::{
+    either::Either,
+    sync::CancellationToken,
+    time::{delay_queue, FutureExt},
+};
 use tracing::{debug, error, error_span, trace, warn, Instrument};
 
 use crate::{
@@ -1577,7 +1581,7 @@ impl Dialer {
             let res = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => Err(anyhow!("Cancelled")),
-                res = endpoint.connect(node_id, alpn) => res
+                res = connect_and_await_direct(&endpoint, node_id, alpn) => res
             };
             (node_id, res)
         });
@@ -1597,6 +1601,31 @@ impl Dialer {
     fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
+}
+
+async fn connect_and_await_direct(
+    endpoint: &Endpoint,
+    node_id: NodeId,
+    alpn: &'static [u8],
+) -> anyhow::Result<endpoint::Connection> {
+    let connection = endpoint.connect(node_id, alpn).await?;
+    let mut conn_type = endpoint.conn_type(node_id)?.stream();
+    let await_direct = async move {
+        while let Some(tpe) = conn_type.next().await {
+            match tpe {
+                endpoint::ConnectionType::Direct(addr) => {
+                    debug!(%node_id, %addr, "connected to node via direct connection");
+                    return Ok(connection);
+                }
+                _ => continue,
+            }
+        }
+        Err(anyhow!("No direct connection established"))
+    };
+    await_direct
+        .timeout(Duration::from_secs(30))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for direct connection"))?
 }
 
 impl Stream for Dialer {
