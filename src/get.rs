@@ -1,9 +1,13 @@
-//! The client side API
+//! The low level client side API
 //!
-//! To get data, create a connection using [iroh-net] or use any quinn
-//! connection that was obtained in another way.
+//! Note that while using this API directly is fine, a simpler way to get data
+//! to a store is to use the [`crate::api::remote`] API, in particular the
+//! [`crate::api::remote::Remote::fetch`] function to download data to your
+//! local store.
 //!
-//! Create a request describing the data you want to get.
+//! To get data, create a connection using an [`iroh::Endpoint`].
+//!
+//! Create a [`crate::protocol::GetRequest`] describing the data you want to get.
 //!
 //! Then create a state machine using [fsm::start] and
 //! drive it to completion by calling next on each state.
@@ -11,7 +15,7 @@
 //! For some states you have to provide additional arguments when calling next,
 //! or you can choose to finish early.
 //!
-//! [iroh-net]: https://docs.rs/iroh-net
+//! [iroh]: https://docs.rs/iroh
 use std::{
     error::Error,
     fmt::{self, Debug},
@@ -20,28 +24,41 @@ use std::{
 
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
-use iroh::endpoint::{self, ClosedStream, RecvStream, SendStream, WriteError};
+use fsm::RequestCounters;
+use iroh::endpoint::{self, RecvStream, SendStream};
+use iroh_io::TokioStreamReader;
+use n0_snafu::SpanTrace;
+use nested_enum_utils::common_fields;
 use serde::{Deserialize, Serialize};
+use snafu::{Backtrace, IntoError, ResultExt, Snafu};
 use tracing::{debug, error};
 
-use crate::{
-    protocol::RangeSpecSeq,
-    util::io::{TrackingReader, TrackingWriter},
-    Hash, IROH_BLOCK_SIZE,
-};
+use crate::{protocol::ChunkRangesSeq, store::IROH_BLOCK_SIZE, Hash};
 
-pub mod db;
-pub mod error;
-pub mod progress;
+mod error;
 pub mod request;
+pub(crate) use error::{BadRequestSnafu, LocalFailureSnafu};
+pub use error::{GetError, GetResult};
+
+type WrappedRecvStream = TokioStreamReader<RecvStream>;
 
 /// Stats about the transfer.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    derive_more::Deref,
+    derive_more::DerefMut,
+)]
 pub struct Stats {
-    /// The number of bytes written
-    pub bytes_written: u64,
-    /// The number of bytes read
-    pub bytes_read: u64,
+    /// Counters
+    #[deref]
+    #[deref_mut]
+    pub counters: RequestCounters,
     /// The time it took to transfer the data
     pub elapsed: Duration,
 }
@@ -49,8 +66,20 @@ pub struct Stats {
 impl Stats {
     /// Transfer rate in megabits per second
     pub fn mbits(&self) -> f64 {
-        let data_len_bit = self.bytes_read * 8;
+        let data_len_bit = self.total_bytes_read() * 8;
         data_len_bit as f64 / (1000. * 1000.) / self.elapsed.as_secs_f64()
+    }
+
+    pub fn total_bytes_read(&self) -> u64 {
+        self.payload_bytes_read + self.other_bytes_read
+    }
+
+    pub fn combine(&mut self, that: &Stats) {
+        self.payload_bytes_written += that.payload_bytes_written;
+        self.other_bytes_written += that.other_bytes_written;
+        self.payload_bytes_read += that.payload_bytes_read;
+        self.other_bytes_read += that.other_bytes_read;
+        self.elapsed += that.elapsed;
     }
 }
 
@@ -68,27 +97,65 @@ pub mod fsm {
     use derive_more::From;
     use iroh::endpoint::Connection;
     use iroh_io::{AsyncSliceWriter, AsyncStreamReader, TokioStreamReader};
-    use tokio::io::AsyncWriteExt;
 
     use super::*;
     use crate::{
-        protocol::{GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE},
-        store::BaoBatchWriter,
+        get::error::BadRequestSnafu,
+        protocol::{
+            GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
+        },
     };
-
-    type WrappedRecvStream = TrackingReader<TokioStreamReader<RecvStream>>;
 
     self_cell::self_cell! {
         struct RangesIterInner {
-            owner: RangeSpecSeq,
-            #[covariant]
+            owner: ChunkRangesSeq,
+            #[not_covariant]
             dependent: NonEmptyRequestRangeSpecIter,
         }
     }
 
     /// The entry point of the get response machine
-    pub fn start(connection: Connection, request: GetRequest) -> AtInitial {
-        AtInitial::new(connection, request)
+    pub fn start(
+        connection: Connection,
+        request: GetRequest,
+        counters: RequestCounters,
+    ) -> AtInitial {
+        AtInitial::new(connection, request, counters)
+    }
+
+    /// Start with a get many request. Todo: turn this into distinct states.
+    pub async fn start_get_many(
+        connection: Connection,
+        request: GetManyRequest,
+        counters: RequestCounters,
+    ) -> std::result::Result<Result<AtStartChild, AtClosing>, GetError> {
+        let start = Instant::now();
+        let (mut writer, reader) = connection.open_bi().await?;
+        let request = Request::GetMany(request);
+        let request_bytes = postcard::to_stdvec(&request)
+            .map_err(|source| BadRequestSnafu.into_error(source.into()))?;
+        writer.write_all(&request_bytes).await?;
+        writer.finish()?;
+        let Request::GetMany(request) = request else {
+            unreachable!();
+        };
+        let reader = TokioStreamReader::new(reader);
+        let mut ranges_iter = RangesIter::new(request.ranges.clone());
+        let first_item = ranges_iter.next();
+        let misc = Box::new(Misc {
+            counters,
+            start,
+            ranges_iter,
+        });
+        Ok(match first_item {
+            Some((child_offset, child_ranges)) => Ok(AtStartChild {
+                ranges: child_ranges,
+                reader,
+                misc,
+                offset: child_offset,
+            }),
+            None => Err(AtClosing::new(misc, reader, true)),
+        })
     }
 
     /// Owned iterator for the ranges in a request
@@ -104,8 +171,10 @@ pub mod fsm {
     }
 
     impl RangesIter {
-        pub fn new(owner: RangeSpecSeq) -> Self {
-            Self(RangesIterInner::new(owner, |owner| owner.iter_non_empty()))
+        pub fn new(owner: ChunkRangesSeq) -> Self {
+            Self(RangesIterInner::new(owner, |owner| {
+                owner.iter_non_empty_infinite()
+            }))
         }
 
         pub fn offset(&self) -> u64 {
@@ -118,8 +187,7 @@ pub mod fsm {
 
         fn next(&mut self) -> Option<Self::Item> {
             self.0.with_dependent_mut(|_owner, iter| {
-                iter.next()
-                    .map(|(offset, ranges)| (offset, ranges.to_chunk_ranges()))
+                iter.next().map(|(offset, ranges)| (offset, ranges.clone()))
             })
         }
     }
@@ -129,6 +197,7 @@ pub mod fsm {
     pub struct AtInitial {
         connection: Connection,
         request: GetRequest,
+        counters: RequestCounters,
     }
 
     impl AtInitial {
@@ -136,10 +205,11 @@ pub mod fsm {
         ///
         /// `connection` is an existing connection
         /// `request` is the request to be sent
-        pub fn new(connection: Connection, request: GetRequest) -> Self {
+        pub fn new(connection: Connection, request: GetRequest, counters: RequestCounters) -> Self {
             Self {
                 connection,
                 request,
+                counters,
             }
         }
 
@@ -147,13 +217,13 @@ pub mod fsm {
         pub async fn next(self) -> Result<AtConnected, endpoint::ConnectionError> {
             let start = Instant::now();
             let (writer, reader) = self.connection.open_bi().await?;
-            let reader = TrackingReader::new(TokioStreamReader::new(reader));
-            let writer = TrackingWriter::new(writer);
+            let reader = TokioStreamReader::new(reader);
             Ok(AtConnected {
                 start,
                 reader,
                 writer,
                 request: self.request,
+                counters: self.counters,
             })
         }
     }
@@ -163,8 +233,9 @@ pub mod fsm {
     pub struct AtConnected {
         start: Instant,
         reader: WrappedRecvStream,
-        writer: TrackingWriter<SendStream>,
+        writer: SendStream,
         request: GetRequest,
+        counters: RequestCounters,
     }
 
     /// Possible next states after the handshake has been sent
@@ -179,50 +250,30 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtConnected::next`]
-    #[derive(Debug, thiserror::Error)]
+    #[common_fields({
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: SpanTrace,
+    })]
+    #[allow(missing_docs)]
+    #[derive(Debug, Snafu)]
+    #[non_exhaustive]
     pub enum ConnectedNextError {
         /// Error when serializing the request
-        #[error("postcard ser: {0}")]
-        PostcardSer(postcard::Error),
+        #[snafu(display("postcard ser: {source}"))]
+        PostcardSer { source: postcard::Error },
         /// The serialized request is too long to be sent
-        #[error("request too big")]
-        RequestTooBig,
+        #[snafu(display("request too big"))]
+        RequestTooBig {},
         /// Error when writing the request to the [`SendStream`].
-        #[error("write: {0}")]
-        Write(#[from] WriteError),
+        #[snafu(display("write: {source}"))]
+        Write { source: quinn::WriteError },
         /// Quic connection is closed.
-        #[error("closed")]
-        Closed(#[from] ClosedStream),
+        #[snafu(display("closed"))]
+        Closed { source: quinn::ClosedStream },
         /// A generic io error
-        #[error("io {0}")]
-        Io(io::Error),
-    }
-
-    impl ConnectedNextError {
-        fn from_io(cause: io::Error) -> Self {
-            if let Some(inner) = cause.get_ref() {
-                if let Some(e) = inner.downcast_ref::<endpoint::WriteError>() {
-                    Self::Write(e.clone())
-                } else {
-                    Self::Io(cause)
-                }
-            } else {
-                Self::Io(cause)
-            }
-        }
-    }
-
-    impl From<ConnectedNextError> for io::Error {
-        fn from(cause: ConnectedNextError) -> Self {
-            match cause {
-                ConnectedNextError::Write(cause) => cause.into(),
-                ConnectedNextError::Io(cause) => cause,
-                ConnectedNextError::PostcardSer(cause) => {
-                    io::Error::new(io::ErrorKind::Other, cause)
-                }
-                _ => io::Error::new(io::ErrorKind::Other, cause),
-            }
-        }
+        #[snafu(transparent)]
+        Io { source: io::Error },
     }
 
     impl AtConnected {
@@ -238,37 +289,36 @@ pub mod fsm {
                 reader,
                 mut writer,
                 mut request,
+                mut counters,
             } = self;
             // 1. Send Request
-            {
+            counters.other_bytes_written += {
                 debug!("sending request");
                 let wrapped = Request::Get(request);
-                let request_bytes =
-                    postcard::to_stdvec(&wrapped).map_err(ConnectedNextError::PostcardSer)?;
-                let Request::Get(x) = wrapped;
+                let request_bytes = postcard::to_stdvec(&wrapped).context(PostcardSerSnafu)?;
+                let Request::Get(x) = wrapped else {
+                    unreachable!();
+                };
                 request = x;
 
                 if request_bytes.len() > MAX_MESSAGE_SIZE {
-                    return Err(ConnectedNextError::RequestTooBig);
+                    return Err(RequestTooBigSnafu.build());
                 }
 
                 // write the request itself
-                writer
-                    .write_all(&request_bytes)
-                    .await
-                    .map_err(ConnectedNextError::from_io)?;
-            }
+                writer.write_all(&request_bytes).await.context(WriteSnafu)?;
+                request_bytes.len() as u64
+            };
 
             // 2. Finish writing before expecting a response
-            let (mut writer, bytes_written) = writer.into_parts();
-            writer.finish()?;
+            writer.finish().context(ClosedSnafu)?;
 
             let hash = request.hash;
             let ranges_iter = RangesIter::new(request.ranges);
             // this is in a box so we don't have to memcpy it on every state transition
             let mut misc = Box::new(Misc {
+                counters,
                 start,
-                bytes_written,
                 ranges_iter,
             });
             Ok(match misc.ranges_iter.next() {
@@ -286,7 +336,7 @@ pub mod fsm {
                             reader,
                             ranges,
                             misc,
-                            child_offset: offset - 1,
+                            offset,
                         }
                         .into()
                     }
@@ -300,7 +350,7 @@ pub mod fsm {
     #[derive(Debug)]
     pub struct AtStartRoot {
         ranges: ChunkRanges,
-        reader: TrackingReader<TokioStreamReader<RecvStream>>,
+        reader: TokioStreamReader<RecvStream>,
         misc: Box<Misc>,
         hash: Hash,
     }
@@ -309,9 +359,9 @@ pub mod fsm {
     #[derive(Debug)]
     pub struct AtStartChild {
         ranges: ChunkRanges,
-        reader: TrackingReader<TokioStreamReader<RecvStream>>,
+        reader: TokioStreamReader<RecvStream>,
         misc: Box<Misc>,
-        child_offset: u64,
+        offset: u64,
     }
 
     impl AtStartChild {
@@ -320,8 +370,8 @@ pub mod fsm {
         /// This must be used to determine the hash needed to call next.
         /// If this is larger than the number of children in the collection,
         /// you can call finish to stop reading the response.
-        pub fn child_offset(&self) -> u64 {
-            self.child_offset
+        pub fn offset(&self) -> u64 {
+            self.offset
         }
 
         /// The ranges we have requested for the child
@@ -384,35 +434,41 @@ pub mod fsm {
     #[derive(Debug)]
     pub struct AtBlobHeader {
         ranges: ChunkRanges,
-        reader: TrackingReader<TokioStreamReader<RecvStream>>,
+        reader: TokioStreamReader<RecvStream>,
         misc: Box<Misc>,
         hash: Hash,
     }
 
     /// Error that you can get from [`AtBlobHeader::next`]
-    #[derive(Debug, thiserror::Error)]
+    #[common_fields({
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: SpanTrace,
+    })]
+    #[non_exhaustive]
+    #[derive(Debug, Snafu)]
     pub enum AtBlobHeaderNextError {
         /// Eof when reading the size header
         ///
         /// This indicates that the provider does not have the requested data.
-        #[error("not found")]
-        NotFound,
+        #[snafu(display("not found"))]
+        NotFound {},
         /// Quinn read error when reading the size header
-        #[error("read: {0}")]
-        Read(endpoint::ReadError),
+        #[snafu(display("read: {source}"))]
+        EndpointRead { source: endpoint::ReadError },
         /// Generic io error
-        #[error("io: {0}")]
-        Io(io::Error),
+        #[snafu(display("io: {source}"))]
+        Io { source: io::Error },
     }
 
     impl From<AtBlobHeaderNextError> for io::Error {
         fn from(cause: AtBlobHeaderNextError) -> Self {
             match cause {
-                AtBlobHeaderNextError::NotFound => {
+                AtBlobHeaderNextError::NotFound { .. } => {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
-                AtBlobHeaderNextError::Read(cause) => cause.into(),
-                AtBlobHeaderNextError::Io(cause) => cause,
+                AtBlobHeaderNextError::EndpointRead { source, .. } => source.into(),
+                AtBlobHeaderNextError::Io { source, .. } => source,
             }
         }
     }
@@ -422,16 +478,17 @@ pub mod fsm {
         pub async fn next(mut self) -> Result<(AtBlobContent, u64), AtBlobHeaderNextError> {
             let size = self.reader.read::<8>().await.map_err(|cause| {
                 if cause.kind() == io::ErrorKind::UnexpectedEof {
-                    AtBlobHeaderNextError::NotFound
+                    NotFoundSnafu.build()
                 } else if let Some(e) = cause
                     .get_ref()
                     .and_then(|x| x.downcast_ref::<endpoint::ReadError>())
                 {
-                    AtBlobHeaderNextError::Read(e.clone())
+                    EndpointReadSnafu.into_error(e.clone())
                 } else {
-                    AtBlobHeaderNextError::Io(cause)
+                    IoSnafu.into_error(cause)
                 }
             })?;
+            self.misc.other_bytes_read += 8;
             let size = u64::from_le_bytes(size);
             let stream = ResponseDecoder::new(
                 self.hash.into(),
@@ -493,16 +550,6 @@ pub mod fsm {
             Ok(res)
         }
 
-        /// Write the entire stream for this blob to a batch writer.
-        pub async fn write_all_batch<B>(self, batch: B) -> result::Result<AtEndBlob, DecodeError>
-        where
-            B: BaoBatchWriter,
-        {
-            let (content, _size) = self.next().await?;
-            let res = content.write_all_batch(batch).await?;
-            Ok(res)
-        }
-
         /// The hash of the blob we are reading.
         pub fn hash(&self) -> Hash {
             self.hash
@@ -545,41 +592,53 @@ pub mod fsm {
     /// provider should never do this, so this is an indication that the provider is
     /// not behaving correctly.
     ///
-    /// The [`DecodeError::Io`] variant is just a fallback for any other io error that
-    /// is not actually a [`ReadError`].
+    /// The [`DecodeError::DecodeIo`] variant is just a fallback for any other io error that
+    /// is not actually a [`DecodeError::Read`].
     ///
     /// [`ReadError`]: endpoint::ReadError
-    #[derive(Debug, thiserror::Error)]
+    #[common_fields({
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: SpanTrace,
+    })]
+    #[non_exhaustive]
+    #[derive(Debug, Snafu)]
     pub enum DecodeError {
         /// A chunk was not found or invalid, so the provider stopped sending data
-        #[error("not found")]
-        NotFound,
+        #[snafu(display("not found"))]
+        ChunkNotFound {},
         /// A parent was not found or invalid, so the provider stopped sending data
-        #[error("parent not found {0:?}")]
-        ParentNotFound(TreeNode),
+        #[snafu(display("parent not found {node:?}"))]
+        ParentNotFound { node: TreeNode },
         /// A parent was not found or invalid, so the provider stopped sending data
-        #[error("chunk not found {0}")]
-        LeafNotFound(ChunkNum),
+        #[snafu(display("chunk not found {num}"))]
+        LeafNotFound { num: ChunkNum },
         /// The hash of a parent did not match the expected hash
-        #[error("parent hash mismatch: {0:?}")]
-        ParentHashMismatch(TreeNode),
+        #[snafu(display("parent hash mismatch: {node:?}"))]
+        ParentHashMismatch { node: TreeNode },
         /// The hash of a leaf did not match the expected hash
-        #[error("leaf hash mismatch: {0}")]
-        LeafHashMismatch(ChunkNum),
+        #[snafu(display("leaf hash mismatch: {num}"))]
+        LeafHashMismatch { num: ChunkNum },
         /// Error when reading from the stream
-        #[error("read: {0}")]
-        Read(endpoint::ReadError),
+        #[snafu(display("read: {source}"))]
+        Read { source: endpoint::ReadError },
         /// A generic io error
-        #[error("io: {0}")]
-        Io(#[from] io::Error),
+        #[snafu(display("io: {source}"))]
+        DecodeIo { source: io::Error },
+    }
+
+    impl DecodeError {
+        pub(crate) fn leaf_hash_mismatch(num: ChunkNum) -> Self {
+            LeafHashMismatchSnafu { num }.build()
+        }
     }
 
     impl From<AtBlobHeaderNextError> for DecodeError {
         fn from(cause: AtBlobHeaderNextError) -> Self {
             match cause {
-                AtBlobHeaderNextError::NotFound => Self::NotFound,
-                AtBlobHeaderNextError::Read(cause) => Self::Read(cause),
-                AtBlobHeaderNextError::Io(cause) => Self::Io(cause),
+                AtBlobHeaderNextError::NotFound { .. } => ChunkNotFoundSnafu.build(),
+                AtBlobHeaderNextError::EndpointRead { source, .. } => ReadSnafu.into_error(source),
+                AtBlobHeaderNextError::Io { source, .. } => DecodeIoSnafu.into_error(source),
             }
         }
     }
@@ -587,35 +646,47 @@ pub mod fsm {
     impl From<DecodeError> for io::Error {
         fn from(cause: DecodeError) -> Self {
             match cause {
-                DecodeError::ParentNotFound(_) => {
+                DecodeError::ParentNotFound { .. } => {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
-                DecodeError::LeafNotFound(_) => io::Error::new(io::ErrorKind::UnexpectedEof, cause),
-                DecodeError::Read(cause) => cause.into(),
-                DecodeError::Io(cause) => cause,
-                _ => io::Error::new(io::ErrorKind::Other, cause),
+                DecodeError::LeafNotFound { .. } => {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, cause)
+                }
+                DecodeError::Read { source, .. } => source.into(),
+                DecodeError::DecodeIo { source, .. } => source,
+                _ => io::Error::other(cause),
             }
+        }
+    }
+
+    impl From<io::Error> for DecodeError {
+        fn from(value: io::Error) -> Self {
+            DecodeIoSnafu.into_error(value)
         }
     }
 
     impl From<bao_tree::io::DecodeError> for DecodeError {
         fn from(value: bao_tree::io::DecodeError) -> Self {
             match value {
-                bao_tree::io::DecodeError::ParentNotFound(x) => Self::ParentNotFound(x),
-                bao_tree::io::DecodeError::LeafNotFound(x) => Self::LeafNotFound(x),
-                bao_tree::io::DecodeError::ParentHashMismatch(node) => {
-                    Self::ParentHashMismatch(node)
+                bao_tree::io::DecodeError::ParentNotFound(x) => {
+                    ParentNotFoundSnafu { node: x }.build()
                 }
-                bao_tree::io::DecodeError::LeafHashMismatch(chunk) => Self::LeafHashMismatch(chunk),
+                bao_tree::io::DecodeError::LeafNotFound(x) => LeafNotFoundSnafu { num: x }.build(),
+                bao_tree::io::DecodeError::ParentHashMismatch(node) => {
+                    ParentHashMismatchSnafu { node }.build()
+                }
+                bao_tree::io::DecodeError::LeafHashMismatch(chunk) => {
+                    LeafHashMismatchSnafu { num: chunk }.build()
+                }
                 bao_tree::io::DecodeError::Io(cause) => {
                     if let Some(inner) = cause.get_ref() {
                         if let Some(e) = inner.downcast_ref::<endpoint::ReadError>() {
-                            Self::Read(e.clone())
+                            ReadSnafu.into_error(e.clone())
                         } else {
-                            Self::Io(cause)
+                            DecodeIoSnafu.into_error(cause)
                         }
                     } else {
-                        Self::Io(cause)
+                        DecodeIoSnafu.into_error(cause)
                     }
                 }
             }
@@ -636,8 +707,17 @@ pub mod fsm {
         pub async fn next(self) -> BlobContentNext {
             match self.stream.next().await {
                 ResponseDecoderNext::More((stream, res)) => {
-                    let next = Self { stream, ..self };
+                    let mut next = Self { stream, ..self };
                     let res = res.map_err(DecodeError::from);
+                    match &res {
+                        Ok(BaoContentItem::Parent(_)) => {
+                            next.misc.other_bytes_read += 64;
+                        }
+                        Ok(BaoContentItem::Leaf(leaf)) => {
+                            next.misc.payload_bytes_read += leaf.data.len() as u64;
+                        }
+                        _ => {}
+                    }
                     BlobContentNext::More((next, res))
                 }
                 ResponseDecoderNext::Done(stream) => BlobContentNext::Done(AtEndBlob {
@@ -660,6 +740,14 @@ pub mod fsm {
         /// The current offset of the blob we are reading.
         pub fn offset(&self) -> u64 {
             self.misc.ranges_iter.offset()
+        }
+
+        /// Current stats
+        pub fn stats(&self) -> Stats {
+            Stats {
+                counters: self.misc.counters,
+                elapsed: self.misc.start.elapsed(),
+            }
         }
 
         /// Drain the response and throw away the result
@@ -699,39 +787,6 @@ pub mod fsm {
                 }
             };
             Ok((done, res))
-        }
-
-        /// Write the entire stream for this blob to a batch writer.
-        pub async fn write_all_batch<B>(self, writer: B) -> result::Result<AtEndBlob, DecodeError>
-        where
-            B: BaoBatchWriter,
-        {
-            let mut writer = writer;
-            let mut buf = Vec::new();
-            let mut content = self;
-            let size = content.tree().size();
-            loop {
-                match content.next().await {
-                    BlobContentNext::More((next, item)) => {
-                        let item = item?;
-                        match &item {
-                            BaoContentItem::Parent(_) => {
-                                buf.push(item);
-                            }
-                            BaoContentItem::Leaf(_) => {
-                                buf.push(item);
-                                let batch = std::mem::take(&mut buf);
-                                writer.write_batch(size, batch).await?;
-                            }
-                        }
-                        content = next;
-                    }
-                    BlobContentNext::Done(end) => {
-                        assert!(buf.is_empty());
-                        return Ok(end);
-                    }
-                }
-            }
         }
 
         /// Write the entire blob to a slice writer and to an optional outboard.
@@ -822,7 +877,7 @@ pub mod fsm {
             if let Some((offset, ranges)) = self.misc.ranges_iter.next() {
                 AtStartChild {
                     reader: self.stream,
-                    child_offset: offset - 1,
+                    offset,
                     ranges,
                     misc: self.misc,
                 }
@@ -853,7 +908,7 @@ pub mod fsm {
         /// Finish the get response, returning statistics
         pub async fn next(self) -> result::Result<Stats, endpoint::ReadError> {
             // Shut down the stream
-            let (reader, bytes_read) = self.reader.into_parts();
+            let reader = self.reader;
             let mut reader = reader.into_inner();
             if self.check_extra_data {
                 if let Some(chunk) = reader.read_chunk(8, false).await? {
@@ -864,48 +919,68 @@ pub mod fsm {
                 reader.stop(0u8.into()).ok();
             }
             Ok(Stats {
+                counters: self.misc.counters,
                 elapsed: self.misc.start.elapsed(),
-                bytes_written: self.misc.bytes_written,
-                bytes_read,
             })
         }
     }
 
+    #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+    pub struct RequestCounters {
+        /// payload bytes written
+        pub payload_bytes_written: u64,
+        /// request, hash pair and size bytes written
+        pub other_bytes_written: u64,
+        /// payload bytes read
+        pub payload_bytes_read: u64,
+        /// hash pair and size bytes read
+        pub other_bytes_read: u64,
+    }
+
     /// Stuff we need to hold on to while going through the machine states
-    #[derive(Debug)]
+    #[derive(Debug, derive_more::Deref, derive_more::DerefMut)]
     struct Misc {
         /// start time for statistics
         start: Instant,
-        /// bytes written for statistics
-        bytes_written: u64,
+        /// counters
+        #[deref]
+        #[deref_mut]
+        counters: RequestCounters,
         /// iterator over the ranges of the collection and the children
         ranges_iter: RangesIter,
     }
 }
 
 /// Error when processing a response
-#[derive(thiserror::Error, Debug)]
+#[common_fields({
+    backtrace: Option<Backtrace>,
+    #[snafu(implicit)]
+    span_trace: SpanTrace,
+})]
+#[allow(missing_docs)]
+#[non_exhaustive]
+#[derive(Debug, Snafu)]
 pub enum GetResponseError {
     /// Error when opening a stream
-    #[error("connection: {0}")]
-    Connection(#[from] endpoint::ConnectionError),
+    #[snafu(display("connection: {source}"))]
+    Connection { source: endpoint::ConnectionError },
     /// Error when writing the handshake or request to the stream
-    #[error("write: {0}")]
-    Write(#[from] endpoint::WriteError),
+    #[snafu(display("write: {source}"))]
+    Write { source: endpoint::WriteError },
     /// Error when reading from the stream
-    #[error("read: {0}")]
-    Read(#[from] endpoint::ReadError),
+    #[snafu(display("read: {source}"))]
+    Read { source: endpoint::ReadError },
     /// Error when decoding, e.g. hash mismatch
-    #[error("decode: {0}")]
-    Decode(bao_tree::io::DecodeError),
+    #[snafu(display("decode: {source}"))]
+    Decode { source: bao_tree::io::DecodeError },
     /// A generic error
-    #[error("generic: {0}")]
-    Generic(anyhow::Error),
+    #[snafu(display("generic: {source}"))]
+    Generic { source: anyhow::Error },
 }
 
 impl From<postcard::Error> for GetResponseError {
     fn from(cause: postcard::Error) -> Self {
-        Self::Generic(cause.into())
+        GenericSnafu.into_error(cause.into())
     }
 }
 
@@ -916,30 +991,30 @@ impl From<bao_tree::io::DecodeError> for GetResponseError {
                 // try to downcast to specific quinn errors
                 if let Some(source) = cause.source() {
                     if let Some(error) = source.downcast_ref::<endpoint::ConnectionError>() {
-                        return Self::Connection(error.clone());
+                        return ConnectionSnafu.into_error(error.clone());
                     }
                     if let Some(error) = source.downcast_ref::<endpoint::ReadError>() {
-                        return Self::Read(error.clone());
+                        return ReadSnafu.into_error(error.clone());
                     }
                     if let Some(error) = source.downcast_ref::<endpoint::WriteError>() {
-                        return Self::Write(error.clone());
+                        return WriteSnafu.into_error(error.clone());
                     }
                 }
-                Self::Generic(cause.into())
+                GenericSnafu.into_error(cause.into())
             }
-            _ => Self::Decode(cause),
+            _ => DecodeSnafu.into_error(cause),
         }
     }
 }
 
 impl From<anyhow::Error> for GetResponseError {
     fn from(cause: anyhow::Error) -> Self {
-        Self::Generic(cause)
+        GenericSnafu.into_error(cause)
     }
 }
 
 impl From<GetResponseError> for std::io::Error {
     fn from(cause: GetResponseError) -> Self {
-        Self::new(std::io::ErrorKind::Other, cause)
+        Self::other(cause)
     }
 }

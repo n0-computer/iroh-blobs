@@ -1,4 +1,4 @@
-//! traits related to collections of blobs
+//! Helpers for blobs that contain a sequence of hashes.
 use std::{fmt::Debug, io};
 
 use bytes::Bytes;
@@ -7,8 +7,20 @@ use iroh_io::{AsyncSliceReader, AsyncSliceReaderExt};
 use crate::Hash;
 
 /// A sequence of links, backed by a [`Bytes`] object.
-#[derive(Debug, Clone, derive_more::Into)]
+#[derive(Clone, derive_more::Into)]
 pub struct HashSeq(Bytes);
+
+impl Debug for HashSeq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<'a> FromIterator<&'a Hash> for HashSeq {
+    fn from_iter<T: IntoIterator<Item = &'a Hash>>(iter: T) -> Self {
+        iter.into_iter().copied().collect()
+    }
+}
 
 impl FromIterator<Hash> for HashSeq {
     fn from_iter<T: IntoIterator<Item = Hash>>(iter: T) -> Self {

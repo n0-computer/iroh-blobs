@@ -29,6 +29,7 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
+    "CDLA-Permissive-2.0",
 ]
 
 [[licenses.clarify]]

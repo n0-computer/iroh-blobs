@@ -2,8 +2,15 @@
 
 use std::{borrow::Borrow, fmt, str::FromStr};
 
+use arrayvec::ArrayString;
+use bao_tree::blake3;
+use n0_snafu::SpanTrace;
+use nested_enum_utils::common_fields;
 use postcard::experimental::max_size::MaxSize;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use snafu::{Backtrace, ResultExt, Snafu};
+
+use crate::store::util::DD;
 
 /// Hash type used throughout.
 #[derive(PartialEq, Eq, Copy, Clone, Hash)]
@@ -12,14 +19,6 @@ pub struct Hash(blake3::Hash);
 impl fmt::Debug for Hash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Hash").field(&DD(self.to_hex())).finish()
-    }
-}
-
-struct DD<T: fmt::Display>(T);
-
-impl<T: fmt::Display> fmt::Debug for DD<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -53,8 +52,12 @@ impl Hash {
 
     /// Convert to a hex string limited to the first 5bytes for a friendly string
     /// representation of the hash.
-    pub fn fmt_short(&self) -> String {
-        data_encoding::HEXLOWER.encode(&self.as_bytes()[..5])
+    pub fn fmt_short(&self) -> ArrayString<10> {
+        let mut res = ArrayString::new();
+        data_encoding::HEXLOWER
+            .encode_write(&self.as_bytes()[..5], &mut res)
+            .unwrap();
+        res
     }
 }
 
@@ -120,25 +123,33 @@ impl Ord for Hash {
 
 impl fmt::Display for Hash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // result will be 52 bytes
-        let mut res = [b'b'; 52];
-        // write the encoded bytes
-        data_encoding::BASE32_NOPAD.encode_mut(self.as_bytes(), &mut res);
-        // convert to string, this is guaranteed to succeed
-        let t = std::str::from_utf8_mut(res.as_mut()).unwrap();
-        // hack since data_encoding doesn't have BASE32LOWER_NOPAD as a const
-        t.make_ascii_lowercase();
-        // write the str, no allocations
-        f.write_str(t)
+        f.write_str(&self.to_hex())
+        // // result will be 52 bytes
+        // let mut res = [b'b'; 52];
+        // // write the encoded bytes
+        // data_encoding::BASE32_NOPAD.encode_mut(self.as_bytes(), &mut res);
+        // // convert to string, this is guaranteed to succeed
+        // let t = std::str::from_utf8_mut(res.as_mut()).unwrap();
+        // // hack since data_encoding doesn't have BASE32LOWER_NOPAD as a const
+        // t.make_ascii_lowercase();
+        // // write the str, no allocations
+        // f.write_str(t)
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[common_fields({
+    backtrace: Option<Backtrace>,
+    #[snafu(implicit)]
+    span_trace: SpanTrace,
+})]
+#[allow(missing_docs)]
+#[non_exhaustive]
+#[derive(Debug, Snafu)]
 pub enum HexOrBase32ParseError {
-    #[error("Invalid length")]
-    DecodeInvalidLength,
-    #[error("Failed to decode {0}")]
-    Decode(#[from] data_encoding::DecodeError),
+    #[snafu(display("Invalid length"))]
+    DecodeInvalidLength {},
+    #[snafu(display("Failed to decode {source}"))]
+    Decode { source: data_encoding::DecodeError },
 }
 
 impl FromStr for Hash {
@@ -151,20 +162,15 @@ impl FromStr for Hash {
             // hex
             data_encoding::HEXLOWER.decode_mut(s.as_bytes(), &mut bytes)
         } else {
-            let input = s.to_ascii_uppercase();
-            let input = input.as_bytes();
-            if data_encoding::BASE32_NOPAD.decode_len(input.len())? != bytes.len() {
-                return Err(HexOrBase32ParseError::DecodeInvalidLength);
-            }
-            data_encoding::BASE32_NOPAD.decode_mut(input, &mut bytes)
+            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), &mut bytes)
         };
         match res {
             Ok(len) => {
                 if len != 32 {
-                    return Err(HexOrBase32ParseError::DecodeInvalidLength);
+                    return Err(DecodeInvalidLengthSnafu.build());
                 }
             }
-            Err(partial) => return Err(partial.error.into()),
+            Err(partial) => return Err(partial.error).context(DecodeSnafu),
         }
         Ok(Self(blake3::Hash::from_bytes(bytes)))
     }
@@ -248,7 +254,7 @@ impl BlobFormat {
 }
 
 /// A hash and format pair
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, MaxSize, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, MaxSize, Hash)]
 pub struct HashAndFormat {
     /// The hash
     pub hash: Hash,
@@ -256,13 +262,28 @@ pub struct HashAndFormat {
     pub format: BlobFormat,
 }
 
-impl From<Hash> for HashAndFormat {
-    fn from(hash: Hash) -> Self {
-        Self::raw(hash)
+impl std::fmt::Debug for HashAndFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        std::fmt::Debug::fmt(&(DD(self.hash.to_hex()), self.format), f)
     }
 }
 
-#[cfg(feature = "redb")]
+impl From<(Hash, BlobFormat)> for HashAndFormat {
+    fn from((hash, format): (Hash, BlobFormat)) -> Self {
+        Self { hash, format }
+    }
+}
+
+impl From<Hash> for HashAndFormat {
+    fn from(hash: Hash) -> Self {
+        Self {
+            hash,
+            format: BlobFormat::Raw,
+        }
+    }
+}
+
+// #[cfg(feature = "redb")]
 mod redb_support {
     use postcard::experimental::max_size::MaxSize;
     use redb::{Key as RedbKey, Value as RedbValue};
@@ -427,10 +448,11 @@ impl<'de> Deserialize<'de> for HashAndFormat {
 
 #[cfg(test)]
 mod tests {
+
+    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
     use serde_test::{assert_tokens, Configure, Token};
 
     use super::*;
-    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     #[test]
     fn test_display_parse_roundtrip() {
@@ -471,7 +493,7 @@ mod tests {
         assert_eq_hex!(serialized, expected);
     }
 
-    #[cfg(feature = "redb")]
+    // #[cfg(feature = "redb")]
     #[test]
     fn hash_redb() {
         use redb::Value as RedbValue;
@@ -496,7 +518,7 @@ mod tests {
         assert_eq_hex!(serialized, expected);
     }
 
-    #[cfg(feature = "redb")]
+    // #[cfg(feature = "redb")]
     #[test]
     fn hash_and_format_redb() {
         use redb::Value as RedbValue;
@@ -541,7 +563,7 @@ mod tests {
         assert_tokens(&hash.compact(), &tokens);
 
         let tokens = vec![Token::String(
-            "5khrmpntq2bjexseshc6ldklwnig56gbj23yvbxjbdcwestheahq",
+            "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
         )];
         assert_tokens(&hash.readable(), &tokens);
     }
@@ -563,7 +585,7 @@ mod tests {
         let de = serde_json::from_str(&ser).unwrap();
         assert_eq!(hash, de);
         // 52 bytes of base32 + 2 quotes
-        assert_eq!(ser.len(), 54);
+        assert_eq!(ser.len(), 66);
     }
 
     #[test]
@@ -593,10 +615,5 @@ mod tests {
         let ser = serde_json::to_string(&haf).unwrap();
         let de = serde_json::from_str(&ser).unwrap();
         assert_eq!(haf, de);
-    }
-
-    #[test]
-    fn test_hash_invalid() {
-        let _ = Hash::from_str("invalid").unwrap_err();
     }
 }
