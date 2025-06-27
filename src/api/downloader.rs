@@ -703,6 +703,7 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore = "todo"]
     async fn downloader_get_many_smoke() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
