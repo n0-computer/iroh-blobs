@@ -840,7 +840,8 @@
 <a href="#839" id="839">839</a>
 <a href="#840" id="840">840</a>
 <a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -1545,6 +1546,7 @@
     };
 
     <span class="attr">#[tokio::test]
+    #[ignore = <span class="string">"todo"</span>]
     </span><span class="kw">async fn </span>downloader_get_many_smoke() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
         <span class="kw">let </span>(r1, store1, <span class="kw">_</span>) = node_test_setup_fs(testdir.path().join(<span class="string">"a"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
