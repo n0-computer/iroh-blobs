@@ -1,6 +1,6 @@
 [package]
 name = "iroh-blobs"
-version = "0.90.0-alpha1"
+version = "0.90.0"
 edition = "2021"
 description = "content-addressed blobs for iroh"
 license = "MIT OR Apache-2.0"
