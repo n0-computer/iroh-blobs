@@ -93,8 +93,9 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
     } else {
         // Generate a new random key
         let secret_key = SecretKey::generate(&mut rand::thread_rng());
+        let secret_key_str = hex::encode(secret_key.to_bytes());
         println!("Generated new random secret key");
-        println!("To reuse this key, set the IROH_SECRET={secret_key:?}");
+        println!("To reuse this key, set the IROH_SECRET={secret_key_str}");
         Ok(secret_key)
     }
 }
