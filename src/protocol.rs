@@ -1,7 +1,4 @@
-//! Protocol for transferring content-addressed blobs and collections over quic
-//! connections. This can be used either with normal quic connections when using
-//! the [quinn](https://crates.io/crates/quinn) crate or with magicsock connections
-//! when using the [iroh-net](https://crates.io/crates/iroh-net) crate.
+//! Protocol for transferring content-addressed blobs over [`iroh`] p2p QUIC connections.
 //!
 //! # Participants
 //!
@@ -88,33 +85,36 @@
 //! ## Specifying the required data
 //!
 //! A [`GetRequest`] contains a hash and a specification of what data related to
-//! that hash is required. The specification is using a [`RangeSpecSeq`] which
+//! that hash is required. The specification is using a [`ChunkRangesSeq`] which
 //! has a compact representation on the wire but is otherwise identical to a
 //! sequence of sets of ranges.
 //!
-//! In the following, we describe how the [`RangeSpecSeq`] is to be created for
+//! In the following, we describe how the [`GetRequest`] is to be created for
 //! different common scenarios.
+//!
+//! Under the hood, this is using the [`ChunkRangesSeq`] type, but the most
+//! convenient way to create a [`GetRequest`] is to use the builder API.
 //!
 //! Ranges are always given in terms of 1024 byte blake3 chunks, *not* in terms
 //! of bytes or chunk groups. The reason for this is that chunks are the fundamental
-//! unit of hashing in blake3. Addressing anything smaller than a chunk is not
+//! unit of hashing in BLAKE3. Addressing anything smaller than a chunk is not
 //! possible, and combining multiple chunks is merely an optimization to reduce
 //! metadata overhead.
 //!
 //! ### Individual blobs
 //!
 //! In the easiest case, the getter just wants to retrieve a single blob. In this
-//! case, the getter specifies [`RangeSpecSeq`] that contains a single element.
+//! case, the getter specifies [`ChunkRangesSeq`] that contains a single element.
 //! This element is the set of all chunks to indicate that we
 //! want the entire blob, no matter how many chunks it has.
 //!
 //! Since this is a very common case, there is a convenience method
-//! [`GetRequest::single`] that only requires the hash of the blob.
+//! [`GetRequest::blob`] that only requires the hash of the blob.
 //!
 //! ```rust
 //! # use iroh_blobs::protocol::GetRequest;
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let request = GetRequest::single(hash);
+//! let request = GetRequest::blob(hash);
 //! ```
 //!
 //! ### Ranges of blobs
@@ -122,36 +122,55 @@
 //! In this case, we have a (possibly large) blob and we want to retrieve only
 //! some ranges of chunks. This is useful in similar cases as HTTP range requests.
 //!
-//! We still need just a single element in the [`RangeSpecSeq`], since we are
+//! We still need just a single element in the [`ChunkRangesSeq`], since we are
 //! still only interested in a single blob. However, this element contains all
 //! the chunk ranges we want to retrieve.
 //!
 //! For example, if we want to retrieve chunks 0-10 of a blob, we would
-//! create a [`RangeSpecSeq`] like this:
+//! create a [`ChunkRangesSeq`] like this:
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let spec = RangeSpecSeq::from_ranges([ChunkRanges::from(..ChunkNum(10))]);
-//! let request = GetRequest::new(hash, spec);
+//! let request = GetRequest::builder()
+//!     .root(ChunkRanges::chunks(..10))
+//!     .build(hash);
 //! ```
-//!
-//! Here `ChunkNum` is a newtype wrapper around `u64` that is used to indicate
-//! that we are talking about chunk numbers, not bytes.
 //!
 //! While not that common, it is also possible to request multiple ranges of a
 //! single blob. For example, if we want to retrieve chunks `0-10` and `100-110`
-//! of a large file, we would create a [`RangeSpecSeq`] like this:
+//! of a large file, we would create a [`GetRequest`] like this:
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt, ChunkRangesSeq};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let ranges =
-//!     &ChunkRanges::from(..ChunkNum(10)) | &ChunkRanges::from(ChunkNum(100)..ChunkNum(110));
-//! let spec = RangeSpecSeq::from_ranges([ranges]);
-//! let request = GetRequest::new(hash, spec);
+//! let request = GetRequest::builder()
+//!     .root(ChunkRanges::chunks(..10) | ChunkRanges::chunks(100..110))
+//!     .build(hash);
+//! ```
+//!
+//! This is all great, but in most cases we are not interested in chunks but
+//! in bytes. The [`ChunkRanges`] type has a constructor that allows providing
+//! byte ranges instead of chunk ranges. These will be rounded up to the
+//! nearest chunk.
+//!
+//! ```rust
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt, ChunkRangesSeq};
+//! # let hash: iroh_blobs::Hash = [0; 32].into();
+//! let request = GetRequest::builder()
+//!     .root(ChunkRanges::bytes(..1000) | ChunkRanges::bytes(10000..11000))
+//!     .build(hash);
+//! ```
+//!
+//! There are also methods to request a single chunk or a single byte offset,
+//! as well as a special constructor for the last chunk of a blob.
+//!
+//! ```rust
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt, ChunkRangesSeq};
+//! # let hash: iroh_blobs::Hash = [0; 32].into();
+//! let request = GetRequest::builder()
+//!     .root(ChunkRanges::offset(1) | ChunkRanges::last_chunk())
+//!     .build(hash);
 //! ```
 //!
 //! To specify chunk ranges, we use the [`ChunkRanges`] type alias.
@@ -165,82 +184,83 @@
 //! [`RangeSet`]: range_collections::range_set::RangeSet
 //! [`RangeSet2`]: range_collections::range_set::RangeSet2
 //!
-//! ### Collections
+//! ### Hash sequences
 //!
-//! In this case the provider has a collection that contains multiple blobs.
-//! We want to retrieve all blobs in the collection.
+//! In this case the provider has a hash sequence that refers multiple blobs.
+//! We want to retrieve all blobs in the hash sequence.
 //!
-//! When used for collections, the first element of a [`RangeSpecSeq`] refers
-//! to the collection itself, and all subsequent elements refer to the blobs
-//! in the collection. When a [`RangeSpecSeq`] specifies ranges for more than
-//! one blob, the provider will interpret this as a request for a collection.
+//! When used for hash sequences, the first element of a [`ChunkRangesSeq`] refers
+//! to the hash seq itself, and all subsequent elements refer to the blobs
+//! in the hash seq. When a [`ChunkRangesSeq`] specifies ranges for more than
+//! one blob, the provider will interpret this as a request for a hash seq.
 //!
 //! One thing to note is that we might not yet know how many blobs are in the
-//! collection. Therefore, it is not possible to download an entire collection
+//! hash sequence. Therefore, it is not possible to download an entire hash seq
 //! by just specifying [`ChunkRanges::all()`] for all children.
 //!
-//! Instead, [`RangeSpecSeq`] allows defining infinite sequences of range sets.
-//! The [`RangeSpecSeq::all()`] method returns a [`RangeSpecSeq`] that, when iterated
+//! Instead, [`ChunkRangesSeq`] allows defining infinite sequences of range sets.
+//! The [`ChunkRangesSeq::all()`] method returns a [`ChunkRangesSeq`] that, when iterated
 //! over, will yield [`ChunkRanges::all()`] forever.
 //!
-//! So specifying a collection would work like this:
+//! So a get request to download a hash sequence blob and all its children
+//! would look like this:
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt, GetRequest};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let spec = RangeSpecSeq::all();
-//! let request = GetRequest::new(hash, spec);
+//! let request = GetRequest::builder()
+//!     .root(ChunkRanges::all())
+//!     .build_open(hash); // repeats the last range forever
 //! ```
 //!
-//! Downloading an entire collection is also a very common case, so there is a
+//! Downloading an entire hash seq is also a very common case, so there is a
 //! convenience method [`GetRequest::all`] that only requires the hash of the
-//! collection.
+//! hash sequence blob.
 //!
-//! ### Parts of collections
+//! ```rust
+//! # use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt, GetRequest};
+//! # let hash: iroh_blobs::Hash = [0; 32].into();
+//! let request = GetRequest::all(hash);
+//! ```
 //!
-//! The most complex common case is when we have retrieved a collection and
+//! ### Parts of hash sequences
+//!
+//! The most complex common case is when we have retrieved a hash seq and
 //! it's children, but were interrupted before we could retrieve all children.
 //!
-//! In this case we need to specify the collection we want to retrieve, but
+//! In this case we need to specify the hash seq we want to retrieve, but
 //! exclude the children and parts of children that we already have.
 //!
-//! For example, if we have a collection with 3 children, and we already have
+//! For example, if we have a hash with 3 children, and we already have
 //! the first child and the first 1000000 chunks of the second child.
 //!
 //! We would create a [`GetRequest`] like this:
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let spec = RangeSpecSeq::from_ranges([
-//!   ChunkRanges::empty(), // we don't need the collection itself
-//!   ChunkRanges::empty(), // we don't need the first child either
-//!   ChunkRanges::from(ChunkNum(1000000)..), // we need the second child from chunk 1000000 onwards
-//!   ChunkRanges::all(), // we need the third child completely
-//! ]);
-//! let request = GetRequest::new(hash, spec);
+//! let request = GetRequest::builder()
+//!     .child(1, ChunkRanges::chunks(1000000..)) // we don't need the first child;
+//!     .next(ChunkRanges::all()) // we need the second child and all subsequent children completely
+//!     .build_open(hash);
 //! ```
 //!
 //! ### Requesting chunks for each child
 //!
-//! The RangeSpecSeq allows some scenarios that are not covered above. E.g. you
-//! might want to request a collection and the first chunk of each child blob to
+//! The ChunkRangesSeq allows some scenarios that are not covered above. E.g. you
+//! might want to request a hash seq and the first chunk of each child blob to
 //! do something like mime type detection.
 //!
 //! You do not know how many children the collection has, so you need to use
 //! an infinite sequence.
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt, ChunkRangesSeq};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let spec = RangeSpecSeq::from_ranges_infinite([
-//!     ChunkRanges::all(),               // the collection itself
-//!     ChunkRanges::from(..ChunkNum(1)), // the first chunk of each child
-//! ]);
-//! let request = GetRequest::new(hash, spec);
+//! let request = GetRequest::builder()
+//!     .root(ChunkRanges::all())
+//!     .next(ChunkRanges::chunk(1)) // the first chunk of each child)
+//!     .build_open(hash);
 //! ```
 //!
 //! ### Requesting a single child
@@ -249,45 +269,40 @@
 //! the following would download the second child of a collection:
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesExt};
 //! # let hash: iroh_blobs::Hash = [0; 32].into();
-//! let spec = RangeSpecSeq::from_ranges([
-//!     ChunkRanges::empty(), // we don't need the collection itself
-//!     ChunkRanges::empty(), // we don't need the first child either
-//!     ChunkRanges::all(),   // we need the second child completely
-//! ]);
-//! let request = GetRequest::new(hash, spec);
+//! let request = GetRequest::builder()
+//!     .child(1, ChunkRanges::all()) // we need the second child completely
+//!     .build(hash);
 //! ```
 //!
 //! However, if you already have the collection, you might as well locally
 //! look up the hash of the child and request it directly.
 //!
 //! ```rust
-//! # use bao_tree::{ChunkNum, ChunkRanges};
-//! # use iroh_blobs::protocol::{GetRequest, RangeSpecSeq};
+//! # use iroh_blobs::protocol::{GetRequest, ChunkRanges, ChunkRangesSeq};
 //! # let child_hash: iroh_blobs::Hash = [0; 32].into();
-//! let request = GetRequest::single(child_hash);
+//! let request = GetRequest::blob(child_hash);
 //! ```
 //!
-//! ### Why RangeSpec and RangeSpecSeq?
+//! ### Why ChunkRanges and ChunkRangesSeq?
 //!
-//! You might wonder why we have [`RangeSpec`] and [`RangeSpecSeq`], when a simple
+//! You might wonder why we have [`ChunkRangesSeq`], when a simple
 //! sequence of [`ChunkRanges`] might also do.
 //!
-//! The [`RangeSpec`] and [`RangeSpecSeq`] types exist to provide an efficient
-//! representation of the request on the wire. In the [`RangeSpec`] type,
-//! sequences of ranges are encoded alternating intervals of selected and
-//! non-selected chunks. This results in smaller numbers that will result in fewer bytes
-//! on the wire when using the [postcard](https://crates.io/crates/postcard) encoding
-//! format that uses variable length integers.
+//! The [`ChunkRangesSeq`] type exist to provide an efficient
+//! representation of the request on the wire. In the wire encoding of [`ChunkRangesSeq`],
+//! [`ChunkRanges`] are encoded alternating intervals of selected and non-selected chunks.
+//! This results in smaller numbers that will result in fewer bytes on the wire when using
+//! the [postcard](https://crates.io/crates/postcard) encoding format that uses variable
+//! length integers.
 //!
-//! Likewise, the [`RangeSpecSeq`] type is a sequence of [`RangeSpec`]s that
+//! Likewise, the [`ChunkRangesSeq`] type
 //! does run length encoding to remove repeating elements. It also allows infinite
-//! sequences of [`RangeSpec`]s to be encoded, unlike a simple sequence of
+//! sequences of [`ChunkRanges`] to be encoded, unlike a simple sequence of
 //! [`ChunkRanges`]s.
 //!
-//! [`RangeSpecSeq`] should be efficient even in case of very fragmented availability
+//! [`ChunkRangesSeq`] should be efficient even in case of very fragmented availability
 //! of chunks, like a download from multiple providers that was frequently interrupted.
 //!
 //! # Responses
@@ -295,17 +310,12 @@
 //! The response stream contains the bao encoded bytes for the requested data.
 //! The data will be sent in the order in which it was requested, so ascending
 //! chunks for each blob, and blobs in the order in which they appear in the
-//! collection.
+//! hash seq.
 //!
 //! For details on the bao encoding, see the [bao specification](https://github.com/oconnor663/bao/blob/master/docs/spec.md)
 //! and the [bao-tree](https://crates.io/crates/bao-tree) crate. The bao-tree crate
-//! is identical to the bao crate, except that it allows combining multiple blake3
+//! is identical to the bao crate, except that it allows combining multiple BLAKE3
 //! chunks to chunk groups for efficiency.
-//!
-//! As a consequence of the chunk group optimization, chunk ranges in the response
-//! will be rounded up to chunk groups ranges, so e.g. if you ask for chunks 0..10,
-//! you will get chunks 0-16. This is done to reduce metadata overhead, and might
-//! change in the future.
 //!
 //! For a complete response, the chunks are guaranteed to completely cover the
 //! requested ranges.
@@ -323,33 +333,67 @@
 //!
 //! # Requesting multiple unrelated blobs
 //!
-//! Currently, the protocol does not support requesting multiple unrelated blobs
-//! in a single request. As an alternative, you can create a collection
-//! on the provider side and use that to efficiently retrieve the blobs.
+//! Let's say you don't have a hash sequence on the provider side, but you
+//! nevertheless want to request multiple unrelated blobs in a single request.
 //!
-//! If that is not possible, you can create a custom request handler that
-//! accepts a custom request struct that contains the hashes of the blobs.
+//! For this, there is the [`GetManyRequest`] type, which also comes with a
+//! builder API.
 //!
-//! If neither of these options are possible, you have no choice but to do
-//! multiple requests. However, note that multiple requests will be multiplexed
-//! over a single connection, and the overhead of a new QUIC stream on an existing
-//! connection is very low.
+//! ```rust
+//! # use iroh_blobs::protocol::{GetManyRequest, ChunkRanges, ChunkRangesExt};
+//! # let hash1: iroh_blobs::Hash = [0; 32].into();
+//! # let hash2: iroh_blobs::Hash = [1; 32].into();
+//! GetManyRequest::builder()
+//!     .hash(hash1, ChunkRanges::all())
+//!     .hash(hash2, ChunkRanges::all())
+//!     .build();
+//! ```
+//! If you accidentally or intentionally request ranges for the same hash
+//! multiple times, they will be merged into a single [`ChunkRanges`].
 //!
-//! In case nodes are permanently exchanging data, it is probably valuable to
-//! keep a connection open and reuse it for multiple requests.
-use bao_tree::{ChunkNum, ChunkRanges};
+//! ```rust
+//! # use iroh_blobs::protocol::{GetManyRequest, ChunkRanges, ChunkRangesExt};
+//! # let hash1: iroh_blobs::Hash = [0; 32].into();
+//! # let hash2: iroh_blobs::Hash = [1; 32].into();
+//! GetManyRequest::builder()
+//!     .hash(hash1, ChunkRanges::chunk(1))
+//!     .hash(hash2, ChunkRanges::all())
+//!     .hash(hash1, ChunkRanges::last_chunk())
+//!     .build();
+//! ```
+//!
+//! This is mostly useful for requesting multiple tiny blobs in a single request.
+//! For large or even medium sized blobs, multiple requests are not expensive.
+//! Multiple requests just create multiple streams on the same connection,
+//! which is *very* cheap in QUIC.
+//!
+//! In case nodes are permanently exchanging data, it is somewhat valuable to
+//! keep a connection open and reuse it for multiple requests. However, creating
+//! a new connection is also very cheap, so you would only do this to optimize
+//! a large existing system that has demonstrated performance issues.
+//!
+//! If in doubt, just use multiple requests and multiple connections.
+use std::io;
+
+use builder::GetRequestBuilder;
 use derive_more::From;
 use iroh::endpoint::VarInt;
+use irpc::util::AsyncReadVarintExt;
+use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 mod range_spec;
-pub use range_spec::{NonEmptyRequestRangeSpecIter, RangeSpec, RangeSpecSeq};
+pub use bao_tree::ChunkRanges;
+pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
+use snafu::{GenerateImplicitData, Snafu};
+use tokio::io::AsyncReadExt;
 
-use crate::Hash;
+pub use crate::util::ChunkRangesExt;
+use crate::{api::blobs::Bitfield, provider::CountingReader, BlobFormat, Hash, HashAndFormat};
 
 /// Maximum message size is limited to 100MiB for now.
-pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024 * 100;
+pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
-/// The ALPN used with quic for the iroh bytes protocol.
+/// The ALPN used with quic for the iroh blobs protocol.
 pub const ALPN: &[u8] = b"/iroh-bytes/4";
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, From)]
@@ -357,61 +401,238 @@ pub const ALPN: &[u8] = b"/iroh-bytes/4";
 pub enum Request {
     /// A get request for a blob or collection
     Get(GetRequest),
+    Observe(ObserveRequest),
+    Slot2,
+    Slot3,
+    Slot4,
+    Slot5,
+    Slot6,
+    Slot7,
+    /// The inverse of a get request - push data to the provider
+    ///
+    /// Note that providers will in many cases reject this request, e.g. if
+    /// they don't have write access to the store or don't want to ingest
+    /// unknown data.
+    Push(PushRequest),
+    /// Get multiple blobs in a single request, from a single provider
+    ///
+    /// This is identical to a [`GetRequest`] for a [`crate::hashseq::HashSeq`], but the provider
+    /// does not need to have the hash seq.
+    GetMany(GetManyRequest),
 }
 
-/// A request
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
+/// This must contain the request types in the same order as the full requests
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Copy, MaxSize)]
+pub enum RequestType {
+    Get,
+    Observe,
+    Slot2,
+    Slot3,
+    Slot4,
+    Slot5,
+    Slot6,
+    Slot7,
+    Push,
+    GetMany,
+}
+
+impl Request {
+    pub async fn read_async(
+        reader: &mut CountingReader<&mut iroh::endpoint::RecvStream>,
+    ) -> io::Result<Self> {
+        let request_type = reader.read_u8().await?;
+        let request_type: RequestType = postcard::from_bytes(std::slice::from_ref(&request_type))
+            .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "failed to deserialize request type",
+            )
+        })?;
+        Ok(match request_type {
+            RequestType::Get => reader
+                .read_to_end_as::<GetRequest>(MAX_MESSAGE_SIZE)
+                .await?
+                .into(),
+            RequestType::GetMany => reader
+                .read_to_end_as::<GetManyRequest>(MAX_MESSAGE_SIZE)
+                .await?
+                .into(),
+            RequestType::Observe => reader
+                .read_to_end_as::<ObserveRequest>(MAX_MESSAGE_SIZE)
+                .await?
+                .into(),
+            RequestType::Push => reader
+                .read_length_prefixed::<PushRequest>(MAX_MESSAGE_SIZE)
+                .await?
+                .into(),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "failed to deserialize request type",
+                ));
+            }
+        })
+    }
+}
+
+/// A get request
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Hash)]
 pub struct GetRequest {
     /// blake3 hash
     pub hash: Hash,
     /// The range of data to request
     ///
     /// The first element is the parent, all subsequent elements are children.
-    pub ranges: RangeSpecSeq,
+    pub ranges: ChunkRangesSeq,
+}
+
+impl From<HashAndFormat> for GetRequest {
+    fn from(value: HashAndFormat) -> Self {
+        match value.format {
+            BlobFormat::Raw => Self::blob(value.hash),
+            BlobFormat::HashSeq => Self::all(value.hash),
+        }
+    }
 }
 
 impl GetRequest {
+    pub fn builder() -> GetRequestBuilder {
+        GetRequestBuilder::default()
+    }
+
+    pub fn content(&self) -> HashAndFormat {
+        HashAndFormat {
+            hash: self.hash,
+            format: if self.ranges.is_blob() {
+                BlobFormat::Raw
+            } else {
+                BlobFormat::HashSeq
+            },
+        }
+    }
+
     /// Request a blob or collection with specified ranges
-    pub fn new(hash: Hash, ranges: RangeSpecSeq) -> Self {
+    pub fn new(hash: Hash, ranges: ChunkRangesSeq) -> Self {
         Self { hash, ranges }
     }
 
     /// Request a collection and all its children
-    pub fn all(hash: Hash) -> Self {
+    pub fn all(hash: impl Into<Hash>) -> Self {
         Self {
-            hash,
-            ranges: RangeSpecSeq::all(),
+            hash: hash.into(),
+            ranges: ChunkRangesSeq::all(),
         }
     }
 
     /// Request just a single blob
-    pub fn single(hash: Hash) -> Self {
+    pub fn blob(hash: impl Into<Hash>) -> Self {
         Self {
-            hash,
-            ranges: RangeSpecSeq::from_ranges([ChunkRanges::all()]),
+            hash: hash.into(),
+            ranges: ChunkRangesSeq::from_ranges([ChunkRanges::all()]),
         }
     }
 
-    /// Request the last chunk of a single blob
-    ///
-    /// This can be used to get the verified size of a blob.
-    pub fn last_chunk(hash: Hash) -> Self {
+    /// Request ranges from a single blob
+    pub fn blob_ranges(hash: Hash, ranges: ChunkRanges) -> Self {
         Self {
             hash,
-            ranges: RangeSpecSeq::from_ranges([ChunkRanges::from(ChunkNum(u64::MAX)..)]),
+            ranges: ChunkRangesSeq::from_ranges([ranges]),
         }
     }
+}
 
-    /// Request the last chunk for all children
+/// A push request contains a description of what to push, but will be followed
+/// by the data to push.
+#[derive(
+    Deserialize, Serialize, Debug, PartialEq, Eq, Clone, derive_more::From, derive_more::Deref,
+)]
+pub struct PushRequest(GetRequest);
+
+impl PushRequest {
+    pub fn new(hash: Hash, ranges: ChunkRangesSeq) -> Self {
+        Self(GetRequest::new(hash, ranges))
+    }
+}
+
+/// A GetMany request is a request to get multiple blobs via a single request.
+///
+/// It is identical to a [`GetRequest`] for a HashSeq, but the HashSeq is provided
+/// by the requester.
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
+pub struct GetManyRequest {
+    /// The hashes of the blobs to get
+    pub hashes: Vec<Hash>,
+    /// The ranges of data to request
     ///
-    /// This can be used to get the verified size of all children.
-    pub fn last_chunks(hash: Hash) -> Self {
+    /// There is no range request for the parent, since we just sent the hashes
+    /// and therefore have the parent already.
+    pub ranges: ChunkRangesSeq,
+}
+
+impl<I: Into<Hash>> FromIterator<I> for GetManyRequest {
+    fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
+        let mut res = iter.into_iter().map(Into::into).collect::<Vec<Hash>>();
+        res.sort();
+        res.dedup();
+        let n = res.len() as u64;
         Self {
-            hash,
-            ranges: RangeSpecSeq::from_ranges_infinite([
-                ChunkRanges::all(),
-                ChunkRanges::from(ChunkNum(u64::MAX)..),
+            hashes: res,
+            ranges: ChunkRangesSeq(smallvec::smallvec![
+                (0, ChunkRanges::all()),
+                (n, ChunkRanges::empty())
             ]),
+        }
+    }
+}
+
+impl GetManyRequest {
+    pub fn new(hashes: Vec<Hash>, ranges: ChunkRangesSeq) -> Self {
+        Self { hashes, ranges }
+    }
+
+    pub fn builder() -> builder::GetManyRequestBuilder {
+        builder::GetManyRequestBuilder::default()
+    }
+}
+
+/// A request to observe a raw blob bitfield.
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Hash)]
+pub struct ObserveRequest {
+    /// blake3 hash
+    pub hash: Hash,
+    /// ranges to observe.
+    pub ranges: RangeSpec,
+}
+
+impl ObserveRequest {
+    pub fn new(hash: Hash) -> Self {
+        Self {
+            hash,
+            ranges: RangeSpec::all(),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
+pub struct ObserveItem {
+    pub size: u64,
+    pub ranges: ChunkRanges,
+}
+
+impl From<&Bitfield> for ObserveItem {
+    fn from(value: &Bitfield) -> Self {
+        Self {
+            size: value.size,
+            ranges: value.ranges.clone(),
+        }
+    }
+}
+
+impl From<&ObserveItem> for Bitfield {
+    fn from(value: &ObserveItem) -> Self {
+        Self {
+            size: value.size,
+            ranges: value.ranges.clone(),
         }
     }
 }
@@ -464,9 +685,21 @@ impl From<Closed> for VarInt {
 }
 
 /// Unknown error_code, can not be converted into [`Closed`].
-#[derive(thiserror::Error, Debug)]
-#[error("Unknown error_code: {0}")]
-pub struct UnknownErrorCode(u64);
+#[derive(Debug, Snafu)]
+#[snafu(display("Unknown error_code: {code}"))]
+pub struct UnknownErrorCode {
+    code: u64,
+    backtrace: Option<snafu::Backtrace>,
+}
+
+impl UnknownErrorCode {
+    pub(crate) fn new(code: u64) -> Self {
+        Self {
+            code,
+            backtrace: GenerateImplicitData::generate(),
+        }
+    }
+}
 
 impl TryFrom<VarInt> for Closed {
     type Error = UnknownErrorCode;
@@ -476,26 +709,269 @@ impl TryFrom<VarInt> for Closed {
             0 => Ok(Self::StreamDropped),
             1 => Ok(Self::ProviderTerminating),
             2 => Ok(Self::RequestReceived),
-            val => Err(UnknownErrorCode(val)),
+            val => Err(UnknownErrorCode::new(val)),
+        }
+    }
+}
+
+pub mod builder {
+    use std::collections::BTreeMap;
+
+    use bao_tree::ChunkRanges;
+
+    use super::ChunkRangesSeq;
+    use crate::{
+        protocol::{GetManyRequest, GetRequest},
+        Hash,
+    };
+
+    #[derive(Debug, Clone, Default)]
+    pub struct ChunkRangesSeqBuilder {
+        ranges: BTreeMap<u64, ChunkRanges>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct GetRequestBuilder {
+        builder: ChunkRangesSeqBuilder,
+    }
+
+    impl GetRequestBuilder {
+        /// Add a range to the request.
+        pub fn offset(mut self, offset: u64, ranges: impl Into<ChunkRanges>) -> Self {
+            self.builder = self.builder.offset(offset, ranges);
+            self
+        }
+
+        /// Add a range to the request.
+        pub fn child(mut self, child: u64, ranges: impl Into<ChunkRanges>) -> Self {
+            self.builder = self.builder.offset(child + 1, ranges);
+            self
+        }
+
+        /// Specify ranges for the root blob (the HashSeq)
+        pub fn root(mut self, ranges: impl Into<ChunkRanges>) -> Self {
+            self.builder = self.builder.offset(0, ranges);
+            self
+        }
+
+        /// Specify ranges for the next offset.
+        pub fn next(mut self, ranges: impl Into<ChunkRanges>) -> Self {
+            self.builder = self.builder.next(ranges);
+            self
+        }
+
+        /// Build a get request for the given hash, with the ranges specified in the builder.
+        pub fn build(self, hash: impl Into<Hash>) -> GetRequest {
+            let ranges = self.builder.build();
+            GetRequest::new(hash.into(), ranges)
+        }
+
+        /// Build a get request for the given hash, with the ranges specified in the builder
+        /// and the last non-empty range repeating indefinitely.
+        pub fn build_open(self, hash: impl Into<Hash>) -> GetRequest {
+            let ranges = self.builder.build_open();
+            GetRequest::new(hash.into(), ranges)
+        }
+    }
+
+    impl ChunkRangesSeqBuilder {
+        /// Add a range to the request.
+        pub fn offset(self, offset: u64, ranges: impl Into<ChunkRanges>) -> Self {
+            self.at_offset(offset, ranges.into())
+        }
+
+        /// Specify ranges for the next offset.
+        pub fn next(self, ranges: impl Into<ChunkRanges>) -> Self {
+            let offset = self.next_offset_value();
+            self.at_offset(offset, ranges.into())
+        }
+
+        /// Build a get request for the given hash, with the ranges specified in the builder.
+        pub fn build(self) -> ChunkRangesSeq {
+            ChunkRangesSeq::from_ranges(self.build0())
+        }
+
+        /// Build a get request for the given hash, with the ranges specified in the builder
+        /// and the last non-empty range repeating indefinitely.
+        pub fn build_open(self) -> ChunkRangesSeq {
+            ChunkRangesSeq::from_ranges_infinite(self.build0())
+        }
+
+        /// Add ranges at the given offset.
+        fn at_offset(mut self, offset: u64, ranges: ChunkRanges) -> Self {
+            self.ranges
+                .entry(offset)
+                .and_modify(|v| *v |= ranges.clone())
+                .or_insert(ranges);
+            self
+        }
+
+        /// Build the request.
+        fn build0(mut self) -> impl Iterator<Item = ChunkRanges> {
+            let mut ranges = Vec::new();
+            self.ranges.retain(|_, v| !v.is_empty());
+            let until_key = self.next_offset_value();
+            for offset in 0..until_key {
+                ranges.push(self.ranges.remove(&offset).unwrap_or_default());
+            }
+            ranges.into_iter()
+        }
+
+        /// Get the next offset value.
+        fn next_offset_value(&self) -> u64 {
+            self.ranges
+                .last_key_value()
+                .map(|(k, _)| *k + 1)
+                .unwrap_or_default()
+        }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct GetManyRequestBuilder {
+        ranges: BTreeMap<Hash, ChunkRanges>,
+    }
+
+    impl GetManyRequestBuilder {
+        /// Specify ranges for the given hash.
+        ///
+        /// Note that if you specify a hash that is already in the request, the ranges will be
+        /// merged with the existing ranges.
+        pub fn hash(mut self, hash: impl Into<Hash>, ranges: impl Into<ChunkRanges>) -> Self {
+            let ranges = ranges.into();
+            let hash = hash.into();
+            self.ranges
+                .entry(hash)
+                .and_modify(|v| *v |= ranges.clone())
+                .or_insert(ranges);
+            self
+        }
+
+        /// Build a `GetManyRequest`.
+        pub fn build(self) -> GetManyRequest {
+            let (hashes, ranges): (Vec<Hash>, Vec<ChunkRanges>) = self
+                .ranges
+                .into_iter()
+                .filter(|(_, v)| !v.is_empty())
+                .unzip();
+            let ranges = ChunkRangesSeq::from_ranges(ranges);
+            GetManyRequest { hashes, ranges }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use bao_tree::ChunkNum;
+
+        use super::*;
+        use crate::{protocol::GetManyRequest, util::ChunkRangesExt};
+
+        #[test]
+        fn chunk_ranges_ext() {
+            let ranges = ChunkRanges::bytes(1..2)
+                | ChunkRanges::chunks(100..=200)
+                | ChunkRanges::offset(1024 * 10)
+                | ChunkRanges::chunk(1024)
+                | ChunkRanges::last_chunk();
+            assert_eq!(
+                ranges,
+                ChunkRanges::from(ChunkNum(0)..ChunkNum(1)) // byte range 1..2
+                    | ChunkRanges::from(ChunkNum(10)..ChunkNum(11)) // chunk at byte offset 1024*10
+                    | ChunkRanges::from(ChunkNum(100)..ChunkNum(201)) // chunk range 100..=200
+                    | ChunkRanges::from(ChunkNum(1024)..ChunkNum(1025)) // chunk 1024
+                    | ChunkRanges::last_chunk() // last chunk
+            );
+        }
+
+        #[test]
+        fn get_request_builder() {
+            let hash = [0; 32];
+            let request = GetRequest::builder()
+                .root(ChunkRanges::all())
+                .next(ChunkRanges::all())
+                .next(ChunkRanges::bytes(0..100))
+                .build(hash);
+            assert_eq!(request.hash.as_bytes(), &hash);
+            assert_eq!(
+                request.ranges,
+                ChunkRangesSeq::from_ranges([
+                    ChunkRanges::all(),
+                    ChunkRanges::all(),
+                    ChunkRanges::from(..ChunkNum(1)),
+                ])
+            );
+
+            let request = GetRequest::builder()
+                .root(ChunkRanges::all())
+                .child(2, ChunkRanges::bytes(0..100))
+                .build(hash);
+            assert_eq!(request.hash.as_bytes(), &hash);
+            assert_eq!(
+                request.ranges,
+                ChunkRangesSeq::from_ranges([
+                    ChunkRanges::all(),               // root
+                    ChunkRanges::empty(),             // child 0
+                    ChunkRanges::empty(),             // child 1
+                    ChunkRanges::from(..ChunkNum(1))  // child 2,
+                ])
+            );
+
+            let request = GetRequest::builder()
+                .root(ChunkRanges::all())
+                .next(ChunkRanges::bytes(0..1024) | ChunkRanges::last_chunk())
+                .build_open(hash);
+            assert_eq!(request.hash.as_bytes(), &[0; 32]);
+            assert_eq!(
+                request.ranges,
+                ChunkRangesSeq::from_ranges_infinite([
+                    ChunkRanges::all(),
+                    ChunkRanges::from(..ChunkNum(1)) | ChunkRanges::last_chunk(),
+                ])
+            );
+        }
+
+        #[test]
+        fn get_many_request_builder() {
+            let hash1 = [0; 32];
+            let hash2 = [1; 32];
+            let hash3 = [2; 32];
+            let request = GetManyRequest::builder()
+                .hash(hash1, ChunkRanges::all())
+                .hash(hash2, ChunkRanges::empty()) // will be ignored!
+                .hash(hash3, ChunkRanges::bytes(0..100))
+                .build();
+            assert_eq!(
+                request.hashes,
+                vec![Hash::from([0; 32]), Hash::from([2; 32])]
+            );
+            assert_eq!(
+                request.ranges,
+                ChunkRangesSeq::from_ranges([
+                    ChunkRanges::all(),               // hash 0
+                    ChunkRanges::from(..ChunkNum(1)), // hash 2
+                ])
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GetRequest, Request};
-    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
+    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
+    use postcard::experimental::max_size::MaxSize;
+
+    use super::{GetRequest, Request, RequestType};
+    use crate::Hash;
 
     #[test]
     fn request_wire_format() {
-        let hash = [0xda; 32].into();
+        let hash: Hash = [0xda; 32].into();
         let cases = [
             (
-                Request::from(GetRequest::single(hash)),
+                Request::from(GetRequest::blob(hash)),
                 r"
                     00 # enum variant for GetRequest
                     dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada # the hash
-                    020001000100 # the RangeSpecSeq
+                    020001000100 # the ChunkRangesSeq
             ",
             ),
             (
@@ -503,7 +979,7 @@ mod tests {
                 r"
                     00 # enum variant for GetRequest
                     dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada # the hash
-                    01000100 # the RangeSpecSeq
+                    01000100 # the ChunkRangesSeq
             ",
             ),
         ];
@@ -512,5 +988,10 @@ mod tests {
             let bytes = postcard::to_stdvec(&case).unwrap();
             assert_eq_hex!(bytes, expected);
         }
+    }
+
+    #[test]
+    fn request_type_size() {
+        assert_eq!(RequestType::POSTCARD_MAX_SIZE, 1);
     }
 }

@@ -1,357 +1,390 @@
-//! A readonly in memory database for iroh-blobs, usable for testing and sharing static data.
+//! Readonly in-memory store.
 //!
-//! Main entry point is [Store].
+//! This can only serve data that is provided at creation time. It is much simpler
+//! than the mutable in-memory store and the file system store, and can serve as a
+//! good starting point for custom implementations.
+//!
+//! It can also be useful as a lightweight store for tests.
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    future::Future,
-    io,
+    collections::HashMap,
+    io::{self, Write},
+    ops::Deref,
     path::PathBuf,
-    sync::Arc,
 };
 
 use bao_tree::{
-    blake3,
-    io::{outboard::PreOrderMemOutboard, sync::Outboard},
+    io::{
+        mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
+        outboard::PreOrderMemOutboard,
+        sync::ReadAt,
+        Leaf,
+    },
+    BaoTree, ChunkRanges,
 };
 use bytes::Bytes;
-use futures_lite::Stream;
-use iroh_io::AsyncSliceReader;
-use tokio::io::AsyncWriteExt;
+use irpc::channel::mpsc;
+use n0_future::future::{self, yield_now};
+use range_collections::range_set::RangeSetRange;
+use ref_cast::RefCast;
+use tokio::task::{JoinError, JoinSet};
 
-use super::{BaoBatchWriter, BaoBlobSize, ConsistencyCheckProgress, DbIter, ExportProgressCb};
+use super::util::BaoTreeSender;
 use crate::{
-    store::{
-        EntryStatus, ExportMode, ImportMode, ImportProgress, Map, MapEntry, MapEntryMut,
-        ReadableStore,
+    api::{
+        self,
+        blobs::{Bitfield, ExportProgressItem},
+        proto::{
+            self, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
+            ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
+            ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
+            ObserveRequest,
+        },
+        ApiClient, TempTag,
     },
-    util::{
-        progress::{BoxedProgressSender, IdGenerator, ProgressSender},
-        Tag,
-    },
-    BlobFormat, Hash, HashAndFormat, TempTag, IROH_BLOCK_SIZE,
+    store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
+    util::ChunkRangesExt,
+    Hash,
 };
 
-/// A readonly in memory database for iroh-blobs.
-///
-/// This is basically just a HashMap, so it does not allow for any modifications
-/// unless you have a mutable reference to it.
-///
-/// It is therefore useful mostly for testing and sharing static data.
-#[derive(Debug, Clone, Default)]
-pub struct Store(Arc<HashMap<Hash, (PreOrderMemOutboard<Bytes>, Bytes)>>);
-
-impl<K, V> FromIterator<(K, V)> for Store
-where
-    K: Into<String>,
-    V: AsRef<[u8]>,
-{
-    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
-        let (db, _m) = Self::new(iter);
-        db
-    }
-}
-
-impl Store {
-    /// Create a new [Store] from a sequence of entries.
-    ///
-    /// Returns the database and a map of names to computed blake3 hashes.
-    /// In case of duplicate names, the last entry is used.
-    pub fn new(
-        entries: impl IntoIterator<Item = (impl Into<String>, impl AsRef<[u8]>)>,
-    ) -> (Self, BTreeMap<String, blake3::Hash>) {
-        let mut names = BTreeMap::new();
-        let mut res = HashMap::new();
-        for (name, data) in entries.into_iter() {
-            let name = name.into();
-            let data: &[u8] = data.as_ref();
-            // wrap into the right types
-            let outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE).map_data(Bytes::from);
-            let hash = outboard.root();
-            // add the name, this assumes that names are unique
-            names.insert(name, hash);
-            let data = Bytes::from(data.to_vec());
-            let hash = Hash::from(hash);
-            res.insert(hash, (outboard, data));
-        }
-        (Self(Arc::new(res)), names)
-    }
-
-    /// Insert a new entry into the database, and return the hash of the entry.
-    ///
-    /// If the database was shared before, this will make a copy.
-    pub fn insert(&mut self, data: impl AsRef<[u8]>) -> Hash {
-        let inner = Arc::make_mut(&mut self.0);
-        let data: &[u8] = data.as_ref();
-        // wrap into the right types
-        let outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE).map_data(Bytes::from);
-        let hash = outboard.root();
-        let data = Bytes::from(data.to_vec());
-        let hash = Hash::from(hash);
-        inner.insert(hash, (outboard, data));
-        hash
-    }
-
-    /// Insert multiple entries into the database, and return the hash of the last entry.
-    pub fn insert_many(
-        &mut self,
-        items: impl IntoIterator<Item = impl AsRef<[u8]>>,
-    ) -> Option<Hash> {
-        let mut hash = None;
-        for item in items.into_iter() {
-            hash = Some(self.insert(item));
-        }
-        hash
-    }
-
-    /// Get the bytes associated with a hash, if they exist.
-    pub fn get_content(&self, hash: &Hash) -> Option<Bytes> {
-        let entry = self.0.get(hash)?;
-        Some(entry.1.clone())
-    }
-
-    async fn export_impl(
-        &self,
-        hash: Hash,
-        target: PathBuf,
-        _mode: ExportMode,
-        progress: impl Fn(u64) -> io::Result<()> + Send + Sync + 'static,
-    ) -> io::Result<()> {
-        tracing::trace!("exporting {} to {}", hash, target.display());
-
-        if !target.is_absolute() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "target path must be absolute",
-            ));
-        }
-        let parent = target.parent().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "target path has no parent directory",
-            )
-        })?;
-        // create the directory in which the target file is
-        tokio::fs::create_dir_all(parent).await?;
-        let data = self
-            .get_content(&hash)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "hash not found"))?;
-
-        let mut offset = 0u64;
-        let mut file = tokio::fs::File::create(&target).await?;
-        for chunk in data.chunks(1024 * 1024) {
-            progress(offset)?;
-            file.write_all(chunk).await?;
-            offset += chunk.len() as u64;
-        }
-        file.sync_all().await?;
-        drop(file);
-        Ok(())
-    }
-}
-
-/// The [MapEntry] implementation for [Store].
 #[derive(Debug, Clone)]
-pub struct Entry {
-    outboard: PreOrderMemOutboard<Bytes>,
-    data: Bytes,
+pub struct ReadonlyMemStore {
+    client: ApiClient,
 }
 
-impl MapEntry for Entry {
-    fn hash(&self) -> Hash {
-        self.outboard.root().into()
-    }
+impl Deref for ReadonlyMemStore {
+    type Target = crate::api::Store;
 
-    fn size(&self) -> BaoBlobSize {
-        BaoBlobSize::Verified(self.data.len() as u64)
-    }
-
-    async fn outboard(&self) -> io::Result<impl bao_tree::io::fsm::Outboard> {
-        Ok(self.outboard.clone())
-    }
-
-    async fn data_reader(&self) -> io::Result<impl AsyncSliceReader> {
-        Ok(self.data.clone())
-    }
-
-    fn is_complete(&self) -> bool {
-        true
+    fn deref(&self) -> &Self::Target {
+        crate::api::Store::ref_from_sender(&self.client)
     }
 }
 
-impl Map for Store {
-    type Entry = Entry;
-
-    async fn get(&self, hash: &Hash) -> io::Result<Option<Self::Entry>> {
-        Ok(self.0.get(hash).map(|(o, d)| Entry {
-            outboard: o.clone(),
-            data: d.clone(),
-        }))
-    }
+struct Actor {
+    commands: tokio::sync::mpsc::Receiver<proto::Command>,
+    tasks: JoinSet<()>,
+    data: HashMap<Hash, CompleteStorage>,
 }
 
-impl super::MapMut for Store {
-    type EntryMut = Entry;
-
-    async fn get_mut(&self, hash: &Hash) -> io::Result<Option<Self::EntryMut>> {
-        self.get(hash).await
+impl Actor {
+    fn new(
+        commands: tokio::sync::mpsc::Receiver<proto::Command>,
+        data: HashMap<Hash, CompleteStorage>,
+    ) -> Self {
+        Self {
+            data,
+            commands,
+            tasks: JoinSet::new(),
+        }
     }
 
-    async fn get_or_create(&self, _hash: Hash, _size: u64) -> io::Result<Entry> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "cannot create temp entry in readonly database",
-        ))
-    }
-
-    fn entry_status_sync(&self, hash: &Hash) -> io::Result<EntryStatus> {
-        Ok(match self.0.contains_key(hash) {
-            true => EntryStatus::Complete,
-            false => EntryStatus::NotFound,
-        })
-    }
-
-    async fn entry_status(&self, hash: &Hash) -> io::Result<EntryStatus> {
-        self.entry_status_sync(hash)
-    }
-
-    async fn insert_complete(&self, _entry: Entry) -> io::Result<()> {
-        // this is unreachable, since we cannot create partial entries
-        unreachable!()
-    }
-}
-
-impl ReadableStore for Store {
-    async fn blobs(&self) -> io::Result<DbIter<Hash>> {
-        Ok(Box::new(
-            self.0
-                .keys()
-                .copied()
-                .map(Ok)
-                .collect::<Vec<_>>()
-                .into_iter(),
-        ))
-    }
-
-    async fn tags(
-        &self,
-        _from: Option<Tag>,
-        _to: Option<Tag>,
-    ) -> io::Result<DbIter<(Tag, HashAndFormat)>> {
-        Ok(Box::new(std::iter::empty()))
-    }
-
-    fn temp_tags(&self) -> Box<dyn Iterator<Item = HashAndFormat> + Send + Sync + 'static> {
-        Box::new(std::iter::empty())
-    }
-
-    async fn consistency_check(
-        &self,
-        _repair: bool,
-        _tx: BoxedProgressSender<ConsistencyCheckProgress>,
-    ) -> io::Result<()> {
-        Ok(())
-    }
-
-    async fn export(
-        &self,
-        hash: Hash,
-        target: PathBuf,
-        mode: ExportMode,
-        progress: ExportProgressCb,
-    ) -> io::Result<()> {
-        self.export_impl(hash, target, mode, progress).await
-    }
-
-    async fn partial_blobs(&self) -> io::Result<DbIter<Hash>> {
-        Ok(Box::new(std::iter::empty()))
-    }
-}
-
-impl MapEntryMut for Entry {
-    async fn batch_writer(&self) -> io::Result<impl BaoBatchWriter> {
-        enum Bar {}
-        impl BaoBatchWriter for Bar {
-            async fn write_batch(
-                &mut self,
-                _size: u64,
-                _batch: Vec<bao_tree::io::fsm::BaoContentItem>,
-            ) -> io::Result<()> {
-                unreachable!()
+    async fn handle_command(&mut self, cmd: Command) -> Option<irpc::channel::oneshot::Sender<()>> {
+        match cmd {
+            Command::ImportBao(ImportBaoMsg { tx, .. }) => {
+                tx.send(Err(api::Error::Io(io::Error::other(
+                    "import not supported",
+                ))))
+                .await
+                .ok();
             }
-
-            async fn sync(&mut self) -> io::Result<()> {
-                unreachable!()
+            Command::ImportBytes(ImportBytesMsg { tx, .. }) => {
+                tx.send(io::Error::other("import not supported").into())
+                    .await
+                    .ok();
+            }
+            Command::ImportByteStream(ImportByteStreamMsg { tx, .. }) => {
+                tx.send(io::Error::other("import not supported").into())
+                    .await
+                    .ok();
+            }
+            Command::ImportPath(ImportPathMsg { tx, .. }) => {
+                tx.send(io::Error::other("import not supported").into())
+                    .await
+                    .ok();
+            }
+            Command::Observe(ObserveMsg {
+                inner: ObserveRequest { hash },
+                tx,
+                ..
+            }) => {
+                let size = self.data.get_mut(&hash).map(|x| x.data.len() as u64);
+                self.tasks.spawn(async move {
+                    if let Some(size) = size {
+                        tx.send(Bitfield::complete(size)).await.ok();
+                    } else {
+                        tx.send(Bitfield::empty()).await.ok();
+                        future::pending::<()>().await;
+                    };
+                });
+            }
+            Command::ExportBao(ExportBaoMsg {
+                inner: ExportBaoRequest { hash, ranges },
+                tx,
+                ..
+            }) => {
+                let entry = self.data.get(&hash).cloned();
+                self.tasks.spawn(export_bao(hash, entry, ranges, tx));
+            }
+            Command::ExportPath(ExportPathMsg {
+                inner: ExportPathRequest { hash, target, .. },
+                tx,
+                ..
+            }) => {
+                let entry = self.data.get(&hash).cloned();
+                self.tasks.spawn(export_path(entry, target, tx));
+            }
+            Command::Batch(_cmd) => {}
+            Command::ClearProtected(cmd) => {
+                cmd.tx.send(Ok(())).await.ok();
+            }
+            Command::CreateTag(cmd) => {
+                cmd.tx
+                    .send(Err(io::Error::other("create tag not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::CreateTempTag(cmd) => {
+                cmd.tx.send(TempTag::new(cmd.inner.value, None)).await.ok();
+            }
+            Command::RenameTag(cmd) => {
+                cmd.tx
+                    .send(Err(io::Error::other("rename tag not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::DeleteTags(cmd) => {
+                cmd.tx
+                    .send(Err(io::Error::other("delete tags not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::DeleteBlobs(cmd) => {
+                cmd.tx
+                    .send(Err(io::Error::other("delete blobs not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::ListBlobs(cmd) => {
+                let hashes: Vec<Hash> = self.data.keys().cloned().collect();
+                self.tasks.spawn(async move {
+                    for hash in hashes {
+                        cmd.tx.send(Ok(hash)).await.ok();
+                    }
+                });
+            }
+            Command::BlobStatus(cmd) => {
+                let hash = cmd.inner.hash;
+                let entry = self.data.get(&hash);
+                let status = if let Some(entry) = entry {
+                    BlobStatus::Complete {
+                        size: entry.data.len() as u64,
+                    }
+                } else {
+                    BlobStatus::NotFound
+                };
+                cmd.tx.send(status).await.ok();
+            }
+            Command::ListTags(cmd) => {
+                cmd.tx.send(Vec::new()).await.ok();
+            }
+            Command::SetTag(cmd) => {
+                cmd.tx
+                    .send(Err(io::Error::other("set tag not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::ListTempTags(cmd) => {
+                cmd.tx.send(Vec::new()).await.ok();
+            }
+            Command::SyncDb(cmd) => {
+                cmd.tx.send(Ok(())).await.ok();
+            }
+            Command::Shutdown(cmd) => {
+                return Some(cmd.tx);
+            }
+            Command::ExportRanges(cmd) => {
+                let entry = self.data.get(&cmd.inner.hash).cloned();
+                self.tasks.spawn(export_ranges(cmd, entry));
             }
         }
+        None
+    }
 
-        #[allow(unreachable_code)]
-        Ok(unreachable!() as Bar)
+    fn log_unit_task(&self, res: Result<(), JoinError>) {
+        if let Err(e) = res {
+            tracing::error!("task failed: {e}");
+        }
+    }
+
+    async fn run(mut self) {
+        loop {
+            tokio::select! {
+                Some(cmd) = self.commands.recv() => {
+                    if let Some(shutdown) = self.handle_command(cmd).await {
+                        shutdown.send(()).await.ok();
+                        break;
+                    }
+                },
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    self.log_unit_task(res);
+                },
+                else => break,
+            }
+        }
     }
 }
 
-impl super::Store for Store {
-    async fn import_file(
-        &self,
-        data: PathBuf,
-        mode: ImportMode,
-        format: BlobFormat,
-        progress: impl ProgressSender<Msg = ImportProgress> + IdGenerator,
-    ) -> io::Result<(TempTag, u64)> {
-        let _ = (data, mode, progress, format);
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
-    }
+async fn export_bao(
+    hash: Hash,
+    entry: Option<CompleteStorage>,
+    ranges: ChunkRanges,
+    mut sender: mpsc::Sender<EncodedItem>,
+) {
+    let entry = match entry {
+        Some(entry) => entry,
+        None => {
+            sender
+                .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "export task ended unexpectedly",
+                    ),
+                )))
+                .await
+                .ok();
+            return;
+        }
+    };
+    let data = entry.data;
+    let outboard = entry.outboard;
+    let size = data.as_ref().len() as u64;
+    let tree = BaoTree::new(size, IROH_BLOCK_SIZE);
+    let outboard = PreOrderMemOutboard {
+        root: hash.into(),
+        tree,
+        data: outboard,
+    };
+    let sender = BaoTreeSender::ref_cast_mut(&mut sender);
+    traverse_ranges_validated(data.as_ref(), outboard, &ranges, sender)
+        .await
+        .ok();
+}
 
-    /// import a byte slice
-    async fn import_bytes(&self, bytes: Bytes, format: BlobFormat) -> io::Result<TempTag> {
-        let _ = (bytes, format);
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+async fn export_ranges(mut cmd: ExportRangesMsg, entry: Option<CompleteStorage>) {
+    let Some(entry) = entry else {
+        cmd.tx
+            .send(ExportRangesItem::Error(api::Error::io(
+                io::ErrorKind::NotFound,
+                "hash not found",
+            )))
+            .await
+            .ok();
+        return;
+    };
+    if let Err(cause) = export_ranges_impl(cmd.inner, &mut cmd.tx, entry).await {
+        cmd.tx
+            .send(ExportRangesItem::Error(cause.into()))
+            .await
+            .ok();
     }
+}
 
-    async fn rename_tag(&self, _from: Tag, _to: Tag) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+async fn export_ranges_impl(
+    cmd: ExportRangesRequest,
+    tx: &mut mpsc::Sender<ExportRangesItem>,
+    entry: CompleteStorage,
+) -> io::Result<()> {
+    let ExportRangesRequest { ranges, .. } = cmd;
+    let data = entry.data;
+    let size = data.len() as u64;
+    let bitfield = Bitfield::complete(size);
+    for range in ranges.iter() {
+        let range = match range {
+            RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
+            RangeSetRange::RangeFrom(range) => size.min(*range.start)..size,
+        };
+        let requested = ChunkRanges::bytes(range.start..range.end);
+        if !bitfield.ranges.is_superset(&requested) {
+            return Err(io::Error::other(format!(
+                "missing range: {requested:?}, present: {bitfield:?}",
+            )));
+        }
+        let bs = 1024;
+        let mut offset = range.start;
+        loop {
+            let end: u64 = (offset + bs).min(range.end);
+            let size = (end - offset) as usize;
+            tx.send(
+                Leaf {
+                    offset,
+                    data: data.read_bytes_at(offset, size)?,
+                }
+                .into(),
+            )
+            .await?;
+            offset = end;
+            if offset >= range.end {
+                break;
+            }
+        }
     }
+    Ok(())
+}
 
-    async fn import_stream(
-        &self,
-        data: impl Stream<Item = io::Result<Bytes>> + Unpin + Send,
-        format: BlobFormat,
-        progress: impl ProgressSender<Msg = ImportProgress> + IdGenerator,
-    ) -> io::Result<(TempTag, u64)> {
-        let _ = (data, format, progress);
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+impl ReadonlyMemStore {
+    pub fn new(items: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
+        let mut entries = HashMap::new();
+        for item in items {
+            let data = Bytes::copy_from_slice(item.as_ref());
+            let (hash, entry) = CompleteStorage::create(data);
+            entries.insert(hash, entry);
+        }
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let actor = Actor::new(receiver, entries);
+        tokio::spawn(actor.run());
+        let local = irpc::LocalSender::from(sender);
+        Self {
+            client: local.into(),
+        }
     }
+}
 
-    async fn set_tag(&self, _name: Tag, _hash: HashAndFormat) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
+async fn export_path(
+    entry: Option<CompleteStorage>,
+    target: PathBuf,
+    mut tx: mpsc::Sender<ExportProgressItem>,
+) {
+    let Some(entry) = entry else {
+        tx.send(api::Error::io(io::ErrorKind::NotFound, "hash not found").into())
+            .await
+            .ok();
+        return;
+    };
+    match export_path_impl(entry, target, &mut tx).await {
+        Ok(()) => tx.send(ExportProgressItem::Done).await.ok(),
+        Err(cause) => tx.send(api::Error::from(cause).into()).await.ok(),
+    };
+}
+
+async fn export_path_impl(
+    entry: CompleteStorage,
+    target: PathBuf,
+    tx: &mut mpsc::Sender<ExportProgressItem>,
+) -> io::Result<()> {
+    let data = entry.data;
+    // todo: for partial entries make sure to only write the part that is actually present
+    let mut file = std::fs::File::create(&target)?;
+    let size = data.len() as u64;
+    tx.send(ExportProgressItem::Size(size)).await?;
+    let mut buf = [0u8; 1024 * 64];
+    for offset in (0..size).step_by(1024 * 64) {
+        let len = std::cmp::min(size - offset, 1024 * 64) as usize;
+        let buf = &mut buf[..len];
+        data.as_ref().read_exact_at(offset, buf)?;
+        file.write_all(buf)?;
+        tx.try_send(ExportProgressItem::CopyProgress(offset))
+            .await
+            .map_err(|_e| io::Error::other("error"))?;
+        yield_now().await;
     }
-
-    async fn delete_tags(&self, _from: Option<Tag>, _to: Option<Tag>) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
-    }
-
-    async fn create_tag(&self, _hash: HashAndFormat) -> io::Result<Tag> {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
-    }
-
-    fn temp_tag(&self, inner: HashAndFormat) -> TempTag {
-        TempTag::new(inner, None)
-    }
-
-    async fn gc_run<G, Gut>(&self, config: super::GcConfig, protected_cb: G)
-    where
-        G: Fn() -> Gut,
-        Gut: Future<Output = BTreeSet<Hash>> + Send,
-    {
-        super::gc_run_loop(self, config, move || async { Ok(()) }, protected_cb).await
-    }
-
-    async fn delete(&self, _hashes: Vec<Hash>) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Other, "not implemented"))
-    }
-
-    async fn shutdown(&self) {}
-
-    async fn sync(&self) -> io::Result<()> {
-        Ok(())
-    }
+    Ok(())
 }
