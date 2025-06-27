@@ -1640,11 +1640,11 @@ dependencies = [
 
 [[package]]
 name = "iroh"
-version = "0.35.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=ramfox%2Fticket-error#ca7d0d3c10977632fff6b9667b8602e4066e4b7e"
+version = "0.90.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9436f319c2d24bca1b28a2fab4477c8d2ac795ab2d3aeda142d207b38ec068f4"
 dependencies = [
  "aead",
- "anyhow",
  "backon",
  "bytes",
  "cfg_aliases",
@@ -1701,8 +1701,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.35.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=ramfox%2Fticket-error#ca7d0d3c10977632fff6b9667b8602e4066e4b7e"
+version = "0.90.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e0090050c4055b21e61cbcb856f043a2b24ad22c65d76bab91f121b4c7bece3"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1783,12 +1784,13 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.34.0"
+version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f70466f14caff7420a14373676947e25e2917af6a5b1bec45825beb2bf1eb6a7"
+checksum = "c8922c169f1b84d39d325c02ef1bbe1419d4de6e35f0403462b3c7e60cc19634"
 dependencies = [
  "iroh-metrics-derive",
  "itoa",
+ "postcard",
  "serde",
  "snafu",
  "tracing",
@@ -1863,8 +1865,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.35.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=ramfox%2Fticket-error#ca7d0d3c10977632fff6b9667b8602e4066e4b7e"
+version = "0.90.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3f3cdbdaebc92835452e4e1d0d4b36118206b0950089b7bc3654f13e843475b"
 dependencies = [
  "bytes",
  "cfg_aliases",
@@ -1922,8 +1925,9 @@ dependencies = [
 
 [[package]]
 name = "irpc"
-version = "0.4.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-quinn-latest#04f7fa33f878496f8117776c675aa000f01fc50c"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b355fe12226ee885e1c1056a867c2cf37be2b22032a16f5ab7091069e98a966f"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -1945,7 +1949,8 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.4.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-quinn-latest#04f7fa33f878496f8117776c675aa000f01fc50c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efeabe1ee5615ea0416340b1a6d71a16f971495859c87fad48633b6497ee7a77"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2677,9 +2682,9 @@ checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
 
 [[package]]
 name = "portmapper"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f651ba57abd6d766deb1b86f45b50c189db69204f20126e84f033168c1bf0853"
+checksum = "2d82975dc029c00d566f4e0f61f567d31f0297a290cb5416b5580dd8b4b54ade"
 dependencies = [
  "base64",
  "bytes",

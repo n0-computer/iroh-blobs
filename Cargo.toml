@@ -37,13 +37,13 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.35"
+iroh = "0.90"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.35"
+iroh-base = "0.90"
 reflink-copy = "0.1.24"
-irpc = { version = "0.4.0", features = ["rpc", "quinn_endpoint_setup", "message_spans", "stream", "derive"], default-features = false }
-iroh-metrics = { version = "0.34.0" }
+irpc = { version = "0.5.0", features = ["rpc", "quinn_endpoint_setup", "message_spans", "stream", "derive"], default-features = false }
+iroh-metrics = { version = "0.35" }
 hashlink = "0.10.0"
 futures-buffered = "0.2.11"
 
@@ -66,8 +66,8 @@ hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs"]
 
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "ramfox/ticket-error" }
-iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "ramfox/ticket-error" }
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-quinn-latest" }
-irpc-derive = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-quinn-latest" }
+# [patch.crates-io]
+# iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "ramfox/ticket-error" }
+# iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "ramfox/ticket-error" }
+# irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-quinn-latest" }
+# irpc-derive = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-quinn-latest" }
