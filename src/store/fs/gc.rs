@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, pin::Pin, sync::Arc};
 
 use bao_tree::ChunkRanges;
 use genawaiter::sync::{Co, Gen};
 use n0_future::{Stream, StreamExt};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{api::Store, Hash, HashAndFormat};
 
@@ -130,14 +130,31 @@ fn gc_sweep<'a>(
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug, Clone)]
 pub struct GcConfig {
     pub interval: std::time::Duration,
+    #[debug("ProtectCallback")]
+    pub add_protected: Option<ProtectCb>,
 }
+
+#[derive(Debug)]
+pub enum ProtectOutcome {
+    Continue,
+    Skip,
+}
+
+pub type ProtectCb = Arc<
+    dyn for<'a> Fn(
+            &'a mut HashSet<Hash>,
+        )
+            -> Pin<Box<dyn std::future::Future<Output = ProtectOutcome> + Send + Sync + 'a>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api::Result<()> {
     {
-        live.clear();
         store.clear_protected().await?;
         let mut stream = gc_mark(store, live);
         while let Some(ev) = stream.next().await {
@@ -179,7 +196,17 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
 pub async fn run_gc(store: Store, config: GcConfig) {
     let mut live = HashSet::new();
     loop {
+        live.clear();
         tokio::time::sleep(config.interval).await;
+        if let Some(ref cb) = config.add_protected {
+            match (cb)(&mut live).await {
+                ProtectOutcome::Continue => {}
+                ProtectOutcome::Skip => {
+                    info!("Skip gc run: protect callback indicated skip");
+                    continue;
+                }
+            }
+        }
         if let Err(e) = gc_run_once(&store, &mut live).await {
             error!("error during gc run: {e}");
             break;
@@ -288,6 +315,7 @@ mod tests {
             assert!(!data_path.exists());
             assert!(!outboard_path.exists());
         }
+        live.clear();
         // create a large partial file and check that the data and outboard file as well as
         // the sizes and bitfield files are deleted by gc
         {
