@@ -745,6 +745,15 @@ async fn export_path_impl(
     tx: &mut mpsc::Sender<ExportProgressItem>,
 ) -> io::Result<()> {
     let ExportPathRequest { target, .. } = cmd;
+    if !target.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path is not absolute",
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     // todo: for partial entries make sure to only write the part that is actually present
     let mut file = std::fs::File::create(target)?;
     let size = entry.0.state.borrow().size();
