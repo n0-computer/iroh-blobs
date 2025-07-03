@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["Drain","IrpcSenderRefSink","IrpcSenderSink","TokioMpscSenderSink","WithMap","WithMapErr"],"trait":["Sink"]};
