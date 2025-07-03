@@ -302,7 +302,6 @@ impl Blobs {
             ExportBaoRequest {
                 hash: hash.into(),
                 ranges: ranges.into(),
-                create_if_missing: false,
             },
             32,
         )

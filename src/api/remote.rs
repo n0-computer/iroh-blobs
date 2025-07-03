@@ -420,14 +420,14 @@ impl Remote {
             let opts = ExportBaoOptions {
                 hash: root,
                 ranges: bitfield.ranges.clone(),
-                create_if_missing: true,
             };
             let bao = self.store().export_bao_with_opts(opts, 32);
             let mut by_index = BTreeMap::new();
             let mut stream = bao.hashes_with_index();
             while let Some(item) = stream.next().await {
-                let (index, hash) = item?;
-                by_index.insert(index, hash);
+                if let Ok((index, hash)) = item {
+                    by_index.insert(index, hash);
+                }
             }
             let mut bitfields = BTreeMap::new();
             let mut hash_seq = BTreeMap::new();

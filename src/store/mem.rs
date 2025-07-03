@@ -190,20 +190,11 @@ impl Actor {
                 self.spawn(import_path(cmd));
             }
             Command::ExportBao(ExportBaoMsg {
-                inner:
-                    ExportBaoRequest {
-                        hash,
-                        ranges,
-                        create_if_missing,
-                    },
+                inner: ExportBaoRequest { hash, ranges },
                 tx,
                 ..
             }) => {
-                let entry = if create_if_missing {
-                    Some(self.get_or_create_entry(hash))
-                } else {
-                    self.get(&hash)
-                };
+                let entry = self.get(&hash);
                 self.spawn(export_bao(entry, ranges, tx))
             }
             Command::ExportPath(cmd) => {

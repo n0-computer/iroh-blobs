@@ -1028,7 +1028,7 @@ async fn export_ranges_impl(
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
-    match ctx.get_maybe_create(cmd.hash, cmd.create_if_missing).await {
+    match ctx.get_maybe_create(cmd.hash, false).await {
         Ok(handle) => {
             if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, handle).await {
                 cmd.tx
