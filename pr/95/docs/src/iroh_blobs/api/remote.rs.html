@@ -1695,14 +1695,14 @@
             <span class="kw">let </span>opts = ExportBaoOptions {
                 hash: root,
                 ranges: bitfield.ranges.clone(),
-                create_if_missing: <span class="bool-val">true</span>,
             };
             <span class="kw">let </span>bao = <span class="self">self</span>.store().export_bao_with_opts(opts, <span class="number">32</span>);
             <span class="kw">let </span><span class="kw-2">mut </span>by_index = BTreeMap::new();
             <span class="kw">let </span><span class="kw-2">mut </span>stream = bao.hashes_with_index();
             <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{
-                <span class="kw">let </span>(index, hash) = item<span class="question-mark">?</span>;
-                by_index.insert(index, hash);
+                <span class="kw">if let </span><span class="prelude-val">Ok</span>((index, hash)) = item {
+                    by_index.insert(index, hash);
+                }
             }
             <span class="kw">let </span><span class="kw-2">mut </span>bitfields = BTreeMap::new();
             <span class="kw">let </span><span class="kw-2">mut </span>hash_seq = BTreeMap::new();

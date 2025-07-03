@@ -703,8 +703,7 @@
 <a href="#702" id="702">702</a>
 <a href="#703" id="703">703</a>
 <a href="#704" id="704">704</a>
-<a href="#705" id="705">705</a>
-<a href="#706" id="706">706</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(feature = <span class="string">"hide-proto-docs"</span>, doc(hidden))]
+<a href="#705" id="705">705</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(feature = <span class="string">"hide-proto-docs"</span>, doc(hidden))]
 </span><span class="doccomment">//! The protocol that a store implementation needs to implement.
 //!
 //! A store needs to handle [`Request`]s. It is fine to just return an error for some
@@ -928,7 +927,6 @@
 </span><span class="kw">pub struct </span>ExportBaoRequest {
     <span class="kw">pub </span>hash: Hash,
     <span class="kw">pub </span>ranges: ChunkRanges,
-    <span class="kw">pub </span>create_if_missing: bool,
 }
 
 <span class="doccomment">/// Export the given ranges as chunkks, without validation.

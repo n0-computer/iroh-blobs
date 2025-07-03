@@ -1078,16 +1078,7 @@
 <a href="#1077" id="1077">1077</a>
 <a href="#1078" id="1078">1078</a>
 <a href="#1079" id="1079">1079</a>
-<a href="#1080" id="1080">1080</a>
-<a href="#1081" id="1081">1081</a>
-<a href="#1082" id="1082">1082</a>
-<a href="#1083" id="1083">1083</a>
-<a href="#1084" id="1084">1084</a>
-<a href="#1085" id="1085">1085</a>
-<a href="#1086" id="1086">1086</a>
-<a href="#1087" id="1087">1087</a>
-<a href="#1088" id="1088">1088</a>
-<a href="#1089" id="1089">1089</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1080" id="1080">1080</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1279,20 +1270,11 @@
                 <span class="self">self</span>.spawn(import_path(cmd));
             }
             Command::ExportBao(ExportBaoMsg {
-                inner:
-                    ExportBaoRequest {
-                        hash,
-                        ranges,
-                        create_if_missing,
-                    },
+                inner: ExportBaoRequest { hash, ranges },
                 tx,
                 ..
             }) =&gt; {
-                <span class="kw">let </span>entry = <span class="kw">if </span>create_if_missing {
-                    <span class="prelude-val">Some</span>(<span class="self">self</span>.get_or_create_entry(hash))
-                } <span class="kw">else </span>{
-                    <span class="self">self</span>.get(<span class="kw-2">&amp;</span>hash)
-                };
+                <span class="kw">let </span>entry = <span class="self">self</span>.get(<span class="kw-2">&amp;</span>hash);
                 <span class="self">self</span>.spawn(export_bao(entry, ranges, tx))
             }
             Command::ExportPath(cmd) =&gt; {
