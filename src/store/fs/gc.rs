@@ -189,14 +189,18 @@ pub async fn run_gc(store: Store, config: GcConfig) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        io::{self},
+        path::Path,
+    };
 
-    use bao_tree::ChunkNum;
+    use bao_tree::{io::EncodeError, ChunkNum};
+    use range_collections::RangeSet2;
     use testresult::TestResult;
 
     use super::*;
     use crate::{
-        api::{blobs::AddBytesOptions, Store},
+        api::{blobs::AddBytesOptions, ExportBaoError, RequestError, Store},
         hashseq::HashSeq,
         store::fs::{options::PathOptions, tests::create_n0_bao},
         BlobFormat,
@@ -324,6 +328,85 @@ mod tests {
         tracing_subscriber::fmt::try_init().ok();
         let store = crate::store::mem::MemStore::new();
         gc_smoke(&store).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gc_check_deletion_fs() -> TestResult {
+        tracing_subscriber::fmt::try_init().ok();
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db");
+        let store = crate::store::fs::FsStore::load(&db_path).await?;
+        gc_check_deletion(&store).await
+    }
+
+    #[tokio::test]
+    async fn gc_check_deletion_mem() -> TestResult {
+        tracing_subscriber::fmt::try_init().ok();
+        let store = crate::store::mem::MemStore::default();
+        gc_check_deletion(&store).await
+    }
+
+    async fn gc_check_deletion(store: &Store) -> TestResult {
+        let temp_tag = store.add_bytes(b"foo".to_vec()).temp_tag().await?;
+        let hash = *temp_tag.hash();
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), b"foo");
+        drop(temp_tag);
+        let mut live = HashSet::new();
+        gc_run_once(&store, &mut live).await?;
+
+        // check that `get_bytes` returns an error.
+        let res = store.get_bytes(hash).await;
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(ExportBaoError::ExportBaoInner {
+                source: EncodeError::Io(cause),
+                ..
+            }) if cause.kind() == io::ErrorKind::NotFound
+        ));
+
+        // check that `export_ranges` returns an error.
+        let res = store
+            .export_ranges(hash, RangeSet2::all())
+            .concatenate()
+            .await;
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(RequestError::Inner{
+                source: crate::api::Error::Io(cause),
+                ..
+            }) if cause.kind() == io::ErrorKind::NotFound
+        ));
+
+        // check that `export_bao` returns an error.
+        let res = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await;
+        assert!(res.is_err());
+        println!("export_bao res {res:?}");
+        assert!(matches!(
+            res,
+            Err(RequestError::Inner{
+                source: crate::api::Error::Io(cause),
+                ..
+            }) if cause.kind() == io::ErrorKind::NotFound
+        ));
+
+        // check that `export` returns an error.
+        let target = tempfile::NamedTempFile::new()?;
+        let path = target.path();
+        let res = store.export(hash, path).await;
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(RequestError::Inner{
+                source: crate::api::Error::Io(cause),
+                ..
+            }) if cause.kind() == io::ErrorKind::NotFound
+        ));
         Ok(())
     }
 }
