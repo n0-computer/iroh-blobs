@@ -154,6 +154,7 @@ pub type ProtectCb = Arc<
 >;
 
 pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api::Result<()> {
+    debug!(externally_protected = live.len(), "gc: start");
     {
         store.clear_protected().await?;
         let mut stream = gc_mark(store, live);
@@ -172,6 +173,7 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
             }
         }
     }
+    debug!(total_protected = live.len(), "gc: sweep");
     {
         let mut stream = gc_sweep(store, live);
         while let Some(ev) = stream.next().await {
@@ -189,11 +191,13 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
             }
         }
     }
+    debug!("gc: done");
 
     Ok(())
 }
 
 pub async fn run_gc(store: Store, config: GcConfig) {
+    debug!("gc enabled with interval {:?}", config.interval);
     let mut live = HashSet::new();
     loop {
         live.clear();
