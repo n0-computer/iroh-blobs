@@ -130,19 +130,39 @@ fn gc_sweep<'a>(
     })
 }
 
+/// Configuration for garbage collection.
 #[derive(derive_more::Debug, Clone)]
 pub struct GcConfig {
+    /// Interval in which to run garbage collection.
     pub interval: std::time::Duration,
+    /// Optional callback to manually add protected blobs.
+    ///
+    /// The callback is called before each garbage collection run. It gets a `&mut HashSet<Hash>`
+    /// and returns a future that returns [`ProtectOutcome`]. All hashes that are added to the
+    /// [`HashSet`] will be protected from garbage collection during this run.
+    ///
+    /// In normal operation, return [`ProtectOutcome::Continue`] from the callback. If you return
+    /// [`ProtectOutcome::Abort`], the garbage collection run will be aborted.Use this if your
+    /// source of hashes to protect returned an error, and thus garbage collection should be skipped
+    /// completely to not unintentionally delete blobs that should be protected.
     #[debug("ProtectCallback")]
     pub add_protected: Option<ProtectCb>,
 }
 
+/// Returned from [`ProtectCb`].
+///
+/// See [`GcConfig::add_protected] for details.
 #[derive(Debug)]
 pub enum ProtectOutcome {
+    /// Continue with the garbage collection run.
     Continue,
-    Skip,
+    /// Abort the garbage collection run.
+    Abort,
 }
 
+/// The type of the garbage collection callback.
+///
+/// See [`GcConfig::add_protected] for details.
 pub type ProtectCb = Arc<
     dyn for<'a> Fn(
             &'a mut HashSet<Hash>,
@@ -205,8 +225,8 @@ pub async fn run_gc(store: Store, config: GcConfig) {
         if let Some(ref cb) = config.add_protected {
             match (cb)(&mut live).await {
                 ProtectOutcome::Continue => {}
-                ProtectOutcome::Skip => {
-                    info!("Skip gc run: protect callback indicated skip");
+                ProtectOutcome::Abort => {
+                    info!("abort gc run: protect callback indicated abort");
                     continue;
                 }
             }
