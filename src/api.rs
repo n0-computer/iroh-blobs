@@ -4,6 +4,7 @@
 //! with a remote store via rpc calls.
 use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
 
+use bao_tree::io::EncodeError;
 use iroh::Endpoint;
 use irpc::rpc::{listen, Handler};
 use n0_snafu::SpanTrace;
@@ -207,6 +208,15 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Io(e) => Some(e),
+        }
+    }
+}
+
+impl From<EncodeError> for Error {
+    fn from(value: EncodeError) -> Self {
+        match value {
+            EncodeError::Io(cause) => Self::Io(cause),
+            _ => Self::other(value),
         }
     }
 }

@@ -305,6 +305,26 @@ impl HashContext {
         Ok(())
     }
 
+    pub async fn get(&self, hash: Hash) -> api::Result<BaoFileHandle> {
+        if hash == Hash::EMPTY {
+            return Ok(self.ctx.empty.clone());
+        }
+        let res = self
+            .slot
+            .get_or_create(|| async {
+                let res = self.db().get(hash).await.map_err(io::Error::other)?;
+                let res = match res {
+                    Some(state) => open_bao_file(&hash, state, &self.ctx).await,
+                    None => Err(io::Error::new(io::ErrorKind::NotFound, "hash not found")),
+                };
+                Ok((res?, ()))
+            })
+            .await
+            .map_err(api::Error::from);
+        let (res, _) = res?;
+        Ok(res)
+    }
+
     pub async fn get_or_create(&self, hash: Hash) -> api::Result<BaoFileHandle> {
         if hash == Hash::EMPTY {
             return Ok(self.ctx.empty.clone());
@@ -939,7 +959,7 @@ async fn observe(cmd: ObserveMsg, ctx: HashContext) {
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_ranges(mut cmd: ExportRangesMsg, ctx: HashContext) {
-    match ctx.get_or_create(cmd.hash).await {
+    match ctx.get(cmd.hash).await {
         Ok(handle) => {
             if let Err(cause) = export_ranges_impl(cmd.inner, &mut cmd.tx, handle).await {
                 cmd.tx
@@ -1000,7 +1020,7 @@ async fn export_ranges_impl(
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
-    match ctx.get_or_create(cmd.hash).await {
+    match ctx.get(cmd.hash).await {
         Ok(handle) => {
             if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, handle).await {
                 cmd.tx
@@ -1010,9 +1030,9 @@ async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
             }
         }
         Err(cause) => {
-            let cause = anyhow::anyhow!("failed to open file: {cause}");
+            let crate::api::Error::Io(cause) = cause;
             cmd.tx
-                .send(bao_tree::io::EncodeError::Io(io::Error::other(cause)).into())
+                .send(bao_tree::io::EncodeError::Io(cause).into())
                 .await
                 .ok();
         }
