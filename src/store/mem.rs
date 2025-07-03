@@ -23,7 +23,7 @@ use bao_tree::{
         mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
         outboard::PreOrderMemOutboard,
         sync::{Outboard, ReadAt, WriteAt},
-        BaoContentItem, Leaf,
+        BaoContentItem, EncodeError, Leaf,
     },
     BaoTree, ChunkNum, ChunkRanges, TreeNode,
 };
@@ -117,6 +117,7 @@ impl MemStore {
                 state: State {
                     data: HashMap::new(),
                     tags: BTreeMap::new(),
+                    empty_hash: BaoFileHandle::new_partial(Hash::EMPTY),
                 },
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
@@ -193,11 +194,11 @@ impl Actor {
                 tx,
                 ..
             }) => {
-                let entry = self.get_or_create_entry(hash);
-                self.spawn(export_bao(entry, ranges, tx));
+                let entry = self.get(&hash);
+                self.spawn(export_bao(entry, ranges, tx))
             }
             Command::ExportPath(cmd) => {
-                let entry = self.state.data.get(&cmd.hash).cloned();
+                let entry = self.get(&cmd.hash);
                 self.spawn(export_path(entry, cmd));
             }
             Command::DeleteTags(cmd) => {
@@ -329,7 +330,7 @@ impl Actor {
                     tx,
                     ..
                 } = cmd;
-                let res = match self.state.data.get(&hash) {
+                let res = match self.get(&hash) {
                     None => api::blobs::BlobStatus::NotFound,
                     Some(x) => {
                         let bitfield = x.0.state.borrow().bitfield();
@@ -371,8 +372,8 @@ impl Actor {
                 cmd.tx.send(Ok(())).await.ok();
             }
             Command::ExportRanges(cmd) => {
-                let entry = self.get_or_create_entry(cmd.hash);
-                self.spawn(export_ranges(cmd, entry.clone()));
+                let entry = self.get(&cmd.hash);
+                self.spawn(export_ranges(cmd, entry));
             }
             Command::SyncDb(SyncDbMsg { tx, .. }) => {
                 tx.send(Ok(())).await.ok();
@@ -384,12 +385,24 @@ impl Actor {
         None
     }
 
+    fn get(&mut self, hash: &Hash) -> Option<BaoFileHandle> {
+        if *hash == Hash::EMPTY {
+            Some(self.state.empty_hash.clone())
+        } else {
+            self.state.data.get(hash).cloned()
+        }
+    }
+
     fn get_or_create_entry(&mut self, hash: Hash) -> BaoFileHandle {
-        self.state
-            .data
-            .entry(hash)
-            .or_insert_with(|| BaoFileHandle::new_partial(hash))
-            .clone()
+        if hash == Hash::EMPTY {
+            self.state.empty_hash.clone()
+        } else {
+            self.state
+                .data
+                .entry(hash)
+                .or_insert_with(|| BaoFileHandle::new_partial(hash))
+                .clone()
+        }
     }
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
@@ -501,7 +514,12 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
-async fn export_ranges(mut cmd: ExportRangesMsg, entry: BaoFileHandle) {
+async fn export_ranges(mut cmd: ExportRangesMsg, entry: Option<BaoFileHandle>) {
+    let Some(entry) = entry else {
+        let err = io::Error::new(io::ErrorKind::NotFound, "hash not found");
+        cmd.tx.send(ExportRangesItem::Error(err.into())).await.ok();
+        return;
+    };
     if let Err(cause) = export_ranges_impl(cmd.inner, &mut cmd.tx, entry).await {
         cmd.tx
             .send(ExportRangesItem::Error(cause.into()))
@@ -624,12 +642,18 @@ async fn import_bao(
     tx.send(Ok(())).await.ok();
 }
 
-#[instrument(skip_all, fields(hash = %entry.hash.fmt_short()))]
+#[instrument(skip_all, fields(hash = tracing::field::Empty))]
 async fn export_bao(
-    entry: BaoFileHandle,
+    entry: Option<BaoFileHandle>,
     ranges: ChunkRanges,
     mut sender: mpsc::Sender<EncodedItem>,
 ) {
+    let Some(entry) = entry else {
+        let err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, "hash not found"));
+        sender.send(err.into()).await.ok();
+        return;
+    };
+    tracing::Span::current().record("hash", tracing::field::display(entry.hash));
     let data = entry.data_reader();
     let outboard = entry.outboard_reader();
     let tx = BaoTreeSender::new(&mut sender);
@@ -828,6 +852,7 @@ impl Outboard for OutboardReader {
 struct State {
     data: HashMap<Hash, BaoFileHandle>,
     tags: BTreeMap<Tag, HashAndFormat>,
+    empty_hash: BaoFileHandle,
 }
 
 #[derive(Debug, derive_more::From)]
