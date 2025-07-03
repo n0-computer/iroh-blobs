@@ -1140,7 +1140,8 @@
 <a href="#1139" id="1139">1139</a>
 <a href="#1140" id="1140">1140</a>
 <a href="#1141" id="1141">1141</a>
-<a href="#1142" id="1142">1142</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
+<a href="#1142" id="1142">1142</a>
+<a href="#1143" id="1143">1143</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
 //!
 //! This API is for local interactions with the blob store, such as importing
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
@@ -1444,6 +1445,7 @@
             ExportBaoRequest {
                 hash: hash.into(),
                 ranges: ranges.into(),
+                create_if_missing: <span class="bool-val">false</span>,
             },
             <span class="number">32</span>,
         )

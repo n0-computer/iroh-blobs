@@ -1268,7 +1268,12 @@
 <a href="#1267" id="1267">1267</a>
 <a href="#1268" id="1268">1268</a>
 <a href="#1269" id="1269">1269</a>
-<a href="#1270" id="1270">1270</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
+<a href="#1270" id="1270">1270</a>
+<a href="#1271" id="1271">1271</a>
+<a href="#1272" id="1272">1272</a>
+<a href="#1273" id="1273">1273</a>
+<a href="#1274" id="1274">1274</a>
+<a href="#1275" id="1275">1275</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
 //!
 //! The entry point is the [`Remote`] struct.
 </span><span class="kw">use </span>genawaiter::sync::{Co, Gen};
@@ -1280,7 +1285,7 @@
 <span class="kw">use </span>ref_cast::RefCast;
 <span class="kw">use </span>snafu::{Backtrace, IntoError, Snafu};
 
-<span class="kw">use </span><span class="kw">super</span>::blobs::Bitfield;
+<span class="kw">use </span><span class="kw">super</span>::blobs::{Bitfield, ExportBaoOptions};
 <span class="kw">use crate</span>::{
     api::{blobs::WriteProgress, ApiClient},
     get::{fsm::DecodeError, BadRequestSnafu, GetError, GetResult, LocalFailureSnafu, Stats},
@@ -1429,7 +1434,7 @@
 
 <span class="kw">async fn </span>just_result&lt;S, R&gt;(stream: S) -&gt; <span class="prelude-ty">Option</span>&lt;R&gt;
 <span class="kw">where
-    </span>S: Stream,
+    </span>S: Stream&lt;Item: std::fmt::Debug&gt;,
     R: TryFrom&lt;S::Item&gt;,
 {
     <span class="macro">tokio::pin!</span>(stream);
@@ -1687,7 +1692,12 @@
         <span class="kw">let </span>root = request.hash;
         <span class="kw">let </span>bitfield = <span class="self">self</span>.store().observe(root).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>children = <span class="kw">if </span>!request.ranges.is_blob() {
-            <span class="kw">let </span>bao = <span class="self">self</span>.store().export_bao(root, bitfield.ranges.clone());
+            <span class="kw">let </span>opts = ExportBaoOptions {
+                hash: root,
+                ranges: bitfield.ranges.clone(),
+                create_if_missing: <span class="bool-val">true</span>,
+            };
+            <span class="kw">let </span>bao = <span class="self">self</span>.store().export_bao_with_opts(opts, <span class="number">32</span>);
             <span class="kw">let </span><span class="kw-2">mut </span>by_index = BTreeMap::new();
             <span class="kw">let </span><span class="kw-2">mut </span>stream = bao.hashes_with_index();
             <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{

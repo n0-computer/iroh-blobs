@@ -765,7 +765,7 @@
         <span class="macro">assert_eq!</span>(store.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>.as_ref(), <span class="string">b"foo"</span>);
         drop(temp_tag);
         <span class="kw">let </span><span class="kw-2">mut </span>live = HashSet::new();
-        gc_run_once(<span class="kw-2">&amp;</span>store, <span class="kw-2">&amp;mut </span>live).<span class="kw">await</span><span class="question-mark">?</span>;
+        gc_run_once(store, <span class="kw-2">&amp;mut </span>live).<span class="kw">await</span><span class="question-mark">?</span>;
 
         <span class="comment">// check that `get_bytes` returns an error.
         </span><span class="kw">let </span>res = store.get_bytes(hash).<span class="kw">await</span>;
