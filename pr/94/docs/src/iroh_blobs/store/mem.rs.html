@@ -1053,7 +1053,18 @@
 <a href="#1052" id="1052">1052</a>
 <a href="#1053" id="1053">1053</a>
 <a href="#1054" id="1054">1054</a>
-<a href="#1055" id="1055">1055</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a>
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a>
+<a href="#1066" id="1066">1066</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1078,7 +1089,7 @@
         mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
         outboard::PreOrderMemOutboard,
         sync::{Outboard, ReadAt, WriteAt},
-        BaoContentItem, Leaf,
+        BaoContentItem, EncodeError, Leaf,
     },
     BaoTree, ChunkNum, ChunkRanges, TreeNode,
 };
@@ -1248,8 +1259,8 @@
                 tx,
                 ..
             }) =&gt; {
-                <span class="kw">let </span>entry = <span class="self">self</span>.get_or_create_entry(hash);
-                <span class="self">self</span>.spawn(export_bao(entry, ranges, tx));
+                <span class="kw">let </span>entry = <span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>hash).cloned();
+                <span class="self">self</span>.spawn(export_bao(entry, ranges, tx))
             }
             Command::ExportPath(cmd) =&gt; {
                 <span class="kw">let </span>entry = <span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>cmd.hash).cloned();
@@ -1426,8 +1437,8 @@
                 cmd.tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
             }
             Command::ExportRanges(cmd) =&gt; {
-                <span class="kw">let </span>entry = <span class="self">self</span>.get_or_create_entry(cmd.hash);
-                <span class="self">self</span>.spawn(export_ranges(cmd, entry.clone()));
+                <span class="kw">let </span>entry = <span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>cmd.hash).cloned();
+                <span class="self">self</span>.spawn(export_ranges(cmd, entry));
             }
             Command::SyncDb(SyncDbMsg { tx, .. }) =&gt; {
                 tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
@@ -1556,7 +1567,12 @@
     <span class="prelude-val">Ok</span>(())
 }
 
-<span class="kw">async fn </span>export_ranges(<span class="kw-2">mut </span>cmd: ExportRangesMsg, entry: BaoFileHandle) {
+<span class="kw">async fn </span>export_ranges(<span class="kw-2">mut </span>cmd: ExportRangesMsg, entry: <span class="prelude-ty">Option</span>&lt;BaoFileHandle&gt;) {
+    <span class="kw">let </span><span class="prelude-val">Some</span>(entry) = entry <span class="kw">else </span>{
+        <span class="kw">let </span>err = io::Error::new(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>);
+        cmd.tx.send(ExportRangesItem::Error(err.into())).<span class="kw">await</span>.ok();
+        <span class="kw">return</span>;
+    };
     <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = export_ranges_impl(cmd.inner, <span class="kw-2">&amp;mut </span>cmd.tx, entry).<span class="kw">await </span>{
         cmd.tx
             .send(ExportRangesItem::Error(cause.into()))
@@ -1679,12 +1695,18 @@
     tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
 }
 
-<span class="attr">#[instrument(skip_all, fields(hash = %entry.hash.fmt_short()))]
+<span class="attr">#[instrument(skip_all, fields(hash = tracing::field::Empty))]
 </span><span class="kw">async fn </span>export_bao(
-    entry: BaoFileHandle,
+    entry: <span class="prelude-ty">Option</span>&lt;BaoFileHandle&gt;,
     ranges: ChunkRanges,
     <span class="kw-2">mut </span>sender: mpsc::Sender&lt;EncodedItem&gt;,
 ) {
+    <span class="kw">let </span><span class="prelude-val">Some</span>(entry) = entry <span class="kw">else </span>{
+        <span class="kw">let </span>err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>));
+        sender.send(err.into()).<span class="kw">await</span>.ok();
+        <span class="kw">return</span>;
+    };
+    tracing::Span::current().record(<span class="string">"hash"</span>, tracing::field::display(entry.hash));
     <span class="kw">let </span>data = entry.data_reader();
     <span class="kw">let </span>outboard = entry.outboard_reader();
     <span class="kw">let </span>tx = BaoTreeSender::new(<span class="kw-2">&amp;mut </span>sender);

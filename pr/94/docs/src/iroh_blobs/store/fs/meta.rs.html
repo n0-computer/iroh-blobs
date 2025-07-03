@@ -837,7 +837,10 @@
 <a href="#836" id="836">836</a>
 <a href="#837" id="837">837</a>
 <a href="#838" id="838">838</a>
-<a href="#839" id="839">839</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
 </span><span class="attr">#![allow(clippy::result_large_err)]
 </span><span class="kw">use </span>std::{
     collections::HashSet,
@@ -1302,6 +1305,7 @@
         } = cmd;
         <span class="kw">for </span>hash <span class="kw">in </span>hashes {
             <span class="kw">if </span>!force &amp;&amp; protected.contains(<span class="kw-2">&amp;</span>hash) {
+                <span class="macro">trace!</span>(<span class="string">"delete {hash}: skip (protected)"</span>);
                 <span class="kw">continue</span>;
             }
             <span class="kw">if let </span><span class="prelude-val">Some</span>(entry) = tables.blobs.remove(hash).context(StorageSnafu)<span class="question-mark">? </span>{
@@ -1310,6 +1314,7 @@
                         data_location,
                         outboard_location,
                     } =&gt; {
+                        <span class="macro">trace!</span>(<span class="string">"delete {hash}: currently complete. will be deleted."</span>);
                         <span class="kw">match </span>data_location {
                             DataLocation::Inline(<span class="kw">_</span>) =&gt; {
                                 tables.inline_data.remove(hash).context(StorageSnafu)<span class="question-mark">?</span>;
@@ -1332,6 +1337,7 @@
                         }
                     }
                     EntryState::Partial { .. } =&gt; {
+                        <span class="macro">trace!</span>(<span class="string">"delete {hash}: currently partial. will be deleted."</span>);
                         tables.ftx.delete(
                             hash,
                             [

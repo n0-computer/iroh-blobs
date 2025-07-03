@@ -2089,7 +2089,27 @@
 <a href="#2088" id="2088">2088</a>
 <a href="#2089" id="2089">2089</a>
 <a href="#2090" id="2090">2090</a>
-<a href="#2091" id="2091">2091</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2091" id="2091">2091</a>
+<a href="#2092" id="2092">2092</a>
+<a href="#2093" id="2093">2093</a>
+<a href="#2094" id="2094">2094</a>
+<a href="#2095" id="2095">2095</a>
+<a href="#2096" id="2096">2096</a>
+<a href="#2097" id="2097">2097</a>
+<a href="#2098" id="2098">2098</a>
+<a href="#2099" id="2099">2099</a>
+<a href="#2100" id="2100">2100</a>
+<a href="#2101" id="2101">2101</a>
+<a href="#2102" id="2102">2102</a>
+<a href="#2103" id="2103">2103</a>
+<a href="#2104" id="2104">2104</a>
+<a href="#2105" id="2105">2105</a>
+<a href="#2106" id="2106">2106</a>
+<a href="#2107" id="2107">2107</a>
+<a href="#2108" id="2108">2108</a>
+<a href="#2109" id="2109">2109</a>
+<a href="#2110" id="2110">2110</a>
+<a href="#2111" id="2111">2111</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2394,6 +2414,26 @@
             </span>.map_err(io::Error::other)<span class="question-mark">?</span>;
         rx.<span class="kw">await</span>.map_err(|_e| io::Error::other(<span class="string">""</span>))<span class="question-mark">??</span>;
         <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">pub async fn </span>get(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; api::Result&lt;BaoFileHandle&gt; {
+        <span class="kw">if </span>hash == Hash::EMPTY {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="self">self</span>.ctx.empty.clone());
+        }
+        <span class="kw">let </span>res = <span class="self">self
+            </span>.slot
+            .get_or_create(|| <span class="kw">async </span>{
+                <span class="kw">let </span>res = <span class="self">self</span>.db().get(hash).<span class="kw">await</span>.map_err(io::Error::other)<span class="question-mark">?</span>;
+                <span class="kw">let </span>res = <span class="kw">match </span>res {
+                    <span class="prelude-val">Some</span>(state) =&gt; open_bao_file(<span class="kw-2">&amp;</span>hash, state, <span class="kw-2">&amp;</span><span class="self">self</span>.ctx).<span class="kw">await</span>,
+                    <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>)),
+                };
+                <span class="prelude-val">Ok</span>((res<span class="question-mark">?</span>, ()))
+            })
+            .<span class="kw">await
+            </span>.map_err(api::Error::from);
+        <span class="kw">let </span>(res, <span class="kw">_</span>) = res<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(res)
     }
 
     <span class="kw">pub async fn </span>get_or_create(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; api::Result&lt;BaoFileHandle&gt; {
@@ -3030,7 +3070,7 @@
 
 <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 </span><span class="kw">async fn </span>export_ranges(<span class="kw-2">mut </span>cmd: ExportRangesMsg, ctx: HashContext) {
-    <span class="kw">match </span>ctx.get_or_create(cmd.hash).<span class="kw">await </span>{
+    <span class="kw">match </span>ctx.get(cmd.hash).<span class="kw">await </span>{
         <span class="prelude-val">Ok</span>(handle) =&gt; {
             <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = export_ranges_impl(cmd.inner, <span class="kw-2">&amp;mut </span>cmd.tx, handle).<span class="kw">await </span>{
                 cmd.tx
@@ -3091,7 +3131,7 @@
 
 <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 </span><span class="kw">async fn </span>export_bao(<span class="kw-2">mut </span>cmd: ExportBaoMsg, ctx: HashContext) {
-    <span class="kw">match </span>ctx.get_or_create(cmd.hash).<span class="kw">await </span>{
+    <span class="kw">match </span>ctx.get(cmd.hash).<span class="kw">await </span>{
         <span class="prelude-val">Ok</span>(handle) =&gt; {
             <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = export_bao_impl(cmd.inner, <span class="kw-2">&amp;mut </span>cmd.tx, handle).<span class="kw">await </span>{
                 cmd.tx
@@ -3101,9 +3141,9 @@
             }
         }
         <span class="prelude-val">Err</span>(cause) =&gt; {
-            <span class="kw">let </span>cause = <span class="macro">anyhow::anyhow!</span>(<span class="string">"failed to open file: {cause}"</span>);
+            <span class="kw">let </span><span class="kw">crate</span>::api::Error::Io(cause) = cause;
             cmd.tx
-                .send(bao_tree::io::EncodeError::Io(io::Error::other(cause)).into())
+                .send(bao_tree::io::EncodeError::Io(cause).into())
                 .<span class="kw">await
                 </span>.ok();
         }

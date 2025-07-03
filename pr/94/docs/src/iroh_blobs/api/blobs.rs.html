@@ -1133,7 +1133,14 @@
 <a href="#1132" id="1132">1132</a>
 <a href="#1133" id="1133">1133</a>
 <a href="#1134" id="1134">1134</a>
-<a href="#1135" id="1135">1135</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
+<a href="#1135" id="1135">1135</a>
+<a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a>
+<a href="#1140" id="1140">1140</a>
+<a href="#1141" id="1141">1141</a>
+<a href="#1142" id="1142">1142</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
 //!
 //! This API is for local interactions with the blob store, such as importing
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
@@ -1237,13 +1244,21 @@
         })
     }
 
-    <span class="kw">pub async fn </span>delete_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: DeleteOptions) -&gt; RequestResult&lt;()&gt; {
+    <span class="doccomment">/// Delete a blob.
+    ///
+    /// This function is not public, because it does not work as expected when called manually,
+    /// because blobs are protected from deletion. This is only called from the gc task, which
+    /// clears the protections before.
+    ///
+    /// Users should rely only on garbage collection for blob deletion.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: DeleteOptions) -&gt; RequestResult&lt;()&gt; {
         <span class="macro">trace!</span>(<span class="string">"{options:?}"</span>);
         <span class="self">self</span>.client.rpc(options).<span class="kw">await</span><span class="question-mark">??</span>;
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">pub async fn </span>delete(
+    <span class="doccomment">/// See [`Self::delete_with_opts`].
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         hashes: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>Into&lt;Hash&gt;&gt;,
     ) -&gt; RequestResult&lt;()&gt; {
@@ -2097,7 +2112,6 @@
         <span class="kw">let </span><span class="kw-2">mut </span>data = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>stream = <span class="self">self</span>.into_byte_stream();
         <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{
-            <span class="macro">println!</span>(<span class="string">"item: {item:?}"</span>);
             data.extend_from_slice(<span class="kw-2">&amp;</span>item<span class="question-mark">?</span>);
         }
         <span class="prelude-val">Ok</span>(data)
@@ -2223,7 +2237,7 @@
             }
             EncodedItem::Leaf(leaf) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(leaf.data)),
             EncodedItem::Done =&gt; <span class="prelude-val">None</span>,
-            EncodedItem::Error(cause) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(<span class="kw">super</span>::Error::other(cause))),
+            EncodedItem::Error(cause) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(cause.into())),
         })
     }
 
