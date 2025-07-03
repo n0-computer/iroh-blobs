@@ -1064,7 +1064,30 @@
 <a href="#1063" id="1063">1063</a>
 <a href="#1064" id="1064">1064</a>
 <a href="#1065" id="1065">1065</a>
-<a href="#1066" id="1066">1066</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1066" id="1066">1066</a>
+<a href="#1067" id="1067">1067</a>
+<a href="#1068" id="1068">1068</a>
+<a href="#1069" id="1069">1069</a>
+<a href="#1070" id="1070">1070</a>
+<a href="#1071" id="1071">1071</a>
+<a href="#1072" id="1072">1072</a>
+<a href="#1073" id="1073">1073</a>
+<a href="#1074" id="1074">1074</a>
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a>
+<a href="#1078" id="1078">1078</a>
+<a href="#1079" id="1079">1079</a>
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a>
+<a href="#1082" id="1082">1082</a>
+<a href="#1083" id="1083">1083</a>
+<a href="#1084" id="1084">1084</a>
+<a href="#1085" id="1085">1085</a>
+<a href="#1086" id="1086">1086</a>
+<a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1183,6 +1206,7 @@
                 state: State {
                     data: HashMap::new(),
                     tags: BTreeMap::new(),
+                    empty_hash: BaoFileHandle::new_partial(Hash::EMPTY),
                 },
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
@@ -1255,15 +1279,24 @@
                 <span class="self">self</span>.spawn(import_path(cmd));
             }
             Command::ExportBao(ExportBaoMsg {
-                inner: ExportBaoRequest { hash, ranges },
+                inner:
+                    ExportBaoRequest {
+                        hash,
+                        ranges,
+                        create_if_missing,
+                    },
                 tx,
                 ..
             }) =&gt; {
-                <span class="kw">let </span>entry = <span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>hash).cloned();
+                <span class="kw">let </span>entry = <span class="kw">if </span>create_if_missing {
+                    <span class="prelude-val">Some</span>(<span class="self">self</span>.get_or_create_entry(hash))
+                } <span class="kw">else </span>{
+                    <span class="self">self</span>.get(<span class="kw-2">&amp;</span>hash)
+                };
                 <span class="self">self</span>.spawn(export_bao(entry, ranges, tx))
             }
             Command::ExportPath(cmd) =&gt; {
-                <span class="kw">let </span>entry = <span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>cmd.hash).cloned();
+                <span class="kw">let </span>entry = <span class="self">self</span>.get(<span class="kw-2">&amp;</span>cmd.hash);
                 <span class="self">self</span>.spawn(export_path(entry, cmd));
             }
             Command::DeleteTags(cmd) =&gt; {
@@ -1395,7 +1428,7 @@
                     tx,
                     ..
                 } = cmd;
-                <span class="kw">let </span>res = <span class="kw">match </span><span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>hash) {
+                <span class="kw">let </span>res = <span class="kw">match </span><span class="self">self</span>.get(<span class="kw-2">&amp;</span>hash) {
                     <span class="prelude-val">None </span>=&gt; api::blobs::BlobStatus::NotFound,
                     <span class="prelude-val">Some</span>(x) =&gt; {
                         <span class="kw">let </span>bitfield = x.<span class="number">0</span>.state.borrow().bitfield();
@@ -1437,7 +1470,7 @@
                 cmd.tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
             }
             Command::ExportRanges(cmd) =&gt; {
-                <span class="kw">let </span>entry = <span class="self">self</span>.state.data.get(<span class="kw-2">&amp;</span>cmd.hash).cloned();
+                <span class="kw">let </span>entry = <span class="self">self</span>.get(<span class="kw-2">&amp;</span>cmd.hash);
                 <span class="self">self</span>.spawn(export_ranges(cmd, entry));
             }
             Command::SyncDb(SyncDbMsg { tx, .. }) =&gt; {
@@ -1450,12 +1483,24 @@
         <span class="prelude-val">None
     </span>}
 
+    <span class="kw">fn </span>get(<span class="kw-2">&amp;mut </span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash) -&gt; <span class="prelude-ty">Option</span>&lt;BaoFileHandle&gt; {
+        <span class="kw">if </span><span class="kw-2">*</span>hash == Hash::EMPTY {
+            <span class="prelude-val">Some</span>(<span class="self">self</span>.state.empty_hash.clone())
+        } <span class="kw">else </span>{
+            <span class="self">self</span>.state.data.get(hash).cloned()
+        }
+    }
+
     <span class="kw">fn </span>get_or_create_entry(<span class="kw-2">&amp;mut </span><span class="self">self</span>, hash: Hash) -&gt; BaoFileHandle {
-        <span class="self">self</span>.state
-            .data
-            .entry(hash)
-            .or_insert_with(|| BaoFileHandle::new_partial(hash))
-            .clone()
+        <span class="kw">if </span>hash == Hash::EMPTY {
+            <span class="self">self</span>.state.empty_hash.clone()
+        } <span class="kw">else </span>{
+            <span class="self">self</span>.state
+                .data
+                .entry(hash)
+                .or_insert_with(|| BaoFileHandle::new_partial(hash))
+                .clone()
+        }
     }
 
     <span class="kw">async fn </span>create_temp_tag(<span class="kw-2">&amp;mut </span><span class="self">self</span>, cmd: CreateTempTagMsg) {
@@ -1905,6 +1950,7 @@
 <span class="kw">struct </span>State {
     data: HashMap&lt;Hash, BaoFileHandle&gt;,
     tags: BTreeMap&lt;Tag, HashAndFormat&gt;,
+    empty_hash: BaoFileHandle,
 }
 
 <span class="attr">#[derive(Debug, derive_more::From)]
