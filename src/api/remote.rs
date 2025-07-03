@@ -10,7 +10,7 @@ use nested_enum_utils::common_fields;
 use ref_cast::RefCast;
 use snafu::{Backtrace, IntoError, Snafu};
 
-use super::blobs::Bitfield;
+use super::blobs::{Bitfield, ExportBaoOptions};
 use crate::{
     api::{blobs::WriteProgress, ApiClient},
     get::{fsm::DecodeError, BadRequestSnafu, GetError, GetResult, LocalFailureSnafu, Stats},
@@ -159,7 +159,7 @@ impl PushProgress {
 
 async fn just_result<S, R>(stream: S) -> Option<R>
 where
-    S: Stream,
+    S: Stream<Item: std::fmt::Debug>,
     R: TryFrom<S::Item>,
 {
     tokio::pin!(stream);
@@ -417,7 +417,12 @@ impl Remote {
         let root = request.hash;
         let bitfield = self.store().observe(root).await?;
         let children = if !request.ranges.is_blob() {
-            let bao = self.store().export_bao(root, bitfield.ranges.clone());
+            let opts = ExportBaoOptions {
+                hash: root,
+                ranges: bitfield.ranges.clone(),
+                create_if_missing: true,
+            };
+            let bao = self.store().export_bao_with_opts(opts, 32);
             let mut by_index = BTreeMap::new();
             let mut stream = bao.hashes_with_index();
             while let Some(item) = stream.next().await {

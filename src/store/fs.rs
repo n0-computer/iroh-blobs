@@ -305,6 +305,14 @@ impl HashContext {
         Ok(())
     }
 
+    pub async fn get_maybe_create(&self, hash: Hash, create: bool) -> api::Result<BaoFileHandle> {
+        if create {
+            self.get_or_create(hash).await
+        } else {
+            self.get(hash).await
+        }
+    }
+
     pub async fn get(&self, hash: Hash) -> api::Result<BaoFileHandle> {
         if hash == Hash::EMPTY {
             return Ok(self.ctx.empty.clone());
@@ -1020,7 +1028,7 @@ async fn export_ranges_impl(
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
-    match ctx.get(cmd.hash).await {
+    match ctx.get_maybe_create(cmd.hash, cmd.create_if_missing).await {
         Ok(handle) => {
             if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, handle).await {
                 cmd.tx
@@ -1044,7 +1052,7 @@ async fn export_bao_impl(
     tx: &mut mpsc::Sender<EncodedItem>,
     handle: BaoFileHandle,
 ) -> anyhow::Result<()> {
-    let ExportBaoRequest { ranges, hash } = cmd;
+    let ExportBaoRequest { ranges, hash, .. } = cmd;
     debug_assert!(handle.hash() == hash, "hash mismatch");
     let outboard = handle.outboard()?;
     let size = outboard.tree.size();

@@ -222,6 +222,7 @@ pub struct ObserveRequest {
 pub struct ExportBaoRequest {
     pub hash: Hash,
     pub ranges: ChunkRanges,
+    pub create_if_missing: bool,
 }
 
 /// Export the given ranges as chunkks, without validation.

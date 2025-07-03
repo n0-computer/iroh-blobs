@@ -117,6 +117,7 @@ impl MemStore {
                 state: State {
                     data: HashMap::new(),
                     tags: BTreeMap::new(),
+                    empty_hash: BaoFileHandle::new_partial(Hash::EMPTY),
                 },
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
@@ -189,15 +190,24 @@ impl Actor {
                 self.spawn(import_path(cmd));
             }
             Command::ExportBao(ExportBaoMsg {
-                inner: ExportBaoRequest { hash, ranges },
+                inner:
+                    ExportBaoRequest {
+                        hash,
+                        ranges,
+                        create_if_missing,
+                    },
                 tx,
                 ..
             }) => {
-                let entry = self.state.data.get(&hash).cloned();
+                let entry = if create_if_missing {
+                    Some(self.get_or_create_entry(hash))
+                } else {
+                    self.get(&hash)
+                };
                 self.spawn(export_bao(entry, ranges, tx))
             }
             Command::ExportPath(cmd) => {
-                let entry = self.state.data.get(&cmd.hash).cloned();
+                let entry = self.get(&cmd.hash);
                 self.spawn(export_path(entry, cmd));
             }
             Command::DeleteTags(cmd) => {
@@ -329,7 +339,7 @@ impl Actor {
                     tx,
                     ..
                 } = cmd;
-                let res = match self.state.data.get(&hash) {
+                let res = match self.get(&hash) {
                     None => api::blobs::BlobStatus::NotFound,
                     Some(x) => {
                         let bitfield = x.0.state.borrow().bitfield();
@@ -371,7 +381,7 @@ impl Actor {
                 cmd.tx.send(Ok(())).await.ok();
             }
             Command::ExportRanges(cmd) => {
-                let entry = self.state.data.get(&cmd.hash).cloned();
+                let entry = self.get(&cmd.hash);
                 self.spawn(export_ranges(cmd, entry));
             }
             Command::SyncDb(SyncDbMsg { tx, .. }) => {
@@ -384,12 +394,24 @@ impl Actor {
         None
     }
 
+    fn get(&mut self, hash: &Hash) -> Option<BaoFileHandle> {
+        if *hash == Hash::EMPTY {
+            Some(self.state.empty_hash.clone())
+        } else {
+            self.state.data.get(hash).cloned()
+        }
+    }
+
     fn get_or_create_entry(&mut self, hash: Hash) -> BaoFileHandle {
-        self.state
-            .data
-            .entry(hash)
-            .or_insert_with(|| BaoFileHandle::new_partial(hash))
-            .clone()
+        if hash == Hash::EMPTY {
+            self.state.empty_hash.clone()
+        } else {
+            self.state
+                .data
+                .entry(hash)
+                .or_insert_with(|| BaoFileHandle::new_partial(hash))
+                .clone()
+        }
     }
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
@@ -839,6 +861,7 @@ impl Outboard for OutboardReader {
 struct State {
     data: HashMap<Hash, BaoFileHandle>,
     tags: BTreeMap<Tag, HashAndFormat>,
+    empty_hash: BaoFileHandle,
 }
 
 #[derive(Debug, derive_more::From)]

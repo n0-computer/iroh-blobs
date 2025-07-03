@@ -117,7 +117,7 @@ impl Actor {
                 });
             }
             Command::ExportBao(ExportBaoMsg {
-                inner: ExportBaoRequest { hash, ranges },
+                inner: ExportBaoRequest { hash, ranges, .. },
                 tx,
                 ..
             }) => {
