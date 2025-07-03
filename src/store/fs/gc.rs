@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(store.get_bytes(hash).await?.as_ref(), b"foo");
         drop(temp_tag);
         let mut live = HashSet::new();
-        gc_run_once(&store, &mut live).await?;
+        gc_run_once(store, &mut live).await?;
 
         // check that `get_bytes` returns an error.
         let res = store.get_bytes(hash).await;
