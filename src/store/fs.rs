@@ -94,6 +94,7 @@ use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{Id, JoinError, JoinSet};
 use tracing::{error, instrument, trace};
+use entity_manager::{EntityManager, Options as EntityManagerOptions};
 
 use crate::{
     api::{
