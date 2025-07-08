@@ -102,13 +102,21 @@ impl Blobs {
         })
     }
 
-    pub async fn delete_with_opts(&self, options: DeleteOptions) -> RequestResult<()> {
+    /// Delete a blob.
+    ///
+    /// This function is not public, because it does not work as expected when called manually,
+    /// because blobs are protected from deletion. This is only called from the gc task, which
+    /// clears the protections before.
+    ///
+    /// Users should rely only on garbage collection for blob deletion.
+    pub(crate) async fn delete_with_opts(&self, options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
         self.client.rpc(options).await??;
         Ok(())
     }
 
-    pub async fn delete(
+    /// See [`Self::delete_with_opts`].
+    pub(crate) async fn delete(
         &self,
         hashes: impl IntoIterator<Item = impl Into<Hash>>,
     ) -> RequestResult<()> {
@@ -962,7 +970,6 @@ impl ExportBaoProgress {
         let mut data = Vec::new();
         let mut stream = self.into_byte_stream();
         while let Some(item) = stream.next().await {
-            println!("item: {item:?}");
             data.extend_from_slice(&item?);
         }
         Ok(data)
@@ -1088,7 +1095,7 @@ impl ExportBaoProgress {
             }
             EncodedItem::Leaf(leaf) => Some(Ok(leaf.data)),
             EncodedItem::Done => None,
-            EncodedItem::Error(cause) => Some(Err(super::Error::other(cause))),
+            EncodedItem::Error(cause) => Some(Err(cause.into())),
         })
     }
 
