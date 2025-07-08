@@ -4,7 +4,7 @@ use std::{
     io,
     ops::Deref,
     path::Path,
-    sync::{Arc, Weak},
+    sync::Arc,
 };
 
 use bao_tree::{
@@ -503,27 +503,6 @@ impl BaoFileStorage {
     }
 }
 
-/// A weak reference to a bao file handle.
-#[derive(Debug, Clone)]
-pub struct BaoFileHandleWeak(Weak<BaoFileHandleInner>);
-
-impl BaoFileHandleWeak {
-    /// Upgrade to a strong reference if possible.
-    pub fn upgrade(&self) -> Option<BaoFileHandle> {
-        let inner = self.0.upgrade()?;
-        if let &BaoFileStorage::Poisoned = inner.storage.borrow().deref() {
-            trace!("poisoned storage, cannot upgrade");
-            return None;
-        };
-        Some(BaoFileHandle(inner))
-    }
-
-    /// True if the handle is definitely dead.
-    pub fn is_dead(&self) -> bool {
-        self.0.strong_count() == 0
-    }
-}
-
 /// The inner part of a bao file handle.
 pub struct BaoFileHandleInner {
     pub(crate) storage: watch::Sender<BaoFileStorage>,
@@ -546,8 +525,8 @@ impl fmt::Debug for BaoFileHandleInner {
 #[derive(Debug, Clone, derive_more::Deref)]
 pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
 
-impl Drop for BaoFileHandle {
-    fn drop(&mut self) {
+impl BaoFileHandle {
+    pub fn persist(&mut self) {
         self.0.storage.send_if_modified(|guard| {
             if Arc::strong_count(&self.0) > 1 {
                 return false;
@@ -564,6 +543,9 @@ impl Drop for BaoFileHandle {
             };
             let options = &self.options;
             let path = options.path.bitfield_path(&self.hash);
+            if fs.bitfield.size == 8000000 {
+                println!("PERSISTING THE TEST CASE FILE to {}", path.display());
+            }
             trace!(
                 "writing bitfield for hash {} to {}",
                 self.hash,
@@ -579,6 +561,12 @@ impl Drop for BaoFileHandle {
             }
             false
         });
+    }
+}
+
+impl Drop for BaoFileHandle {
+    fn drop(&mut self) {
+        self.persist();
     }
 }
 
@@ -751,11 +739,6 @@ impl BaoFileHandle {
     /// The hash of the file.
     pub fn hash(&self) -> Hash {
         self.hash
-    }
-
-    /// Downgrade to a weak reference.
-    pub fn downgrade(&self) -> BaoFileHandleWeak {
-        BaoFileHandleWeak(Arc::downgrade(&self.0))
     }
 
     /// Write a batch and notify the db

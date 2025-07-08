@@ -64,7 +64,6 @@
 //! safely shut down as well. Any store refs you are holding will be inoperable
 //! after this.
 use std::{
-    collections::{HashMap, HashSet},
     fmt, fs,
     future::Future,
     io::Write,
@@ -93,7 +92,7 @@ use meta::{list_blobs, Snapshot};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
-use tokio::task::{Id, JoinError, JoinSet};
+use tokio::task::{JoinError, JoinSet};
 use tracing::{error, instrument, trace};
 
 use crate::{
@@ -117,7 +116,7 @@ use crate::{
     },
 };
 mod bao_file;
-use bao_file::{BaoFileHandle, BaoFileHandleWeak};
+use bao_file::BaoFileHandle;
 mod delete_set;
 mod entry_state;
 mod import;
@@ -259,7 +258,7 @@ impl HashContext {
         &self.ctx.options
     }
 
-    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, Option<BaoFileHandleWeak>> {
+    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, Option<BaoFileHandle>> {
         self.slot.0.lock().await
     }
 
@@ -377,14 +376,9 @@ async fn open_bao_file(
 /// An entry for each hash, containing a weak reference to a BaoFileHandle
 /// wrapped in a tokio mutex so handle creation is sequential.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Slot(Arc<tokio::sync::Mutex<Option<BaoFileHandleWeak>>>);
+pub(crate) struct Slot(Arc<tokio::sync::Mutex<Option<BaoFileHandle>>>);
 
 impl Slot {
-    pub async fn is_live(&self) -> bool {
-        let slot = self.0.lock().await;
-        slot.as_ref().map(|weak| !weak.is_dead()).unwrap_or(false)
-    }
-
     /// Get the handle if it exists and is still alive, otherwise load it from the database.
     /// If there is nothing in the database, create a new in-memory handle.
     ///
@@ -396,14 +390,12 @@ impl Slot {
         T: Default,
     {
         let mut slot = self.0.lock().await;
-        if let Some(weak) = &*slot {
-            if let Some(handle) = weak.upgrade() {
-                return Ok((handle, Default::default()));
-            }
+        if let Some(handle) = &*slot {
+            return Ok((handle.clone(), Default::default()));
         }
         let handle = make().await;
         if let Ok((handle, _)) = &handle {
-            *slot = Some(handle.downgrade());
+            *slot = Some(handle.clone());
         }
         handle
     }
@@ -845,7 +837,7 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
         }
     }
     let guard = ctx.lock().await;
-    let handle = guard.as_ref().and_then(|x| x.upgrade());
+    let handle = guard.as_ref().map(|x| x.clone());
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
     //   the entry exists in the db, but we don't have a handle
