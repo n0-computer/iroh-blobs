@@ -84,6 +84,7 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
+use entity_manager::{EntityManager, Options as EntityManagerOptions};
 use entry_state::{DataLocation, OutboardLocation};
 use gc::run_gc;
 use import::{ImportEntry, ImportSource};
@@ -94,7 +95,6 @@ use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{Id, JoinError, JoinSet};
 use tracing::{error, instrument, trace};
-use entity_manager::{EntityManager, Options as EntityManagerOptions};
 
 use crate::{
     api::{
@@ -201,6 +201,30 @@ impl TaskContext {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct EntityState;
+
+impl entity_manager::Reset for EntityState {
+    fn reset(&mut self) {}
+}
+
+#[derive(Debug)]
+struct EmParams;
+
+impl entity_manager::Params for EmParams {
+    type EntityId = Hash;
+
+    type GlobalState = Arc<TaskContext>;
+
+    type EntityState = EntityState;
+
+    async fn on_shutdown(
+        state: entity_manager::ActiveEntityState<Self>,
+        cause: entity_manager::ShutdownCause,
+    ) {
+    }
+}
+
 #[derive(Debug)]
 struct Actor {
     // Context that can be cheaply shared with tasks.
@@ -215,6 +239,8 @@ struct Actor {
     running: HashSet<Id>,
     // handles
     handles: HashMap<Hash, Slot>,
+
+    handles2: EntityManager<EmParams>,
     // temp tags
     temp_tags: TempTags,
     // our private tokio runtime. It has to live somewhere.
@@ -494,6 +520,10 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
+            Command::DeleteBlobs(cmd) => {
+                trace!("{cmd:?}");
+                self.db().send(cmd.into()).await.ok();
+            }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -510,10 +540,6 @@ impl Actor {
                 if let Ok(snapshot) = rx.await {
                     self.spawn(list_blobs(snapshot, cmd));
                 }
-            }
-            Command::DeleteBlobs(cmd) => {
-                trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
             }
             Command::Batch(cmd) => {
                 trace!("{cmd:?}");
@@ -670,12 +696,13 @@ impl Actor {
         });
         rt.spawn(db_actor.run());
         Ok(Self {
-            context: slot_context,
+            context: slot_context.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
             tasks: JoinSet::new(),
             running: HashSet::new(),
             handles: Default::default(),
+            handles2: EntityManager::new(slot_context, EntityManagerOptions::default()),
             temp_tags: Default::default(),
             _rt: rt,
         })
