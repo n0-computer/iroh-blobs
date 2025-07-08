@@ -96,6 +96,25 @@ impl Db {
         Self { sender }
     }
 
+    pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(
+                Update {
+                    hash,
+                    state,
+                    tx: Some(tx),
+                    span: tracing::Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| io::Error::other("send update"))?;
+        rx.await
+            .map_err(|_e| io::Error::other("receive update"))??;
+        Ok(())
+    }
+
     /// Update the entry state for a hash, without awaiting completion.
     pub async fn update(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
         self.sender
@@ -132,7 +151,7 @@ impl Db {
     }
 
     /// Get the entry state for a hash, if any.
-    pub async fn get(&self, hash: Hash) -> anyhow::Result<Option<EntryState<Bytes>>> {
+    pub async fn get(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(
@@ -143,8 +162,9 @@ impl Db {
                 }
                 .into(),
             )
-            .await?;
-        let res = rx.await?;
+            .await
+            .map_err(|_| io::Error::other("send get"))?;
+        let res = rx.await.map_err(|_| io::Error::other("receive get"))?;
         Ok(res.state?)
     }
 
