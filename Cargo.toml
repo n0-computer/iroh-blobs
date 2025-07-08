@@ -46,6 +46,7 @@ irpc = { version = "0.5.0", features = ["rpc", "quinn_endpoint_setup", "message_
 iroh-metrics = { version = "0.35" }
 hashlink = "0.10.0"
 futures-buffered = "0.2.11"
+entity-manager = { path = "../entity-manager" }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
