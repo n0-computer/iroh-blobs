@@ -84,7 +84,7 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
-use entity_manager::{EntityManager, Options as EntityManagerOptions};
+use entity_manager::{EntityManager, Options as EntityManagerOptions, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use gc::run_gc;
 use import::{ImportEntry, ImportSource};
@@ -201,11 +201,10 @@ impl TaskContext {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct EntityState;
-
-impl entity_manager::Reset for EntityState {
-    fn reset(&mut self) {}
+impl entity_manager::Reset for Slot {
+    fn reset(&mut self) {
+        self.0 = Arc::new(tokio::sync::Mutex::new(None));
+    }
 }
 
 #[derive(Debug)]
@@ -216,7 +215,7 @@ impl entity_manager::Params for EmParams {
 
     type GlobalState = Arc<TaskContext>;
 
-    type EntityState = EntityState;
+    type EntityState = Slot;
 
     async fn on_shutdown(
         state: entity_manager::ActiveEntityState<Self>,
@@ -235,11 +234,7 @@ struct Actor {
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
-    // Running tasks
-    running: HashSet<Id>,
-    // handles
-    handles: HashMap<Hash, Slot>,
-
+    // Entity handler
     handles2: EntityManager<EmParams>,
     // temp tags
     temp_tags: TempTags,
@@ -291,14 +286,6 @@ impl HashContext {
     /// Update the entry state in the database, and wait for completion.
     pub async fn set(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
         self.db().set(hash, state).await
-    }
-
-    pub async fn get_maybe_create(&self, hash: Hash, create: bool) -> api::Result<BaoFileHandle> {
-        if create {
-            self.get_or_create(hash).await
-        } else {
-            self.get(hash).await
-        }
     }
 
     pub async fn get(&self, hash: Hash) -> api::Result<BaoFileHandle> {
@@ -433,17 +420,12 @@ impl Actor {
 
     fn spawn(&mut self, fut: impl Future<Output = ()> + Send + 'static) {
         let span = tracing::Span::current();
-        let id = self.tasks.spawn(fut.instrument(span)).id();
-        self.running.insert(id);
+        self.tasks.spawn(fut.instrument(span));
     }
 
-    fn log_task_result(&mut self, res: Result<(Id, ()), JoinError>) {
+    fn log_task_result(&mut self, res: Result<(), JoinError>) {
         match res {
-            Ok((id, _)) => {
-                // println!("task {id} finished");
-                self.running.remove(&id);
-                // println!("{:?}", self.running);
-            }
+            Ok(_) => {}
             Err(e) => {
                 error!("task failed: {e}");
             }
@@ -457,26 +439,6 @@ impl Actor {
             tt.leak();
         }
         tx.send(tt).await.ok();
-    }
-
-    async fn clear_dead_handles(&mut self) {
-        let mut to_remove = Vec::new();
-        for (hash, slot) in &self.handles {
-            if !slot.is_live().await {
-                to_remove.push(*hash);
-            }
-        }
-        for hash in to_remove {
-            if let Some(slot) = self.handles.remove(&hash) {
-                // do a quick check if the handle has become alive in the meantime, and reinsert it
-                let guard = slot.0.lock().await;
-                let is_live = guard.as_ref().map(|x| !x.is_dead()).unwrap_or_default();
-                if is_live {
-                    drop(guard);
-                    self.handles.insert(hash, slot);
-                }
-            }
-        }
     }
 
     async fn handle_command(&mut self, cmd: Command) {
@@ -513,7 +475,6 @@ impl Actor {
             }
             Command::ClearProtected(cmd) => {
                 trace!("{cmd:?}");
-                self.clear_dead_handles().await;
                 self.db().send(cmd.into()).await.ok();
             }
             Command::BlobStatus(cmd) => {
@@ -569,37 +530,109 @@ impl Actor {
             }
             Command::ExportPath(cmd) => {
                 trace!("{cmd:?}");
-                let ctx = self.hash_context(cmd.hash);
-                self.spawn(export_path(cmd, ctx));
+                let ctx = self.context.clone();
+                self.handles2
+                    .spawn(cmd.hash, |state| async move {
+                        match state {
+                            SpawnArg::Active(state) => {
+                                let ctx = HashContext {
+                                    slot: state.state,
+                                    ctx,
+                                };
+                                export_path(cmd, ctx).await
+                            }
+                            _ => {}
+                        }
+                    })
+                    .await
+                    .ok();
+                // let ctx = self.hash_context(cmd.hash);
+                // self.spawn(export_path(cmd, ctx));
             }
             Command::ExportBao(cmd) => {
                 trace!("{cmd:?}");
-                let ctx = self.hash_context(cmd.hash);
-                self.spawn(export_bao(cmd, ctx));
+                let ctx = self.context.clone();
+                self.handles2
+                    .spawn(cmd.hash, |state| async move {
+                        match state {
+                            SpawnArg::Active(state) => {
+                                let ctx = HashContext {
+                                    slot: state.state,
+                                    ctx,
+                                };
+                                export_bao(cmd, ctx).await
+                            }
+                            _ => {}
+                        }
+                    })
+                    .await
+                    .ok();
+                // let ctx = self.hash_context(cmd.hash);
+                // self.spawn(export_bao(cmd, ctx));
             }
             Command::ExportRanges(cmd) => {
                 trace!("{cmd:?}");
-                let ctx = self.hash_context(cmd.hash);
-                self.spawn(export_ranges(cmd, ctx));
+                let ctx = self.context.clone();
+                self.handles2
+                    .spawn(cmd.hash, |state| async move {
+                        match state {
+                            SpawnArg::Active(state) => {
+                                let ctx = HashContext {
+                                    slot: state.state,
+                                    ctx,
+                                };
+                                export_ranges(cmd, ctx).await
+                            }
+                            _ => {}
+                        }
+                    })
+                    .await
+                    .ok();
+                // let ctx = self.hash_context(cmd.hash);
+                // self.spawn(export_ranges(cmd, ctx));
             }
             Command::ImportBao(cmd) => {
                 trace!("{cmd:?}");
-                let ctx = self.hash_context(cmd.hash);
-                self.spawn(import_bao(cmd, ctx));
+                let ctx = self.context.clone();
+                self.handles2
+                    .spawn(cmd.hash, |state| async move {
+                        match state {
+                            SpawnArg::Active(state) => {
+                                let ctx = HashContext {
+                                    slot: state.state,
+                                    ctx,
+                                };
+                                import_bao(cmd, ctx).await
+                            }
+                            _ => {}
+                        }
+                    })
+                    .await
+                    .ok();
+                // let ctx = self.hash_context(cmd.hash);
+                // self.spawn(import_bao(cmd, ctx));
             }
             Command::Observe(cmd) => {
                 trace!("{cmd:?}");
-                let ctx = self.hash_context(cmd.hash);
-                self.spawn(observe(cmd, ctx));
+                let ctx = self.context.clone();
+                self.handles2
+                    .spawn(cmd.hash, |state| async move {
+                        match state {
+                            SpawnArg::Active(state) => {
+                                let ctx = HashContext {
+                                    slot: state.state,
+                                    ctx,
+                                };
+                                observe(cmd, ctx).await
+                            }
+                            _ => {}
+                        }
+                    })
+                    .await
+                    .ok();
+                // let ctx = self.hash_context(cmd.hash);
+                // self.spawn(observe(cmd, ctx));
             }
-        }
-    }
-
-    /// Create a hash context for a given hash.
-    fn hash_context(&mut self, hash: Hash) -> HashContext {
-        HashContext {
-            slot: self.handles.entry(hash).or_default().clone(),
-            ctx: self.context.clone(),
         }
     }
 
@@ -630,8 +663,22 @@ impl Actor {
                             format: cmd.format,
                         },
                     );
-                    let ctx = self.hash_context(cmd.hash);
-                    self.spawn(finish_import(cmd, tt, ctx));
+                    let ctx = self.context.clone();
+                    self.handles2
+                        .spawn(cmd.hash, |state| async move {
+                            match state {
+                                SpawnArg::Active(state) => {
+                                    let ctx = HashContext {
+                                        slot: state.state,
+                                        ctx,
+                                    };
+                                    finish_import(cmd, tt, ctx).await
+                                }
+                                _ => {}
+                            }
+                        })
+                        .await
+                        .ok();
                 }
             }
         }
@@ -649,7 +696,7 @@ impl Actor {
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
-                Some(res) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     self.log_task_result(res);
                 }
             }
@@ -700,8 +747,6 @@ impl Actor {
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
             tasks: JoinSet::new(),
-            running: HashSet::new(),
-            handles: Default::default(),
             handles2: EntityManager::new(slot_context, EntityManagerOptions::default()),
             temp_tags: Default::default(),
             _rt: rt,
@@ -1017,7 +1062,7 @@ async fn export_ranges_impl(
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
-    match ctx.get_maybe_create(cmd.hash, false).await {
+    match ctx.get(cmd.hash).await {
         Ok(handle) => {
             if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, handle).await {
                 cmd.tx
