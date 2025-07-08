@@ -34,7 +34,7 @@ mod proto;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables};
-use tracing::{debug, error, info_span, trace};
+use tracing::{debug, error, info_span, trace, Span};
 
 use super::{
     delete_set::DeleteHandle,
@@ -88,7 +88,7 @@ pub type ActorResult<T> = Result<T, ActorError>;
 
 #[derive(Debug, Clone)]
 pub struct Db {
-    pub sender: tokio::sync::mpsc::Sender<Command>,
+    sender: tokio::sync::mpsc::Sender<Command>,
 }
 
 impl Db {
@@ -96,8 +96,62 @@ impl Db {
         Self { sender }
     }
 
+    pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(
+                Update {
+                    hash,
+                    state,
+                    tx: Some(tx),
+                    span: tracing::Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| io::Error::other("send update"))?;
+        rx.await
+            .map_err(|_e| io::Error::other("receive update"))??;
+        Ok(())
+    }
+
+    /// Update the entry state for a hash, without awaiting completion.
+    pub async fn update(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
+        self.sender
+            .send(
+                Update {
+                    hash,
+                    state,
+                    tx: None,
+                    span: Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| io::Error::other("send update"))
+    }
+
+    /// Set the entry state and await completion.
+    pub async fn set(&self, hash: Hash, entry_state: EntryState<Bytes>) -> io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(
+                Set {
+                    hash,
+                    state: entry_state,
+                    tx,
+                    span: Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| io::Error::other("send update"))?;
+        rx.await.map_err(|_| io::Error::other("receive update"))??;
+        Ok(())
+    }
+
     /// Get the entry state for a hash, if any.
-    pub async fn get(&self, hash: Hash) -> anyhow::Result<Option<EntryState<Bytes>>> {
+    pub async fn get(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(
@@ -108,8 +162,9 @@ impl Db {
                 }
                 .into(),
             )
-            .await?;
-        let res = rx.await?;
+            .await
+            .map_err(|_| io::Error::other("send get"))?;
+        let res = rx.await.map_err(|_| io::Error::other("receive get"))?;
         Ok(res.state?)
     }
 

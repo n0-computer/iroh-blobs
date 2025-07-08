@@ -247,20 +247,8 @@ impl HashContext {
     }
 
     /// Update the entry state in the database, and wait for completion.
-    pub async fn update(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.db()
-            .send(
-                meta::Update {
-                    hash,
-                    state,
-                    tx: Some(tx),
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await?;
-        rx.await.map_err(|_e| io::Error::other(""))??;
+    pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db().update_await(hash, state).await?;
         Ok(())
     }
 
@@ -270,40 +258,13 @@ impl HashContext {
                 data_location: DataLocation::Inline(Bytes::new()),
                 outboard_location: OutboardLocation::NotNeeded,
             }));
-        }
-        let (tx, rx) = oneshot::channel();
-        self.db()
-            .send(
-                meta::Get {
-                    hash,
-                    tx,
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .ok();
-        let res = rx.await.map_err(io::Error::other)?;
-        Ok(res.state?)
+        };
+        self.db().get(hash).await
     }
 
     /// Update the entry state in the database, and wait for completion.
     pub async fn set(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.db()
-            .send(
-                meta::Set {
-                    hash,
-                    state,
-                    tx,
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(io::Error::other)?;
-        rx.await.map_err(|_e| io::Error::other(""))??;
-        Ok(())
+        self.db().set(hash, state).await
     }
 
     pub async fn get_maybe_create(&self, hash: Hash, create: bool) -> api::Result<BaoFileHandle> {
@@ -893,7 +854,7 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
         data_location,
         outboard_location,
     };
-    ctx.update(hash, state).await?;
+    ctx.update_await(hash, state).await?;
     Ok(())
 }
 

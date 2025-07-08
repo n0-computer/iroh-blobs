@@ -21,21 +21,17 @@ use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
 use tokio::sync::watch;
-use tracing::{debug, error, info, trace, Span};
+use tracing::{debug, error, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
-    meta::Update,
     options::{Options, PathOptions},
     BaoFilePart,
 };
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{
-            meta::{raw_outboard_size, Set},
-            TaskContext,
-        },
+        fs::{meta::raw_outboard_size, TaskContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, SizeInfo, SparseMemFile, DD,
@@ -644,21 +640,7 @@ impl BaoFileHandle {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
             debug!("File was reconstructed as complete");
-            let (tx, rx) = crate::util::channel::oneshot::channel();
-            ctx.db
-                .sender
-                .send(
-                    Set {
-                        hash,
-                        state: entry_state,
-                        tx,
-                        span: Span::current(),
-                    }
-                    .into(),
-                )
-                .await
-                .map_err(|_| io::Error::other("send update"))?;
-            rx.await.map_err(|_| io::Error::other("receive update"))??;
+            ctx.db.set(hash, entry_state).await?;
             storage.into()
         } else {
             storage.into()
@@ -796,19 +778,7 @@ impl BaoFileHandle {
             true
         });
         if let Some(update) = res? {
-            ctx.db
-                .sender
-                .send(
-                    Update {
-                        hash: self.hash,
-                        state: update,
-                        tx: None,
-                        span: Span::current(),
-                    }
-                    .into(),
-                )
-                .await
-                .map_err(|_| io::Error::other("send update"))?;
+            ctx.db.update(self.hash, update).await?;
         }
         Ok(())
     }
