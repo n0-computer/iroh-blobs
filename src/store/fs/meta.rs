@@ -463,6 +463,7 @@ impl Actor {
         } = cmd;
         for hash in hashes {
             if !force && protected.contains(&hash) {
+                trace!("delete {hash}: skip (protected)");
                 continue;
             }
             if let Some(entry) = tables.blobs.remove(hash).context(StorageSnafu)? {
@@ -471,6 +472,7 @@ impl Actor {
                         data_location,
                         outboard_location,
                     } => {
+                        trace!("delete {hash}: currently complete. will be deleted.");
                         match data_location {
                             DataLocation::Inline(_) => {
                                 tables.inline_data.remove(hash).context(StorageSnafu)?;
@@ -493,6 +495,7 @@ impl Actor {
                         }
                     }
                     EntryState::Partial { .. } => {
+                        trace!("delete {hash}: currently partial. will be deleted.");
                         tables.ftx.delete(
                             hash,
                             [
