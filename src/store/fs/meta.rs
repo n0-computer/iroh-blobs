@@ -34,7 +34,7 @@ mod proto;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables};
-use tracing::{debug, error, info_span, trace};
+use tracing::{debug, error, info_span, trace, Span};
 
 use super::{
     delete_set::DeleteHandle,
@@ -88,12 +88,47 @@ pub type ActorResult<T> = Result<T, ActorError>;
 
 #[derive(Debug, Clone)]
 pub struct Db {
-    pub sender: tokio::sync::mpsc::Sender<Command>,
+    sender: tokio::sync::mpsc::Sender<Command>,
 }
 
 impl Db {
     pub fn new(sender: tokio::sync::mpsc::Sender<Command>) -> Self {
         Self { sender }
+    }
+
+    /// Update the entry state for a hash, without awaiting completion.
+    pub async fn update(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
+        self.sender
+            .send(
+                Update {
+                    hash,
+                    state,
+                    tx: None,
+                    span: Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| io::Error::other("send update"))
+    }
+
+    /// Set the entry state and await completion.
+    pub async fn set(&self, hash: Hash, entry_state: EntryState<Bytes>) -> io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(
+                Set {
+                    hash,
+                    state: entry_state,
+                    tx,
+                    span: Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| io::Error::other("send update"))?;
+        rx.await.map_err(|_| io::Error::other("receive update"))??;
+        Ok(())
     }
 
     /// Get the entry state for a hash, if any.
