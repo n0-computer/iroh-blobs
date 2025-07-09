@@ -40,7 +40,7 @@ pub use bitfield::Bitfield;
 
 use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
 
-pub(crate) trait HashSpecific: Send + 'static {
+pub(crate) trait HashSpecific {
     fn hash(&self) -> Hash;
 
     fn hash_short(&self) -> ArrayString<10> {

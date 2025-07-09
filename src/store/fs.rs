@@ -639,7 +639,7 @@ impl Actor {
     }
 }
 
-trait HashSpecificCommand: HashSpecific {
+trait HashSpecificCommand: HashSpecific + Send + 'static {
     fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
 
     fn on_error(self) -> impl Future<Output = ()> + Send + 'static;

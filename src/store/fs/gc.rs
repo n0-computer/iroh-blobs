@@ -304,11 +304,7 @@ mod tests {
             assert!(data_path.exists());
             assert!(outboard_path.exists());
             assert!(sizes_path.exists());
-            assert!(
-                bitfield_path.exists(),
-                "Bitfield file {} should exist",
-                bitfield_path.display()
-            );
+            assert!(bitfield_path.exists());
             gc_run_once(store, &mut live).await?;
             assert!(!data_path.exists());
             assert!(!outboard_path.exists());
