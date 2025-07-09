@@ -853,10 +853,7 @@
 <a href="#852" id="852">852</a>
 <a href="#853" id="853">853</a>
 <a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a>
-<a href="#856" id="856">856</a>
-<a href="#857" id="857">857</a>
-<a href="#858" id="858">858</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
+<a href="#855" id="855">855</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
 <span class="kw">use </span>std::{
     fs::{File, OpenOptions},
     io,
@@ -1401,9 +1398,6 @@
             };
             <span class="kw">let </span>options = <span class="kw-2">&amp;</span><span class="self">self</span>.options;
             <span class="kw">let </span>path = options.path.bitfield_path(<span class="kw-2">&amp;</span><span class="self">self</span>.hash);
-            <span class="kw">if </span>fs.bitfield.size == <span class="number">8000000 </span>{
-                <span class="macro">println!</span>(<span class="string">"PERSISTING THE TEST CASE FILE to {}"</span>, path.display());
-            }
             <span class="macro">trace!</span>(
                 <span class="string">"writing bitfield for hash {} to {}"</span>,
                 <span class="self">self</span>.hash,
