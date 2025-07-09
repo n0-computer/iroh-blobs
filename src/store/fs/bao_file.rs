@@ -543,9 +543,6 @@ impl BaoFileHandle {
             };
             let options = &self.options;
             let path = options.path.bitfield_path(&self.hash);
-            if fs.bitfield.size == 8000000 {
-                println!("PERSISTING THE TEST CASE FILE to {}", path.display());
-            }
             trace!(
                 "writing bitfield for hash {} to {}",
                 self.hash,
