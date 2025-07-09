@@ -1188,15 +1188,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashlink"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
-dependencies = [
- "hashbrown",
-]
-
-[[package]]
 name = "heapless"
 version = "0.7.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1728,10 +1719,8 @@ dependencies = [
  "clap",
  "data-encoding",
  "derive_more 2.0.1",
- "futures-buffered",
  "futures-lite",
  "genawaiter",
- "hashlink",
  "hex",
  "iroh",
  "iroh-base",
