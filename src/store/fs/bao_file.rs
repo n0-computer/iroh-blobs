@@ -31,7 +31,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, HashContext, TaskContext},
+        fs::{meta::raw_outboard_size, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -577,14 +577,15 @@ impl BaoFileHandle {
     }
 
     /// Create a new bao file handle with a partial file.
-    pub(super) async fn new_partial_file(hash: Hash, ctx: &TaskContext) -> io::Result<Self> {
-        let options = ctx.options.clone();
-        let storage = PartialFileStorage::load(&hash, &options.path)?;
+    pub(super) async fn new_partial_file(ctx: &HashContext) -> io::Result<Self> {
+        let hash = &ctx.id;
+        let options = ctx.global.options.clone();
+        let storage = PartialFileStorage::load(hash, &options.path)?;
         let storage = if storage.bitfield.is_complete() {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
             debug!("File was reconstructed as complete");
-            ctx.db.set(hash, entry_state).await?;
+            ctx.global.db.set(*hash, entry_state).await?;
             storage.into()
         } else {
             storage.into()

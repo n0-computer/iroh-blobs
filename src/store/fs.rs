@@ -298,7 +298,7 @@ impl HashContext {
             .get_or_create(|| async {
                 let res = self.db().get(hash).await.map_err(io::Error::other)?;
                 let res = match res {
-                    Some(state) => open_bao_file(&hash, state, &self.global).await,
+                    Some(state) => open_bao_file(state, self).await,
                     None => Err(io::Error::new(io::ErrorKind::NotFound, "hash not found")),
                 };
                 Ok((res?, ()))
@@ -318,7 +318,7 @@ impl HashContext {
             .get_or_create(|| async {
                 let res = self.db().get(hash).await.map_err(io::Error::other)?;
                 let res = match res {
-                    Some(state) => open_bao_file(&hash, state, &self.global).await,
+                    Some(state) => open_bao_file(state, self).await,
                     None => Ok(BaoFileHandle::new_partial_mem()),
                 };
                 Ok((res?, ()))
@@ -331,12 +331,9 @@ impl HashContext {
     }
 }
 
-async fn open_bao_file(
-    hash: &Hash,
-    state: EntryState<Bytes>,
-    ctx: &TaskContext,
-) -> io::Result<BaoFileHandle> {
-    let options = &ctx.options;
+async fn open_bao_file(state: EntryState<Bytes>, ctx: &HashContext) -> io::Result<BaoFileHandle> {
+    let hash = &ctx.id;
+    let options = &ctx.global.options;
     Ok(match state {
         EntryState::Complete {
             data_location,
@@ -368,7 +365,7 @@ async fn open_bao_file(
             };
             BaoFileHandle::new_complete(data, outboard)
         }
-        EntryState::Partial { .. } => BaoFileHandle::new_partial_file(*hash, ctx).await?,
+        EntryState::Partial { .. } => BaoFileHandle::new_partial_file(ctx).await?,
     })
 }
 
