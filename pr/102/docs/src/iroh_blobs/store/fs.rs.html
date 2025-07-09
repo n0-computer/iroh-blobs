@@ -2107,10 +2107,7 @@
 <a href="#2106" id="2106">2106</a>
 <a href="#2107" id="2107">2107</a>
 <a href="#2108" id="2108">2108</a>
-<a href="#2109" id="2109">2109</a>
-<a href="#2110" id="2110">2110</a>
-<a href="#2111" id="2111">2111</a>
-<a href="#2112" id="2112">2112</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2109" id="2109">2109</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2410,7 +2407,7 @@
             .get_or_create(|| <span class="kw">async </span>{
                 <span class="kw">let </span>res = <span class="self">self</span>.db().get(hash).<span class="kw">await</span>.map_err(io::Error::other)<span class="question-mark">?</span>;
                 <span class="kw">let </span>res = <span class="kw">match </span>res {
-                    <span class="prelude-val">Some</span>(state) =&gt; open_bao_file(state, <span class="kw-2">&amp;</span><span class="self">self</span>).<span class="kw">await</span>,
+                    <span class="prelude-val">Some</span>(state) =&gt; open_bao_file(state, <span class="self">self</span>).<span class="kw">await</span>,
                     <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>)),
                 };
                 <span class="prelude-val">Ok</span>((res<span class="question-mark">?</span>, ()))
@@ -2430,7 +2427,7 @@
             .get_or_create(|| <span class="kw">async </span>{
                 <span class="kw">let </span>res = <span class="self">self</span>.db().get(hash).<span class="kw">await</span>.map_err(io::Error::other)<span class="question-mark">?</span>;
                 <span class="kw">let </span>res = <span class="kw">match </span>res {
-                    <span class="prelude-val">Some</span>(state) =&gt; open_bao_file(state, <span class="kw-2">&amp;</span><span class="self">self</span>).<span class="kw">await</span>,
+                    <span class="prelude-val">Some</span>(state) =&gt; open_bao_file(state, <span class="self">self</span>).<span class="kw">await</span>,
                     <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(BaoFileHandle::new_partial_mem()),
                 };
                 <span class="prelude-val">Ok</span>((res<span class="question-mark">?</span>, ()))
@@ -2443,10 +2440,7 @@
     }
 }
 
-<span class="kw">async fn </span>open_bao_file(
-    state: EntryState&lt;Bytes&gt;,
-    ctx: <span class="kw-2">&amp;</span>HashContext,
-) -&gt; io::Result&lt;BaoFileHandle&gt; {
+<span class="kw">async fn </span>open_bao_file(state: EntryState&lt;Bytes&gt;, ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;BaoFileHandle&gt; {
     <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
     <span class="kw">let </span>options = <span class="kw-2">&amp;</span>ctx.global.options;
     <span class="prelude-val">Ok</span>(<span class="kw">match </span>state {
