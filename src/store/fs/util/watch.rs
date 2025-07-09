@@ -53,7 +53,7 @@ impl<T> Drop for Sender<T> {
         self.0.value.borrow_mut().dropped = true;
         self.0.notify.notify_waiters();
     }
-}   
+}
 
 impl<T> Receiver<T> {
     pub async fn changed(&self) -> Result<(), error::RecvError> {
@@ -69,7 +69,7 @@ impl<T> Receiver<T> {
         AtomicRef::map(self.0.value.borrow(), |state| &state.value)
     }
 }
-    
+
 pub mod error {
     use std::{error::Error, fmt};
 

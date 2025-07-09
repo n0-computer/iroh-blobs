@@ -20,12 +20,12 @@ use bao_tree::{
 use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
-use super::util::watch;
 use tracing::{debug, error, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     options::{Options, PathOptions},
+    util::watch,
     BaoFilePart,
 };
 use crate::{
