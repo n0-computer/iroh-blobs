@@ -140,7 +140,7 @@
         <span class="self">self</span>.<span class="number">0</span>.value.borrow_mut().dropped = <span class="bool-val">true</span>;
         <span class="self">self</span>.<span class="number">0</span>.notify.notify_waiters();
     }
-}   
+}
 
 <span class="kw">impl</span>&lt;T&gt; Receiver&lt;T&gt; {
     <span class="kw">pub async fn </span>changed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(), error::RecvError&gt; {
@@ -156,7 +156,7 @@
         AtomicRef::map(<span class="self">self</span>.<span class="number">0</span>.value.borrow(), |state| <span class="kw-2">&amp;</span>state.value)
     }
 }
-    
+
 <span class="kw">pub mod </span>error {
     <span class="kw">use </span>std::{error::Error, fmt};
 
@@ -171,4 +171,5 @@
     }
 
     <span class="kw">impl </span>Error <span class="kw">for </span>RecvError {}
-}</code></pre></div></section></main></body></html>
+}
+</code></pre></div></section></main></body></html>
