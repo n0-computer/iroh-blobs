@@ -226,7 +226,7 @@ impl entity_manager::Params for EmParams {
         // have exact control over where it happens.
         if let Some(mut handle) = state.state.0.lock().await.take() {
             trace!("shutting down hash: {}, cause: {cause:?}", state.id);
-            handle.persist(&state.id, &state.global.options);
+            handle.persist(&state);
         }
     }
 }
@@ -924,11 +924,7 @@ async fn import_bao_impl(
     handle: BaoFileHandle,
     ctx: HashContext,
 ) -> api::Result<()> {
-    trace!(
-        "importing bao: {} {} bytes",
-        ctx.id.fmt_short(),
-        size
-    );
+    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
