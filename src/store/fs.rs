@@ -218,9 +218,16 @@ impl entity_manager::Params for EmParams {
     type EntityState = Slot;
 
     async fn on_shutdown(
-        _state: entity_manager::ActiveEntityState<Self>,
-        _cause: entity_manager::ShutdownCause,
+        state: entity_manager::ActiveEntityState<Self>,
+        cause: entity_manager::ShutdownCause,
     ) {
+        // this isn't strictly necessary. Drop will run anyway as soon as the
+        // state is reset to it's default value. Doing it here means that we
+        // have exact control over where it happens.
+        if let Some(mut handle) = state.state.0.lock().await.take() {
+            trace!("shutting down hash: {}, cause: {cause:?}", state.id);
+            handle.persist(&state.global.options);
+        }
     }
 }
 
@@ -312,10 +319,7 @@ impl HashContext {
                 let res = self.db().get(hash).await.map_err(io::Error::other)?;
                 let res = match res {
                     Some(state) => open_bao_file(&hash, state, &self.global).await,
-                    None => Ok(BaoFileHandle::new_partial_mem(
-                        hash,
-                        self.global.options.clone(),
-                    )),
+                    None => Ok(BaoFileHandle::new_partial_mem(hash)),
                 };
                 Ok((res?, ()))
             })
@@ -362,7 +366,7 @@ async fn open_bao_file(
                     MemOrFile::File(file)
                 }
             };
-            BaoFileHandle::new_complete(*hash, data, outboard, options.clone())
+            BaoFileHandle::new_complete(*hash, data, outboard)
         }
         EntryState::Partial { .. } => BaoFileHandle::new_partial_file(*hash, ctx).await?,
     })
@@ -618,12 +622,7 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            empty: BaoFileHandle::new_complete(
-                Hash::EMPTY,
-                MemOrFile::empty(),
-                MemOrFile::empty(),
-                options,
-            ),
+            empty: BaoFileHandle::new_complete(Hash::EMPTY, MemOrFile::empty(), MemOrFile::empty()),
             protect,
         });
         rt.spawn(db_actor.run());

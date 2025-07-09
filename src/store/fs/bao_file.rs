@@ -507,7 +507,6 @@ impl BaoFileStorage {
 pub struct BaoFileHandleInner {
     pub(crate) storage: watch::Sender<BaoFileStorage>,
     hash: Hash,
-    options: Arc<Options>,
 }
 
 impl fmt::Debug for BaoFileHandleInner {
@@ -526,7 +525,7 @@ impl fmt::Debug for BaoFileHandleInner {
 pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
 
 impl BaoFileHandle {
-    pub fn persist(&mut self) {
+    pub fn persist(&mut self, options: &Options) {
         self.0.storage.send_if_modified(|guard| {
             if Arc::strong_count(&self.0) > 1 {
                 return false;
@@ -534,7 +533,6 @@ impl BaoFileHandle {
             let BaoFileStorage::Partial(fs) = guard.take() else {
                 return false;
             };
-            let options = &self.options;
             let path = options.path.bitfield_path(&self.hash);
             trace!(
                 "writing bitfield for hash {} to {}",
@@ -551,12 +549,6 @@ impl BaoFileHandle {
             }
             false
         });
-    }
-}
-
-impl Drop for BaoFileHandle {
-    fn drop(&mut self) {
-        self.persist();
     }
 }
 
@@ -601,12 +593,11 @@ impl BaoFileHandle {
     /// Create a new bao file handle.
     ///
     /// This will create a new file handle with an empty memory storage.
-    pub fn new_partial_mem(hash: Hash, options: Arc<Options>) -> Self {
+    pub fn new_partial_mem(hash: Hash) -> Self {
         let storage = BaoFileStorage::partial_mem();
         Self(Arc::new(BaoFileHandleInner {
             storage: watch::Sender::new(storage),
             hash,
-            options: options.clone(),
         }))
     }
 
@@ -626,7 +617,6 @@ impl BaoFileHandle {
         Ok(Self(Arc::new(BaoFileHandleInner {
             storage: watch::Sender::new(storage),
             hash,
-            options,
         })))
     }
 
@@ -635,13 +625,11 @@ impl BaoFileHandle {
         hash: Hash,
         data: MemOrFile<Bytes, FixedSize<File>>,
         outboard: MemOrFile<Bytes, File>,
-        options: Arc<Options>,
     ) -> Self {
         let storage = CompleteStorage { data, outboard }.into();
         Self(Arc::new(BaoFileHandleInner {
             storage: watch::Sender::new(storage),
             hash,
-            options,
         }))
     }
 
