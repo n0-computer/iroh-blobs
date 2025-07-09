@@ -96,6 +96,15 @@ impl Db {
         Self { sender }
     }
 
+    pub async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(Snapshot { tx, span }.into())
+            .await
+            .map_err(|_| io::Error::other("send snapshot"))?;
+        rx.await.map_err(|_| io::Error::other("receive snapshot"))
+    }
+
     pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sender
