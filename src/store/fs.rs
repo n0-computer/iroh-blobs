@@ -226,7 +226,7 @@ impl entity_manager::Params for EmParams {
         // have exact control over where it happens.
         if let Some(mut handle) = state.state.0.lock().await.take() {
             trace!("shutting down hash: {}, cause: {cause:?}", state.id);
-            handle.persist(&state.global.options);
+            handle.persist(&state.id, &state.global.options);
         }
     }
 }
@@ -319,7 +319,7 @@ impl HashContext {
                 let res = self.db().get(hash).await.map_err(io::Error::other)?;
                 let res = match res {
                     Some(state) => open_bao_file(&hash, state, &self.global).await,
-                    None => Ok(BaoFileHandle::new_partial_mem(hash)),
+                    None => Ok(BaoFileHandle::new_partial_mem()),
                 };
                 Ok((res?, ()))
             })
@@ -366,7 +366,7 @@ async fn open_bao_file(
                     MemOrFile::File(file)
                 }
             };
-            BaoFileHandle::new_complete(*hash, data, outboard)
+            BaoFileHandle::new_complete(data, outboard)
         }
         EntryState::Partial { .. } => BaoFileHandle::new_partial_file(*hash, ctx).await?,
     })
@@ -622,7 +622,7 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            empty: BaoFileHandle::new_complete(Hash::EMPTY, MemOrFile::empty(), MemOrFile::empty()),
+            empty: BaoFileHandle::new_complete(MemOrFile::empty(), MemOrFile::empty()),
             protect,
         });
         rt.spawn(db_actor.run());
@@ -926,7 +926,7 @@ async fn import_bao_impl(
 ) -> api::Result<()> {
     trace!(
         "importing bao: {} {} bytes",
-        handle.hash().fmt_short(),
+        ctx.id.fmt_short(),
         size
     );
     let mut batch = Vec::<BaoContentItem>::new();
@@ -935,7 +935,7 @@ async fn import_bao_impl(
         // if the batch is not empty, the last item is a leaf and the current item is a parent, write the batch
         if !batch.is_empty() && batch[batch.len() - 1].is_leaf() && item.is_parent() {
             let bitfield = Bitfield::new_unchecked(ranges, size.into());
-            handle.write_batch(&batch, &bitfield, &ctx.global).await?;
+            handle.write_batch(&batch, &bitfield, &ctx).await?;
             batch.clear();
             ranges = ChunkRanges::empty();
         }
@@ -951,7 +951,7 @@ async fn import_bao_impl(
     }
     if !batch.is_empty() {
         let bitfield = Bitfield::new_unchecked(ranges, size.into());
-        handle.write_batch(&batch, &bitfield, &ctx.global).await?;
+        handle.write_batch(&batch, &bitfield, &ctx).await?;
     }
     Ok(())
 }
@@ -991,7 +991,6 @@ async fn export_ranges_impl(
         "exporting ranges: {hash} {ranges:?} size={}",
         handle.current_size()?
     );
-    debug_assert!(handle.hash() == hash, "hash mismatch");
     let bitfield = handle.bitfield()?;
     let data = handle.data_reader();
     let size = bitfield.size();
@@ -1052,8 +1051,7 @@ async fn export_bao_impl(
     handle: BaoFileHandle,
 ) -> anyhow::Result<()> {
     let ExportBaoRequest { ranges, hash, .. } = cmd;
-    debug_assert!(handle.hash() == hash, "hash mismatch");
-    let outboard = handle.outboard()?;
+    let outboard = handle.outboard(&hash)?;
     let size = outboard.tree.size();
     if size == 0 && hash != Hash::EMPTY {
         // we have no data whatsoever, so we stop here

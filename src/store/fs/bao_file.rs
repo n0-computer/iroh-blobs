@@ -31,7 +31,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, TaskContext},
+        fs::{meta::raw_outboard_size, HashContext, TaskContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -401,21 +401,20 @@ impl BaoFileStorage {
         self,
         batch: &[BaoContentItem],
         bitfield: &Bitfield,
-        ctx: &TaskContext,
-        hash: &Hash,
+        ctx: &HashContext,
     ) -> io::Result<(Self, Option<EntryState<bytes::Bytes>>)> {
         Ok(match self {
             BaoFileStorage::PartialMem(mut ms) => {
                 // check if we need to switch to file mode, otherwise write to memory
-                if max_offset(batch) <= ctx.options.inline.max_data_inlined {
+                if max_offset(batch) <= ctx.global.options.inline.max_data_inlined {
                     ms.write_batch(bitfield.size(), batch)?;
                     let changes = ms.bitfield.update(bitfield);
                     let new = changes.new_state();
                     if new.complete {
-                        let (cs, update) = ms.into_complete(hash, ctx)?;
+                        let (cs, update) = ms.into_complete(&ctx.id, &ctx.global)?;
                         (cs.into(), Some(update))
                     } else {
-                        let fs = ms.persist(ctx, hash)?;
+                        let fs = ms.persist(&ctx.global, &ctx.id)?;
                         let update = EntryState::Partial {
                             size: new.validated_size,
                         };
@@ -428,13 +427,13 @@ impl BaoFileStorage {
                     // a write at the end of a very large file.
                     //
                     // opt: we should check if we become complete to avoid going from mem to partial to complete
-                    let mut fs = ms.persist(ctx, hash)?;
+                    let mut fs = ms.persist(&ctx.global, &ctx.id)?;
                     fs.write_batch(bitfield.size(), batch)?;
                     let changes = fs.bitfield.update(bitfield);
                     let new = changes.new_state();
                     if new.complete {
                         let size = new.validated_size.unwrap();
-                        let (cs, update) = fs.into_complete(size, &ctx.options)?;
+                        let (cs, update) = fs.into_complete(size, &ctx.global.options)?;
                         (cs.into(), Some(update))
                     } else {
                         let update = EntryState::Partial {
@@ -450,7 +449,7 @@ impl BaoFileStorage {
                 let new = changes.new_state();
                 if new.complete {
                     let size = new.validated_size.unwrap();
-                    let (cs, update) = fs.into_complete(size, &ctx.options)?;
+                    let (cs, update) = fs.into_complete(size, &ctx.global.options)?;
                     (cs.into(), Some(update))
                 } else if changes.was_validated() {
                     // we are still partial, but now we know the size
@@ -503,46 +502,29 @@ impl BaoFileStorage {
     }
 }
 
-/// The inner part of a bao file handle.
-pub struct BaoFileHandleInner {
-    pub(crate) storage: watch::Sender<BaoFileStorage>,
-    hash: Hash,
-}
-
-impl fmt::Debug for BaoFileHandleInner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let guard = self.storage.borrow();
-        let storage = guard.deref();
-        f.debug_struct("BaoFileHandleInner")
-            .field("hash", &DD(self.hash))
-            .field("storage", &storage)
-            .finish_non_exhaustive()
-    }
-}
-
 /// A cheaply cloneable handle to a bao file, including the hash and the configuration.
 #[derive(Debug, Clone, derive_more::Deref)]
-pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
+pub(crate) struct BaoFileHandle(Arc<watch::Sender<BaoFileStorage>>);
 
 impl BaoFileHandle {
-    pub fn persist(&mut self, options: &Options) {
-        self.0.storage.send_if_modified(|guard| {
+    pub fn persist(&mut self, hash: &Hash, options: &Options) {
+        self.send_if_modified(|guard| {
             if Arc::strong_count(&self.0) > 1 {
                 return false;
             }
             let BaoFileStorage::Partial(fs) = guard.take() else {
                 return false;
             };
-            let path = options.path.bitfield_path(&self.hash);
+            let path = options.path.bitfield_path(hash);
             trace!(
                 "writing bitfield for hash {} to {}",
-                self.hash,
+                hash,
                 path.display()
             );
             if let Err(cause) = fs.sync_all(&path) {
                 error!(
                     "failed to write bitfield for {} at {}: {:?}",
-                    self.hash,
+                    hash,
                     path.display(),
                     cause
                 );
@@ -558,7 +540,7 @@ pub struct DataReader(BaoFileHandle);
 
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
-        let guard = self.0.storage.borrow();
+        let guard = self.0.borrow();
         match guard.deref() {
             BaoFileStorage::PartialMem(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Partial(x) => x.data.read_bytes_at(offset, size),
@@ -574,7 +556,7 @@ pub struct OutboardReader(BaoFileHandle);
 
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let guard = self.0.storage.borrow();
+        let guard = self.0.borrow();
         match guard.deref() {
             BaoFileStorage::Complete(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::PartialMem(x) => x.outboard.read_at(offset, buf),
@@ -593,12 +575,9 @@ impl BaoFileHandle {
     /// Create a new bao file handle.
     ///
     /// This will create a new file handle with an empty memory storage.
-    pub fn new_partial_mem(hash: Hash) -> Self {
+    pub fn new_partial_mem() -> Self {
         let storage = BaoFileStorage::partial_mem();
-        Self(Arc::new(BaoFileHandleInner {
-            storage: watch::Sender::new(storage),
-            hash,
-        }))
+        Self(Arc::new(watch::Sender::new(storage)))
     }
 
     /// Create a new bao file handle with a partial file.
@@ -614,23 +593,16 @@ impl BaoFileHandle {
         } else {
             storage.into()
         };
-        Ok(Self(Arc::new(BaoFileHandleInner {
-            storage: watch::Sender::new(storage),
-            hash,
-        })))
+        Ok(Self(Arc::new(watch::Sender::new(storage))))
     }
 
     /// Create a new complete bao file handle.
     pub fn new_complete(
-        hash: Hash,
         data: MemOrFile<Bytes, FixedSize<File>>,
         outboard: MemOrFile<Bytes, File>,
     ) -> Self {
         let storage = CompleteStorage { data, outboard }.into();
-        Self(Arc::new(BaoFileHandleInner {
-            storage: watch::Sender::new(storage),
-            hash,
-        }))
+        Self(Arc::new(watch::Sender::new(storage)))
     }
 
     /// Complete the handle
@@ -639,7 +611,7 @@ impl BaoFileHandle {
         data: MemOrFile<Bytes, FixedSize<File>>,
         outboard: MemOrFile<Bytes, File>,
     ) {
-        self.storage.send_if_modified(|guard| {
+        self.send_if_modified(|guard| {
             let res = match guard {
                 BaoFileStorage::Complete(_) => None,
                 BaoFileStorage::PartialMem(entry) => Some(&mut entry.bitfield),
@@ -657,13 +629,13 @@ impl BaoFileHandle {
     }
 
     pub fn subscribe(&self) -> BaoFileStorageSubscriber {
-        BaoFileStorageSubscriber::new(self.0.storage.subscribe())
+        BaoFileStorageSubscriber::new(self.0.subscribe())
     }
 
     /// True if the file is complete.
     #[allow(dead_code)]
     pub fn is_complete(&self) -> bool {
-        matches!(self.storage.borrow().deref(), BaoFileStorage::Complete(_))
+        matches!(self.borrow().deref(), BaoFileStorage::Complete(_))
     }
 
     /// An AsyncSliceReader for the data file.
@@ -684,7 +656,7 @@ impl BaoFileHandle {
 
     /// The most precise known total size of the data file.
     pub fn current_size(&self) -> io::Result<u64> {
-        match self.storage.borrow().deref() {
+        match self.borrow().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.size()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
             BaoFileStorage::Partial(file) => file.current_size(),
@@ -694,7 +666,7 @@ impl BaoFileHandle {
 
     /// The most precise known total size of the data file.
     pub fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.storage.borrow().deref() {
+        match self.borrow().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
             BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
@@ -703,20 +675,14 @@ impl BaoFileHandle {
     }
 
     /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let root = self.hash.into();
+    pub fn outboard(&self, hash: &Hash) -> io::Result<PreOrderOutboard<OutboardReader>> {
         let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
         let outboard = self.outboard_reader();
         Ok(PreOrderOutboard {
-            root,
+            root: blake3::Hash::from(*hash),
             tree,
             data: outboard,
         })
-    }
-
-    /// The hash of the file.
-    pub fn hash(&self) -> Hash {
-        self.hash
     }
 
     /// Write a batch and notify the db
@@ -724,12 +690,12 @@ impl BaoFileHandle {
         &self,
         batch: &[BaoContentItem],
         bitfield: &Bitfield,
-        ctx: &TaskContext,
+        ctx: &HashContext,
     ) -> io::Result<()> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
-        self.storage.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, ctx, &self.hash)
+        self.send_if_modified(|state| {
+            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, ctx)
             else {
                 res = Err(io::Error::other("write batch failed"));
                 return false;
@@ -739,7 +705,7 @@ impl BaoFileHandle {
             true
         });
         if let Some(update) = res? {
-            ctx.db.update(self.hash, update).await?;
+            ctx.global.db.update(ctx.id, update).await?;
         }
         Ok(())
     }
