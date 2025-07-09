@@ -837,7 +837,10 @@
 <a href="#836" id="836">836</a>
 <a href="#837" id="837">837</a>
 <a href="#838" id="838">838</a>
-<a href="#839" id="839">839</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
 <span class="kw">use </span>std::{
     fs::{File, OpenOptions},
     io,
@@ -1367,6 +1370,9 @@
 <span class="kw">impl </span>BaoFileHandle {
     <span class="kw">pub fn </span>persist(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
         <span class="self">self</span>.<span class="number">0</span>.storage.send_if_modified(|guard| {
+            <span class="kw">if </span>Arc::strong_count(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>) &gt; <span class="number">1 </span>{
+                <span class="kw">return </span><span class="bool-val">false</span>;
+            }
             <span class="kw">let </span>BaoFileStorage::Partial(fs) = guard.take() <span class="kw">else </span>{
                 <span class="kw">return </span><span class="bool-val">false</span>;
             };
