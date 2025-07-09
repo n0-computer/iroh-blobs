@@ -312,8 +312,8 @@ mod main_actor {
     impl<P: Params> EntityHandle<P> {
         pub fn send(&self) -> &mpsc::Sender<entity_actor::Command<P>> {
             match self {
-                EntityHandle::Live { send: sender } => sender,
-                EntityHandle::ShuttingDown { send: sender, .. } => sender,
+                EntityHandle::Live { send } => send,
+                EntityHandle::ShuttingDown { send, .. } => send,
             }
         }
     }
@@ -426,6 +426,9 @@ mod main_actor {
             task
         }
 
+        /// This function needs to be polled by the owner of the actor state to advance the
+        /// entity manager state machine. If it returns a future, that future must be spawned
+        /// by the caller.
         #[must_use = "this function may return a future that must be spawned by the caller"]
         pub async fn tick(&mut self) -> Option<impl Future<Output = ()> + Send + 'static> {
             if let Some(cmd) = self.internal_recv.recv().await {
@@ -492,6 +495,8 @@ mod main_actor {
         }
 
         /// Get or create an entity actor for the given id.
+        ///
+        /// If this function returns a future, it must be spawned by the caller.
         fn get_or_create(
             &mut self,
             id: P::EntityId,
@@ -501,14 +506,17 @@ mod main_actor {
         ) {
             let mut task = None;
             let handle = self.live.entry(id.clone()).or_insert_with(|| {
-                if let Some((sender, mut actor)) = self.pool.pop() {
+                if let Some((send, mut actor)) = self.pool.pop() {
+                    // Get an actor from the pool of inactive actors and initialize it.
                     actor.state.id = id.clone();
                     actor.state.global = self.state.clone();
+                    // strictly speaking this is not needed, since we reset the state when adding the actor to the pool.
                     actor.state.state.reset();
                     task = Some(actor.run());
-                    EntityHandle::Live { send: sender }
+                    EntityHandle::Live { send }
                 } else {
-                    let (sender, recv) = mpsc::channel(self.entity_inbox_size);
+                    // Create a new entity actor and inbox.
+                    let (send, recv) = mpsc::channel(self.entity_inbox_size);
                     let state: entity_actor::State<P> = entity_actor::State {
                         id: id.clone(),
                         global: self.state.clone(),
@@ -523,7 +531,7 @@ mod main_actor {
                         ),
                     };
                     task = Some(actor.run());
-                    EntityHandle::Live { send: sender }
+                    EntityHandle::Live { send }
                 }
             });
             (handle, task)
