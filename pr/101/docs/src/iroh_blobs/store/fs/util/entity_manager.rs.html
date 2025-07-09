@@ -1028,7 +1028,15 @@
 <a href="#1027" id="1027">1027</a>
 <a href="#1028" id="1028">1028</a>
 <a href="#1029" id="1029">1029</a>
-<a href="#1030" id="1030">1030</a></pre></div><pre class="rust"><code><span class="attr">#![allow(dead_code)]
+<a href="#1030" id="1030">1030</a>
+<a href="#1031" id="1031">1031</a>
+<a href="#1032" id="1032">1032</a>
+<a href="#1033" id="1033">1033</a>
+<a href="#1034" id="1034">1034</a>
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a></pre></div><pre class="rust"><code><span class="attr">#![allow(dead_code)]
 </span><span class="kw">use </span>std::{fmt::Debug, future::Future, hash::Hash};
 
 <span class="kw">use </span>n0_future::{future, FuturesUnordered};
@@ -1342,8 +1350,8 @@
     <span class="kw">impl</span>&lt;P: Params&gt; EntityHandle&lt;P&gt; {
         <span class="kw">pub fn </span>send(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>mpsc::Sender&lt;entity_actor::Command&lt;P&gt;&gt; {
             <span class="kw">match </span><span class="self">self </span>{
-                EntityHandle::Live { send: sender } =&gt; sender,
-                EntityHandle::ShuttingDown { send: sender, .. } =&gt; sender,
+                EntityHandle::Live { send } =&gt; send,
+                EntityHandle::ShuttingDown { send, .. } =&gt; send,
             }
         }
     }
@@ -1456,7 +1464,10 @@
             task
         }
 
-        <span class="attr">#[must_use = <span class="string">"this function may return a future that must be spawned by the caller"</span>]
+        <span class="doccomment">/// This function needs to be polled by the owner of the actor state to advance the
+        /// entity manager state machine. If it returns a future, that future must be spawned
+        /// by the caller.
+        </span><span class="attr">#[must_use = <span class="string">"this function may return a future that must be spawned by the caller"</span>]
         </span><span class="kw">pub async fn </span>tick(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw">impl </span>Future&lt;Output = ()&gt; + Send + <span class="lifetime">'static</span>&gt; {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(cmd) = <span class="self">self</span>.internal_recv.recv().<span class="kw">await </span>{
                 <span class="kw">match </span>cmd {
@@ -1522,6 +1533,8 @@
         }
 
         <span class="doccomment">/// Get or create an entity actor for the given id.
+        ///
+        /// If this function returns a future, it must be spawned by the caller.
         </span><span class="kw">fn </span>get_or_create(
             <span class="kw-2">&amp;mut </span><span class="self">self</span>,
             id: P::EntityId,
@@ -1531,14 +1544,17 @@
         ) {
             <span class="kw">let </span><span class="kw-2">mut </span>task = <span class="prelude-val">None</span>;
             <span class="kw">let </span>handle = <span class="self">self</span>.live.entry(id.clone()).or_insert_with(|| {
-                <span class="kw">if let </span><span class="prelude-val">Some</span>((sender, <span class="kw-2">mut </span>actor)) = <span class="self">self</span>.pool.pop() {
-                    actor.state.id = id.clone();
+                <span class="kw">if let </span><span class="prelude-val">Some</span>((send, <span class="kw-2">mut </span>actor)) = <span class="self">self</span>.pool.pop() {
+                    <span class="comment">// Get an actor from the pool of inactive actors and initialize it.
+                    </span>actor.state.id = id.clone();
                     actor.state.global = <span class="self">self</span>.state.clone();
-                    actor.state.state.reset();
+                    <span class="comment">// strictly speaking this is not needed, since we reset the state when adding the actor to the pool.
+                    </span>actor.state.state.reset();
                     task = <span class="prelude-val">Some</span>(actor.run());
-                    EntityHandle::Live { send: sender }
+                    EntityHandle::Live { send }
                 } <span class="kw">else </span>{
-                    <span class="kw">let </span>(sender, recv) = mpsc::channel(<span class="self">self</span>.entity_inbox_size);
+                    <span class="comment">// Create a new entity actor and inbox.
+                    </span><span class="kw">let </span>(send, recv) = mpsc::channel(<span class="self">self</span>.entity_inbox_size);
                     <span class="kw">let </span>state: entity_actor::State&lt;P&gt; = entity_actor::State {
                         id: id.clone(),
                         global: <span class="self">self</span>.state.clone(),
@@ -1553,7 +1569,7 @@
                         ),
                     };
                     task = <span class="prelude-val">Some</span>(actor.run());
-                    EntityHandle::Live { send: sender }
+                    EntityHandle::Live { send }
                 }
             });
             (handle, task)

@@ -840,23 +840,7 @@
 <a href="#839" id="839">839</a>
 <a href="#840" id="840">840</a>
 <a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a>
-<a href="#844" id="844">844</a>
-<a href="#845" id="845">845</a>
-<a href="#846" id="846">846</a>
-<a href="#847" id="847">847</a>
-<a href="#848" id="848">848</a>
-<a href="#849" id="849">849</a>
-<a href="#850" id="850">850</a>
-<a href="#851" id="851">851</a>
-<a href="#852" id="852">852</a>
-<a href="#853" id="853">853</a>
-<a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a>
-<a href="#856" id="856">856</a>
-<a href="#857" id="857">857</a>
-<a href="#858" id="858">858</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
+<a href="#842" id="842">842</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
 <span class="kw">use </span>std::{
     fs::{File, OpenOptions},
     io,
@@ -892,7 +876,7 @@
         fs::{meta::raw_outboard_size, TaskContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
-            PartialMemStorage, SizeInfo, SparseMemFile, DD,
+            PartialMemStorage, DD,
         },
         Hash, IROH_BLOCK_SIZE,
     },
@@ -1389,21 +1373,11 @@
             <span class="kw">if </span>Arc::strong_count(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>) &gt; <span class="number">1 </span>{
                 <span class="kw">return </span><span class="bool-val">false</span>;
             }
-            <span class="comment">// there is the possibility that somebody else will increase the strong count
-            // here. there is nothing we can do about it, but they won't be able to
-            // access the internals of the handle because we have the lock.
-            //
-            // We poison the storage. A poisoned storage is considered dead and will
-            // have to be recreated, but only *after* we are done with persisting
-            // the bitfield.
-            </span><span class="kw">let </span>BaoFileStorage::Partial(fs) = guard.take() <span class="kw">else </span>{
+            <span class="kw">let </span>BaoFileStorage::Partial(fs) = guard.take() <span class="kw">else </span>{
                 <span class="kw">return </span><span class="bool-val">false</span>;
             };
             <span class="kw">let </span>options = <span class="kw-2">&amp;</span><span class="self">self</span>.options;
             <span class="kw">let </span>path = options.path.bitfield_path(<span class="kw-2">&amp;</span><span class="self">self</span>.hash);
-            <span class="kw">if </span>fs.bitfield.size == <span class="number">8000000 </span>{
-                <span class="macro">println!</span>(<span class="string">"PERSISTING THE TEST CASE FILE to {}"</span>, path.display());
-            }
             <span class="macro">trace!</span>(
                 <span class="string">"writing bitfield for hash {} to {}"</span>,
                 <span class="self">self</span>.hash,
@@ -1626,7 +1600,7 @@
 }
 
 <span class="kw">impl </span>PartialMemStorage {
-    <span class="doccomment">/// Persist the batch to disk, creating a FileBatch.
+    <span class="doccomment">/// Persist the batch to disk.
     </span><span class="kw">fn </span>persist(<span class="self">self</span>, ctx: <span class="kw-2">&amp;</span>TaskContext, hash: <span class="kw-2">&amp;</span>Hash) -&gt; io::Result&lt;PartialFileStorage&gt; {
         <span class="kw">let </span>options = <span class="kw-2">&amp;</span>ctx.options.path;
         ctx.protect.protect(
@@ -1653,12 +1627,6 @@
             sizes,
             bitfield: <span class="self">self</span>.bitfield,
         })
-    }
-
-    <span class="doccomment">/// Get the parts data, outboard and sizes
-    </span><span class="attr">#[allow(dead_code)]
-    </span><span class="kw">pub fn </span>into_parts(<span class="self">self</span>) -&gt; (SparseMemFile, SparseMemFile, SizeInfo) {
-        (<span class="self">self</span>.data, <span class="self">self</span>.outboard, <span class="self">self</span>.size)
     }
 }
 
