@@ -44,6 +44,7 @@ iroh-base = "0.90"
 reflink-copy = "0.1.24"
 irpc = { version = "0.5.0", features = ["rpc", "quinn_endpoint_setup", "message_spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
+atomic_refcell = "0.1.13"
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
@@ -58,7 +59,6 @@ testresult = "0.4.1"
 tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
-atomic_refcell = "0.1.13"
 
 [features]
 hide-proto-docs = []

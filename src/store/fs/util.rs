@@ -2,6 +2,7 @@ use std::future::Future;
 
 use tokio::{select, sync::mpsc};
 pub(crate) mod entity_manager;
+pub(crate) mod watcher;
 
 /// A wrapper for a tokio mpsc receiver that allows peeking at the next message.
 #[derive(Debug)]
