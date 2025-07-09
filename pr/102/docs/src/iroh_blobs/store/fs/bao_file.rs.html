@@ -790,7 +790,8 @@
 <a href="#789" id="789">789</a>
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
 <span class="kw">use </span>std::{
     fs::{File, OpenOptions},
     io,
@@ -823,7 +824,7 @@
 <span class="kw">use crate</span>::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, HashContext, TaskContext},
+        fs::{meta::raw_outboard_size, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -1369,14 +1370,15 @@
     }
 
     <span class="doccomment">/// Create a new bao file handle with a partial file.
-    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">async fn </span>new_partial_file(hash: Hash, ctx: <span class="kw-2">&amp;</span>TaskContext) -&gt; io::Result&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>options = ctx.options.clone();
-        <span class="kw">let </span>storage = PartialFileStorage::load(<span class="kw-2">&amp;</span>hash, <span class="kw-2">&amp;</span>options.path)<span class="question-mark">?</span>;
+    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">async fn </span>new_partial_file(ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
+        <span class="kw">let </span>options = ctx.global.options.clone();
+        <span class="kw">let </span>storage = PartialFileStorage::load(hash, <span class="kw-2">&amp;</span>options.path)<span class="question-mark">?</span>;
         <span class="kw">let </span>storage = <span class="kw">if </span>storage.bitfield.is_complete() {
             <span class="kw">let </span>size = storage.bitfield.size;
             <span class="kw">let </span>(storage, entry_state) = storage.into_complete(size, <span class="kw-2">&amp;</span>options)<span class="question-mark">?</span>;
             <span class="macro">debug!</span>(<span class="string">"File was reconstructed as complete"</span>);
-            ctx.db.set(hash, entry_state).<span class="kw">await</span><span class="question-mark">?</span>;
+            ctx.global.db.set(<span class="kw-2">*</span>hash, entry_state).<span class="kw">await</span><span class="question-mark">?</span>;
             storage.into()
         } <span class="kw">else </span>{
             storage.into()
