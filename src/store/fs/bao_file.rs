@@ -31,7 +31,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, HashContext},
+        fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -514,8 +514,14 @@ impl BaoFileStorage {
 }
 
 /// A cheaply cloneable handle to a bao file, including the hash and the configuration.
-#[derive(Debug, Clone, derive_more::Deref)]
+#[derive(Debug, Clone, Default, derive_more::Deref)]
 pub(crate) struct BaoFileHandle(Arc<watch::Sender<BaoFileStorage>>);
+
+impl entity_manager::Reset for BaoFileHandle {
+    fn reset(&mut self) {
+        self.send_replace(BaoFileStorage::Initial);
+    }
+}
 
 impl BaoFileHandle {
     pub(super) async fn load(&self, ctx: &HashContext) {
