@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Receiver","Sender"],"fn":["channel"]};
