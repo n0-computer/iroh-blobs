@@ -20,7 +20,7 @@ use bao_tree::{
 use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
-use tokio::sync::watch;
+use super::util::watch;
 use tracing::{debug, error, info, trace};
 
 use super::{
