@@ -234,7 +234,7 @@ struct Actor {
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
-    // Entity manager that handles concurrency for entites.
+    // Entity manager that handles concurrency for entities.
     handles: EntityManagerState<EmParams>,
     // temp tags
     temp_tags: TempTags,
