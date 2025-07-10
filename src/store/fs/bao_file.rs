@@ -754,18 +754,15 @@ impl BaoFileHandle {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
         self.send_if_modified(|state| {
-            println!("write_batch {:?}", bitfield);
             let Ok((state1, update)) = state.take().write_batch(batch, bitfield, ctx) else {
                 res = Err(io::Error::other("write batch failed"));
                 return false;
             };
             res = Ok(update);
-            println!("{:?}", state1);
             *state = state1;
             true
         });
         if let Some(update) = res? {
-            println!("update {:?}", update);
             ctx.global.db.update(ctx.id, update).await?;
         }
         Ok(())

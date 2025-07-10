@@ -360,8 +360,6 @@ mod tests {
         // check that `get_bytes` returns an error.
         let res = store.get_bytes(hash).await;
         assert!(res.is_err());
-
-        println!("{:?}", res);
         assert!(matches!(
             res,
             Err(ExportBaoError::ExportBaoInner {
