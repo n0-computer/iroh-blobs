@@ -1,20 +1,14 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{
-    api::blobs::{AddPathOptions, ExportMode, ExportOptions, ImportMode},
-    net_protocol::Blobs,
-    store::mem::MemStore,
-    ticket::BlobTicket,
-    BlobFormat,
-};
+use iroh_blobs::{net_protocol::Blobs, store::mem::MemStore, ticket::BlobTicket};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+
     // We initialize an in-memory backing store for iroh-blobs
     let store = MemStore::new();
     // Then we initialize a struct that can accept blobs requests over iroh connections
@@ -27,29 +21,16 @@ async fn main() -> Result<()> {
 
     match arg_refs.as_slice() {
         ["send", filename] => {
-            // For sending files we build a router that accepts blobs connections & routes them
-            // to the blobs protocol.
-            let router = Router::builder(endpoint)
-                .accept(iroh_blobs::ALPN, blobs)
-                .spawn();
-
             let filename: PathBuf = filename.parse()?;
             let abs_path = std::path::absolute(&filename)?;
 
             println!("Hashing file.");
 
-            // When we import a blob, we get back a tag that refers to said blob in the store
+            // When we import a blob, we get back a "tag" that refers to said blob in the store
             // and allows us to control when/if it gets garbage-collected
-            let tag = store
-                .blobs()
-                .add_path_with_opts(AddPathOptions {
-                    path: abs_path,
-                    format: BlobFormat::Raw,
-                    mode: ImportMode::TryReference,
-                })
-                .await?;
+            let tag = store.blobs().add_path(abs_path).await?;
 
-            let node_id = router.endpoint().node_id();
+            let node_id = endpoint.node_id();
             let ticket = BlobTicket::new(node_id.into(), tag.hash, tag.format);
 
             println!("File hashed. Fetch this file by running:");
@@ -58,6 +39,12 @@ async fn main() -> Result<()> {
                 filename.display()
             );
 
+            // For sending files we build a router that accepts blobs connections & routes them
+            // to the blobs protocol.
+            let router = Router::builder(endpoint)
+                .accept(iroh_blobs::ALPN, blobs)
+                .spawn();
+
             tokio::signal::ctrl_c().await?;
 
             // Gracefully shut down the node
@@ -65,31 +52,23 @@ async fn main() -> Result<()> {
             router.shutdown().await?;
         }
         ["receive", ticket, filename] => {
-            // For receiving files, we create a "downloader" that allows us to fetch files
-            // from other nodes via iroh connections
-            let downloader = store.downloader(&endpoint);
-
             let filename: PathBuf = filename.parse()?;
             let abs_path = std::path::absolute(filename)?;
             let ticket: BlobTicket = ticket.parse()?;
 
             println!("Starting download.");
 
-            downloader
+            // For receiving files, we create a "downloader" that allows us to fetch files
+            // from other nodes via iroh connections
+            store
+                .downloader(&endpoint)
                 .download(ticket.hash(), Some(ticket.node_addr().node_id))
                 .await?;
 
             println!("Finished download.");
             println!("Copying to destination.");
 
-            store
-                .blobs()
-                .export_with_opts(ExportOptions {
-                    hash: ticket.hash(),
-                    mode: ExportMode::TryReference,
-                    target: abs_path,
-                })
-                .await?;
+            store.blobs().export(ticket.hash(), abs_path).await?;
 
             println!("Finished copying.");
 
