@@ -412,9 +412,7 @@
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashSet;
+<a href="#414" id="414">414</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashSet;
 
 <span class="kw">use </span>bao_tree::ChunkRanges;
 <span class="kw">use </span>genawaiter::sync::{Co, Gen};
@@ -776,8 +774,6 @@
         <span class="comment">// check that `get_bytes` returns an error.
         </span><span class="kw">let </span>res = store.get_bytes(hash).<span class="kw">await</span>;
         <span class="macro">assert!</span>(res.is_err());
-
-        <span class="macro">println!</span>(<span class="string">"{:?}"</span>, res);
         <span class="macro">assert!</span>(<span class="macro">matches!</span>(
             res,
             <span class="prelude-val">Err</span>(ExportBaoError::ExportBaoInner {
