@@ -771,7 +771,21 @@ impl<P: Params> EntityManager<P> {
 
 #[cfg(test)]
 mod tests {
-
+    //! Tests for the entity manager.
+    //!
+    //! We implement a simple database for u128 counters, identified by u64 ids,
+    //! with both an in-memory and a file-based implementation.
+    //!
+    //! The database does internal consistency checks, to ensure that each
+    //! entity is only ever accessed by a single tokio task at a time, and to
+    //! ensure that wakeup and shutdown events are interleaved.
+    //!
+    //! We also check that the database behaves correctly by comparing with an
+    //! in-memory implementation.
+    //!
+    //! Database operations are done in parallel, so the fact that we are using
+    //! AtomicRefCell provides another test - if there was parallel write access
+    //! to a single entity due to a bug, it would panic.
     use std::collections::HashMap;
 
     use n0_future::{BufferedStreamExt, StreamExt};
@@ -793,6 +807,10 @@ mod tests {
     }
 
     mod mem {
+        //! The in-memory database uses a HashMap in the global state to store
+        //! the values of the counters. Loading means reading from the global
+        //! state into the entity state, and persisting means writing to the
+        //! global state from the entity state.
         use std::{
             collections::{HashMap, HashSet},
             sync::{Arc, Mutex},
@@ -957,6 +975,7 @@ mod tests {
     }
 
     mod fs {
+        //! The fs db uses one file per counter, stored as a 16-byte big-endian u128.
         use std::{
             collections::HashSet,
             path::{Path, PathBuf},
@@ -1121,6 +1140,15 @@ mod tests {
 
             async fn check_consistency(&self, values: HashMap<u64, u128>) {
                 let global = self.global.lock().unwrap();
+                for (id, value) in &values {
+                    let path = get_path(&global.path, *id);
+                    let disk_value = match std::fs::read(path) {
+                        Ok(data) => u128::from_be_bytes(data.try_into().unwrap()),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                        Err(_) => panic!("Failed to read disk state for id {id}"),
+                    };
+                    assert_eq!(disk_value, *value, "Disk value mismatch for id {id}");
+                }
                 for id in values.keys() {
                     let log = global.log.get(&id).unwrap();
                     assert!(
