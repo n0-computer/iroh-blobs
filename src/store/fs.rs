@@ -570,9 +570,12 @@ impl Actor {
 }
 
 trait HashSpecificCommand: HashSpecific + Send + 'static {
+    /// Handle the command on success by spawning a task into the per-hash context.
     fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
 
-    fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
+    /// Opportunity to send an error if spawning fails due to the task being busy (inbox full)
+    /// or dead (e.g. panic in one of the running tasks).
+    fn on_error(self, arg: SpawnArg<EmParams>) -> impl Future<Output = ()> + Send + 'static;
 
     async fn spawn(
         self,
@@ -581,25 +584,24 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
     ) where
         Self: Sized,
     {
+        let span = tracing::Span::current();
         let task = manager
-            .spawn_boxed(
-                self.hash(),
-                Box::new(|x| {
-                    Box::pin(async move {
-                        match x {
-                            SpawnArg::Active(state) => {
-                                self.handle(state).await;
-                            }
-                            SpawnArg::Busy => {
-                                self.on_error().await;
-                            }
-                            SpawnArg::Dead => {
-                                self.on_error().await;
-                            }
+            .spawn(self.hash(), |arg| {
+                async move {
+                    match arg {
+                        SpawnArg::Active(state) => {
+                            self.handle(state).await;
                         }
-                    })
-                }),
-            )
+                        SpawnArg::Busy => {
+                            self.on_error(arg).await;
+                        }
+                        SpawnArg::Dead => {
+                            self.on_error(arg).await;
+                        }
+                    }
+                }
+                .instrument(span)
+            })
             .await;
         if let Some(task) = task {
             tasks.spawn(task);
@@ -611,31 +613,31 @@ impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
         observe(self, ctx).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
         export_path(self, ctx).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         export_bao(self, ctx).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
         export_ranges(self, ctx).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         import_bao(self, ctx).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecific for (TempTag, ImportEntryMsg) {
     fn hash(&self) -> Hash {
@@ -647,7 +649,7 @@ impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
         let (tt, cmd) = self;
         finish_import(cmd, tt, ctx).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 
 struct RtWrapper(Option<tokio::runtime::Runtime>);

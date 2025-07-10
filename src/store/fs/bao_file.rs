@@ -285,6 +285,15 @@ fn read_size(size_file: &File) -> io::Result<u64> {
 }
 
 /// The storage for a bao file. This can be either in memory or on disk.
+///
+/// The two initial states `Initial` and `Loading` are used to coordinate the
+/// loading of the entry from the metadata database. Once that is complete,
+/// you should never see these states again.
+///
+/// From the remaining states you can get into `Poisoned` if there is an
+/// IO error during an operation.
+///
+/// `Poisioned` is also used once the handle is persisted and no longer usable.
 #[derive(derive_more::From, Default)]
 pub(crate) enum BaoFileStorage {
     /// Initial state, we don't know anything yet.
@@ -311,13 +320,8 @@ pub(crate) enum BaoFileStorage {
     ///
     /// Writing to this is a no-op, since it is already complete.
     Complete(CompleteStorage),
-    /// We will get into that state if there is an io error in the middle of an operation
-    ///
-    /// Also, when the handle is dropped we will poison the storage, so poisoned
-    /// can be seen when the handle is revived during the drop.
-    ///
-    /// BaoFileHandleWeak::upgrade() will return None if the storage is poisoned,
-    /// treat it as dead.
+    /// We will get into that state if there is an io error in the middle of an operation,
+    /// or after the handle is persisted and no longer usable.
     Poisoned,
 }
 

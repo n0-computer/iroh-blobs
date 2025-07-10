@@ -373,24 +373,25 @@ mod main_actor {
         }
 
         /// Friendly version of `spawn_boxed` that does the boxing
-        pub async fn spawn<F, Fut>(&mut self, id: P::EntityId, f: F, tasks: &mut JoinSet<()>)
+        #[must_use = "this function may return a future that must be spawned by the caller"]
+        pub async fn spawn<F, Fut>(
+            &mut self,
+            id: P::EntityId,
+            f: F,
+        ) -> Option<impl Future<Output = ()> + Send + 'static>
         where
             F: FnOnce(SpawnArg<P>) -> Fut + Send + 'static,
             Fut: Future<Output = ()> + Send + 'static,
         {
-            let task = self
-                .spawn_boxed(
-                    id,
-                    Box::new(|x| {
-                        Box::pin(async move {
-                            f(x).await;
-                        })
-                    }),
-                )
-                .await;
-            if let Some(task) = task {
-                tasks.spawn(task);
-            }
+            self.spawn_boxed(
+                id,
+                Box::new(|x| {
+                    Box::pin(async move {
+                        f(x).await;
+                    })
+                }),
+            )
+            .await
         }
 
         #[must_use = "this function may return a future that must be spawned by the caller"]
