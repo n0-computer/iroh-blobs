@@ -12,6 +12,12 @@ use tokio::sync::{mpsc, oneshot};
 pub trait Reset: Default {
     /// Reset the state to its default value.
     fn reset(&mut self);
+
+    /// A ref count to ensure that the state is unique when shutting down.
+    ///
+    /// You are not allowed to clone the state out of a task, even though that
+    /// is possible.
+    fn ref_count(&self) -> usize;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +219,8 @@ mod entity_actor {
                 )
                 .await
                 .ok();
+            println!("Calling on_shutdown {}", self.state.state.ref_count());
+            assert_eq!(self.state.state.ref_count(), 1);
             P::on_shutdown(self.state.clone(), ShutdownCause::Idle).await;
             // Notify the main actor that we have completed shutdown.
             // here we also give back the rest of ourselves so the main actor can recycle us.
@@ -466,6 +474,7 @@ mod main_actor {
                             );
                             return None;
                         };
+                        println!("ENTITY_MANAGER recycling {:?}", state.id);
                         // re-assemble the actor from the parts
                         let mut actor = entity_actor::Actor {
                             main: self.internal_send.clone(),
@@ -788,6 +797,10 @@ mod tests {
             fn reset(&mut self) {
                 *self.0.borrow_mut() = Default::default();
             }
+
+            fn ref_count(&self) -> usize {
+                Arc::strong_count(&self.0)
+            }
         }
 
         struct Counters;
@@ -900,6 +913,10 @@ mod tests {
         impl Reset for EntityState {
             fn reset(&mut self) {
                 *self.0.borrow_mut() = State::Disk;
+            }
+
+            fn ref_count(&self) -> usize {
+                1
             }
         }
 

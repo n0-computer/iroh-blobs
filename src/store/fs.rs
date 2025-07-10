@@ -106,7 +106,10 @@ use crate::{
         ApiClient,
     },
     store::{
-        fs::util::entity_manager::{self, ActiveEntityState},
+        fs::{
+            bao_file::{BaoFileStorage, CompleteStorage},
+            util::entity_manager::{self, ActiveEntityState},
+        },
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         Hash,
     },
@@ -186,8 +189,6 @@ struct TaskContext {
     pub db: meta::Db,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
-    /// The file handle for the empty hash.
-    pub empty: BaoFileHandle,
     /// Handle to protect files from deletion.
     pub protect: ProtectHandle,
 }
@@ -201,12 +202,6 @@ impl TaskContext {
     }
 }
 
-impl entity_manager::Reset for Slot {
-    fn reset(&mut self) {
-        self.0 = Arc::new(tokio::sync::Mutex::new(None));
-    }
-}
-
 #[derive(Debug)]
 struct EmParams;
 
@@ -215,19 +210,15 @@ impl entity_manager::Params for EmParams {
 
     type GlobalState = Arc<TaskContext>;
 
-    type EntityState = Slot;
+    type EntityState = BaoFileHandle;
 
     async fn on_shutdown(
         state: entity_manager::ActiveEntityState<Self>,
-        cause: entity_manager::ShutdownCause,
+        _cause: entity_manager::ShutdownCause,
     ) {
-        // this isn't strictly necessary. Drop will run anyway as soon as the
-        // state is reset to it's default value. Doing it here means that we
-        // have exact control over where it happens.
-        if let Some(mut handle) = state.state.0.lock().await.take() {
-            trace!("shutting down hash: {}, cause: {cause:?}", state.id);
-            handle.persist(&state);
-        }
+        // println!("persisting entry {:?} {:?}", state.id, state.state.borrow().bitfield());
+        state.state.clone().persist(&state);
+        // println!("persisting entry done {:?}", state.id);
     }
 }
 
@@ -252,16 +243,67 @@ struct Actor {
 type HashContext = ActiveEntityState<EmParams>;
 
 impl HashContext {
+    /// Load the state from the database.
+    ///
+    /// If the state is Initial, this will start the load.
+    /// If it is Loading, it will wait until loading is done.
+    /// If it is any other state, it will be a noop.
+    pub async fn load(&self) {
+        enum Action {
+            Load,
+            Wait,
+            None,
+        }
+        let mut action = Action::None;
+        self.state.send_if_modified(|guard| match guard.deref() {
+            BaoFileStorage::Initial => {
+                *guard = BaoFileStorage::Loading;
+                action = Action::Load;
+                true
+            }
+            BaoFileStorage::Loading => {
+                action = Action::Wait;
+                false
+            }
+            _ => false,
+        });
+        match action {
+            Action::Load => {
+                let state = if self.id == Hash::EMPTY {
+                    BaoFileStorage::Complete(CompleteStorage {
+                        data: MemOrFile::Mem(Bytes::new()),
+                        outboard: MemOrFile::empty(),
+                    })
+                } else {
+                    // we must assign a new state even in the error case, otherwise
+                    // tasks waiting for loading would stall!
+                    match self.global.db.get(self.id).await {
+                        Ok(state) => match BaoFileStorage::open(state, self).await {
+                            Ok(handle) => handle,
+                            Err(_) => BaoFileStorage::Poisoned,
+                        },
+                        Err(_) => BaoFileStorage::Poisoned,
+                    }
+                };
+                self.state.send_replace(state);
+            }
+            Action::Wait => {
+                // we are in state loading already, so we just need to wait for the
+                // other task to complete loading.
+                while matches!(self.state.borrow().deref(), BaoFileStorage::Loading) {
+                    self.state.0.subscribe().changed().await.ok();
+                }
+            }
+            Action::None => {}
+        }
+    }
+
     pub fn db(&self) -> &meta::Db {
         &self.global.db
     }
 
     pub fn options(&self) -> &Arc<Options> {
         &self.global.options
-    }
-
-    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, Option<BaoFileHandle>> {
-        self.state.0.lock().await
     }
 
     pub fn protect(&self, hash: Hash, parts: impl IntoIterator<Item = BaoFilePart>) {
@@ -287,113 +329,6 @@ impl HashContext {
     /// Update the entry state in the database, and wait for completion.
     pub async fn set(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
         self.db().set(hash, state).await
-    }
-
-    pub async fn get(&self, hash: Hash) -> api::Result<BaoFileHandle> {
-        if hash == Hash::EMPTY {
-            return Ok(self.global.empty.clone());
-        }
-        let res = self
-            .state
-            .get_or_create(|| async {
-                let res = self.db().get(hash).await.map_err(io::Error::other)?;
-                let res = match res {
-                    Some(state) => open_bao_file(state, self).await,
-                    None => Err(io::Error::new(io::ErrorKind::NotFound, "hash not found")),
-                };
-                Ok((res?, ()))
-            })
-            .await
-            .map_err(api::Error::from);
-        let (res, _) = res?;
-        Ok(res)
-    }
-
-    pub async fn get_or_create(&self, hash: Hash) -> api::Result<BaoFileHandle> {
-        if hash == Hash::EMPTY {
-            return Ok(self.global.empty.clone());
-        }
-        let res = self
-            .state
-            .get_or_create(|| async {
-                let res = self.db().get(hash).await.map_err(io::Error::other)?;
-                let res = match res {
-                    Some(state) => open_bao_file(state, self).await,
-                    None => Ok(BaoFileHandle::new_partial_mem()),
-                };
-                Ok((res?, ()))
-            })
-            .await
-            .map_err(api::Error::from);
-        trace!("{res:?}");
-        let (res, _) = res?;
-        Ok(res)
-    }
-}
-
-async fn open_bao_file(state: EntryState<Bytes>, ctx: &HashContext) -> io::Result<BaoFileHandle> {
-    let hash = &ctx.id;
-    let options = &ctx.global.options;
-    Ok(match state {
-        EntryState::Complete {
-            data_location,
-            outboard_location,
-        } => {
-            let data = match data_location {
-                DataLocation::Inline(data) => MemOrFile::Mem(data),
-                DataLocation::Owned(size) => {
-                    let path = options.path.data_path(hash);
-                    let file = fs::File::open(&path)?;
-                    MemOrFile::File(FixedSize::new(file, size))
-                }
-                DataLocation::External(paths, size) => {
-                    let Some(path) = paths.into_iter().next() else {
-                        return Err(io::Error::other("no external data path"));
-                    };
-                    let file = fs::File::open(&path)?;
-                    MemOrFile::File(FixedSize::new(file, size))
-                }
-            };
-            let outboard = match outboard_location {
-                OutboardLocation::NotNeeded => MemOrFile::empty(),
-                OutboardLocation::Inline(data) => MemOrFile::Mem(data),
-                OutboardLocation::Owned => {
-                    let path = options.path.outboard_path(hash);
-                    let file = fs::File::open(&path)?;
-                    MemOrFile::File(file)
-                }
-            };
-            BaoFileHandle::new_complete(data, outboard)
-        }
-        EntryState::Partial { .. } => BaoFileHandle::new_partial_file(ctx).await?,
-    })
-}
-
-/// An entry for each hash, containing a weak reference to a BaoFileHandle
-/// wrapped in a tokio mutex so handle creation is sequential.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Slot(Arc<tokio::sync::Mutex<Option<BaoFileHandle>>>);
-
-impl Slot {
-    /// Get the handle if it exists and is still alive, otherwise load it from the database.
-    /// If there is nothing in the database, create a new in-memory handle.
-    ///
-    /// `make` will be called if the a live handle does not exist.
-    pub async fn get_or_create<F, Fut, T>(&self, make: F) -> io::Result<(BaoFileHandle, T)>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = io::Result<(BaoFileHandle, T)>>,
-        T: Default,
-    {
-        let mut slot = self.0.lock().await;
-        if let Some(handle) = &*slot {
-            return Ok((handle.clone(), Default::default()));
-        }
-        let handle = make().await;
-        if let Ok((handle, _)) = &handle {
-            *slot = Some(handle.clone());
-        }
-        handle
     }
 }
 
@@ -619,7 +554,6 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            empty: BaoFileHandle::new_complete(MemOrFile::empty(), MemOrFile::empty()),
             protect,
         });
         rt.spawn(db_actor.run());
@@ -772,6 +706,7 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn finish_import(cmd: ImportEntryMsg, mut tt: TempTag, ctx: HashContext) {
+    trace!("{cmd:?}");
     let res = match finish_import_impl(cmd.inner, ctx).await {
         Ok(()) => {
             // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
@@ -788,6 +723,9 @@ async fn finish_import(cmd: ImportEntryMsg, mut tt: TempTag, ctx: HashContext) {
 }
 
 async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::Result<()> {
+    if ctx.id == Hash::EMPTY {
+        return Ok(()); // nothing to do for the empty hash
+    }
     let ImportEntry {
         source,
         hash,
@@ -806,8 +744,8 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
             debug_assert!(!options.is_inlined_data(*size));
         }
     }
-    let guard = ctx.lock().await;
-    let handle = guard.as_ref().map(|x| x.clone());
+    ctx.load().await;
+    let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
     //   the entry exists in the db, but we don't have a handle
@@ -857,33 +795,31 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
             OutboardLocation::Owned
         }
     };
-    if let Some(handle) = handle {
-        let data = match &data_location {
-            DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
-            DataLocation::Owned(size) => {
-                let path = ctx.options().path.data_path(&hash);
-                let file = fs::File::open(&path)?;
-                MemOrFile::File(FixedSize::new(file, *size))
-            }
-            DataLocation::External(paths, size) => {
-                let Some(path) = paths.iter().next() else {
-                    return Err(io::Error::other("no external data path"));
-                };
-                let file = fs::File::open(path)?;
-                MemOrFile::File(FixedSize::new(file, *size))
-            }
-        };
-        let outboard = match &outboard_location {
-            OutboardLocation::NotNeeded => MemOrFile::empty(),
-            OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
-            OutboardLocation::Owned => {
-                let path = ctx.options().path.outboard_path(&hash);
-                let file = fs::File::open(&path)?;
-                MemOrFile::File(file)
-            }
-        };
-        handle.complete(data, outboard);
-    }
+    let data = match &data_location {
+        DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
+        DataLocation::Owned(size) => {
+            let path = ctx.options().path.data_path(&hash);
+            let file = fs::File::open(&path)?;
+            MemOrFile::File(FixedSize::new(file, *size))
+        }
+        DataLocation::External(paths, size) => {
+            let Some(path) = paths.iter().next() else {
+                return Err(io::Error::other("no external data path"));
+            };
+            let file = fs::File::open(path)?;
+            MemOrFile::File(FixedSize::new(file, *size))
+        }
+    };
+    let outboard = match &outboard_location {
+        OutboardLocation::NotNeeded => MemOrFile::empty(),
+        OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
+        OutboardLocation::Owned => {
+            let path = ctx.options().path.outboard_path(&hash);
+            let file = fs::File::open(&path)?;
+            MemOrFile::File(file)
+        }
+    };
+    handle.complete(data, outboard);
     let state = EntryState::Complete {
         data_location,
         outboard_location,
@@ -895,16 +831,15 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn import_bao(cmd: ImportBaoMsg, ctx: HashContext) {
     trace!("{cmd:?}");
+    let hash = ctx.id;
     let ImportBaoMsg {
-        inner: ImportBaoRequest { size, hash },
+        inner: ImportBaoRequest { size, .. },
         rx,
         tx,
         ..
     } = cmd;
-    let res = match ctx.get_or_create(hash).await {
-        Ok(handle) => import_bao_impl(size, rx, handle, ctx).await,
-        Err(cause) => Err(cause),
-    };
+    ctx.load().await;
+    let res = import_bao_impl(size, rx, ctx.state.clone(), ctx).await;
     trace!("{res:?}");
     tx.send(res).await.ok();
 }
@@ -951,26 +886,21 @@ async fn import_bao_impl(
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn observe(cmd: ObserveMsg, ctx: HashContext) {
-    let Ok(handle) = ctx.get_or_create(cmd.hash).await else {
-        return;
-    };
+    trace!("{cmd:?}");
+    ctx.load().await;
+    let handle = ctx.state.clone();
     handle.subscribe().forward(cmd.tx).await.ok();
 }
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_ranges(mut cmd: ExportRangesMsg, ctx: HashContext) {
-    match ctx.get(cmd.hash).await {
-        Ok(handle) => {
-            if let Err(cause) = export_ranges_impl(cmd.inner, &mut cmd.tx, handle).await {
-                cmd.tx
-                    .send(ExportRangesItem::Error(cause.into()))
-                    .await
-                    .ok();
-            }
-        }
-        Err(cause) => {
-            cmd.tx.send(ExportRangesItem::Error(cause)).await.ok();
-        }
+    trace!("{cmd:?}");
+    ctx.load().await;
+    if let Err(cause) = export_ranges_impl(cmd.inner, &mut cmd.tx, ctx.state.clone()).await {
+        cmd.tx
+            .send(ExportRangesItem::Error(cause.into()))
+            .await
+            .ok();
     }
 }
 
@@ -1019,22 +949,14 @@ async fn export_ranges_impl(
 
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
-    match ctx.get(cmd.hash).await {
-        Ok(handle) => {
-            if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, handle).await {
-                cmd.tx
-                    .send(bao_tree::io::EncodeError::Io(io::Error::other(cause)).into())
-                    .await
-                    .ok();
-            }
-        }
-        Err(cause) => {
-            let crate::api::Error::Io(cause) = cause;
-            cmd.tx
-                .send(bao_tree::io::EncodeError::Io(cause).into())
-                .await
-                .ok();
-        }
+    ctx.load().await;
+    if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, ctx.state.clone()).await {
+        // if the entry is in state NonExisting, this will be an io error with
+        // kind NotFound. So we must not wrap this somehow but pass it on directly.
+        cmd.tx
+            .send(bao_tree::io::EncodeError::Io(cause).into())
+            .await
+            .ok();
     }
 }
 
@@ -1042,11 +964,11 @@ async fn export_bao_impl(
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
     handle: BaoFileHandle,
-) -> anyhow::Result<()> {
+) -> io::Result<()> {
     let ExportBaoRequest { ranges, hash, .. } = cmd;
     let outboard = handle.outboard(&hash)?;
     let size = outboard.tree.size();
-    if size == 0 && hash != Hash::EMPTY {
+    if size == 0 && cmd.hash != Hash::EMPTY {
         // we have no data whatsoever, so we stop here
         return Ok(());
     }
@@ -1080,7 +1002,6 @@ async fn export_path_impl(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    let _guard = ctx.lock().await;
     let state = ctx.get_entry_state(cmd.hash).await?;
     let (data_location, outboard_location) = match state {
         Some(EntryState::Complete {
@@ -1412,7 +1333,7 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
-    async fn test_import_bytes() -> TestResult<()> {
+    async fn test_import_bytes_simple() -> TestResult<()> {
         tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
@@ -1943,7 +1864,6 @@ pub mod tests {
             if path.is_file() {
                 if let Some(file_ext) = path.extension() {
                     if file_ext.to_string_lossy().to_lowercase() == ext {
-                        println!("Deleting: {}", path.display());
                         fs::remove_file(path)?;
                     }
                 }
