@@ -853,7 +853,11 @@
 <a href="#852" id="852">852</a>
 <a href="#853" id="853">853</a>
 <a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
 <span class="kw">use </span>std::{
     fs::{File, OpenOptions},
     io,
@@ -1140,6 +1144,15 @@
 }
 
 <span class="doccomment">/// The storage for a bao file. This can be either in memory or on disk.
+///
+/// The two initial states `Initial` and `Loading` are used to coordinate the
+/// loading of the entry from the metadata database. Once that is complete,
+/// you should never see these states again.
+///
+/// From the remaining states you can get into `Poisoned` if there is an
+/// IO error during an operation.
+///
+/// `Poisioned` is also used once the handle is persisted and no longer usable.
 </span><span class="attr">#[derive(derive_more::From, Default)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>BaoFileStorage {
     <span class="doccomment">/// Initial state, we don't know anything yet.
@@ -1166,13 +1179,8 @@
     ///
     /// Writing to this is a no-op, since it is already complete.
     </span>Complete(CompleteStorage),
-    <span class="doccomment">/// We will get into that state if there is an io error in the middle of an operation
-    ///
-    /// Also, when the handle is dropped we will poison the storage, so poisoned
-    /// can be seen when the handle is revived during the drop.
-    ///
-    /// BaoFileHandleWeak::upgrade() will return None if the storage is poisoned,
-    /// treat it as dead.
+    <span class="doccomment">/// We will get into that state if there is an io error in the middle of an operation,
+    /// or after the handle is persisted and no longer usable.
     </span>Poisoned,
 }
 

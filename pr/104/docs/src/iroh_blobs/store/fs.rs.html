@@ -2026,7 +2026,9 @@
 <a href="#2025" id="2025">2025</a>
 <a href="#2026" id="2026">2026</a>
 <a href="#2027" id="2027">2027</a>
-<a href="#2028" id="2028">2028</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2028" id="2028">2028</a>
+<a href="#2029" id="2029">2029</a>
+<a href="#2030" id="2030">2030</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2598,9 +2600,12 @@
 }
 
 <span class="kw">trait </span>HashSpecificCommand: HashSpecific + Send + <span class="lifetime">'static </span>{
-    <span class="kw">fn </span>handle(<span class="self">self</span>, ctx: HashContext) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; + Send + <span class="lifetime">'static</span>;
+    <span class="doccomment">/// Handle the command on success by spawning a task into the per-hash context.
+    </span><span class="kw">fn </span>handle(<span class="self">self</span>, ctx: HashContext) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; + Send + <span class="lifetime">'static</span>;
 
-    <span class="kw">fn </span>on_error(<span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; + Send + <span class="lifetime">'static</span>;
+    <span class="doccomment">/// Opportunity to send an error if spawning fails due to the task being busy (inbox full)
+    /// or dead (e.g. panic in one of the running tasks).
+    </span><span class="kw">fn </span>on_error(<span class="self">self</span>, arg: SpawnArg&lt;EmParams&gt;) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; + Send + <span class="lifetime">'static</span>;
 
     <span class="kw">async fn </span>spawn(
         <span class="self">self</span>,
@@ -2609,25 +2614,24 @@
     ) <span class="kw">where
         </span><span class="self">Self</span>: Sized,
     {
+        <span class="kw">let </span>span = tracing::Span::current();
         <span class="kw">let </span>task = manager
-            .spawn_boxed(
-                <span class="self">self</span>.hash(),
-                Box::new(|x| {
-                    Box::pin(<span class="kw">async move </span>{
-                        <span class="kw">match </span>x {
-                            SpawnArg::Active(state) =&gt; {
-                                <span class="self">self</span>.handle(state).<span class="kw">await</span>;
-                            }
-                            SpawnArg::Busy =&gt; {
-                                <span class="self">self</span>.on_error().<span class="kw">await</span>;
-                            }
-                            SpawnArg::Dead =&gt; {
-                                <span class="self">self</span>.on_error().<span class="kw">await</span>;
-                            }
+            .spawn(<span class="self">self</span>.hash(), |arg| {
+                <span class="kw">async move </span>{
+                    <span class="kw">match </span>arg {
+                        SpawnArg::Active(state) =&gt; {
+                            <span class="self">self</span>.handle(state).<span class="kw">await</span>;
                         }
-                    })
-                }),
-            )
+                        SpawnArg::Busy =&gt; {
+                            <span class="self">self</span>.on_error(arg).<span class="kw">await</span>;
+                        }
+                        SpawnArg::Dead =&gt; {
+                            <span class="self">self</span>.on_error(arg).<span class="kw">await</span>;
+                        }
+                    }
+                }
+                .instrument(span)
+            })
             .<span class="kw">await</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(task) = task {
             tasks.spawn(task);
@@ -2639,31 +2643,31 @@
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
         observe(<span class="self">self</span>, ctx).<span class="kw">await
     </span>}
-    <span class="kw">async fn </span>on_error(<span class="self">self</span>) {}
+    <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;EmParams&gt;) {}
 }
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>ExportPathMsg {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
         export_path(<span class="self">self</span>, ctx).<span class="kw">await
     </span>}
-    <span class="kw">async fn </span>on_error(<span class="self">self</span>) {}
+    <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;EmParams&gt;) {}
 }
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>ExportBaoMsg {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
         export_bao(<span class="self">self</span>, ctx).<span class="kw">await
     </span>}
-    <span class="kw">async fn </span>on_error(<span class="self">self</span>) {}
+    <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;EmParams&gt;) {}
 }
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>ExportRangesMsg {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
         export_ranges(<span class="self">self</span>, ctx).<span class="kw">await
     </span>}
-    <span class="kw">async fn </span>on_error(<span class="self">self</span>) {}
+    <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;EmParams&gt;) {}
 }
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>ImportBaoMsg {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
         import_bao(<span class="self">self</span>, ctx).<span class="kw">await
     </span>}
-    <span class="kw">async fn </span>on_error(<span class="self">self</span>) {}
+    <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;EmParams&gt;) {}
 }
 <span class="kw">impl </span>HashSpecific <span class="kw">for </span>(TempTag, ImportEntryMsg) {
     <span class="kw">fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Hash {
@@ -2675,7 +2679,7 @@
         <span class="kw">let </span>(tt, cmd) = <span class="self">self</span>;
         finish_import(cmd, tt, ctx).<span class="kw">await
     </span>}
-    <span class="kw">async fn </span>on_error(<span class="self">self</span>) {}
+    <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;EmParams&gt;) {}
 }
 
 <span class="kw">struct </span>RtWrapper(<span class="prelude-ty">Option</span>&lt;tokio::runtime::Runtime&gt;);
