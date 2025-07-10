@@ -1042,12 +1042,9 @@ mod tests {
             );
             let (tx, rx) = oneshot::channel();
             let killer = |arg: SpawnArg<Counters>| async move {
-                match arg {
-                    SpawnArg::Active(_) => {
-                        tx.send(()).ok();
-                        panic!("Panic to kill the task");
-                    }
-                    _ => {}
+                if let SpawnArg::Active(_) = arg {
+                    tx.send(()).ok();
+                    panic!("Panic to kill the task");
                 }
             };
             // spawn a task that kills the entity actor
@@ -1055,11 +1052,8 @@ mod tests {
             rx.await.expect("Failed to receive kill confirmation");
             let (tx, rx) = oneshot::channel();
             let counter = |arg: SpawnArg<Counters>| async move {
-                match arg {
-                    SpawnArg::Dead => {
-                        tx.send(()).ok();
-                    }
-                    _ => {}
+                if let SpawnArg::Dead = arg {
+                    tx.send(()).ok();
                 }
             };
             // // spawn another task on the - now dead - entity actor
