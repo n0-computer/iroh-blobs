@@ -474,7 +474,6 @@ mod main_actor {
                             );
                             return None;
                         };
-                        println!("ENTITY_MANAGER recycling {:?}", state.id);
                         // re-assemble the actor from the parts
                         let mut actor = entity_actor::Actor {
                             main: self.internal_send.clone(),
