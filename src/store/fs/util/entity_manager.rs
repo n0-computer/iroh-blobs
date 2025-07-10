@@ -364,25 +364,26 @@ mod main_actor {
             }
         }
 
+        #[must_use = "this function may return a future that must be spawned by the caller"]
         /// Friendly version of `spawn_boxed` that does the boxing
-        pub async fn spawn<F, Fut>(&mut self, id: P::EntityId, f: F, tasks: &mut JoinSet<()>)
+        pub async fn spawn<F, Fut>(
+            &mut self,
+            id: P::EntityId,
+            f: F,
+        ) -> Option<impl Future<Output = ()> + Send + 'static>
         where
             F: FnOnce(SpawnArg<P>) -> Fut + Send + 'static,
             Fut: Future<Output = ()> + Send + 'static,
         {
-            let task = self
-                .spawn_boxed(
-                    id,
-                    Box::new(|x| {
-                        Box::pin(async move {
-                            f(x).await;
-                        })
-                    }),
-                )
-                .await;
-            if let Some(task) = task {
-                tasks.spawn(task);
-            }
+            self.spawn_boxed(
+                id,
+                Box::new(|x| {
+                    Box::pin(async move {
+                        f(x).await;
+                    })
+                }),
+            )
+            .await
         }
 
         #[must_use = "this function may return a future that must be spawned by the caller"]
@@ -627,7 +628,7 @@ mod main_actor {
                     SelectOutcome::TaskDone(result) => {
                         // Handle completed task
                         if let Err(e) = result {
-                            eprintln!("Task failed: {e:?}");
+                            error!("Task failed: {e:?}");
                         }
                     }
                 }
@@ -789,6 +790,7 @@ mod tests {
     use std::collections::HashMap;
 
     use n0_future::{BufferedStreamExt, StreamExt};
+    use testresult::TestResult;
 
     use super::*;
 
@@ -813,7 +815,10 @@ mod tests {
         //! global state from the entity state.
         use std::{
             collections::{HashMap, HashSet},
-            sync::{Arc, Mutex},
+            sync::{
+                atomic::{AtomicUsize, Ordering},
+                Arc, Mutex,
+            },
             time::Instant,
         };
 
@@ -971,6 +976,96 @@ mod tests {
                     }
                 }
             }
+        }
+
+        /// If a task is so busy that it can't drain it's inbox in time, we will
+        /// get a SpawnArg::Busy instead of access to the actual state.
+        ///
+        /// This will only happen if the system is seriously overloaded, since
+        /// the entity actor just spawns tasks for each message. So here we
+        /// simulate it by just not spawning the task as we are supposed to.
+        #[tokio::test]
+        async fn test_busy() -> TestResult<()> {
+            let mut state = EntityManagerState::<Counters>::new(
+                Arc::new(Mutex::new(Global::default())),
+                1024,
+                8,
+                8,
+                2,
+            );
+            let active = Arc::new(AtomicUsize::new(0));
+            let busy = Arc::new(AtomicUsize::new(0));
+            let inc = || {
+                let active = active.clone();
+                let busy = busy.clone();
+                |arg: SpawnArg<Counters>| async move {
+                    match arg {
+                        SpawnArg::Active(_) => {
+                            active.fetch_add(1, Ordering::SeqCst);
+                        }
+                        SpawnArg::Busy => {
+                            busy.fetch_add(1, Ordering::SeqCst);
+                        }
+                        SpawnArg::Dead => {
+                            println!("Entity actor is dead");
+                        }
+                    }
+                }
+            };
+            let fut1 = state.spawn(1, inc()).await;
+            assert!(fut1.is_some(), "First spawn should give us a task to spawn");
+            for _ in 0..9 {
+                let fut = state.spawn(1, inc()).await;
+                assert!(
+                    fut.is_none(),
+                    "Subsequent spawns should assume first task has been spawned"
+                );
+            }
+            assert_eq!(
+                active.load(Ordering::SeqCst),
+                0,
+                "Active should have never been called, since we did not spawn the task!"
+            );
+            assert_eq!(busy.load(Ordering::SeqCst), 2, "Busy should have been called two times, since we sent 10 msgs to a queue with capacity 8, and nobody is draining it");
+            Ok(())
+        }
+
+        /// If there is a panic in any of the fns that run on an entity actor,
+        /// the entire entity becomes dead. This can not be recovered from, and
+        /// trying to spawn a new task on the dead entity actor will result in
+        /// a SpawnArg::Dead.
+        #[tokio::test]
+        async fn test_dead() -> TestResult<()> {
+            let manager = EntityManager::<Counters>::new(
+                Arc::new(Mutex::new(Global::default())),
+                Options::default(),
+            );
+            let (tx, rx) = oneshot::channel();
+            let killer = |arg: SpawnArg<Counters>| async move {
+                match arg {
+                    SpawnArg::Active(_) => {
+                        tx.send(()).ok();
+                        panic!("Panic to kill the task");
+                    }
+                    _ => {}
+                }
+            };
+            // spawn a task that kills the entity actor
+            manager.spawn(1, killer).await?;
+            rx.await.expect("Failed to receive kill confirmation");
+            let (tx, rx) = oneshot::channel();
+            let counter = |arg: SpawnArg<Counters>| async move {
+                match arg {
+                    SpawnArg::Dead => {
+                        tx.send(()).ok();
+                    }
+                    _ => {}
+                }
+            };
+            // // spawn another task on the - now dead - entity actor
+            manager.spawn(1, counter).await?;
+            rx.await.expect("Failed to receive dead confirmation");
+            Ok(())
         }
     }
 
