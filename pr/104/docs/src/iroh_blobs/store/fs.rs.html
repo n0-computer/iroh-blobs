@@ -2026,8 +2026,7 @@
 <a href="#2025" id="2025">2025</a>
 <a href="#2026" id="2026">2026</a>
 <a href="#2027" id="2027">2027</a>
-<a href="#2028" id="2028">2028</a>
-<a href="#2029" id="2029">2029</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2028" id="2028">2028</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2860,7 +2859,6 @@
 <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 </span><span class="kw">async fn </span>import_bao(cmd: ImportBaoMsg, ctx: HashContext) {
     <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
-    <span class="kw">let </span>hash = ctx.id;
     <span class="kw">let </span>ImportBaoMsg {
         inner: ImportBaoRequest { size, .. },
         rx,
