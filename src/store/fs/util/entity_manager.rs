@@ -953,14 +953,14 @@ mod tests {
                 let global = self.global.lock().unwrap();
                 assert_eq!(global.data, values, "Data mismatch");
                 for id in values.keys() {
-                    let log = global.log.get(&id).unwrap();
+                    let log = global.log.get(id).unwrap();
                     assert!(
                         log.len() % 2 == 0,
                         "Log must contain alternating wakeup and shutdown events"
                     );
-                    for i in 0..log.len() {
+                    for (i, (event, _)) in log.iter().enumerate() {
                         assert_eq!(
-                            log[i].0,
+                            *event,
                             if i % 2 == 0 {
                                 Event::Wakeup
                             } else {
@@ -1061,7 +1061,7 @@ mod tests {
                 if let Some(value) = r.value {
                     let path = get_path(&global.path, state.id);
                     let value_bytes = value.to_be_bytes();
-                    std::fs::write(&path, &value_bytes).expect("Failed to write disk state");
+                    std::fs::write(&path, value_bytes).expect("Failed to write disk state");
                 }
                 global
                     .log
@@ -1150,14 +1150,14 @@ mod tests {
                     assert_eq!(disk_value, *value, "Disk value mismatch for id {id}");
                 }
                 for id in values.keys() {
-                    let log = global.log.get(&id).unwrap();
+                    let log = global.log.get(id).unwrap();
                     assert!(
                         log.len() % 2 == 0,
                         "Log must contain alternating wakeup and shutdown events"
                     );
-                    for i in 0..log.len() {
+                    for (i, (event, _)) in log.iter().enumerate() {
                         assert_eq!(
-                            log[i].0,
+                            *event,
                             if i % 2 == 0 {
                                 Event::Wakeup
                             } else {
@@ -1195,8 +1195,7 @@ mod tests {
             .await;
         assert!(
             errors.is_empty(),
-            "Failed to add some entries: {:?}",
-            errors
+            "Failed to add some entries: {errors:?}"
         );
         // check that the db contains the expected values
         let ids = reference.keys().copied().collect::<Vec<_>>();
