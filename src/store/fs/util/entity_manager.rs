@@ -1193,10 +1193,7 @@ mod tests {
                 }
             })
             .await;
-        assert!(
-            errors.is_empty(),
-            "Failed to add some entries: {errors:?}"
-        );
+        assert!(errors.is_empty(), "Failed to add some entries: {errors:?}");
         // check that the db contains the expected values
         let ids = reference.keys().copied().collect::<Vec<_>>();
         for id in &ids {
