@@ -831,7 +831,6 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
 #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
 async fn import_bao(cmd: ImportBaoMsg, ctx: HashContext) {
     trace!("{cmd:?}");
-    let hash = ctx.id;
     let ImportBaoMsg {
         inner: ImportBaoRequest { size, .. },
         rx,
