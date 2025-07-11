@@ -1,4 +1,5 @@
-//! Blobs layer for iroh.
+#![doc = include_str!("../README.md")]
+//! # Module docs
 //!
 //! The crate is designed to be used from the [iroh] crate.
 //!
@@ -16,7 +17,11 @@
 //! requests and store the result in a store, as well as a low level state
 //! machine for executing requests.
 //!
-//! The [api::downloader] module provides a component to download blobs from
+//! The client API is available in the [api] module. You can get a client
+//! either from one of the [store] implementations, or from the [BlobsProtocol]
+//! via a
+//!
+//! The [downloader](api::downloader) module provides a component to download blobs from
 //! multiple sources and store them in a store.
 //!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
@@ -35,12 +40,11 @@ pub use net_protocol::BlobsProtocol;
 pub mod protocol;
 pub mod provider;
 pub mod ticket;
-pub(crate) mod util;
+pub mod util;
 
 #[cfg(test)]
 mod tests;
 
-#[doc(hidden)]
 pub mod test;
 
 pub use protocol::ALPN;
