@@ -127,7 +127,7 @@ impl Blobs {
         .await
     }
 
-    pub fn add_slice(&self, data: impl AsRef<[u8]>) -> AddProgress {
+    pub fn add_slice(&self, data: impl AsRef<[u8]>) -> AddProgress<'_> {
         let options = ImportBytesRequest {
             data: Bytes::copy_from_slice(data.as_ref()),
             format: crate::BlobFormat::Raw,
@@ -136,7 +136,7 @@ impl Blobs {
         self.add_bytes_impl(options)
     }
 
-    pub fn add_bytes(&self, data: impl Into<bytes::Bytes>) -> AddProgress {
+    pub fn add_bytes(&self, data: impl Into<bytes::Bytes>) -> AddProgress<'_> {
         let options = ImportBytesRequest {
             data: data.into(),
             format: crate::BlobFormat::Raw,
@@ -145,7 +145,7 @@ impl Blobs {
         self.add_bytes_impl(options)
     }
 
-    pub fn add_bytes_with_opts(&self, options: impl Into<AddBytesOptions>) -> AddProgress {
+    pub fn add_bytes_with_opts(&self, options: impl Into<AddBytesOptions>) -> AddProgress<'_> {
         let options = options.into();
         let request = ImportBytesRequest {
             data: options.data,
@@ -155,7 +155,7 @@ impl Blobs {
         self.add_bytes_impl(request)
     }
 
-    fn add_bytes_impl(&self, options: ImportBytesRequest) -> AddProgress {
+    fn add_bytes_impl(&self, options: ImportBytesRequest) -> AddProgress<'_> {
         trace!("{options:?}");
         let this = self.clone();
         let stream = Gen::new(|co| async move {
@@ -180,7 +180,7 @@ impl Blobs {
         AddProgress::new(self, stream)
     }
 
-    pub fn add_path_with_opts(&self, options: impl Into<AddPathOptions>) -> AddProgress {
+    pub fn add_path_with_opts(&self, options: impl Into<AddPathOptions>) -> AddProgress<'_> {
         let options = options.into();
         self.add_path_with_opts_impl(ImportPathRequest {
             path: options.path,
@@ -190,7 +190,7 @@ impl Blobs {
         })
     }
 
-    fn add_path_with_opts_impl(&self, options: ImportPathRequest) -> AddProgress {
+    fn add_path_with_opts_impl(&self, options: ImportPathRequest) -> AddProgress<'_> {
         trace!("{:?}", options);
         let client = self.client.clone();
         let stream = Gen::new(|co| async move {
@@ -215,7 +215,7 @@ impl Blobs {
         AddProgress::new(self, stream)
     }
 
-    pub fn add_path(&self, path: impl AsRef<Path>) -> AddProgress {
+    pub fn add_path(&self, path: impl AsRef<Path>) -> AddProgress<'_> {
         self.add_path_with_opts(AddPathOptions {
             path: path.as_ref().to_owned(),
             mode: ImportMode::Copy,
@@ -226,7 +226,7 @@ impl Blobs {
     pub async fn add_stream(
         &self,
         data: impl Stream<Item = io::Result<Bytes>> + Send + Sync + 'static,
-    ) -> AddProgress {
+    ) -> AddProgress<'_> {
         let inner = ImportByteStreamRequest {
             format: crate::BlobFormat::Raw,
             scope: Scope::default(),
@@ -521,7 +521,7 @@ pub struct Batch<'a> {
 }
 
 impl<'a> Batch<'a> {
-    pub fn add_bytes(&self, data: impl Into<Bytes>) -> BatchAddProgress {
+    pub fn add_bytes(&self, data: impl Into<Bytes>) -> BatchAddProgress<'_> {
         let options = ImportBytesRequest {
             data: data.into(),
             format: crate::BlobFormat::Raw,
@@ -530,7 +530,7 @@ impl<'a> Batch<'a> {
         BatchAddProgress(self.blobs.add_bytes_impl(options))
     }
 
-    pub fn add_bytes_with_opts(&self, options: impl Into<AddBytesOptions>) -> BatchAddProgress {
+    pub fn add_bytes_with_opts(&self, options: impl Into<AddBytesOptions>) -> BatchAddProgress<'_> {
         let options = options.into();
         BatchAddProgress(self.blobs.add_bytes_impl(ImportBytesRequest {
             data: options.data,
@@ -539,7 +539,7 @@ impl<'a> Batch<'a> {
         }))
     }
 
-    pub fn add_slice(&self, data: impl AsRef<[u8]>) -> BatchAddProgress {
+    pub fn add_slice(&self, data: impl AsRef<[u8]>) -> BatchAddProgress<'_> {
         let options = ImportBytesRequest {
             data: Bytes::copy_from_slice(data.as_ref()),
             format: crate::BlobFormat::Raw,
@@ -548,7 +548,7 @@ impl<'a> Batch<'a> {
         BatchAddProgress(self.blobs.add_bytes_impl(options))
     }
 
-    pub fn add_path_with_opts(&self, options: impl Into<AddPathOptions>) -> BatchAddProgress {
+    pub fn add_path_with_opts(&self, options: impl Into<AddPathOptions>) -> BatchAddProgress<'_> {
         let options = options.into();
         BatchAddProgress(self.blobs.add_path_with_opts_impl(ImportPathRequest {
             path: options.path,
