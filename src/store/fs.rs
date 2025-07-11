@@ -64,7 +64,8 @@
 //! safely shut down as well. Any store refs you are holding will be inoperable
 //! after this.
 use std::{
-    fmt, fs,
+    fmt::{self, Debug},
+    fs,
     future::Future,
     io::Write,
     num::NonZeroU64,
@@ -224,7 +225,7 @@ impl entity_manager::Params for EmParams {
         state: entity_manager::ActiveEntityState<Self>,
         _cause: entity_manager::ShutdownCause,
     ) {
-        state.persist();
+        state.persist().await;
     }
 }
 
@@ -248,13 +249,13 @@ struct Actor {
 
 type HashContext = ActiveEntityState<EmParams>;
 
-impl HashContext {
+impl SyncEntityApi for HashContext {
     /// Load the state from the database.
     ///
     /// If the state is Initial, this will start the load.
     /// If it is Loading, it will wait until loading is done.
     /// If it is any other state, it will be a noop.
-    pub async fn load(&self) {
+    async fn load(&self) {
         enum Action {
             Load,
             Wait,
@@ -304,32 +305,8 @@ impl HashContext {
         }
     }
 
-    pub(super) fn persist(&self) {
-        self.state.send_if_modified(|guard| {
-            let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
-                return false;
-            };
-            let path = self.global.options.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            false
-        });
-    }
-
     /// Write a batch and notify the db
-    pub(super) async fn write_batch(
-        &self,
-        batch: &[BaoContentItem],
-        bitfield: &Bitfield,
-    ) -> io::Result<()> {
+    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
@@ -351,7 +328,8 @@ impl HashContext {
     ///
     /// Caution: this is a reader for the unvalidated data file. Reading this
     /// can produce data that does not match the hash.
-    pub fn data_reader(&self) -> DataReader {
+    #[allow(refining_impl_trait_internal)]
+    fn data_reader(&self) -> DataReader {
         DataReader(self.state.clone())
     }
 
@@ -359,36 +337,39 @@ impl HashContext {
     ///
     /// The outboard file is used to validate the data file. It is not guaranteed
     /// to be complete.
-    pub fn outboard_reader(&self) -> OutboardReader {
+    #[allow(refining_impl_trait_internal)]
+    fn outboard_reader(&self) -> OutboardReader {
         OutboardReader(self.state.clone())
     }
 
     /// The most precise known total size of the data file.
-    pub fn current_size(&self) -> io::Result<u64> {
+    fn current_size(&self) -> io::Result<u64> {
         match self.state.borrow().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.size()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
             BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 
     /// The most precise known total size of the data file.
-    pub fn bitfield(&self) -> io::Result<Bitfield> {
+    fn bitfield(&self) -> io::Result<Bitfield> {
         match self.state.borrow().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
             BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
+}
 
+impl HashContext {
     /// The outboard for the file.
     pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
         let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
@@ -722,25 +703,62 @@ impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_path(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx
+            .send(ExportProgressItem::Error(api::Error::Io(err)))
+            .await
+            .ok();
+    }
 }
 impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_bao(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx
+            .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(err)))
+            .await
+            .ok();
+    }
 }
 impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_ranges(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx
+            .send(ExportRangesItem::Error(api::Error::Io(err)))
+            .await
+            .ok();
+    }
 }
 impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.import_bao(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx.send(Err(api::Error::Io(err))).await.ok();
+    }
 }
 impl HashSpecific for (TempTag, ImportEntryMsg) {
     fn hash(&self) -> Hash {
@@ -752,7 +770,14 @@ impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
         let (tt, cmd) = self;
         ctx.finish_import(cmd, tt).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.1.tx.send(AddProgressItem::Error(err)).await.ok();
+    }
 }
 
 struct RtWrapper(Option<tokio::runtime::Runtime>);
@@ -809,8 +834,50 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
+/// The minimal API you need to implement for an entity for a store to work.
+trait EntityApi {
+    /// Import from a stream of n0 bao encoded data.
+    async fn import_bao(&self, cmd: ImportBaoMsg);
+    /// Finish an import from a local file or memory.
+    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
+    /// Observe the bitfield of the entry.
+    async fn observe(&self, cmd: ObserveMsg);
+    /// Export byte ranges of the entry as data
+    async fn export_ranges(&self, cmd: ExportRangesMsg);
+    /// Export chunk ranges of the entry as a n0 bao encoded stream.
+    async fn export_bao(&self, cmd: ExportBaoMsg);
+    /// Export the entry to a local file.
+    async fn export_path(&self, cmd: ExportPathMsg);
+    /// Persist the entry at the end of its lifecycle.
+    async fn persist(&self);
+}
+
+/// A more opinionated API that can be used as a helper to save implementation
+/// effort when implementing the EntityApi trait.
+trait SyncEntityApi: EntityApi {
+    /// Load the entry state from the database. This must make sure that it is
+    /// not run concurrently, so if load is called multiple times, all but one
+    /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
+    async fn load(&self);
+
+    /// Get a synchronous reader for the data file.
+    fn data_reader(&self) -> impl ReadBytesAt;
+
+    /// Get a synchronous reader for the outboard file.
+    fn outboard_reader(&self) -> impl ReadAt;
+
+    /// Get the best known size of the data file.
+    fn current_size(&self) -> io::Result<u64>;
+
+    /// Get the bitfield of the entry.
+    fn bitfield(&self) -> io::Result<Bitfield>;
+
+    /// Write a batch of content items to the entry.
+    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+}
+
 /// The high level entry point per entry.
-impl HashContext {
+impl EntityApi for HashContext {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
@@ -889,6 +956,27 @@ impl HashContext {
             Err(cause) => AddProgressItem::Error(cause),
         };
         cmd.tx.send(res).await.ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
+    async fn persist(&self) {
+        self.state.send_if_modified(|guard| {
+            let hash = &self.id;
+            let BaoFileStorage::Partial(fs) = guard.take() else {
+                return false;
+            };
+            let path = self.global.options.path.bitfield_path(hash);
+            trace!("writing bitfield for hash {} to {}", hash, path.display());
+            if let Err(cause) = fs.sync_all(&path) {
+                error!(
+                    "failed to write bitfield for {} at {}: {:?}",
+                    hash,
+                    path.display(),
+                    cause
+                );
+            }
+            false
+        });
     }
 }
 
