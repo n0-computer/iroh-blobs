@@ -40,11 +40,12 @@ pub use net_protocol::BlobsProtocol;
 pub mod protocol;
 pub mod provider;
 pub mod ticket;
-pub mod util;
+
+#[doc(hidden)]
+pub mod test;
+mod util;
 
 #[cfg(test)]
 mod tests;
-
-pub mod test;
 
 pub use protocol::ALPN;
