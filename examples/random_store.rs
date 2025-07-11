@@ -237,7 +237,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         .bind()
         .await?;
     let (dump_task, events_tx) = dump_provider_events(args.allow_push);
-    let blobs = iroh_blobs::net_protocol::Blobs::new(&store, endpoint.clone(), Some(events_tx));
+    let blobs = iroh_blobs::BlobsProtocol::new(&store, endpoint.clone(), Some(events_tx));
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();
