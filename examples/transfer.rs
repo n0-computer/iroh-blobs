@@ -56,12 +56,13 @@ async fn main() -> anyhow::Result<()> {
             let abs_path = std::path::absolute(filename)?;
             let ticket: BlobTicket = ticket.parse()?;
 
-            println!("Starting download.");
-
             // For receiving files, we create a "downloader" that allows us to fetch files
             // from other nodes via iroh connections
-            store
-                .downloader(&endpoint)
+            let downloader = store.downloader(&endpoint);
+
+            println!("Starting download.");
+
+            downloader
                 .download(ticket.hash(), Some(ticket.node_addr().node_id))
                 .await?;
 
