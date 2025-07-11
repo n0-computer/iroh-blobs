@@ -70,7 +70,10 @@ use std::{
     num::NonZeroU64,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use bao_tree::{
@@ -711,31 +714,31 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 
 impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
-        observe(&ctx, self).await
+        ctx.observe(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
-        export_path(&ctx, self).await
+        ctx.export_path(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
-        export_bao(&ctx, self).await
+        ctx.export_bao(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
-        export_ranges(&ctx, self).await
+        ctx.export_ranges(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
-        import_bao(&ctx, self).await
+        ctx.import_bao(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
@@ -747,7 +750,7 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
     async fn handle(self, ctx: HashContext) {
         let (tt, cmd) = self;
-        finish_import(&ctx, cmd, tt).await
+        ctx.finish_import(cmd, tt).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
@@ -806,80 +809,87 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn import_bao(ctx: &HashContext, cmd: ImportBaoMsg) {
-    trace!("{cmd:?}");
-    let ImportBaoMsg {
-        inner: ImportBaoRequest { size, .. },
-        rx,
-        tx,
-        ..
-    } = cmd;
-    ctx.load().await;
-    let res = import_bao_impl(ctx, size, rx).await;
-    trace!("{res:?}");
-    tx.send(res).await.ok();
-}
+/// The high level entry point per entry.
+impl HashContext {
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn import_bao(&self, cmd: ImportBaoMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let ImportBaoMsg {
+            inner: ImportBaoRequest { size, .. },
+            rx,
+            tx,
+            ..
+        } = cmd;
+        let res = import_bao_impl(self, size, rx).await;
+        trace!("{res:?}");
+        tx.send(res).await.ok();
+    }
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn observe(ctx: &HashContext, cmd: ObserveMsg) {
-    trace!("{cmd:?}");
-    ctx.load().await;
-    BaoFileStorageSubscriber::new(ctx.state.subscribe())
-        .forward(cmd.tx)
-        .await
-        .ok();
-}
-
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn export_ranges(ctx: &HashContext, mut cmd: ExportRangesMsg) {
-    trace!("{cmd:?}");
-    ctx.load().await;
-    if let Err(cause) = export_ranges_impl(ctx, cmd.inner, &mut cmd.tx).await {
-        cmd.tx
-            .send(ExportRangesItem::Error(cause.into()))
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn observe(&self, cmd: ObserveMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        BaoFileStorageSubscriber::new(self.state.subscribe())
+            .forward(cmd.tx)
             .await
             .ok();
     }
-}
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn export_bao(ctx: &HashContext, mut cmd: ExportBaoMsg) {
-    ctx.load().await;
-    if let Err(cause) = export_bao_impl(ctx, cmd.inner, &mut cmd.tx).await {
-        // if the entry is in state NonExisting, this will be an io error with
-        // kind NotFound. So we must not wrap this somehow but pass it on directly.
-        cmd.tx
-            .send(bao_tree::io::EncodeError::Io(cause).into())
-            .await
-            .ok();
-    }
-}
-
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn export_path(ctx: &HashContext, cmd: ExportPathMsg) {
-    let ExportPathMsg { inner, mut tx, .. } = cmd;
-    if let Err(cause) = export_path_impl(ctx, inner, &mut tx).await {
-        tx.send(cause.into()).await.ok();
-    }
-}
-
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn finish_import(ctx: &HashContext, cmd: ImportEntryMsg, mut tt: TempTag) {
-    trace!("{cmd:?}");
-    let res = match finish_import_impl(ctx, cmd.inner).await {
-        Ok(()) => {
-            // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-            // it will be cleaned up when either the process exits or scope ends
-            if cmd.tx.is_rpc() {
-                trace!("leaking temp tag {}", tt.hash_and_format());
-                tt.leak();
-            }
-            AddProgressItem::Done(tt)
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_ranges(&self, mut cmd: ExportRangesMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        if let Err(cause) = export_ranges_impl(self, cmd.inner, &mut cmd.tx).await {
+            cmd.tx
+                .send(ExportRangesItem::Error(cause.into()))
+                .await
+                .ok();
         }
-        Err(cause) => AddProgressItem::Error(cause),
-    };
-    cmd.tx.send(res).await.ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_bao(&self, mut cmd: ExportBaoMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        if let Err(cause) = export_bao_impl(self, cmd.inner, &mut cmd.tx).await {
+            // if the entry is in state NonExisting, this will be an io error with
+            // kind NotFound. So we must not wrap this somehow but pass it on directly.
+            cmd.tx
+                .send(bao_tree::io::EncodeError::Io(cause).into())
+                .await
+                .ok();
+        }
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_path(&self, cmd: ExportPathMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let ExportPathMsg { inner, mut tx, .. } = cmd;
+        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
+            tx.send(cause.into()).await.ok();
+        }
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let res = match finish_import_impl(self, cmd.inner).await {
+            Ok(()) => {
+                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
+                // it will be cleaned up when either the process exits or scope ends
+                if cmd.tx.is_rpc() {
+                    trace!("leaking temp tag {}", tt.hash_and_format());
+                    tt.leak();
+                }
+                AddProgressItem::Done(tt)
+            }
+            Err(cause) => AddProgressItem::Error(cause),
+        };
+        cmd.tx.send(res).await.ok();
+    }
 }
 
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
@@ -1213,8 +1223,14 @@ impl FsStore {
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> anyhow::Result<FsStore> {
+        static THREAD_NR: AtomicU64 = AtomicU64::new(0);
         let rt = tokio::runtime::Builder::new_multi_thread()
-            .thread_name("iroh-blob-store")
+            .thread_name_fn(|| {
+                format!(
+                    "iroh-blob-store-{}",
+                    THREAD_NR.fetch_add(1, Ordering::SeqCst)
+                )
+            })
             .enable_time()
             .build()?;
         let handle = rt.handle().clone();
