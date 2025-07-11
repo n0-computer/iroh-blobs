@@ -49,8 +49,8 @@
     <span class="kw">let </span>tag = blobs.add_slice(<span class="string">b"Hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="macro">println!</span>(<span class="string">"We are now serving {}"</span>, blobs.ticket(tag).<span class="kw">await</span><span class="question-mark">?</span>);
 
-    <span class="comment">// wait a second
-    </span>tokio::time::sleep(std::time::Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
+    <span class="comment">// wait for control-c
+    </span>tokio::signal::ctrl_c().<span class="kw">await</span>;
 
     <span class="comment">// clean shutdown of router and store
     </span>router.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
