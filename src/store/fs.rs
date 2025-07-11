@@ -310,7 +310,7 @@ impl SyncEntityApi for HashContext {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, &self) else {
+            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, self) else {
                 res = Err(io::Error::other("write batch failed"));
                 return false;
             };
