@@ -558,8 +558,7 @@
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
-<a href="#560" id="560">560</a>
-<a href="#561" id="561">561</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::ops::{Bound, RangeBounds};
+<a href="#560" id="560">560</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::ops::{Bound, RangeBounds};
 
 <span class="kw">use </span>bao_tree::{io::round_up_to_chunks, ChunkNum, ChunkRanges};
 <span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
@@ -595,7 +594,6 @@
                 io::ErrorKind::HostUnreachable =&gt; <span class="number">13</span>,
                 io::ErrorKind::Interrupted =&gt; <span class="number">14</span>,
                 io::ErrorKind::InvalidData =&gt; <span class="number">15</span>,
-                io::ErrorKind::InvalidFilename =&gt; <span class="number">16</span>,
                 io::ErrorKind::InvalidInput =&gt; <span class="number">17</span>,
                 io::ErrorKind::IsADirectory =&gt; <span class="number">18</span>,
                 io::ErrorKind::NetworkDown =&gt; <span class="number">19</span>,
@@ -640,8 +638,8 @@
                 <span class="number">13 </span>=&gt; io::ErrorKind::HostUnreachable,
                 <span class="number">14 </span>=&gt; io::ErrorKind::Interrupted,
                 <span class="number">15 </span>=&gt; io::ErrorKind::InvalidData,
-                <span class="number">16 </span>=&gt; io::ErrorKind::InvalidFilename,
-                <span class="number">17 </span>=&gt; io::ErrorKind::InvalidInput,
+                <span class="comment">// 16 =&gt; io::ErrorKind::InvalidFilename,
+                </span><span class="number">17 </span>=&gt; io::ErrorKind::InvalidInput,
                 <span class="number">18 </span>=&gt; io::ErrorKind::IsADirectory,
                 <span class="number">19 </span>=&gt; io::ErrorKind::NetworkDown,
                 <span class="number">20 </span>=&gt; io::ErrorKind::NetworkUnreachable,
@@ -741,8 +739,8 @@
                 ErrorKind::HostUnreachable,
                 ErrorKind::Interrupted,
                 ErrorKind::InvalidData,
-                ErrorKind::InvalidFilename,
-                ErrorKind::InvalidInput,
+                <span class="comment">// ErrorKind::InvalidFilename,
+                </span>ErrorKind::InvalidInput,
                 ErrorKind::IsADirectory,
                 ErrorKind::NetworkDown,
                 ErrorKind::NetworkUnreachable,
