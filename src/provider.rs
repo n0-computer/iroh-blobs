@@ -1,7 +1,7 @@
 //! The low level server side API
 //!
 //! Note that while using this API directly is fine, the standard way
-//! to provide data is to just register a [`crate::net_protocol`] protocol
+//! to provide data is to just register a [`crate::BlobsProtocol`] protocol
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
 use std::{
     fmt::Debug,
