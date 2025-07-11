@@ -364,25 +364,26 @@ mod main_actor {
             }
         }
 
+        #[must_use = "this function may return a future that must be spawned by the caller"]
         /// Friendly version of `spawn_boxed` that does the boxing
-        pub async fn spawn<F, Fut>(&mut self, id: P::EntityId, f: F, tasks: &mut JoinSet<()>)
+        pub async fn spawn<F, Fut>(
+            &mut self,
+            id: P::EntityId,
+            f: F,
+        ) -> Option<impl Future<Output = ()> + Send + 'static>
         where
             F: FnOnce(SpawnArg<P>) -> Fut + Send + 'static,
             Fut: Future<Output = ()> + Send + 'static,
         {
-            let task = self
-                .spawn_boxed(
-                    id,
-                    Box::new(|x| {
-                        Box::pin(async move {
-                            f(x).await;
-                        })
-                    }),
-                )
-                .await;
-            if let Some(task) = task {
-                tasks.spawn(task);
-            }
+            self.spawn_boxed(
+                id,
+                Box::new(|x| {
+                    Box::pin(async move {
+                        f(x).await;
+                    })
+                }),
+            )
+            .await
         }
 
         #[must_use = "this function may return a future that must be spawned by the caller"]
@@ -627,7 +628,7 @@ mod main_actor {
                     SelectOutcome::TaskDone(result) => {
                         // Handle completed task
                         if let Err(e) = result {
-                            eprintln!("Task failed: {e:?}");
+                            error!("Task failed: {e:?}");
                         }
                     }
                 }
@@ -771,18 +772,68 @@ impl<P: Params> EntityManager<P> {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for the entity manager.
+    //!
+    //! We implement a simple database for u128 counters, identified by u64 ids,
+    //! with both an in-memory and a file-based implementation.
+    //!
+    //! The database does internal consistency checks, to ensure that each
+    //! entity is only ever accessed by a single tokio task at a time, and to
+    //! ensure that wakeup and shutdown events are interleaved.
+    //!
+    //! We also check that the database behaves correctly by comparing with an
+    //! in-memory implementation.
+    //!
+    //! Database operations are done in parallel, so the fact that we are using
+    //! AtomicRefCell provides another test - if there was parallel write access
+    //! to a single entity due to a bug, it would panic.
+    use std::collections::HashMap;
+
+    use n0_future::{BufferedStreamExt, StreamExt};
+    use testresult::TestResult;
 
     use super::*;
 
+    // a simple database for u128 counters, identified by u64 ids.
+    trait CounterDb {
+        async fn add(&self, id: u64, value: u128) -> Result<(), &'static str>;
+        async fn get(&self, id: u64) -> Result<u128, &'static str>;
+        async fn shutdown(&self) -> Result<(), &'static str>;
+        async fn check_consistency(&self, values: HashMap<u64, u128>);
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Event {
+        Wakeup,
+        Shutdown,
+    }
+
     mod mem {
-        use std::sync::Arc;
+        //! The in-memory database uses a HashMap in the global state to store
+        //! the values of the counters. Loading means reading from the global
+        //! state into the entity state, and persisting means writing to the
+        //! global state from the entity state.
+        use std::{
+            collections::{HashMap, HashSet},
+            sync::{
+                atomic::{AtomicUsize, Ordering},
+                Arc, Mutex,
+            },
+            time::Instant,
+        };
 
         use atomic_refcell::AtomicRefCell;
 
         use super::*;
 
+        #[derive(Debug, Default)]
+        struct Inner {
+            value: Option<u128>,
+            tasks: HashSet<tokio::task::Id>,
+        }
+
         #[derive(Debug, Clone, Default)]
-        struct State(Arc<AtomicRefCell<u128>>);
+        struct State(Arc<AtomicRefCell<Inner>>);
 
         impl Reset for State {
             fn reset(&mut self) {
@@ -790,42 +841,81 @@ mod tests {
             }
         }
 
+        #[derive(Debug, Default)]
+        struct Global {
+            // the "database" of entity values
+            data: HashMap<u64, u128>,
+            // log of awake and shutdown events
+            log: HashMap<u64, Vec<(Event, Instant)>>,
+        }
+
         struct Counters;
         impl Params for Counters {
             type EntityId = u64;
-            type GlobalState = ();
+            type GlobalState = Arc<Mutex<Global>>;
             type EntityState = State;
-            async fn on_shutdown(_state: entity_actor::State<Self>, _cause: ShutdownCause) {}
+            async fn on_shutdown(entity: entity_actor::State<Self>, _cause: ShutdownCause) {
+                let state = entity.state.0.borrow();
+                let mut global = entity.global.lock().unwrap();
+                assert_eq!(state.tasks.len(), 1);
+                // persist the state
+                if let Some(value) = state.value {
+                    global.data.insert(entity.id, value);
+                }
+                // log the shutdown event
+                global
+                    .log
+                    .entry(entity.id)
+                    .or_default()
+                    .push((Event::Shutdown, Instant::now()));
+            }
         }
 
-        struct CountersManager {
+        pub struct MemDb {
             m: EntityManager<Counters>,
+            global: Arc<Mutex<Global>>,
         }
 
         impl entity_actor::State<Counters> {
             async fn with_value(&self, f: impl FnOnce(&mut u128)) -> Result<(), &'static str> {
-                let mut r = self.state.0.borrow_mut();
-                f(&mut r);
+                let mut state = self.state.0.borrow_mut();
+                // lazily load the data from the database
+                if state.value.is_none() {
+                    let mut global = self.global.lock().unwrap();
+                    state.value = Some(global.data.get(&self.id).copied().unwrap_or_default());
+                    // log the wakeup event
+                    global
+                        .log
+                        .entry(self.id)
+                        .or_default()
+                        .push((Event::Wakeup, Instant::now()));
+                }
+                // insert the task id into the tasks set to check that access is always
+                // from the same tokio task (not necessarily the same thread).
+                state.tasks.insert(tokio::task::id());
+                // do the actual work
+                let r = state.value.as_mut().unwrap();
+                f(r);
                 Ok(())
             }
         }
 
-        impl CountersManager {
+        impl MemDb {
             pub fn new() -> Self {
+                let global = Arc::new(Mutex::new(Global::default()));
                 Self {
-                    m: EntityManager::<Counters>::new((), Options::default()),
+                    global: global.clone(),
+                    m: EntityManager::<Counters>::new(global, Options::default()),
                 }
             }
+        }
 
-            pub async fn add(&self, id: u64, value: u128) -> Result<(), &'static str> {
+        impl super::CounterDb for MemDb {
+            async fn add(&self, id: u64, value: u128) -> Result<(), &'static str> {
                 self.m
                     .spawn(id, move |arg| async move {
                         match arg {
                             SpawnArg::Active(state) => {
-                                // println!(
-                                //     "Adding value {} to entity actor with id {:?}",
-                                //     value, state.id
-                                // );
                                 state
                                     .with_value(|v| *v = v.wrapping_add(value))
                                     .await
@@ -838,7 +928,7 @@ mod tests {
                     .await
             }
 
-            pub async fn get(&self, id: u64) -> Result<u128, &'static str> {
+            async fn get(&self, id: u64) -> Result<u128, &'static str> {
                 let (tx, rx) = oneshot::channel();
                 self.m
                     .spawn(id, move |arg| async move {
@@ -860,27 +950,126 @@ mod tests {
                 rx.await.map_err(|_| "Failed to receive value")
             }
 
-            pub async fn shutdown(&self) -> Result<(), &'static str> {
+            async fn shutdown(&self) -> Result<(), &'static str> {
                 self.m.shutdown().await
+            }
+
+            async fn check_consistency(&self, values: HashMap<u64, u128>) {
+                let global = self.global.lock().unwrap();
+                assert_eq!(global.data, values, "Data mismatch");
+                for id in values.keys() {
+                    let log = global.log.get(id).unwrap();
+                    assert!(
+                        log.len() % 2 == 0,
+                        "Log must contain alternating wakeup and shutdown events"
+                    );
+                    for (i, (event, _)) in log.iter().enumerate() {
+                        assert_eq!(
+                            *event,
+                            if i % 2 == 0 {
+                                Event::Wakeup
+                            } else {
+                                Event::Shutdown
+                            },
+                            "Unexpected event type"
+                        );
+                    }
+                }
             }
         }
 
+        /// If a task is so busy that it can't drain it's inbox in time, we will
+        /// get a SpawnArg::Busy instead of access to the actual state.
+        ///
+        /// This will only happen if the system is seriously overloaded, since
+        /// the entity actor just spawns tasks for each message. So here we
+        /// simulate it by just not spawning the task as we are supposed to.
         #[tokio::test]
-        async fn bench_entity_manager_mem() -> testresult::TestResult<()> {
-            let counter_manager = CountersManager::new();
-            for i in 0..100 {
-                counter_manager.add(i, i as u128).await?;
+        async fn test_busy() -> TestResult<()> {
+            let mut state = EntityManagerState::<Counters>::new(
+                Arc::new(Mutex::new(Global::default())),
+                1024,
+                8,
+                8,
+                2,
+            );
+            let active = Arc::new(AtomicUsize::new(0));
+            let busy = Arc::new(AtomicUsize::new(0));
+            let inc = || {
+                let active = active.clone();
+                let busy = busy.clone();
+                |arg: SpawnArg<Counters>| async move {
+                    match arg {
+                        SpawnArg::Active(_) => {
+                            active.fetch_add(1, Ordering::SeqCst);
+                        }
+                        SpawnArg::Busy => {
+                            busy.fetch_add(1, Ordering::SeqCst);
+                        }
+                        SpawnArg::Dead => {
+                            println!("Entity actor is dead");
+                        }
+                    }
+                }
+            };
+            let fut1 = state.spawn(1, inc()).await;
+            assert!(fut1.is_some(), "First spawn should give us a task to spawn");
+            for _ in 0..9 {
+                let fut = state.spawn(1, inc()).await;
+                assert!(
+                    fut.is_none(),
+                    "Subsequent spawns should assume first task has been spawned"
+                );
             }
-            counter_manager.shutdown().await?;
+            assert_eq!(
+                active.load(Ordering::SeqCst),
+                0,
+                "Active should have never been called, since we did not spawn the task!"
+            );
+            assert_eq!(busy.load(Ordering::SeqCst), 2, "Busy should have been called two times, since we sent 10 msgs to a queue with capacity 8, and nobody is draining it");
+            Ok(())
+        }
+
+        /// If there is a panic in any of the fns that run on an entity actor,
+        /// the entire entity becomes dead. This can not be recovered from, and
+        /// trying to spawn a new task on the dead entity actor will result in
+        /// a SpawnArg::Dead.
+        #[tokio::test]
+        async fn test_dead() -> TestResult<()> {
+            let manager = EntityManager::<Counters>::new(
+                Arc::new(Mutex::new(Global::default())),
+                Options::default(),
+            );
+            let (tx, rx) = oneshot::channel();
+            let killer = |arg: SpawnArg<Counters>| async move {
+                if let SpawnArg::Active(_) = arg {
+                    tx.send(()).ok();
+                    panic!("Panic to kill the task");
+                }
+            };
+            // spawn a task that kills the entity actor
+            manager.spawn(1, killer).await?;
+            rx.await.expect("Failed to receive kill confirmation");
+            let (tx, rx) = oneshot::channel();
+            let counter = |arg: SpawnArg<Counters>| async move {
+                if let SpawnArg::Dead = arg {
+                    tx.send(()).ok();
+                }
+            };
+            // // spawn another task on the - now dead - entity actor
+            manager.spawn(1, counter).await?;
+            rx.await.expect("Failed to receive dead confirmation");
             Ok(())
         }
     }
 
-    mod persistent {
+    mod fs {
+        //! The fs db uses one file per counter, stored as a 16-byte big-endian u128.
         use std::{
+            collections::HashSet,
             path::{Path, PathBuf},
-            sync::Arc,
-            time::Duration,
+            sync::{Arc, Mutex},
+            time::Instant,
         };
 
         use atomic_refcell::AtomicRefCell;
@@ -888,10 +1077,15 @@ mod tests {
         use super::*;
 
         #[derive(Debug, Clone, Default)]
-        enum State {
-            #[default]
-            Disk,
-            Memory(u128),
+        struct State {
+            value: Option<u128>,
+            tasks: HashSet<tokio::task::Id>,
+        }
+
+        #[derive(Debug)]
+        struct Global {
+            path: PathBuf,
+            log: HashMap<u64, Vec<(Event, Instant)>>,
         }
 
         #[derive(Debug, Clone, Default)]
@@ -899,7 +1093,7 @@ mod tests {
 
         impl Reset for EntityState {
             fn reset(&mut self) {
-                *self.0.borrow_mut() = State::Disk;
+                *self.0.borrow_mut() = Default::default();
             }
         }
 
@@ -909,10 +1103,22 @@ mod tests {
 
         impl entity_actor::State<Counters> {
             async fn with_value(&self, f: impl FnOnce(&mut u128)) -> Result<(), &'static str> {
-                let mut r = self.state.0.borrow_mut();
-                if let State::Disk = &*r {
-                    let path = get_path(&*self.global, self.id);
-                    let value = match tokio::fs::read(path).await {
+                let Ok(mut r) = self.state.0.try_borrow_mut() else {
+                    panic!("failed to borrow state mutably");
+                };
+                if r.value.is_none() {
+                    let mut global = self.global.lock().unwrap();
+                    global
+                        .log
+                        .entry(self.id)
+                        .or_default()
+                        .push((Event::Wakeup, Instant::now()));
+                    let path = get_path(&global.path, self.id);
+                    // note: if we were to use async IO, we would need to make sure not to hold the
+                    // lock guard over an await point. The entity manager makes sure that all fns
+                    // are run on the same tokio task, but there is still concurrency, which
+                    // a mutable borrow of the state does not allow.
+                    let value = match std::fs::read(path) {
                         Ok(value) => value,
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                             // If the file does not exist, we initialize it to 0.
@@ -923,9 +1129,9 @@ mod tests {
                     let value = u128::from_be_bytes(
                         value.try_into().map_err(|_| "Invalid disk state format")?,
                     );
-                    *r = State::Memory(value);
+                    r.value = Some(value);
                 }
-                let State::Memory(value) = &mut *r else {
+                let Some(value) = r.value.as_mut() else {
                     panic!("State must be Memory at this point");
                 };
                 f(value);
@@ -936,46 +1142,45 @@ mod tests {
         struct Counters;
         impl Params for Counters {
             type EntityId = u64;
-            type GlobalState = Arc<PathBuf>;
+            type GlobalState = Arc<Mutex<Global>>;
             type EntityState = EntityState;
-            async fn on_shutdown(state: entity_actor::State<Self>, cause: ShutdownCause) {
+            async fn on_shutdown(state: entity_actor::State<Self>, _cause: ShutdownCause) {
                 let r = state.state.0.borrow();
-                if let State::Memory(value) = &*r {
-                    let path = get_path(&*state.global, state.id);
-                    println!(
-                        "{} persisting value {} to {}, cause {:?}",
-                        state.id,
-                        value,
-                        path.display(),
-                        cause
-                    );
+                let mut global = state.global.lock().unwrap();
+                if let Some(value) = r.value {
+                    let path = get_path(&global.path, state.id);
                     let value_bytes = value.to_be_bytes();
-                    tokio::fs::write(&path, &value_bytes)
-                        .await
-                        .expect("Failed to write disk state");
-                    println!(
-                        "{} persisted value {} to {}",
-                        state.id,
-                        value,
-                        path.display()
-                    );
+                    std::fs::write(&path, value_bytes).expect("Failed to write disk state");
                 }
+                global
+                    .log
+                    .entry(state.id)
+                    .or_default()
+                    .push((Event::Shutdown, Instant::now()));
             }
         }
 
-        struct CountersManager {
+        pub struct FsDb {
+            global: Arc<Mutex<Global>>,
             m: EntityManager<Counters>,
         }
 
-        impl CountersManager {
+        impl FsDb {
             pub fn new(path: impl AsRef<Path>) -> Self {
-                let state = Arc::new(path.as_ref().to_owned());
+                let global = Global {
+                    path: path.as_ref().to_owned(),
+                    log: HashMap::new(),
+                };
+                let global = Arc::new(Mutex::new(global));
                 Self {
-                    m: EntityManager::<Counters>::new(state, Options::default()),
+                    global: global.clone(),
+                    m: EntityManager::<Counters>::new(global, Options::default()),
                 }
             }
+        }
 
-            pub async fn add(&self, id: u64, value: u128) -> Result<(), &'static str> {
+        impl super::CounterDb for FsDb {
+            async fn add(&self, id: u64, value: u128) -> Result<(), &'static str> {
                 self.m
                     .spawn(id, move |arg| async move {
                         match arg {
@@ -996,7 +1201,7 @@ mod tests {
                     .await
             }
 
-            pub async fn get(&self, id: u64) -> Result<u128, &'static str> {
+            async fn get(&self, id: u64) -> Result<u128, &'static str> {
                 let (tx, rx) = oneshot::channel();
                 self.m
                     .spawn(id, move |arg| async move {
@@ -1015,24 +1220,103 @@ mod tests {
                         }
                     })
                     .await?;
-                rx.await.map_err(|_| "Failed to receive value")
+                rx.await.map_err(|_| "Failed to receive value in get")
             }
 
-            pub async fn shutdown(&self) -> Result<(), &'static str> {
+            async fn shutdown(&self) -> Result<(), &'static str> {
                 self.m.shutdown().await
             }
-        }
 
-        #[tokio::test]
-        async fn bench_entity_manager_fs() -> testresult::TestResult<()> {
-            let dir = tempfile::tempdir()?;
-            let counter_manager = CountersManager::new(dir.path());
-            for i in 0..100 {
-                counter_manager.add(i, i as u128).await?;
+            async fn check_consistency(&self, values: HashMap<u64, u128>) {
+                let global = self.global.lock().unwrap();
+                for (id, value) in &values {
+                    let path = get_path(&global.path, *id);
+                    let disk_value = match std::fs::read(path) {
+                        Ok(data) => u128::from_be_bytes(data.try_into().unwrap()),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                        Err(_) => panic!("Failed to read disk state for id {id}"),
+                    };
+                    assert_eq!(disk_value, *value, "Disk value mismatch for id {id}");
+                }
+                for id in values.keys() {
+                    let log = global.log.get(id).unwrap();
+                    assert!(
+                        log.len() % 2 == 0,
+                        "Log must contain alternating wakeup and shutdown events"
+                    );
+                    for (i, (event, _)) in log.iter().enumerate() {
+                        assert_eq!(
+                            *event,
+                            if i % 2 == 0 {
+                                Event::Wakeup
+                            } else {
+                                Event::Shutdown
+                            },
+                            "Unexpected event type"
+                        );
+                    }
+                }
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            counter_manager.shutdown().await?;
-            Ok(())
         }
+    }
+
+    async fn test_random(
+        db: impl CounterDb,
+        entries: &[(u64, u128)],
+    ) -> testresult::TestResult<()> {
+        // compute the expected values
+        let mut reference = HashMap::new();
+        for (id, value) in entries {
+            let v: &mut u128 = reference.entry(*id).or_default();
+            *v = v.wrapping_add(*value);
+        }
+        // do the same computation using the database, and some concurrency
+        // and parallelism (we will get parallelism if we are using a multi-threaded runtime).
+        let mut errors = Vec::new();
+        n0_future::stream::iter(entries)
+            .map(|(id, value)| db.add(*id, *value))
+            .buffered_unordered(16)
+            .for_each(|result| {
+                if let Err(e) = result {
+                    errors.push(e);
+                }
+            })
+            .await;
+        assert!(errors.is_empty(), "Failed to add some entries: {errors:?}");
+        // check that the db contains the expected values
+        let ids = reference.keys().copied().collect::<Vec<_>>();
+        for id in &ids {
+            let res = db.get(*id).await?;
+            assert_eq!(res, reference.get(id).copied().unwrap_or_default());
+        }
+        db.shutdown().await?;
+        // check that the db is consistent with the reference
+        db.check_consistency(reference).await;
+        Ok(())
+    }
+
+    #[test_strategy::proptest]
+    fn test_counters_manager_proptest_mem(entries: Vec<(u64, u128)>) {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .build()
+            .expect("Failed to create tokio runtime");
+        rt.block_on(async move {
+            let db = mem::MemDb::new();
+            test_random(db, &entries).await
+        })
+        .expect("Test failed");
+    }
+
+    #[test_strategy::proptest]
+    fn test_counters_manager_proptest_fs(entries: Vec<(u64, u128)>) {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .build()
+            .expect("Failed to create tokio runtime");
+        rt.block_on(async move {
+            let db = fs::FsDb::new(dir.path());
+            test_random(db, &entries).await
+        })
+        .expect("Test failed");
     }
 }
