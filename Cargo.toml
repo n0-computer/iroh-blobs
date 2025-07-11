@@ -65,8 +65,8 @@ hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs"]
 
-# [patch.crates-io]
-# iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "ramfox/ticket-error" }
-# iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "ramfox/ticket-error" }
-# irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-quinn-latest" }
-# irpc-derive = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-quinn-latest" }
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
+irpc-derive = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
