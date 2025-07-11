@@ -34,7 +34,7 @@ use crate::{
         fs::{meta::raw_outboard_size, TaskContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
-            PartialMemStorage, SizeInfo, SparseMemFile, DD,
+            PartialMemStorage, DD,
         },
         Hash, IROH_BLOCK_SIZE,
     },
@@ -531,21 +531,11 @@ impl BaoFileHandle {
             if Arc::strong_count(&self.0) > 1 {
                 return false;
             }
-            // there is the possibility that somebody else will increase the strong count
-            // here. there is nothing we can do about it, but they won't be able to
-            // access the internals of the handle because we have the lock.
-            //
-            // We poison the storage. A poisoned storage is considered dead and will
-            // have to be recreated, but only *after* we are done with persisting
-            // the bitfield.
             let BaoFileStorage::Partial(fs) = guard.take() else {
                 return false;
             };
             let options = &self.options;
             let path = options.path.bitfield_path(&self.hash);
-            if fs.bitfield.size == 8000000 {
-                println!("PERSISTING THE TEST CASE FILE to {}", path.display());
-            }
             trace!(
                 "writing bitfield for hash {} to {}",
                 self.hash,
@@ -768,7 +758,7 @@ impl BaoFileHandle {
 }
 
 impl PartialMemStorage {
-    /// Persist the batch to disk, creating a FileBatch.
+    /// Persist the batch to disk.
     fn persist(self, ctx: &TaskContext, hash: &Hash) -> io::Result<PartialFileStorage> {
         let options = &ctx.options.path;
         ctx.protect.protect(
@@ -795,12 +785,6 @@ impl PartialMemStorage {
             sizes,
             bitfield: self.bitfield,
         })
-    }
-
-    /// Get the parts data, outboard and sizes
-    #[allow(dead_code)]
-    pub fn into_parts(self) -> (SparseMemFile, SparseMemFile, SizeInfo) {
-        (self.data, self.outboard, self.size)
     }
 }
 
