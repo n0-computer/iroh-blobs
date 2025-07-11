@@ -62,11 +62,11 @@ pub(crate) struct BlobsInner {
 
 /// A protocol handler for the blobs protocol.
 #[derive(Debug, Clone)]
-pub struct Blobs {
+pub struct BlobsProtocol {
     pub(crate) inner: Arc<BlobsInner>,
 }
 
-impl Blobs {
+impl BlobsProtocol {
     pub fn new(store: &Store, endpoint: Endpoint, events: Option<mpsc::Sender<Event>>) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
@@ -97,7 +97,7 @@ impl Blobs {
     }
 }
 
-impl ProtocolHandler for Blobs {
+impl ProtocolHandler for BlobsProtocol {
     fn accept(
         &self,
         conn: Connection,
