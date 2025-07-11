@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BlobFormat"],"mod":["api","format","get","hashseq","protocol","provider","store","ticket","util"],"struct":["BlobsProtocol","Hash","HashAndFormat"]};
+window.SIDEBAR_ITEMS = {"enum":["BlobFormat"],"mod":["api","format","get","hashseq","protocol","provider","store","test","ticket","util"],"struct":["BlobsProtocol","Hash","HashAndFormat"]};
