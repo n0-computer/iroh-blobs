@@ -1269,7 +1269,7 @@
         .<span class="kw">await
     </span>}
 
-    <span class="kw">pub fn </span>add_slice(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>AsRef&lt;[u8]&gt;) -&gt; AddProgress {
+    <span class="kw">pub fn </span>add_slice(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>AsRef&lt;[u8]&gt;) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = ImportBytesRequest {
             data: Bytes::copy_from_slice(data.as_ref()),
             format: <span class="kw">crate</span>::BlobFormat::Raw,
@@ -1278,7 +1278,7 @@
         <span class="self">self</span>.add_bytes_impl(options)
     }
 
-    <span class="kw">pub fn </span>add_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>Into&lt;bytes::Bytes&gt;) -&gt; AddProgress {
+    <span class="kw">pub fn </span>add_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>Into&lt;bytes::Bytes&gt;) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = ImportBytesRequest {
             data: data.into(),
             format: <span class="kw">crate</span>::BlobFormat::Raw,
@@ -1287,7 +1287,7 @@
         <span class="self">self</span>.add_bytes_impl(options)
     }
 
-    <span class="kw">pub fn </span>add_bytes_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddBytesOptions&gt;) -&gt; AddProgress {
+    <span class="kw">pub fn </span>add_bytes_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddBytesOptions&gt;) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = options.into();
         <span class="kw">let </span>request = ImportBytesRequest {
             data: options.data,
@@ -1297,7 +1297,7 @@
         <span class="self">self</span>.add_bytes_impl(request)
     }
 
-    <span class="kw">fn </span>add_bytes_impl(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ImportBytesRequest) -&gt; AddProgress {
+    <span class="kw">fn </span>add_bytes_impl(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ImportBytesRequest) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="macro">trace!</span>(<span class="string">"{options:?}"</span>);
         <span class="kw">let </span>this = <span class="self">self</span>.clone();
         <span class="kw">let </span>stream = Gen::new(|co| <span class="kw">async move </span>{
@@ -1322,7 +1322,7 @@
         AddProgress::new(<span class="self">self</span>, stream)
     }
 
-    <span class="kw">pub fn </span>add_path_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddPathOptions&gt;) -&gt; AddProgress {
+    <span class="kw">pub fn </span>add_path_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddPathOptions&gt;) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = options.into();
         <span class="self">self</span>.add_path_with_opts_impl(ImportPathRequest {
             path: options.path,
@@ -1332,7 +1332,7 @@
         })
     }
 
-    <span class="kw">fn </span>add_path_with_opts_impl(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ImportPathRequest) -&gt; AddProgress {
+    <span class="kw">fn </span>add_path_with_opts_impl(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ImportPathRequest) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="macro">trace!</span>(<span class="string">"{:?}"</span>, options);
         <span class="kw">let </span>client = <span class="self">self</span>.client.clone();
         <span class="kw">let </span>stream = Gen::new(|co| <span class="kw">async move </span>{
@@ -1357,7 +1357,7 @@
         AddProgress::new(<span class="self">self</span>, stream)
     }
 
-    <span class="kw">pub fn </span>add_path(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;Path&gt;) -&gt; AddProgress {
+    <span class="kw">pub fn </span>add_path(<span class="kw-2">&amp;</span><span class="self">self</span>, path: <span class="kw">impl </span>AsRef&lt;Path&gt;) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="self">self</span>.add_path_with_opts(AddPathOptions {
             path: path.as_ref().to_owned(),
             mode: ImportMode::Copy,
@@ -1368,7 +1368,7 @@
     <span class="kw">pub async fn </span>add_stream(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         data: <span class="kw">impl </span>Stream&lt;Item = io::Result&lt;Bytes&gt;&gt; + Send + Sync + <span class="lifetime">'static</span>,
-    ) -&gt; AddProgress {
+    ) -&gt; AddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>inner = ImportByteStreamRequest {
             format: <span class="kw">crate</span>::BlobFormat::Raw,
             scope: Scope::default(),
@@ -1663,7 +1663,7 @@
 }
 
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; Batch&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="kw">pub fn </span>add_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>Into&lt;Bytes&gt;) -&gt; BatchAddProgress {
+    <span class="kw">pub fn </span>add_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>Into&lt;Bytes&gt;) -&gt; BatchAddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = ImportBytesRequest {
             data: data.into(),
             format: <span class="kw">crate</span>::BlobFormat::Raw,
@@ -1672,7 +1672,7 @@
         BatchAddProgress(<span class="self">self</span>.blobs.add_bytes_impl(options))
     }
 
-    <span class="kw">pub fn </span>add_bytes_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddBytesOptions&gt;) -&gt; BatchAddProgress {
+    <span class="kw">pub fn </span>add_bytes_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddBytesOptions&gt;) -&gt; BatchAddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = options.into();
         BatchAddProgress(<span class="self">self</span>.blobs.add_bytes_impl(ImportBytesRequest {
             data: options.data,
@@ -1681,7 +1681,7 @@
         }))
     }
 
-    <span class="kw">pub fn </span>add_slice(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>AsRef&lt;[u8]&gt;) -&gt; BatchAddProgress {
+    <span class="kw">pub fn </span>add_slice(<span class="kw-2">&amp;</span><span class="self">self</span>, data: <span class="kw">impl </span>AsRef&lt;[u8]&gt;) -&gt; BatchAddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = ImportBytesRequest {
             data: Bytes::copy_from_slice(data.as_ref()),
             format: <span class="kw">crate</span>::BlobFormat::Raw,
@@ -1690,7 +1690,7 @@
         BatchAddProgress(<span class="self">self</span>.blobs.add_bytes_impl(options))
     }
 
-    <span class="kw">pub fn </span>add_path_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddPathOptions&gt;) -&gt; BatchAddProgress {
+    <span class="kw">pub fn </span>add_path_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: <span class="kw">impl </span>Into&lt;AddPathOptions&gt;) -&gt; BatchAddProgress&lt;<span class="lifetime">'_</span>&gt; {
         <span class="kw">let </span>options = options.into();
         BatchAddProgress(<span class="self">self</span>.blobs.add_path_with_opts_impl(ImportPathRequest {
             path: options.path,
