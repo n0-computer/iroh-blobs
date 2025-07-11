@@ -13,7 +13,7 @@ pub mod protocol;
 pub mod provider;
 pub mod test;
 pub mod ticket;
-pub mod util;
+pub(crate) mod util;
 
 #[cfg(test)]
 mod tests;
