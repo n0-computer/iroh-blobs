@@ -1064,8 +1064,15 @@ mod tests {
     use testresult::TestResult;
 
     use crate::{
+        api::blobs::Blobs,
         protocol::{ChunkRangesSeq, GetRequest},
-        store::fs::{tests::INTERESTING_SIZES, FsStore},
+        store::{
+            fs::{
+                tests::{create_n0_bao, test_data, INTERESTING_SIZES},
+                FsStore,
+            },
+            mem::MemStore,
+        },
         tests::{add_test_hash_seq, add_test_hash_seq_incomplete},
         util::ChunkRangesExt,
     };
@@ -1114,6 +1121,38 @@ mod tests {
             assert_eq!(info.local_bytes(), relevant_sizes + 16 * 1024);
         }
 
+        Ok(())
+    }
+
+    async fn test_observe_partial(blobs: &Blobs) -> TestResult<()> {
+        let sizes = INTERESTING_SIZES;
+        for size in sizes {
+            let data = test_data(size);
+            let ranges = ChunkRanges::chunk(0);
+            let (hash, bao) = create_n0_bao(&data, &ranges)?;
+            blobs.import_bao_bytes(hash, ranges.clone(), bao).await?;
+            let bitfield = blobs.observe(hash).await?;
+            if size > 1024 {
+                assert_eq!(bitfield.ranges, ranges);
+            } else {
+                assert_eq!(bitfield.ranges, ChunkRanges::all());
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_observe_partial_mem() -> TestResult<()> {
+        let store = MemStore::new();
+        test_observe_partial(store.blobs()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_observe_partial_fs() -> TestResult<()> {
+        let td = tempfile::tempdir()?;
+        let store = FsStore::load(td.path()).await?;
+        test_observe_partial(store.blobs()).await?;
         Ok(())
     }
 
