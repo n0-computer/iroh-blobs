@@ -2542,7 +2542,7 @@
         <span class="macro">trace!</span>(<span class="string">"write_batch bitfield={:?} batch={}"</span>, bitfield, batch.len());
         <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         <span class="self">self</span>.state.send_if_modified(|state| {
-            <span class="kw">let </span><span class="prelude-val">Ok</span>((state1, update)) = state.take().write_batch(batch, bitfield, <span class="kw-2">&amp;</span><span class="self">self</span>) <span class="kw">else </span>{
+            <span class="kw">let </span><span class="prelude-val">Ok</span>((state1, update)) = state.take().write_batch(batch, bitfield, <span class="self">self</span>) <span class="kw">else </span>{
                 res = <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"write batch failed"</span>));
                 <span class="kw">return </span><span class="bool-val">false</span>;
             };

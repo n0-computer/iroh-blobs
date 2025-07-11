@@ -129,7 +129,7 @@
 //! ```rust
 //! # async fn example() -&gt; anyhow::Result&lt;()&gt; {
 //! use iroh::{protocol::Router, Endpoint};
-//! use iroh_blobs::{net_protocol::Blobs, store};
+//! use iroh_blobs::{store, BlobsProtocol};
 //!
 //! // create a store
 //! let store = store::fs::FsStore::load("blobs").await?;
@@ -141,7 +141,7 @@
 //! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 //!
 //! // create a blobs protocol handler
-//! let blobs = Blobs::new(&amp;store, endpoint.clone(), None);
+//! let blobs = BlobsProtocol::new(&amp;store, endpoint.clone(), None);
 //!
 //! // create a router and add the blobs protocol handler
 //! let router = Router::builder(endpoint)
@@ -184,11 +184,11 @@
 
 <span class="doccomment">/// A protocol handler for the blobs protocol.
 </span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>Blobs {
+</span><span class="kw">pub struct </span>BlobsProtocol {
     <span class="kw">pub</span>(<span class="kw">crate</span>) inner: Arc&lt;BlobsInner&gt;,
 }
 
-<span class="kw">impl </span>Blobs {
+<span class="kw">impl </span>BlobsProtocol {
     <span class="kw">pub fn </span>new(store: <span class="kw-2">&amp;</span>Store, endpoint: Endpoint, events: <span class="prelude-ty">Option</span>&lt;mpsc::Sender&lt;Event&gt;&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             inner: Arc::new(BlobsInner {
@@ -219,7 +219,7 @@
     }
 }
 
-<span class="kw">impl </span>ProtocolHandler <span class="kw">for </span>Blobs {
+<span class="kw">impl </span>ProtocolHandler <span class="kw">for </span>BlobsProtocol {
     <span class="kw">fn </span>accept(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         conn: Connection,
