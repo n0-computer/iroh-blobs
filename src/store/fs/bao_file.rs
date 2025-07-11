@@ -20,7 +20,7 @@ use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
 use tokio::sync::watch;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
@@ -142,7 +142,7 @@ impl PartialFileStorage {
         &self.bitfield
     }
 
-    fn sync_all(&self, bitfield_path: &Path) -> io::Result<()> {
+    pub(super) fn sync_all(&self, bitfield_path: &Path) -> io::Result<()> {
         self.data.sync_all()?;
         self.outboard.sync_all()?;
         self.sizes.sync_all()?;
@@ -235,7 +235,7 @@ impl PartialFileStorage {
         ))
     }
 
-    fn current_size(&self) -> io::Result<u64> {
+    pub(super) fn current_size(&self) -> io::Result<u64> {
         read_size(&self.sizes)
     }
 
@@ -410,7 +410,7 @@ impl BaoFileStorage {
         }
     }
 
-    fn write_batch(
+    pub(super) fn write_batch(
         self,
         batch: &[BaoContentItem],
         bitfield: &Bitfield,
@@ -535,7 +535,7 @@ impl entity_manager::Reset for BaoFileHandle {
 
 /// A reader for a bao file, reading just the data.
 #[derive(Debug)]
-pub struct DataReader(BaoFileHandle);
+pub struct DataReader(pub(super) BaoFileHandle);
 
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
@@ -554,7 +554,7 @@ impl ReadBytesAt for DataReader {
 
 /// A reader for the outboard part of a bao file.
 #[derive(Debug)]
-pub struct OutboardReader(BaoFileHandle);
+pub struct OutboardReader(pub(super) BaoFileHandle);
 
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
@@ -637,31 +637,6 @@ impl BaoFileStorage {
 }
 
 impl BaoFileHandle {
-    pub(super) fn persist(&mut self, ctx: &HashContext) {
-        self.send_if_modified(|guard| {
-            let hash = &ctx.id;
-            // if Arc::strong_count(&self.0) > 1 {
-            //     // no one is listening, so we don't need to persist
-            //     println!("abort persist - not unique {} {} {}", Arc::strong_count(&self.0), self.0.receiver_count(), self.0.sender_count());
-            //     return false;
-            // }
-            let BaoFileStorage::Partial(fs) = guard.take() else {
-                return false;
-            };
-            let path = ctx.global.options.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            false
-        });
-    }
-
     /// Complete the handle
     pub fn complete(
         &self,
@@ -683,93 +658,6 @@ impl BaoFileHandle {
                 true
             }
         });
-    }
-
-    pub fn subscribe(&self) -> BaoFileStorageSubscriber {
-        BaoFileStorageSubscriber::new(self.0.subscribe())
-    }
-
-    /// True if the file is complete.
-    #[allow(dead_code)]
-    pub fn is_complete(&self) -> bool {
-        matches!(self.borrow().deref(), BaoFileStorage::Complete(_))
-    }
-
-    /// An AsyncSliceReader for the data file.
-    ///
-    /// Caution: this is a reader for the unvalidated data file. Reading this
-    /// can produce data that does not match the hash.
-    pub fn data_reader(&self) -> DataReader {
-        DataReader(self.clone())
-    }
-
-    /// An AsyncSliceReader for the outboard file.
-    ///
-    /// The outboard file is used to validate the data file. It is not guaranteed
-    /// to be complete.
-    pub fn outboard_reader(&self) -> OutboardReader {
-        OutboardReader(self.clone())
-    }
-
-    /// The most precise known total size of the data file.
-    pub fn current_size(&self) -> io::Result<u64> {
-        match self.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.size()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
-            BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
-        }
-    }
-
-    /// The most precise known total size of the data file.
-    pub fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
-            BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
-        }
-    }
-
-    /// The outboard for the file.
-    pub fn outboard(&self, hash: &Hash) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(*hash),
-            tree,
-            data: outboard,
-        })
-    }
-
-    /// Write a batch and notify the db
-    pub(super) async fn write_batch(
-        &self,
-        batch: &[BaoContentItem],
-        bitfield: &Bitfield,
-        ctx: &HashContext,
-    ) -> io::Result<()> {
-        trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
-        let mut res = Ok(None);
-        self.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, ctx) else {
-                res = Err(io::Error::other("write batch failed"));
-                return false;
-            };
-            res = Ok(update);
-            *state = state1;
-            true
-        });
-        if let Some(update) = res? {
-            ctx.global.db.update(ctx.id, update).await?;
-        }
-        Ok(())
     }
 }
 
