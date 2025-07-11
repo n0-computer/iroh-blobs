@@ -24,7 +24,7 @@ the available data into account.</p>
     &amp;self,
     conn: impl <a class="trait" href="trait.GetConnection.html" title="trait iroh_blobs::api::remote::GetConnection">GetConnection</a>,
     content: impl <a class="trait" href="https://doc.rust-lang.org/nightly/core/convert/trait.Into.html" title="trait core::convert::Into">Into</a>&lt;<a class="struct" href="../../struct.HashAndFormat.html" title="struct iroh_blobs::HashAndFormat">HashAndFormat</a>&gt;,
-    progress: impl <a class="trait" href="../../util/sink/trait.Sink.html" title="trait iroh_blobs::util::sink::Sink">Sink</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
+    progress: impl Sink&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
 ) -&gt; <a class="type" href="../../get/type.GetResult.html" title="type iroh_blobs::get::GetResult">GetResult</a>&lt;<a class="struct" href="../../get/struct.Stats.html" title="struct iroh_blobs::get::Stats">Stats</a>&gt;</h4></section></summary><div class="docblock"><p>Get a blob or hash sequence from the given connection, taking the locally available
 ranges into account.</p>
 <p>You can provide a progress channel to get updates on the download progress. This progress
@@ -42,7 +42,7 @@ is the aggregated number of downloaded payload bytes in the request.</p>
     &amp;self,
     conn: Connection,
     request: <a class="struct" href="../../protocol/struct.PushRequest.html" title="struct iroh_blobs::protocol::PushRequest">PushRequest</a>,
-    progress: impl <a class="trait" href="../../util/sink/trait.Sink.html" title="trait iroh_blobs::util::sink::Sink">Sink</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
+    progress: impl Sink&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
 ) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.98/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="../../get/struct.Stats.html" title="struct iroh_blobs::get::Stats">Stats</a>&gt;</h4></section></summary><div class="docblock"><p>Push the given blob or hash sequence to a remote node.</p>
 <p>Note that many nodes will reject push requests. Also, this is an experimental feature for now.</p>
 </div></details><section id="method.execute_get" class="method"><a class="src rightside" href="../../../src/iroh_blobs/api/remote.rs.html#628-630">Source</a><h4 class="code-header">pub fn <a href="#method.execute_get" class="fn">execute_get</a>(&amp;self, conn: Connection, request: <a class="struct" href="../../protocol/struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest">GetRequest</a>) -&gt; <a class="struct" href="struct.GetProgress.html" title="struct iroh_blobs::api::remote::GetProgress">GetProgress</a></h4></section><section id="method.execute_get_with_opts" class="method"><a class="src rightside" href="../../../src/iroh_blobs/api/remote.rs.html#632-647">Source</a><h4 class="code-header">pub fn <a href="#method.execute_get_with_opts" class="fn">execute_get_with_opts</a>(
@@ -53,7 +53,7 @@ is the aggregated number of downloaded payload bytes in the request.</p>
     &amp;self,
     conn: Connection,
     request: <a class="struct" href="../../protocol/struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest">GetRequest</a>,
-    progress: impl <a class="trait" href="../../util/sink/trait.Sink.html" title="trait iroh_blobs::util::sink::Sink">Sink</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
+    progress: impl Sink&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
 ) -&gt; <a class="type" href="../../get/type.GetResult.html" title="type iroh_blobs::get::GetResult">GetResult</a>&lt;<a class="struct" href="../../get/struct.Stats.html" title="struct iroh_blobs::get::Stats">Stats</a>&gt;</h4></section></summary><div class="docblock"><p>Execute a get request <em>without</em> taking the locally available ranges into account.</p>
 <p>You can provide a progress channel to get updates on the download progress. This progress
 is the aggregated number of downloaded payload bytes in the request.</p>
@@ -67,7 +67,7 @@ is the aggregated number of downloaded payload bytes in the request.</p>
     &amp;self,
     conn: Connection,
     request: <a class="struct" href="../../protocol/struct.GetManyRequest.html" title="struct iroh_blobs::protocol::GetManyRequest">GetManyRequest</a>,
-    progress: impl <a class="trait" href="../../util/sink/trait.Sink.html" title="trait iroh_blobs::util::sink::Sink">Sink</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
+    progress: impl Sink&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u64.html">u64</a>, Error = <a class="struct" href="https://doc.rust-lang.org/nightly/std/io/error/struct.Error.html" title="struct std::io::error::Error">Error</a>&gt;,
 ) -&gt; <a class="type" href="../../get/type.GetResult.html" title="type iroh_blobs::get::GetResult">GetResult</a>&lt;<a class="struct" href="../../get/struct.Stats.html" title="struct iroh_blobs::get::Stats">Stats</a>&gt;</h4></section></summary><div class="docblock"><p>Execute a get request <em>without</em> taking the locally available ranges into account.</p>
 <p>You can provide a progress channel to get updates on the download progress. This progress
 is the aggregated number of downloaded payload bytes in the request.</p>
