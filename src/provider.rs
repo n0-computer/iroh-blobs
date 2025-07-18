@@ -260,13 +260,14 @@ pub(crate) async fn transfer_hash_seq<D: Map>(
             debug!("writing ranges '{:?}' of sequence {}", ranges, hash);
             // wrap the data reader in a tracking reader so we can get some stats for reading
             let mut tracking_reader = TrackingSliceReader::new(&mut data);
-            let mut sending_reader =
+            let sending_reader =
                 SendingSliceReader::new(&mut tracking_reader, &events, mk_progress);
+            let mut throttling_reader = ThrottlingSliceReader::new(sending_reader);
             // send the root
             tw.write(outboard.tree().size().to_le_bytes().as_slice())
                 .await?;
             encode_ranges_validated(
-                &mut sending_reader,
+                &mut throttling_reader,
                 &mut outboard,
                 &ranges.to_chunk_ranges(),
                 &mut tw,
@@ -316,6 +317,37 @@ pub(crate) async fn transfer_hash_seq<D: Map>(
 
     debug!("done writing");
     Ok(SentStatus::Sent)
+}
+
+/// A wrapper for an AsyncSliceReader that adds throttling.
+///
+/// This doesn't even attempt to be generic. Everything is hardcoded.
+struct ThrottlingSliceReader<R> {
+    inner: R,
+}
+
+impl<R> ThrottlingSliceReader<R> {
+    pub fn new(inner: R) -> Self {
+        Self { inner }
+    }
+}
+
+impl<R: AsyncSliceReader> AsyncSliceReader for ThrottlingSliceReader<R> {
+    async fn read_at(&mut self, offset: u64, len: usize) -> std::io::Result<bytes::Bytes> {
+        let res = self.inner.read_at(offset, len).await;
+        // only throttle for full 16 KiB chunk group reads, which should be frequent enough
+        // if you send big blobs. 99.9% of all data file reads should be exactly 16 KiB.
+        if len == 1024 * 16 {
+            // Not sure what to put here. The timer is not that precise, so it might throttle
+            // too much. An option would be to only throttle every nth time.
+            tokio::time::sleep(Duration::from_micros(100)).await;
+        }
+        res
+    }
+
+    async fn size(&mut self) -> std::io::Result<u64> {
+        self.inner.size().await
+    }
 }
 
 struct SendingSliceReader<'a, R, F> {
@@ -619,11 +651,11 @@ pub async fn send_blob<D: Map, W: AsyncStreamWriter>(
             let outboard = entry.outboard().await?;
             let size = outboard.tree().size();
             let mut file_reader = TrackingSliceReader::new(entry.data_reader().await?);
-            let mut sending_reader =
-                SendingSliceReader::new(&mut file_reader, &events, mk_progress);
+            let sending_reader = SendingSliceReader::new(&mut file_reader, &events, mk_progress);
+            let mut throttling_reader = ThrottlingSliceReader::new(sending_reader);
             writer.write(size.to_le_bytes().as_slice()).await?;
             encode_ranges_validated(
-                &mut sending_reader,
+                &mut throttling_reader,
                 outboard,
                 &ranges.to_chunk_ranges(),
                 writer,
