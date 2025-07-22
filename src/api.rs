@@ -4,7 +4,7 @@
 //! with a remote store via rpc calls.
 //!
 //! The entry point for the api is the [`Store`] struct. There are several ways
-//! to obtain a `Store` instance: it is available via [`Deref`](std::ops::Deref)
+//! to obtain a `Store` instance: it is available via [`Deref`]
 //! from the different store implementations
 //! (e.g. [`MemStore`](crate::store::mem::MemStore)
 //! and [`FsStore`](crate::store::fs::FsStore)) as well as on the

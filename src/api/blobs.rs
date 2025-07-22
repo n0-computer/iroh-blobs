@@ -105,10 +105,34 @@ impl Blobs {
         })
     }
 
+    /// Create a reader for the given hash. The reader implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncSeek`]
+    /// and therefore can be used to read the blob's content.
+    ///
+    /// Any access to parts of the blob that are not present will result in an error.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iroh_blobs::{store::mem::MemStore, api::blobs::Blobs};
+    /// use tokio::io::AsyncReadExt;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let store = MemStore::new();
+    /// let tag = store.add_slice(b"Hello, world!").await?;
+    /// let mut reader = store.reader(tag.hash);
+    /// let mut buf = String::new();
+    /// reader.read_to_string(&mut buf).await?;
+    /// assert_eq!(buf, "Hello, world!");
+    /// # Ok(())
+    /// }
+    /// ```
     pub fn reader(&self, hash: impl Into<Hash>) -> BlobReader {
         self.reader_with_opts(ReaderOptions { hash: hash.into() })
     }
 
+    /// Create a reader for the given options. The reader implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncSeek`]
+    /// and therefore can be used to read the blob's content.
+    ///
+    /// Any access to parts of the blob that are not present will result in an error.
     pub fn reader_with_opts(&self, options: ReaderOptions) -> BlobReader {
         BlobReader::new(self.clone(), options)
     }

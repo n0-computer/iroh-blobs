@@ -11,6 +11,7 @@ use crate::api::{
     proto::ExportRangesItem,
 };
 
+/// A reader for blobs that implements `AsyncRead` and `AsyncSeek`.
 #[derive(Debug)]
 pub struct BlobReader {
     blobs: Blobs,
@@ -298,7 +299,6 @@ mod tests {
     async fn reader_partial_fs() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let store = FsStore::load(testdir.path().to_owned()).await?;
-        // reader_smoke_raw(store.blobs()).await?;
         reader_partial(store.blobs()).await?;
         Ok(())
     }
@@ -314,7 +314,6 @@ mod tests {
     async fn reader_smoke_fs() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let store = FsStore::load(testdir.path().to_owned()).await?;
-        // reader_smoke_raw(store.blobs()).await?;
         reader_smoke(store.blobs()).await?;
         Ok(())
     }
