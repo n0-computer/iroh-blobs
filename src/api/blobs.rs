@@ -873,7 +873,7 @@ impl ExportRangesProgress {
     /// range of 0..100, you will get the entire first chunk, 0..1024.
     ///
     /// It is up to the caller to clip the ranges to the requested ranges.
-    pub async fn stream(self) -> impl Stream<Item = ExportRangesItem> {
+    pub fn stream(self) -> impl Stream<Item = ExportRangesItem> {
         Gen::new(|co| async move {
             let mut rx = match self.inner.await {
                 Ok(rx) => rx,
