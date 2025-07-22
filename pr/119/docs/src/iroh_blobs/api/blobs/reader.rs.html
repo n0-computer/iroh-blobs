@@ -328,9 +328,7 @@
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io::{<span class="self">self</span>, ErrorKind, SeekFrom},
-    ops::DerefMut,
     pin::Pin,
-    sync::{Arc, Mutex},
     task::{Context, Poll},
 };
 
@@ -345,7 +343,7 @@
 </span><span class="kw">pub struct </span>Reader {
     blobs: Blobs,
     options: ReaderOptions,
-    state: Arc&lt;Mutex&lt;ReaderState&gt;&gt;,
+    state: ReaderState,
 }
 
 <span class="attr">#[derive(Default, derive_more::Debug)]
@@ -370,7 +368,7 @@
         <span class="self">Self </span>{
             blobs,
             options,
-            state: Arc::new(Mutex::new(ReaderState::Idle { position: <span class="number">0 </span>})),
+            state: ReaderState::Idle { position: <span class="number">0 </span>},
         }
     }
 }
@@ -384,8 +382,8 @@
         <span class="kw">let </span>this = <span class="self">self</span>.get_mut();
         <span class="kw">let </span><span class="kw-2">mut </span>position1 = <span class="prelude-val">None</span>;
         <span class="kw">loop </span>{
-            <span class="kw">let </span><span class="kw-2">mut </span>guard = this.state.lock().unwrap();
-            <span class="kw">match </span>std::mem::take(guard.deref_mut()) {
+            <span class="kw">let </span>guard = <span class="kw-2">&amp;mut </span>this.state;
+            <span class="kw">match </span>std::mem::take(guard) {
                 ReaderState::Idle { position } =&gt; {
                     <span class="comment">// todo: read until next page boundary instead of fixed size
                     </span><span class="kw">let </span>len = buf.remaining() <span class="kw">as </span>u64;
@@ -406,6 +404,9 @@
                 ReaderState::Reading { position, <span class="kw-2">mut </span>op } =&gt; {
                     <span class="kw">let </span>position1 = position1.get_or_insert(position);
                     <span class="kw">match </span>op.poll_next(cx) {
+                        Poll::Ready(<span class="prelude-val">Some</span>(ExportRangesItem::Size(<span class="kw">_</span>))) =&gt; {
+                            <span class="kw-2">*</span>guard = ReaderState::Reading { position, op };
+                        }
                         Poll::Ready(<span class="prelude-val">Some</span>(ExportRangesItem::Data(data))) =&gt; {
                             <span class="kw">if </span>data.offset != <span class="kw-2">*</span>position1 {
                                 <span class="kw">break </span>Poll::Ready(<span class="prelude-val">Err</span>(io::Error::other(
@@ -424,13 +425,9 @@
                         }
                         Poll::Ready(<span class="prelude-val">Some</span>(ExportRangesItem::Error(err))) =&gt; {
                             <span class="kw-2">*</span>guard = ReaderState::Idle { position };
-                            <span class="kw">break </span>Poll::Ready(<span class="prelude-val">Err</span>(io::Error::other(
-                                <span class="macro">format!</span>(<span class="string">"Error reading data: {err}"</span>),
-                            )));
-                        }
-                        Poll::Ready(<span class="prelude-val">Some</span>(ExportRangesItem::Size(_size))) =&gt; {
-                            <span class="comment">// put back the state and continue reading
-                            </span><span class="kw-2">*</span>guard = ReaderState::Reading { position, op };
+                            <span class="kw">break </span>Poll::Ready(<span class="prelude-val">Err</span>(io::Error::other(<span class="macro">format!</span>(
+                                <span class="string">"Error reading data: {err}"
+                            </span>))));
                         }
                         Poll::Ready(<span class="prelude-val">None</span>) =&gt; {
                             <span class="comment">// done with the stream, go back in idle.
@@ -462,10 +459,9 @@
                     }
                 }
                 state @ ReaderState::Seeking { .. } =&gt; {
-                    <span class="kw-2">*</span>this.state.lock().unwrap() = state;
-                    <span class="kw">break </span>Poll::Ready(<span class="prelude-val">Err</span>(io::Error::other(
-                        <span class="string">"Can't read while seeking"</span>,
-                    )));
+                    <span class="comment">// should I try to recover from this or just keep it poisoned?
+                    </span>this.state = state;
+                    <span class="kw">break </span>Poll::Ready(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"Can't read while seeking"</span>)));
                 }
                 ReaderState::Poisoned =&gt; {
                     <span class="kw">break </span>Poll::Ready(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"Reader is poisoned"</span>)));
@@ -481,8 +477,8 @@
         seek_from: tokio::io::SeekFrom,
     ) -&gt; io::Result&lt;()&gt; {
         <span class="kw">let </span>this = <span class="self">self</span>.get_mut();
-        <span class="kw">let </span><span class="kw-2">mut </span>guard = this.state.lock().unwrap();
-        <span class="kw">match </span>std::mem::take(guard.deref_mut()) {
+        <span class="kw">let </span>guard = <span class="kw-2">&amp;mut </span>this.state;
+        <span class="kw">match </span>std::mem::take(guard) {
             ReaderState::Idle { position } =&gt; {
                 <span class="kw">let </span>position1 = <span class="kw">match </span>seek_from {
                     SeekFrom::Start(pos) =&gt; pos,
@@ -515,8 +511,8 @@
 
     <span class="kw">fn </span>poll_complete(<span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, _cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;io::Result&lt;u64&gt;&gt; {
         <span class="kw">let </span>this = <span class="self">self</span>.get_mut();
-        <span class="kw">let </span><span class="kw-2">mut </span>guard = this.state.lock().unwrap();
-        Poll::Ready(<span class="kw">match </span>std::mem::take(guard.deref_mut()) {
+        <span class="kw">let </span>guard = <span class="kw-2">&amp;mut </span>this.state;
+        Poll::Ready(<span class="kw">match </span>std::mem::take(guard) {
             ReaderState::Seeking { position } =&gt; {
                 <span class="kw-2">*</span>guard = ReaderState::Idle { position };
                 <span class="prelude-val">Ok</span>(position)
@@ -527,7 +523,11 @@
                 </span><span class="kw-2">*</span>guard = ReaderState::Idle { position };
                 <span class="prelude-val">Ok</span>(position)
             }
-            ReaderState::Reading { .. } =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"Can't seek while reading"</span>)),
+            state @ ReaderState::Reading { .. } =&gt; {
+                <span class="comment">// should I try to recover from this or just keep it poisoned?
+                </span><span class="kw-2">*</span>guard = state;
+                <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"Can't seek while reading"</span>))
+            }
             ReaderState::Poisoned =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"Reader is poisoned"</span>)),
         })
     }
