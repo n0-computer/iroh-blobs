@@ -1,8 +1,6 @@
 use std::{
     io::{self, ErrorKind, SeekFrom},
-    ops::DerefMut,
     pin::Pin,
-    sync::{Arc, Mutex},
     task::{Context, Poll},
 };
 
@@ -17,7 +15,7 @@ use crate::api::{
 pub struct Reader {
     blobs: Blobs,
     options: ReaderOptions,
-    state: Arc<Mutex<ReaderState>>,
+    state: ReaderState,
 }
 
 #[derive(Default, derive_more::Debug)]
@@ -42,7 +40,7 @@ impl Reader {
         Self {
             blobs,
             options,
-            state: Arc::new(Mutex::new(ReaderState::Idle { position: 0 })),
+            state: ReaderState::Idle { position: 0 },
         }
     }
 }
@@ -56,8 +54,8 @@ impl tokio::io::AsyncRead for Reader {
         let this = self.get_mut();
         let mut position1 = None;
         loop {
-            let mut guard = this.state.lock().unwrap();
-            match std::mem::take(guard.deref_mut()) {
+            let guard = &mut this.state;
+            match std::mem::take(guard) {
                 ReaderState::Idle { position } => {
                     // todo: read until next page boundary instead of fixed size
                     let len = buf.remaining() as u64;
@@ -78,6 +76,9 @@ impl tokio::io::AsyncRead for Reader {
                 ReaderState::Reading { position, mut op } => {
                     let position1 = position1.get_or_insert(position);
                     match op.poll_next(cx) {
+                        Poll::Ready(Some(ExportRangesItem::Size(_))) => {
+                            *guard = ReaderState::Reading { position, op };
+                        }
                         Poll::Ready(Some(ExportRangesItem::Data(data))) => {
                             if data.offset != *position1 {
                                 break Poll::Ready(Err(io::Error::other(
@@ -96,13 +97,9 @@ impl tokio::io::AsyncRead for Reader {
                         }
                         Poll::Ready(Some(ExportRangesItem::Error(err))) => {
                             *guard = ReaderState::Idle { position };
-                            break Poll::Ready(Err(io::Error::other(
-                                format!("Error reading data: {err}"),
-                            )));
-                        }
-                        Poll::Ready(Some(ExportRangesItem::Size(_size))) => {
-                            // put back the state and continue reading
-                            *guard = ReaderState::Reading { position, op };
+                            break Poll::Ready(Err(io::Error::other(format!(
+                                "Error reading data: {err}"
+                            ))));
                         }
                         Poll::Ready(None) => {
                             // done with the stream, go back in idle.
@@ -134,10 +131,9 @@ impl tokio::io::AsyncRead for Reader {
                     }
                 }
                 state @ ReaderState::Seeking { .. } => {
-                    *this.state.lock().unwrap() = state;
-                    break Poll::Ready(Err(io::Error::other(
-                        "Can't read while seeking",
-                    )));
+                    // should I try to recover from this or just keep it poisoned?
+                    this.state = state;
+                    break Poll::Ready(Err(io::Error::other("Can't read while seeking")));
                 }
                 ReaderState::Poisoned => {
                     break Poll::Ready(Err(io::Error::other("Reader is poisoned")));
@@ -153,8 +149,8 @@ impl tokio::io::AsyncSeek for Reader {
         seek_from: tokio::io::SeekFrom,
     ) -> io::Result<()> {
         let this = self.get_mut();
-        let mut guard = this.state.lock().unwrap();
-        match std::mem::take(guard.deref_mut()) {
+        let guard = &mut this.state;
+        match std::mem::take(guard) {
             ReaderState::Idle { position } => {
                 let position1 = match seek_from {
                     SeekFrom::Start(pos) => pos,
@@ -187,8 +183,8 @@ impl tokio::io::AsyncSeek for Reader {
 
     fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         let this = self.get_mut();
-        let mut guard = this.state.lock().unwrap();
-        Poll::Ready(match std::mem::take(guard.deref_mut()) {
+        let guard = &mut this.state;
+        Poll::Ready(match std::mem::take(guard) {
             ReaderState::Seeking { position } => {
                 *guard = ReaderState::Idle { position };
                 Ok(position)
@@ -199,7 +195,11 @@ impl tokio::io::AsyncSeek for Reader {
                 *guard = ReaderState::Idle { position };
                 Ok(position)
             }
-            ReaderState::Reading { .. } => Err(io::Error::other("Can't seek while reading")),
+            state @ ReaderState::Reading { .. } => {
+                // should I try to recover from this or just keep it poisoned?
+                *guard = state;
+                Err(io::Error::other("Can't seek while reading"))
+            }
             ReaderState::Poisoned => Err(io::Error::other("Reader is poisoned")),
         })
     }
