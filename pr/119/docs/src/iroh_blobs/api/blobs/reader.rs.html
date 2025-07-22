@@ -325,8 +325,7 @@
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
 <a href="#326" id="326">326</a>
-<a href="#327" id="327">327</a>
-<a href="#328" id="328">328</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#327" id="327">327</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io::{<span class="self">self</span>, ErrorKind, SeekFrom},
     pin::Pin,
     task::{Context, Poll},
@@ -339,7 +338,8 @@
     proto::ExportRangesItem,
 };
 
-<span class="attr">#[derive(Debug)]
+<span class="doccomment">/// A reader for blobs that implements `AsyncRead` and `AsyncSeek`.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>BlobReader {
     blobs: Blobs,
     options: ReaderOptions,
@@ -626,8 +626,7 @@
     </span><span class="kw">async fn </span>reader_partial_fs() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
         <span class="kw">let </span>store = FsStore::load(testdir.path().to_owned()).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="comment">// reader_smoke_raw(store.blobs()).await?;
-        </span>reader_partial(store.blobs()).<span class="kw">await</span><span class="question-mark">?</span>;
+        reader_partial(store.blobs()).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
     }
 
@@ -642,8 +641,7 @@
     </span><span class="kw">async fn </span>reader_smoke_fs() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
         <span class="kw">let </span>store = FsStore::load(testdir.path().to_owned()).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="comment">// reader_smoke_raw(store.blobs()).await?;
-        </span>reader_smoke(store.blobs()).<span class="kw">await</span><span class="question-mark">?</span>;
+        reader_smoke(store.blobs()).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
     }
 
