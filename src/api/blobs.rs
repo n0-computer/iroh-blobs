@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tracing::trace;
 mod reader;
-pub use reader::Reader;
+pub use reader::BlobReader;
 
 // Public reexports from the proto module.
 //
@@ -105,12 +105,12 @@ impl Blobs {
         })
     }
 
-    pub fn reader(&self, hash: impl Into<Hash>) -> Reader {
+    pub fn reader(&self, hash: impl Into<Hash>) -> BlobReader {
         self.reader_with_opts(ReaderOptions { hash: hash.into() })
     }
 
-    pub fn reader_with_opts(&self, options: ReaderOptions) -> Reader {
-        Reader::new(self.clone(), options)
+    pub fn reader_with_opts(&self, options: ReaderOptions) -> BlobReader {
+        BlobReader::new(self.clone(), options)
     }
 
     /// Delete a blob.

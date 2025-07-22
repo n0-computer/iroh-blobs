@@ -12,7 +12,7 @@ use crate::api::{
 };
 
 #[derive(Debug)]
-pub struct Reader {
+pub struct BlobReader {
     blobs: Blobs,
     options: ReaderOptions,
     state: ReaderState,
@@ -35,7 +35,7 @@ enum ReaderState {
     Poisoned,
 }
 
-impl Reader {
+impl BlobReader {
     pub fn new(blobs: Blobs, options: ReaderOptions) -> Self {
         Self {
             blobs,
@@ -45,7 +45,7 @@ impl Reader {
     }
 }
 
-impl tokio::io::AsyncRead for Reader {
+impl tokio::io::AsyncRead for BlobReader {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -143,7 +143,7 @@ impl tokio::io::AsyncRead for Reader {
     }
 }
 
-impl tokio::io::AsyncSeek for Reader {
+impl tokio::io::AsyncSeek for BlobReader {
     fn start_seek(
         self: std::pin::Pin<&mut Self>,
         seek_from: tokio::io::SeekFrom,
