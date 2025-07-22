@@ -29,8 +29,11 @@ use n0_future::{future, stream, Stream, StreamExt};
 use quinn::SendStream;
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tracing::trace;
+mod reader;
+pub use reader::Reader;
 
 // Public reexports from the proto module.
 //
@@ -100,6 +103,14 @@ impl Blobs {
             blobs: self,
             _tx: tx,
         })
+    }
+
+    pub fn reader(&self, hash: impl Into<Hash>) -> Reader {
+        self.reader_with_opts(ReaderOptions { hash: hash.into() })
+    }
+
+    pub fn reader_with_opts(&self, options: ReaderOptions) -> Reader {
+        Reader::new(self.clone(), options)
     }
 
     /// Delete a blob.
@@ -645,6 +656,12 @@ impl<'a> AddProgress<'a> {
     pub async fn stream(self) -> impl Stream<Item = AddProgressItem> {
         self.inner
     }
+}
+
+/// Options for an async reader for blobs that supports AsyncRead and AsyncSeek.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReaderOptions {
+    pub hash: Hash,
 }
 
 /// An observe result. Awaiting this will return the current state.
