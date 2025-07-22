@@ -340,7 +340,7 @@
 };
 
 <span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>Reader {
+</span><span class="kw">pub struct </span>BlobReader {
     blobs: Blobs,
     options: ReaderOptions,
     state: ReaderState,
@@ -363,7 +363,7 @@
     </span>Poisoned,
 }
 
-<span class="kw">impl </span>Reader {
+<span class="kw">impl </span>BlobReader {
     <span class="kw">pub fn </span>new(blobs: Blobs, options: ReaderOptions) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             blobs,
@@ -373,7 +373,7 @@
     }
 }
 
-<span class="kw">impl </span>tokio::io::AsyncRead <span class="kw">for </span>Reader {
+<span class="kw">impl </span>tokio::io::AsyncRead <span class="kw">for </span>BlobReader {
     <span class="kw">fn </span>poll_read(
         <span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;,
         cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;,
@@ -471,7 +471,7 @@
     }
 }
 
-<span class="kw">impl </span>tokio::io::AsyncSeek <span class="kw">for </span>Reader {
+<span class="kw">impl </span>tokio::io::AsyncSeek <span class="kw">for </span>BlobReader {
     <span class="kw">fn </span>start_seek(
         <span class="self">self</span>: std::pin::Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;,
         seek_from: tokio::io::SeekFrom,

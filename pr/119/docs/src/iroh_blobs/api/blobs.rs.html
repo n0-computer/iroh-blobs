@@ -1192,7 +1192,7 @@
 <span class="kw">use </span>tokio::io::AsyncWriteExt;
 <span class="kw">use </span>tracing::trace;
 <span class="kw">mod </span>reader;
-<span class="kw">pub use </span>reader::Reader;
+<span class="kw">pub use </span>reader::BlobReader;
 
 <span class="comment">// Public reexports from the proto module.
 //
@@ -1264,12 +1264,12 @@
         })
     }
 
-    <span class="kw">pub fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw">impl </span>Into&lt;Hash&gt;) -&gt; Reader {
+    <span class="kw">pub fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw">impl </span>Into&lt;Hash&gt;) -&gt; BlobReader {
         <span class="self">self</span>.reader_with_opts(ReaderOptions { hash: hash.into() })
     }
 
-    <span class="kw">pub fn </span>reader_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ReaderOptions) -&gt; Reader {
-        Reader::new(<span class="self">self</span>.clone(), options)
+    <span class="kw">pub fn </span>reader_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ReaderOptions) -&gt; BlobReader {
+        BlobReader::new(<span class="self">self</span>.clone(), options)
     }
 
     <span class="doccomment">/// Delete a blob.
