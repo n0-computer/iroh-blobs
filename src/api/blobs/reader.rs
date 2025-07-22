@@ -6,9 +6,12 @@ use std::{
 
 use n0_future::StreamExt;
 
-use crate::api::{
-    blobs::{Blobs, ReaderOptions},
-    proto::ExportRangesItem,
+use crate::{
+    api::{
+        blobs::{Blobs, ReaderOptions},
+        proto::ExportRangesItem,
+    },
+    Hash,
 };
 
 /// A reader for blobs that implements `AsyncRead` and `AsyncSeek`.
@@ -37,12 +40,16 @@ enum ReaderState {
 }
 
 impl BlobReader {
-    pub fn new(blobs: Blobs, options: ReaderOptions) -> Self {
+    pub(super) fn new(blobs: Blobs, options: ReaderOptions) -> Self {
         Self {
             blobs,
             options,
             state: ReaderState::Idle { position: 0 },
         }
+    }
+
+    pub fn hash(&self) -> &Hash {
+        &self.options.hash
     }
 }
 
