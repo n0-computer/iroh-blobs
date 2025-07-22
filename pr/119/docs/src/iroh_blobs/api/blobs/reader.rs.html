@@ -325,7 +325,14 @@
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
 <a href="#326" id="326">326</a>
-<a href="#327" id="327">327</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io::{<span class="self">self</span>, ErrorKind, SeekFrom},
     pin::Pin,
     task::{Context, Poll},
@@ -333,9 +340,12 @@
 
 <span class="kw">use </span>n0_future::StreamExt;
 
-<span class="kw">use </span><span class="kw">crate</span>::api::{
-    blobs::{Blobs, ReaderOptions},
-    proto::ExportRangesItem,
+<span class="kw">use crate</span>::{
+    api::{
+        blobs::{Blobs, ReaderOptions},
+        proto::ExportRangesItem,
+    },
+    Hash,
 };
 
 <span class="doccomment">/// A reader for blobs that implements `AsyncRead` and `AsyncSeek`.
@@ -364,12 +374,16 @@
 }
 
 <span class="kw">impl </span>BlobReader {
-    <span class="kw">pub fn </span>new(blobs: Blobs, options: ReaderOptions) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>new(blobs: Blobs, options: ReaderOptions) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             blobs,
             options,
             state: ReaderState::Idle { position: <span class="number">0 </span>},
         }
+    }
+
+    <span class="kw">pub fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Hash {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.options.hash
     }
 }
 
