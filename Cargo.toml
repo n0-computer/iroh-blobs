@@ -62,7 +62,7 @@ walkdir = "2.5.0"
 [features]
 hide-proto-docs = []
 metrics = []
-default = ["hide-proto-docs"]
+default = ["hide-proto-docs", "examples"]
 examples = ["iroh/discovery-local-network"]
 
 [[example]]

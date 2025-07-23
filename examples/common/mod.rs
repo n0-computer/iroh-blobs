@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::Result;
 use iroh::SecretKey;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
