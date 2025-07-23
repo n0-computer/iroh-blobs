@@ -2228,9 +2228,7 @@
 <a href="#2227" id="2227">2227</a>
 <a href="#2228" id="2228">2228</a>
 <a href="#2229" id="2229">2229</a>
-<a href="#2230" id="2230">2230</a>
-<a href="#2231" id="2231">2231</a>
-<a href="#2232" id="2232">2232</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2230" id="2230">2230</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -3386,11 +3384,9 @@
         <span class="kw">loop </span>{
             <span class="kw">let </span>end: u64 = (offset + bs).min(range.end);
             <span class="kw">let </span>size = (end - offset) <span class="kw">as </span>usize;
-            tx.send(ExportRangesItem::Data(Leaf {
-                offset,
-                data: data.read_bytes_at(offset, size)<span class="question-mark">?</span>,
-            }))
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+            <span class="kw">let </span>res = data.read_bytes_at(offset, size);
+            tx.send(ExportRangesItem::Data(Leaf { offset, data: res<span class="question-mark">? </span>}))
+                .<span class="kw">await</span><span class="question-mark">?</span>;
             offset = end;
             <span class="kw">if </span>offset &gt;= range.end {
                 <span class="kw">break</span>;

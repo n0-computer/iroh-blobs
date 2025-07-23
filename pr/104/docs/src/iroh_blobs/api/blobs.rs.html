@@ -1140,7 +1140,48 @@
 <a href="#1139" id="1139">1139</a>
 <a href="#1140" id="1140">1140</a>
 <a href="#1141" id="1141">1141</a>
-<a href="#1142" id="1142">1142</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
+<a href="#1142" id="1142">1142</a>
+<a href="#1143" id="1143">1143</a>
+<a href="#1144" id="1144">1144</a>
+<a href="#1145" id="1145">1145</a>
+<a href="#1146" id="1146">1146</a>
+<a href="#1147" id="1147">1147</a>
+<a href="#1148" id="1148">1148</a>
+<a href="#1149" id="1149">1149</a>
+<a href="#1150" id="1150">1150</a>
+<a href="#1151" id="1151">1151</a>
+<a href="#1152" id="1152">1152</a>
+<a href="#1153" id="1153">1153</a>
+<a href="#1154" id="1154">1154</a>
+<a href="#1155" id="1155">1155</a>
+<a href="#1156" id="1156">1156</a>
+<a href="#1157" id="1157">1157</a>
+<a href="#1158" id="1158">1158</a>
+<a href="#1159" id="1159">1159</a>
+<a href="#1160" id="1160">1160</a>
+<a href="#1161" id="1161">1161</a>
+<a href="#1162" id="1162">1162</a>
+<a href="#1163" id="1163">1163</a>
+<a href="#1164" id="1164">1164</a>
+<a href="#1165" id="1165">1165</a>
+<a href="#1166" id="1166">1166</a>
+<a href="#1167" id="1167">1167</a>
+<a href="#1168" id="1168">1168</a>
+<a href="#1169" id="1169">1169</a>
+<a href="#1170" id="1170">1170</a>
+<a href="#1171" id="1171">1171</a>
+<a href="#1172" id="1172">1172</a>
+<a href="#1173" id="1173">1173</a>
+<a href="#1174" id="1174">1174</a>
+<a href="#1175" id="1175">1175</a>
+<a href="#1176" id="1176">1176</a>
+<a href="#1177" id="1177">1177</a>
+<a href="#1178" id="1178">1178</a>
+<a href="#1179" id="1179">1179</a>
+<a href="#1180" id="1180">1180</a>
+<a href="#1181" id="1181">1181</a>
+<a href="#1182" id="1182">1182</a>
+<a href="#1183" id="1183">1183</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
 //!
 //! This API is for local interactions with the blob store, such as importing
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
@@ -1171,8 +1212,11 @@
 <span class="kw">use </span>quinn::SendStream;
 <span class="kw">use </span>range_collections::{range_set::RangeSetRange, RangeSet2};
 <span class="kw">use </span>ref_cast::RefCast;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tokio::io::AsyncWriteExt;
 <span class="kw">use </span>tracing::trace;
+<span class="kw">mod </span>reader;
+<span class="kw">pub use </span>reader::BlobReader;
 
 <span class="comment">// Public reexports from the proto module.
 //
@@ -1242,6 +1286,38 @@
             blobs: <span class="self">self</span>,
             _tx: tx,
         })
+    }
+
+    <span class="doccomment">/// Create a reader for the given hash. The reader implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncSeek`]
+    /// and therefore can be used to read the blob's content.
+    ///
+    /// Any access to parts of the blob that are not present will result in an error.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iroh_blobs::{store::mem::MemStore, api::blobs::Blobs};
+    /// use tokio::io::AsyncReadExt;
+    ///
+    /// # async fn example() -&gt; anyhow::Result&lt;()&gt; {
+    /// let store = MemStore::new();
+    /// let tag = store.add_slice(b"Hello, world!").await?;
+    /// let mut reader = store.reader(tag.hash);
+    /// let mut buf = String::new();
+    /// reader.read_to_string(&amp;mut buf).await?;
+    /// assert_eq!(buf, "Hello, world!");
+    /// # Ok(())
+    /// }
+    /// ```
+    </span><span class="kw">pub fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw">impl </span>Into&lt;Hash&gt;) -&gt; BlobReader {
+        <span class="self">self</span>.reader_with_opts(ReaderOptions { hash: hash.into() })
+    }
+
+    <span class="doccomment">/// Create a reader for the given options. The reader implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncSeek`]
+    /// and therefore can be used to read the blob's content.
+    ///
+    /// Any access to parts of the blob that are not present will result in an error.
+    </span><span class="kw">pub fn </span>reader_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: ReaderOptions) -&gt; BlobReader {
+        BlobReader::new(<span class="self">self</span>.clone(), options)
     }
 
     <span class="doccomment">/// Delete a blob.
@@ -1789,6 +1865,12 @@
     }
 }
 
+<span class="doccomment">/// Options for an async reader for blobs that supports AsyncRead and AsyncSeek.
+</span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+</span><span class="kw">pub struct </span>ReaderOptions {
+    <span class="kw">pub </span>hash: Hash,
+}
+
 <span class="doccomment">/// An observe result. Awaiting this will return the current state.
 ///
 /// Calling [`ObserveProgress::stream`] will return a stream of updates, where
@@ -1998,7 +2080,7 @@
     /// range of 0..100, you will get the entire first chunk, 0..1024.
     ///
     /// It is up to the caller to clip the ranges to the requested ranges.
-    </span><span class="kw">pub async fn </span>stream(<span class="self">self</span>) -&gt; <span class="kw">impl </span>Stream&lt;Item = ExportRangesItem&gt; {
+    </span><span class="kw">pub fn </span>stream(<span class="self">self</span>) -&gt; <span class="kw">impl </span>Stream&lt;Item = ExportRangesItem&gt; {
         Gen::new(|co| <span class="kw">async move </span>{
             <span class="kw">let </span><span class="kw-2">mut </span>rx = <span class="kw">match </span><span class="self">self</span>.inner.<span class="kw">await </span>{
                 <span class="prelude-val">Ok</span>(rx) =&gt; rx,
