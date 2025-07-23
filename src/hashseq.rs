@@ -1,8 +1,7 @@
 //! Helpers for blobs that contain a sequence of hashes.
-use std::{fmt::Debug, io};
+use std::fmt::Debug;
 
 use bytes::Bytes;
-use iroh_io::{AsyncSliceReader, AsyncSliceReaderExt};
 
 use crate::Hash;
 
@@ -51,34 +50,6 @@ impl IntoIterator for HashSeq {
     }
 }
 
-/// Stream over the hashes in a [`HashSeq`].
-///
-/// todo: make this wrap a reader instead of a [`HashSeq`].
-#[derive(Debug, Clone)]
-pub struct HashSeqStream(HashSeq);
-
-impl HashSeqStream {
-    /// Get the next hash in the sequence.
-    #[allow(clippy::should_implement_trait, clippy::unused_async)]
-    pub async fn next(&mut self) -> io::Result<Option<Hash>> {
-        Ok(self.0.pop_front())
-    }
-
-    /// Skip a number of hashes in the sequence.
-    #[allow(clippy::unused_async)]
-    pub async fn skip(&mut self, n: u64) -> io::Result<()> {
-        let ok = self.0.drop_front(n as usize);
-        if !ok {
-            Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "end of sequence",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-}
-
 impl HashSeq {
     /// Create a new sequence of hashes.
     pub fn new(bytes: Bytes) -> Option<Self> {
@@ -86,16 +57,6 @@ impl HashSeq {
             Some(Self(bytes))
         } else {
             None
-        }
-    }
-
-    fn drop_front(&mut self, n: usize) -> bool {
-        let start = n * 32;
-        if start > self.0.len() {
-            false
-        } else {
-            self.0 = self.0.slice(start..);
-            true
         }
     }
 
@@ -154,15 +115,4 @@ impl Iterator for HashSeqIter {
     fn next(&mut self) -> Option<Self::Item> {
         self.0.pop_front()
     }
-}
-
-/// Parse a sequence of hashes.
-pub async fn parse_hash_seq<'a, R: AsyncSliceReader + 'a>(
-    mut reader: R,
-) -> anyhow::Result<(HashSeqStream, u64)> {
-    let bytes = reader.read_to_end().await?;
-    let hashes = HashSeq::try_from(bytes)?;
-    let num_hashes = hashes.len() as u64;
-    let stream = HashSeqStream(hashes);
-    Ok((stream, num_hashes))
 }

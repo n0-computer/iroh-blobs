@@ -1,11 +1,11 @@
 [package]
 name = "iroh-blobs"
-version = "0.90.0"
+version = "0.91.0"
 edition = "2021"
 description = "content-addressed blobs for iroh"
 license = "MIT OR Apache-2.0"
 authors = ["dignifiedquire <me@dignifiedquire.com>", "n0 team"]
-repository = "https://github.com/n0-computer/blobs2"
+repository = "https://github.com/n0-computer/iroh-blobs"
 keywords = ["hashing", "quic", "blake3", "streaming"]
 
 # Sadly this also needs to be updated in .github/workflows/ci.yml
