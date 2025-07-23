@@ -7,17 +7,18 @@
 //! collection.
 use std::{fmt, sync::OnceLock};
 
-use bao_tree::{ChunkNum, ChunkRanges, ChunkRangesRef};
+pub use bao_tree::ChunkRanges;
+use bao_tree::{ChunkNum, ChunkRangesRef};
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
+
+pub use crate::util::ChunkRangesExt;
 
 static CHUNK_RANGES_EMPTY: OnceLock<ChunkRanges> = OnceLock::new();
 
 fn chunk_ranges_empty() -> &'static ChunkRanges {
     CHUNK_RANGES_EMPTY.get_or_init(ChunkRanges::empty)
 }
-
-use crate::util::ChunkRangesExt;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]

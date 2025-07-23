@@ -36,7 +36,7 @@
 //! # }
 //! ```
 
-use std::{fmt::Debug, future::Future, sync::Arc};
+use std::{fmt::Debug, future::Future, ops::Deref, sync::Arc};
 
 use iroh::{
     endpoint::Connection,
@@ -64,6 +64,14 @@ pub(crate) struct BlobsInner {
 #[derive(Debug, Clone)]
 pub struct BlobsProtocol {
     pub(crate) inner: Arc<BlobsInner>,
+}
+
+impl Deref for BlobsProtocol {
+    type Target = Store;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.store
+    }
 }
 
 impl BlobsProtocol {
