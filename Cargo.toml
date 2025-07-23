@@ -63,6 +63,11 @@ walkdir = "2.5.0"
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs"]
+examples = ["iroh/discovery-local-network"]
+
+[[example]]
+name = "mdns-discovery"
+required-features = ["examples"]
 
 [patch.crates-io]
 iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
