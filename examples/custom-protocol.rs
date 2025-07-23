@@ -40,16 +40,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use iroh::{
     discovery::pkarr::PkarrResolver,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, NodeId, SecretKey,
+    Endpoint, NodeId,
 };
 use iroh_blobs::{api::Store, store::mem::MemStore, BlobsProtocol, Hash};
-use tracing_subscriber::{prelude::*, EnvFilter};
+mod common;
+use common::{get_or_generate_secret_key, setup_logging};
 
 #[derive(Debug, Parser)]
 pub struct Cli {
@@ -321,34 +322,4 @@ async fn read_and_print(store: &Store, hash: Hash) -> Result<()> {
     let message = String::from_utf8(content.to_vec())?;
     println!("{}: {message}", hash.fmt_short());
     Ok(())
-}
-
-/// Set the RUST_LOG env var to one of {debug,info,warn} to see logging.
-fn setup_logging() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(EnvFilter::from_default_env())
-        .try_init()
-        .ok();
-}
-
-/// Gets a secret key from the IROH_SECRET environment variable or generates a new random one.
-/// If the environment variable is set, it must be a valid string representation of a secret key.
-pub fn get_or_generate_secret_key() -> Result<SecretKey> {
-    use std::{env, str::FromStr};
-
-    use rand::thread_rng;
-    if let Ok(secret) = env::var("IROH_SECRET") {
-        // Parse the secret key from string
-        SecretKey::from_str(&secret).context("Invalid secret key format")
-    } else {
-        // Generate a new random key
-        let secret_key = SecretKey::generate(&mut thread_rng());
-        println!(
-            "Generated new secret key: {}",
-            hex::encode(secret_key.to_bytes())
-        );
-        println!("To reuse this key, set the IROH_SECRET environment variable to this value");
-        Ok(secret_key)
-    }
 }

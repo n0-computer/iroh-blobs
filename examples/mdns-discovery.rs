@@ -19,16 +19,9 @@ use iroh::{
     discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
 };
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, Hash};
-use tracing_subscriber::{prelude::*, EnvFilter};
 
-// set the RUST_LOG env var to one of {debug,info,warn} to see logging info
-pub fn setup_logging() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(EnvFilter::from_default_env())
-        .try_init()
-        .ok();
-}
+mod common;
+use common::{get_or_generate_secret_key, setup_logging};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -64,13 +57,12 @@ async fn accept(path: &Path) -> Result<()> {
     }
 
     let key = get_or_generate_secret_key()?;
-    let discovery = MdnsDiscovery::new(key.public())?;
 
     println!("Starting iroh node with mdns discovery...");
     // create a new node
     let endpoint = Endpoint::builder()
         .secret_key(key)
-        .add_discovery(discovery)
+        .add_discovery(MdnsDiscovery::builder())
         .relay_mode(RelayMode::Disabled)
         .bind()
         .await?;
@@ -97,7 +89,7 @@ async fn accept(path: &Path) -> Result<()> {
 async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result<()> {
     let key = SecretKey::generate(rand::rngs::OsRng);
     // todo: disable discovery publishing once https://github.com/n0-computer/iroh/issues/3401 is implemented
-    let discovery = MdnsDiscovery::new(key.public())?;
+    let discovery = MdnsDiscovery::builder();
 
     println!("Starting iroh node with mdns discovery...");
     // create a new node
@@ -149,26 +141,4 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Gets a secret key from the IROH_SECRET environment variable or generates a new random one.
-/// If the environment variable is set, it must be a valid string representation of a secret key.
-pub fn get_or_generate_secret_key() -> Result<SecretKey> {
-    use std::{env, str::FromStr};
-
-    use anyhow::Context;
-    use rand::thread_rng;
-    if let Ok(secret) = env::var("IROH_SECRET") {
-        // Parse the secret key from string
-        SecretKey::from_str(&secret).context("Invalid secret key format")
-    } else {
-        // Generate a new random key
-        let secret_key = SecretKey::generate(&mut thread_rng());
-        println!(
-            "Generated new secret key: {}",
-            hex::encode(secret_key.to_bytes())
-        );
-        println!("To reuse this key, set the IROH_SECRET environment variable to this value");
-        Ok(secret_key)
-    }
 }
