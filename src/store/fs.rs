@@ -1154,11 +1154,9 @@ async fn export_ranges_impl(
         loop {
             let end: u64 = (offset + bs).min(range.end);
             let size = (end - offset) as usize;
-            tx.send(ExportRangesItem::Data(Leaf {
-                offset,
-                data: data.read_bytes_at(offset, size)?,
-            }))
-            .await?;
+            let res = data.read_bytes_at(offset, size);
+            tx.send(ExportRangesItem::Data(Leaf { offset, data: res? }))
+                .await?;
             offset = end;
             if offset >= range.end {
                 break;

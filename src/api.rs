@@ -2,6 +2,16 @@
 //!
 //! This API is both for interacting with an in-process store and for interacting
 //! with a remote store via rpc calls.
+//!
+//! The entry point for the api is the [`Store`] struct. There are several ways
+//! to obtain a `Store` instance: it is available via [`Deref`]
+//! from the different store implementations
+//! (e.g. [`MemStore`](crate::store::mem::MemStore)
+//! and [`FsStore`](crate::store::fs::FsStore)) as well as on the
+//! [`BlobsProtocol`](crate::BlobsProtocol) iroh protocol handler.
+//!
+//! You can also [`connect`](Store::connect) to a remote store that is listening
+//! to rpc requests.
 use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
 
 use bao_tree::io::EncodeError;
