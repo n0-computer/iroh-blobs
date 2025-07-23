@@ -364,7 +364,7 @@ impl Downloader {
         self.download_with_opts(DownloadOptions {
             request,
             providers,
-            strategy: SplitStrategy::Split,
+            strategy: SplitStrategy::None,
         })
     }
 

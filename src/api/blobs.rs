@@ -29,8 +29,11 @@ use n0_future::{future, stream, Stream, StreamExt};
 use quinn::SendStream;
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tracing::trace;
+mod reader;
+pub use reader::BlobReader;
 
 // Public reexports from the proto module.
 //
@@ -100,6 +103,38 @@ impl Blobs {
             blobs: self,
             _tx: tx,
         })
+    }
+
+    /// Create a reader for the given hash. The reader implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncSeek`]
+    /// and therefore can be used to read the blob's content.
+    ///
+    /// Any access to parts of the blob that are not present will result in an error.
+    ///
+    /// Example:
+    /// ```rust
+    /// use iroh_blobs::{store::mem::MemStore, api::blobs::Blobs};
+    /// use tokio::io::AsyncReadExt;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let store = MemStore::new();
+    /// let tag = store.add_slice(b"Hello, world!").await?;
+    /// let mut reader = store.reader(tag.hash);
+    /// let mut buf = String::new();
+    /// reader.read_to_string(&mut buf).await?;
+    /// assert_eq!(buf, "Hello, world!");
+    /// # Ok(())
+    /// }
+    /// ```
+    pub fn reader(&self, hash: impl Into<Hash>) -> BlobReader {
+        self.reader_with_opts(ReaderOptions { hash: hash.into() })
+    }
+
+    /// Create a reader for the given options. The reader implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncSeek`]
+    /// and therefore can be used to read the blob's content.
+    ///
+    /// Any access to parts of the blob that are not present will result in an error.
+    pub fn reader_with_opts(&self, options: ReaderOptions) -> BlobReader {
+        BlobReader::new(self.clone(), options)
     }
 
     /// Delete a blob.
@@ -647,6 +682,12 @@ impl<'a> AddProgress<'a> {
     }
 }
 
+/// Options for an async reader for blobs that supports AsyncRead and AsyncSeek.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReaderOptions {
+    pub hash: Hash,
+}
+
 /// An observe result. Awaiting this will return the current state.
 ///
 /// Calling [`ObserveProgress::stream`] will return a stream of updates, where
@@ -856,7 +897,7 @@ impl ExportRangesProgress {
     /// range of 0..100, you will get the entire first chunk, 0..1024.
     ///
     /// It is up to the caller to clip the ranges to the requested ranges.
-    pub async fn stream(self) -> impl Stream<Item = ExportRangesItem> {
+    pub fn stream(self) -> impl Stream<Item = ExportRangesItem> {
         Gen::new(|co| async move {
             let mut rx = match self.inner.await {
                 Ok(rx) => rx,
