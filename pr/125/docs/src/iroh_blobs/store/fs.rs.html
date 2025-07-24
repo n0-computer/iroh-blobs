@@ -2864,7 +2864,7 @@
                     <span class="self">Self</span>::log_task_result(res);
                     <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
                         <span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.idle_waiters.drain(..) {
-                            <span class="kw">let _ </span>= tx.send(());
+                            tx.send(()).<span class="kw">await</span>.ok();
                         }
                     }
                 }

@@ -1082,7 +1082,22 @@
 <a href="#1081" id="1081">1081</a>
 <a href="#1082" id="1082">1082</a>
 <a href="#1083" id="1083">1083</a>
-<a href="#1084" id="1084">1084</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1084" id="1084">1084</a>
+<a href="#1085" id="1085">1085</a>
+<a href="#1086" id="1086">1086</a>
+<a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a>
+<a href="#1090" id="1090">1090</a>
+<a href="#1091" id="1091">1091</a>
+<a href="#1092" id="1092">1092</a>
+<a href="#1093" id="1093">1093</a>
+<a href="#1094" id="1094">1094</a>
+<a href="#1095" id="1095">1095</a>
+<a href="#1096" id="1096">1096</a>
+<a href="#1097" id="1097">1097</a>
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1206,6 +1221,7 @@
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
                 protected: Default::default(),
+                idle_waiters: Default::default(),
             }
             .run(),
         );
@@ -1221,6 +1237,8 @@
     </span>options: Arc&lt;Options&gt;,
     <span class="comment">// temp tags
     </span>temp_tags: TempTags,
+    <span class="comment">// idle waiters
+    </span>idle_waiters: Vec&lt;irpc::channel::oneshot::Sender&lt;()&gt;&gt;,
     protected: HashSet&lt;Hash&gt;,
 }
 
@@ -1248,7 +1266,13 @@
             }
             Command::WaitIdle(WaitIdleMsg { tx, .. }) =&gt; {
                 <span class="macro">trace!</span>(<span class="string">"wait idle"</span>);
-                tx.send(()).<span class="kw">await</span>.ok();
+                <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
+                    <span class="comment">// we are currently idle
+                    </span>tx.send(()).<span class="kw">await</span>.ok();
+                } <span class="kw">else </span>{
+                    <span class="comment">// wait for idle state
+                    </span><span class="self">self</span>.idle_waiters.push(tx);
+                }
             }
             Command::Observe(ObserveMsg {
                 inner: ObserveRequest { hash },
@@ -1572,6 +1596,12 @@
                             <span class="self">self</span>.temp_tags.end_scope(scope);
                         }
                         TaskResult::Unit(<span class="kw">_</span>) =&gt; {}
+                    }
+                    <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
+                        <span class="comment">// we are idle now
+                        </span><span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.idle_waiters.drain(..) {
+                            tx.send(()).<span class="kw">await</span>.ok();
+                        }
                     }
                 }
             }

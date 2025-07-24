@@ -391,7 +391,21 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
-<a href="#393" id="393">393</a></pre></div><pre class="rust"><code><span class="doccomment">//! Readonly in-memory store.
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a></pre></div><pre class="rust"><code><span class="doccomment">//! Readonly in-memory store.
 //!
 //! This can only serve data that is provided at creation time. It is much simpler
 //! than the mutable in-memory store and the file system store, and can serve as a
@@ -455,6 +469,7 @@
 <span class="kw">struct </span>Actor {
     commands: tokio::sync::mpsc::Receiver&lt;proto::Command&gt;,
     tasks: JoinSet&lt;()&gt;,
+    idle_waiters: Vec&lt;irpc::channel::oneshot::Sender&lt;()&gt;&gt;,
     data: HashMap&lt;Hash, CompleteStorage&gt;,
 }
 
@@ -467,6 +482,7 @@
             data,
             commands,
             tasks: JoinSet::new(),
+            idle_waiters: Vec::new(),
         }
     }
 
@@ -480,7 +496,13 @@
                 </span>.ok();
             }
             Command::WaitIdle(WaitIdleMsg { tx, .. }) =&gt; {
-                tx.send(()).<span class="kw">await</span>.ok();
+                <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
+                    <span class="comment">// we are currently idle
+                    </span>tx.send(()).<span class="kw">await</span>.ok();
+                } <span class="kw">else </span>{
+                    <span class="comment">// wait for idle state
+                    </span><span class="self">self</span>.idle_waiters.push(tx);
+                }
             }
             Command::ImportBytes(ImportBytesMsg { tx, .. }) =&gt; {
                 tx.send(io::Error::other(<span class="string">"import not supported"</span>).into())
@@ -622,6 +644,12 @@
                 },
                 <span class="prelude-val">Some</span>(res) = <span class="self">self</span>.tasks.join_next(), <span class="kw">if </span>!<span class="self">self</span>.tasks.is_empty() =&gt; {
                     <span class="self">self</span>.log_unit_task(res);
+                    <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
+                        <span class="comment">// we are idle now
+                        </span><span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.idle_waiters.drain(..) {
+                            tx.send(()).<span class="kw">await</span>.ok();
+                        }
+                    }
                 },
                 <span class="kw">else </span>=&gt; <span class="kw">break</span>,
             }
