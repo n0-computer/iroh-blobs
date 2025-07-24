@@ -818,6 +818,7 @@ async fn handle_batch(cmd: BatchMsg, id: Scope, scope: Arc<TempTagScope>, ctx: A
     if let Err(cause) = handle_batch_impl(cmd, id, &scope).await {
         error!("batch failed: {cause}");
     }
+    println!("batch done, clearing scope {}", id);
     ctx.clear_scope(id).await;
 }
 
@@ -1965,8 +1966,10 @@ pub mod tests {
             .await;
         assert!(tts.contains(tt1.hash_and_format()));
         assert!(tts.contains(tt2.hash_and_format()));
+        println!("dropping batch");
         drop(batch);
         store.sync_db().await?;
+        println!("reading temp tags after batch drop");
         let tts = store
             .tags()
             .list_temp_tags()
