@@ -58,6 +58,7 @@ testresult = "0.4.1"
 tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
+iroh = { version = "0.90", features = ["discovery-local-network"]}
 
 [features]
 hide-proto-docs = []
