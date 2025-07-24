@@ -1813,7 +1813,7 @@
     /// is the aggregated number of downloaded payload bytes in the request.
     ///
     /// This will return the stats of the download.
-    </span><span class="kw">pub async fn </span>fetch_sink(
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>fetch_sink(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         <span class="kw-2">mut </span>conn: <span class="kw">impl </span>GetConnection,
         content: <span class="kw">impl </span>Into&lt;HashAndFormat&gt;,
@@ -1887,7 +1887,7 @@
     <span class="doccomment">/// Push the given blob or hash sequence to a remote node.
     ///
     /// Note that many nodes will reject push requests. Also, this is an experimental feature for now.
-    </span><span class="kw">pub async fn </span>execute_push_sink(
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>execute_push_sink(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         conn: Connection,
         request: PushRequest,
@@ -1968,7 +1968,7 @@
     /// This will download the data again even if the data is locally present.
     ///
     /// This will return the stats of the download.
-    </span><span class="kw">pub async fn </span>execute_get_sink(
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>execute_get_sink(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         conn: Connection,
         request: GetRequest,
