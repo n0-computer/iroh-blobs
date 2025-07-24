@@ -499,7 +499,7 @@ impl Remote {
     /// is the aggregated number of downloaded payload bytes in the request.
     ///
     /// This will return the stats of the download.
-    pub async fn fetch_sink(
+    pub(crate) async fn fetch_sink(
         &self,
         mut conn: impl GetConnection,
         content: impl Into<HashAndFormat>,
@@ -573,7 +573,7 @@ impl Remote {
     /// Push the given blob or hash sequence to a remote node.
     ///
     /// Note that many nodes will reject push requests. Also, this is an experimental feature for now.
-    pub async fn execute_push_sink(
+    pub(crate) async fn execute_push_sink(
         &self,
         conn: Connection,
         request: PushRequest,
@@ -654,7 +654,7 @@ impl Remote {
     /// This will download the data again even if the data is locally present.
     ///
     /// This will return the stats of the download.
-    pub async fn execute_get_sink(
+    pub(crate) async fn execute_get_sink(
         &self,
         conn: Connection,
         request: GetRequest,
