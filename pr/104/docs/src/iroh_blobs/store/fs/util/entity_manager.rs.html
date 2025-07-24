@@ -1335,8 +1335,7 @@
 <a href="#1334" id="1334">1334</a>
 <a href="#1335" id="1335">1335</a>
 <a href="#1336" id="1336">1336</a>
-<a href="#1337" id="1337">1337</a>
-<a href="#1338" id="1338">1338</a></pre></div><pre class="rust"><code><span class="attr">#![allow(dead_code)]
+<a href="#1337" id="1337">1337</a></pre></div><pre class="rust"><code><span class="attr">#![allow(dead_code)]
 </span><span class="kw">use </span>std::{fmt::Debug, future::Future, hash::Hash};
 
 <span class="kw">use </span>n0_future::{future, FuturesUnordered};
@@ -1557,7 +1556,6 @@
                 )
                 .<span class="kw">await
                 </span>.ok();
-            <span class="macro">println!</span>(<span class="string">"Calling on_shutdown {}"</span>, <span class="self">self</span>.state.state.ref_count());
             <span class="macro">assert_eq!</span>(<span class="self">self</span>.state.state.ref_count(), <span class="number">1</span>);
             P::on_shutdown(<span class="self">self</span>.state.clone(), ShutdownCause::Idle).<span class="kw">await</span>;
             <span class="comment">// Notify the main actor that we have completed shutdown.
