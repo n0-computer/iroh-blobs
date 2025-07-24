@@ -1,4 +1,4 @@
-//! Example that runs and iroh node with local node discovery and no relay server.
+//! Example that runs an iroh node with local node discovery and no relay server.
 //!
 //! You can think of this as a local version of [sendme](https://www.iroh.computer/sendme)
 //! that only works for individual files.
