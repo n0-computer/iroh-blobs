@@ -2122,9 +2122,7 @@
 <a href="#2121" id="2121">2121</a>
 <a href="#2122" id="2122">2122</a>
 <a href="#2123" id="2123">2123</a>
-<a href="#2124" id="2124">2124</a>
-<a href="#2125" id="2125">2125</a>
-<a href="#2126" id="2126">2126</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2124" id="2124">2124</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -3122,7 +3120,7 @@
 ) -&gt; io::Result&lt;()&gt; {
     <span class="kw">let </span>ExportRangesRequest { ranges, hash } = cmd;
     <span class="macro">trace!</span>(
-        <span class="string">"exporting ranges: {hash} {ranges:?} size={}"</span>,
+        <span class="string">"export_ranges: exporting ranges: {hash} {ranges:?} size={}"</span>,
         handle.current_size()<span class="question-mark">?
     </span>);
     <span class="macro">debug_assert!</span>(handle.hash() == hash, <span class="string">"hash mismatch"</span>);
@@ -3145,11 +3143,9 @@
         <span class="kw">loop </span>{
             <span class="kw">let </span>end: u64 = (offset + bs).min(range.end);
             <span class="kw">let </span>size = (end - offset) <span class="kw">as </span>usize;
-            tx.send(ExportRangesItem::Data(Leaf {
-                offset,
-                data: data.read_bytes_at(offset, size)<span class="question-mark">?</span>,
-            }))
-            .<span class="kw">await</span><span class="question-mark">?</span>;
+            <span class="kw">let </span>res = data.read_bytes_at(offset, size);
+            tx.send(ExportRangesItem::Data(Leaf { offset, data: res<span class="question-mark">? </span>}))
+                .<span class="kw">await</span><span class="question-mark">?</span>;
             offset = end;
             <span class="kw">if </span>offset &gt;= range.end {
                 <span class="kw">break</span>;
