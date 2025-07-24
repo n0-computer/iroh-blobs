@@ -1984,10 +1984,13 @@ pub mod tests {
     #[tokio::test]
     async fn test_batch_fs() -> TestResult<()> {
         tracing_subscriber::fmt::try_init().ok();
-        let testdir = tempfile::tempdir()?;
-        let db_dir = testdir.path().join("db");
-        let store = FsStore::load(db_dir).await?;
-        test_batch(&store).await
+        for _i in 0..100 {
+            let testdir = tempfile::tempdir()?;
+            let db_dir = testdir.path().join("db");
+            let store = FsStore::load(db_dir).await?;
+            test_batch(&store).await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
