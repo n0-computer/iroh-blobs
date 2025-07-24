@@ -59,6 +59,7 @@ tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
+iroh = { version = "0.90", features = ["discovery-local-network"]}
 
 [features]
 hide-proto-docs = []
