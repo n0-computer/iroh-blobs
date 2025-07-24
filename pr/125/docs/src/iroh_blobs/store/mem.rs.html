@@ -1078,7 +1078,11 @@
 <a href="#1077" id="1077">1077</a>
 <a href="#1078" id="1078">1078</a>
 <a href="#1079" id="1079">1079</a>
-<a href="#1080" id="1080">1080</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a>
+<a href="#1082" id="1082">1082</a>
+<a href="#1083" id="1083">1083</a>
+<a href="#1084" id="1084">1084</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1131,7 +1135,7 @@
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
             ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
             ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg,
+            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -1241,6 +1245,10 @@
             }) =&gt; {
                 <span class="kw">let </span>entry = <span class="self">self</span>.get_or_create_entry(hash);
                 <span class="self">self</span>.spawn(import_bao(entry, size, data, tx));
+            }
+            Command::WaitIdle(WaitIdleMsg { tx, .. }) =&gt; {
+                <span class="macro">trace!</span>(<span class="string">"wait idle"</span>);
+                tx.send(()).<span class="kw">await</span>.ok();
             }
             Command::Observe(ObserveMsg {
                 inner: ObserveRequest { hash },

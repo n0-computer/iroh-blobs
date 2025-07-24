@@ -388,7 +388,10 @@
 <a href="#387" id="387">387</a>
 <a href="#388" id="388">388</a>
 <a href="#389" id="389">389</a>
-<a href="#390" id="390">390</a></pre></div><pre class="rust"><code><span class="doccomment">//! Readonly in-memory store.
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a></pre></div><pre class="rust"><code><span class="doccomment">//! Readonly in-memory store.
 //!
 //! This can only serve data that is provided at creation time. It is much simpler
 //! than the mutable in-memory store and the file system store, and can serve as a
@@ -427,7 +430,7 @@
             <span class="self">self</span>, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
             ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
             ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
-            ObserveRequest,
+            ObserveRequest, WaitIdleMsg,
         },
         ApiClient, TempTag,
     },
@@ -475,6 +478,9 @@
                 ))))
                 .<span class="kw">await
                 </span>.ok();
+            }
+            Command::WaitIdle(WaitIdleMsg { tx, .. }) =&gt; {
+                tx.send(()).<span class="kw">await</span>.ok();
             }
             Command::ImportBytes(ImportBytesMsg { tx, .. }) =&gt; {
                 tx.send(io::Error::other(<span class="string">"import not supported"</span>).into())
