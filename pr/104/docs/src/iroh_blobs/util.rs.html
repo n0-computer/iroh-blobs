@@ -558,7 +558,8 @@
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
-<a href="#560" id="560">560</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::ops::{Bound, RangeBounds};
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::ops::{Bound, RangeBounds};
 
 <span class="kw">use </span>bao_tree::{io::round_up_to_chunks, ChunkNum, ChunkRanges};
 <span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
@@ -1032,7 +1033,8 @@
         </span>}
     }
 
-    <span class="kw">pub struct </span>IrpcSenderSink&lt;T&gt;(<span class="kw">pub </span>irpc::channel::mpsc::Sender&lt;T&gt;);
+    <span class="attr">#[allow(dead_code)]
+    </span><span class="kw">pub struct </span>IrpcSenderSink&lt;T&gt;(<span class="kw">pub </span>irpc::channel::mpsc::Sender&lt;T&gt;);
 
     <span class="kw">impl</span>&lt;T&gt; Sink&lt;T&gt; <span class="kw">for </span>IrpcSenderSink&lt;T&gt;
     <span class="kw">where

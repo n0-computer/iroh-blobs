@@ -2228,7 +2228,26 @@
 <a href="#2227" id="2227">2227</a>
 <a href="#2228" id="2228">2228</a>
 <a href="#2229" id="2229">2229</a>
-<a href="#2230" id="2230">2230</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2230" id="2230">2230</a>
+<a href="#2231" id="2231">2231</a>
+<a href="#2232" id="2232">2232</a>
+<a href="#2233" id="2233">2233</a>
+<a href="#2234" id="2234">2234</a>
+<a href="#2235" id="2235">2235</a>
+<a href="#2236" id="2236">2236</a>
+<a href="#2237" id="2237">2237</a>
+<a href="#2238" id="2238">2238</a>
+<a href="#2239" id="2239">2239</a>
+<a href="#2240" id="2240">2240</a>
+<a href="#2241" id="2241">2241</a>
+<a href="#2242" id="2242">2242</a>
+<a href="#2243" id="2243">2243</a>
+<a href="#2244" id="2244">2244</a>
+<a href="#2245" id="2245">2245</a>
+<a href="#2246" id="2246">2246</a>
+<a href="#2247" id="2247">2247</a>
+<a href="#2248" id="2248">2248</a>
+<a href="#2249" id="2249">2249</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2473,6 +2492,8 @@
     </span>handles: EntityManagerState&lt;EmParams&gt;,
     <span class="comment">// temp tags
     </span>temp_tags: TempTags,
+    <span class="comment">// waiters for idle state.
+    </span>idle_waiters: Vec&lt;irpc::channel::oneshot::Sender&lt;()&gt;&gt;,
     <span class="comment">// our private tokio runtime. It has to live somewhere.
     </span>_rt: RtWrapper,
 }
@@ -2686,6 +2707,16 @@
                 <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
                 <span class="self">self</span>.db().send(cmd.into()).<span class="kw">await</span>.ok();
             }
+            Command::WaitIdle(cmd) =&gt; {
+                <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
+                <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
+                    <span class="comment">// we are currently idle
+                    </span>cmd.tx.send(()).<span class="kw">await</span>.ok();
+                } <span class="kw">else </span>{
+                    <span class="comment">// wait for idle state
+                    </span><span class="self">self</span>.idle_waiters.push(cmd.tx);
+                }
+            }
             Command::Shutdown(cmd) =&gt; {
                 <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
                 <span class="self">self</span>.db().send(cmd.into()).<span class="kw">await</span>.ok();
@@ -2829,6 +2860,11 @@
                 }
                 <span class="prelude-val">Some</span>(res) = <span class="self">self</span>.tasks.join_next(), <span class="kw">if </span>!<span class="self">self</span>.tasks.is_empty() =&gt; {
                     <span class="self">Self</span>::log_task_result(res);
+                    <span class="kw">if </span><span class="self">self</span>.tasks.is_empty() {
+                        <span class="kw">for </span>tx <span class="kw">in </span><span class="self">self</span>.idle_waiters.drain(..) {
+                            tx.send(()).<span class="kw">await</span>.ok();
+                        }
+                    }
                 }
             }
         }
@@ -2878,6 +2914,7 @@
             tasks: JoinSet::new(),
             handles: EntityManagerState::new(slot_context, <span class="number">1024</span>, <span class="number">32</span>, <span class="number">32</span>, <span class="number">2</span>),
             temp_tags: Default::default(),
+            idle_waiters: Vec::new(),
             _rt: rt,
         })
     }
@@ -4197,6 +4234,7 @@
         <span class="macro">assert!</span>(tts.contains(tt2.hash_and_format()));
         drop(batch);
         store.sync_db().<span class="kw">await</span><span class="question-mark">?</span>;
+        store.wait_idle().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>tts = store
             .tags()
             .list_temp_tags()
