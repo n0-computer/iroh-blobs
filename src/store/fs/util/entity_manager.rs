@@ -219,7 +219,6 @@ mod entity_actor {
                 )
                 .await
                 .ok();
-            println!("Calling on_shutdown {}", self.state.state.ref_count());
             assert_eq!(self.state.state.ref_count(), 1);
             P::on_shutdown(self.state.clone(), ShutdownCause::Idle).await;
             // Notify the main actor that we have completed shutdown.
