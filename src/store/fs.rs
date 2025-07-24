@@ -243,6 +243,8 @@ struct Actor {
     handles: EntityManagerState<EmParams>,
     // temp tags
     temp_tags: TempTags,
+    // waiters for idle state.
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     // our private tokio runtime. It has to live somewhere.
     _rt: RtWrapper,
 }
@@ -456,6 +458,16 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
+            Command::WaitIdle(cmd) => {
+                trace!("{cmd:?}");
+                if self.tasks.is_empty() {
+                    // we are currently idle
+                    cmd.tx.send(()).await.ok();
+                } else {
+                    // wait for idle state
+                    self.idle_waiters.push(cmd.tx);
+                }
+            }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
@@ -599,6 +611,11 @@ impl Actor {
                 }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     Self::log_task_result(res);
+                    if self.tasks.is_empty() {
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
+                    }
                 }
             }
         }
@@ -648,6 +665,7 @@ impl Actor {
             tasks: JoinSet::new(),
             handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
             temp_tags: Default::default(),
+            idle_waiters: Vec::new(),
             _rt: rt,
         })
     }
@@ -818,7 +836,6 @@ async fn handle_batch(cmd: BatchMsg, id: Scope, scope: Arc<TempTagScope>, ctx: A
     if let Err(cause) = handle_batch_impl(cmd, id, &scope).await {
         error!("batch failed: {cause}");
     }
-    println!("batch done, clearing scope {}", id);
     ctx.clear_scope(id).await;
 }
 
@@ -1969,6 +1986,7 @@ pub mod tests {
         println!("dropping batch");
         drop(batch);
         store.sync_db().await?;
+        store.wait_idle().await?;
         println!("reading temp tags after batch drop");
         let tts = store
             .tags()

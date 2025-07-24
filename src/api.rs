@@ -30,6 +30,7 @@ pub mod downloader;
 pub mod proto;
 pub mod remote;
 pub mod tags;
+use crate::api::proto::WaitIdleRequest;
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
 pub(crate) type ApiClient = irpc::Client<proto::Command, proto::Request, proto::StoreService>;
@@ -314,6 +315,7 @@ impl Store {
                     Request::ClearProtected(msg) => local.send((msg, tx)),
                     Request::SyncDb(msg) => local.send((msg, tx)),
                     Request::Shutdown(msg) => local.send((msg, tx)),
+                    Request::WaitIdle(msg) => local.send((msg, tx)),
                 }
             })
         });
@@ -328,6 +330,19 @@ impl Store {
 
     pub async fn shutdown(&self) -> irpc::Result<()> {
         let msg = ShutdownRequest;
+        self.client.rpc(msg).await?;
+        Ok(())
+    }
+
+    /// Waits for the store to become completely idle.
+    ///
+    /// This is mostly useful for tests, where you want to check that e.g. the
+    /// store has written all data to disk.
+    ///
+    /// Note that a store is not guaranteed to become idle, if it is being
+    /// interacted with concurrently. So this might wait forever.
+    pub async fn wait_idle(&self) -> irpc::Result<()> {
+        let msg = WaitIdleRequest;
         self.client.rpc(msg).await?;
         Ok(())
     }
