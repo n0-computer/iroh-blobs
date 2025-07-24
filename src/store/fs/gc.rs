@@ -192,7 +192,6 @@ mod tests {
     use std::{
         io::{self},
         path::Path,
-        time::Duration,
     };
 
     use bao_tree::{io::EncodeError, ChunkNum};
@@ -300,7 +299,7 @@ mod tests {
             let outboard_path = options.outboard_path(&bh);
             let sizes_path = options.sizes_path(&bh);
             let bitfield_path = options.bitfield_path(&bh);
-            tokio::time::sleep(Duration::from_millis(100)).await; // allow for some time for the file to be written
+            store.wait_idle().await?;
             assert!(data_path.exists());
             assert!(outboard_path.exists());
             assert!(sizes_path.exists());
