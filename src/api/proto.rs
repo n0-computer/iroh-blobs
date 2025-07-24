@@ -134,10 +134,15 @@ pub enum Request {
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SyncDb(SyncDbRequest),
     #[rpc(tx = oneshot::Sender<()>)]
+    WaitIdle(WaitIdleRequest),
+    #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     ClearProtected(ClearProtectedRequest),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WaitIdleRequest;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncDbRequest;
