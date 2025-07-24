@@ -4,7 +4,7 @@ use std::{
     io,
     ops::Deref,
     path::Path,
-    sync::{Arc, Weak},
+    sync::Arc,
 };
 
 use bao_tree::{
@@ -21,24 +21,20 @@ use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
 use tokio::sync::watch;
-use tracing::{debug, error, info, trace, Span};
+use tracing::{debug, error, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
-    meta::Update,
     options::{Options, PathOptions},
     BaoFilePart,
 };
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{
-            meta::{raw_outboard_size, Set},
-            TaskContext,
-        },
+        fs::{meta::raw_outboard_size, TaskContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
-            PartialMemStorage, SizeInfo, SparseMemFile, DD,
+            PartialMemStorage, DD,
         },
         Hash, IROH_BLOCK_SIZE,
     },
@@ -507,27 +503,6 @@ impl BaoFileStorage {
     }
 }
 
-/// A weak reference to a bao file handle.
-#[derive(Debug, Clone)]
-pub struct BaoFileHandleWeak(Weak<BaoFileHandleInner>);
-
-impl BaoFileHandleWeak {
-    /// Upgrade to a strong reference if possible.
-    pub fn upgrade(&self) -> Option<BaoFileHandle> {
-        let inner = self.0.upgrade()?;
-        if let &BaoFileStorage::Poisoned = inner.storage.borrow().deref() {
-            trace!("poisoned storage, cannot upgrade");
-            return None;
-        };
-        Some(BaoFileHandle(inner))
-    }
-
-    /// True if the handle is definitely dead.
-    pub fn is_dead(&self) -> bool {
-        self.0.strong_count() == 0
-    }
-}
-
 /// The inner part of a bao file handle.
 pub struct BaoFileHandleInner {
     pub(crate) storage: watch::Sender<BaoFileStorage>,
@@ -550,19 +525,12 @@ impl fmt::Debug for BaoFileHandleInner {
 #[derive(Debug, Clone, derive_more::Deref)]
 pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
 
-impl Drop for BaoFileHandle {
-    fn drop(&mut self) {
+impl BaoFileHandle {
+    pub fn persist(&mut self) {
         self.0.storage.send_if_modified(|guard| {
             if Arc::strong_count(&self.0) > 1 {
                 return false;
             }
-            // there is the possibility that somebody else will increase the strong count
-            // here. there is nothing we can do about it, but they won't be able to
-            // access the internals of the handle because we have the lock.
-            //
-            // We poison the storage. A poisoned storage is considered dead and will
-            // have to be recreated, but only *after* we are done with persisting
-            // the bitfield.
             let BaoFileStorage::Partial(fs) = guard.take() else {
                 return false;
             };
@@ -583,6 +551,12 @@ impl Drop for BaoFileHandle {
             }
             false
         });
+    }
+}
+
+impl Drop for BaoFileHandle {
+    fn drop(&mut self) {
+        self.persist();
     }
 }
 
@@ -644,21 +618,7 @@ impl BaoFileHandle {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
             debug!("File was reconstructed as complete");
-            let (tx, rx) = crate::util::channel::oneshot::channel();
-            ctx.db
-                .sender
-                .send(
-                    Set {
-                        hash,
-                        state: entry_state,
-                        tx,
-                        span: Span::current(),
-                    }
-                    .into(),
-                )
-                .await
-                .map_err(|_| io::Error::other("send update"))?;
-            rx.await.map_err(|_| io::Error::other("receive update"))??;
+            ctx.db.set(hash, entry_state).await?;
             storage.into()
         } else {
             storage.into()
@@ -771,11 +731,6 @@ impl BaoFileHandle {
         self.hash
     }
 
-    /// Downgrade to a weak reference.
-    pub fn downgrade(&self) -> BaoFileHandleWeak {
-        BaoFileHandleWeak(Arc::downgrade(&self.0))
-    }
-
     /// Write a batch and notify the db
     pub(super) async fn write_batch(
         &self,
@@ -796,26 +751,14 @@ impl BaoFileHandle {
             true
         });
         if let Some(update) = res? {
-            ctx.db
-                .sender
-                .send(
-                    Update {
-                        hash: self.hash,
-                        state: update,
-                        tx: None,
-                        span: Span::current(),
-                    }
-                    .into(),
-                )
-                .await
-                .map_err(|_| io::Error::other("send update"))?;
+            ctx.db.update(self.hash, update).await?;
         }
         Ok(())
     }
 }
 
 impl PartialMemStorage {
-    /// Persist the batch to disk, creating a FileBatch.
+    /// Persist the batch to disk.
     fn persist(self, ctx: &TaskContext, hash: &Hash) -> io::Result<PartialFileStorage> {
         let options = &ctx.options.path;
         ctx.protect.protect(
@@ -842,12 +785,6 @@ impl PartialMemStorage {
             sizes,
             bitfield: self.bitfield,
         })
-    }
-
-    /// Get the parts data, outboard and sizes
-    #[allow(dead_code)]
-    pub fn into_parts(self) -> (SparseMemFile, SparseMemFile, SizeInfo) {
-        (self.data, self.outboard, self.size)
     }
 }
 
