@@ -68,7 +68,7 @@ async fn accept(path: &Path) -> Result<()> {
         .await?;
     let builder = Router::builder(endpoint.clone());
     let store = MemStore::new();
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let blobs = BlobsProtocol::builder(&store).build(&endpoint);
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn();
 
