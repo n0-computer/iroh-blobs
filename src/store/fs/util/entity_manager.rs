@@ -971,7 +971,7 @@ mod tests {
                 for id in values.keys() {
                     let log = global.log.get(id).unwrap();
                     if log.len() % 2 != 0 {
-                        println!("{:#?}", log);
+                        println!("{log:#?}");
                         panic!("Log for entity {id} must contain an even number of events");
                     }
                     for (i, (event, _)) in log.iter().enumerate() {
