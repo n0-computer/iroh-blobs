@@ -355,7 +355,11 @@
 <a href="#354" id="354">354</a>
 <a href="#355" id="355">355</a>
 <a href="#356" id="356">356</a>
-<a href="#357" id="357">357</a></pre></div><pre class="rust"><code><span class="doccomment">//! The user facing API of the store.
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a></pre></div><pre class="rust"><code><span class="doccomment">//! The user facing API of the store.
 //!
 //! This API is both for interacting with an in-process store and for interacting
 //! with a remote store via rpc calls.
@@ -698,6 +702,10 @@
     ///
     /// Note that a store is not guaranteed to become idle, if it is being
     /// interacted with concurrently. So this might wait forever.
+    ///
+    /// Also note that once you get the callback, the store is not guaranteed to
+    /// still be idle. All this tells you that there was a point in time where
+    /// the store was idle between the call and the response.
     </span><span class="kw">pub async fn </span>wait_idle(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; irpc::Result&lt;()&gt; {
         <span class="kw">let </span>msg = WaitIdleRequest;
         <span class="self">self</span>.client.rpc(msg).<span class="kw">await</span><span class="question-mark">?</span>;
