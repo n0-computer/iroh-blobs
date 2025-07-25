@@ -225,7 +225,7 @@ impl entity_manager::Params for HashContext {
     }
 
     fn ref_count(&self) -> usize {
-        self.state.receiver_count() + self.state.receiver_count()
+        self.state.sender_count() + self.state.receiver_count()
     }
 
     fn new(id: &Self::EntityId, global: &Self::GlobalState) -> Self {
