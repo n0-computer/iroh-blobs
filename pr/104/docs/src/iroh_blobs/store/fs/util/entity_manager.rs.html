@@ -2495,7 +2495,7 @@
                 <span class="kw">for </span>id <span class="kw">in </span>values.keys() {
                     <span class="kw">let </span>log = global.log.get(id).unwrap();
                     <span class="kw">if </span>log.len() % <span class="number">2 </span>!= <span class="number">0 </span>{
-                        <span class="macro">println!</span>(<span class="string">"{:#?}"</span>, log);
+                        <span class="macro">println!</span>(<span class="string">"{log:#?}"</span>);
                         <span class="macro">panic!</span>(<span class="string">"Log for entity {id} must contain an even number of events"</span>);
                     }
                     <span class="kw">for </span>(i, (event, <span class="kw">_</span>)) <span class="kw">in </span>log.iter().enumerate() {
