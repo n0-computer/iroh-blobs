@@ -2497,7 +2497,7 @@
     }
 
     <span class="kw">fn </span>ref_count(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.state.receiver_count() + <span class="self">self</span>.state.receiver_count()
+        <span class="self">self</span>.state.sender_count() + <span class="self">self</span>.state.receiver_count()
     }
 
     <span class="kw">fn </span>new(id: <span class="kw-2">&amp;</span><span class="self">Self</span>::EntityId, global: <span class="kw-2">&amp;</span><span class="self">Self</span>::GlobalState) -&gt; <span class="self">Self </span>{
