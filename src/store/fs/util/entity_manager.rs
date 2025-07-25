@@ -4,22 +4,6 @@ use std::{fmt::Debug, future::Future, hash::Hash};
 use n0_future::{future, FuturesUnordered};
 use tokio::sync::{mpsc, oneshot};
 
-/// Trait to reset an entity state in place.
-///
-/// In many cases this is just assigning the default value, but e.g. for an
-/// `Arc<Mutex<T>>` resetting to the default value means an allocation, whereas
-/// reset can be done without.
-pub trait Reset: Default {
-    /// Reset the state to its default value.
-    fn reset(&mut self);
-
-    /// A ref count to ensure that the state is unique when shutting down.
-    ///
-    /// You are not allowed to clone the state out of a task, even though that
-    /// is possible.
-    fn ref_count(&self) -> usize;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownCause {
     /// The entity is shutting down gracefully because the entity is idle.
@@ -31,7 +15,7 @@ pub enum ShutdownCause {
 }
 
 /// Parameters for the entity manager system.
-pub trait Params: Send + Sync + 'static {
+pub trait Params: Send + Sync + Clone + 'static {
     /// Entity id type.
     ///
     /// This does not require Copy to allow for more complex types, such as `String`,
@@ -43,23 +27,24 @@ pub trait Params: Send + Sync + 'static {
     /// This is passed into all entity actors. It also needs to be cheap handle.
     /// If you don't need it, just set it to `()`.
     type GlobalState: Debug + Clone + Send + Sync + 'static;
-    /// Entity state type.
+
+    fn global(&self) -> &Self::GlobalState;
+
+    fn id(&self) -> &Self::EntityId;
+
+    /// Reset the state to its default value.
+    fn reset(&mut self, id: &Self::EntityId, global: &Self::GlobalState);
+
+    fn new(id: &Self::EntityId, global: &Self::GlobalState) -> Self;
+
+    /// A ref count to ensure that the state is unique when shutting down.
     ///
-    /// This is the actual distinct per-entity state. This needs to implement
-    /// `Default` and a matching `Reset`. It also needs to implement `Clone`
-    /// since we unfortunately need to pass an owned copy of the state to the
-    /// callback - otherwise we run into some rust lifetime limitations
-    /// <https://github.com/rust-lang/rust/issues/100013>.
-    ///
-    /// Frequently this is an `Arc<Mutex<T>>` or similar. Note that per entity
-    /// access is concurrent but not parallel, so you can use a more efficient
-    /// synchronization primitive like [`AtomicRefCell`](https://crates.io/crates/atomic_refcell) if you want to.
-    type EntityState: Default + Debug + Reset + Clone + Send + Sync + 'static;
+    /// You are not allowed to clone the state out of a task, even though that
+    /// is possible.
+    fn ref_count(&self) -> usize;
+
     /// Function being called when an entity actor is shutting down.
-    fn on_shutdown(
-        state: entity_actor::State<Self>,
-        cause: ShutdownCause,
-    ) -> impl Future<Output = ()> + Send + 'static
+    fn on_shutdown(&self, cause: ShutdownCause) -> impl Future<Output = ()> + Send
     where
         Self: Sized;
 }
@@ -75,7 +60,7 @@ pub(crate) struct EntityShutdown;
 /// Argument for the `EntityManager::spawn` function.
 pub enum SpawnArg<P: Params> {
     /// The entity is active, and we were able to spawn a task.
-    Active(ActiveEntityState<P>),
+    Active(P),
     /// The entity is busy and cannot spawn a new task.
     Busy,
     /// The entity is dead.
@@ -101,7 +86,7 @@ struct ShutdownAll {
 /// With this message the entity actor sends back the remaining state. The tasks set
 /// at this point must be empty, as the entity actor has already completed all tasks.
 struct ShutdownComplete<P: Params> {
-    state: ActiveEntityState<P>,
+    state: P,
     tasks: FuturesUnordered<future::Boxed<()>>,
 }
 
@@ -111,29 +96,8 @@ mod entity_actor {
     use tokio::sync::mpsc;
 
     use super::{
-        EntityShutdown, Params, Reset, Shutdown, ShutdownCause, ShutdownComplete, Spawn, SpawnArg,
+        EntityShutdown, Params, Shutdown, ShutdownCause, ShutdownComplete, Spawn, SpawnArg,
     };
-
-    /// State of an active entity.
-    #[derive(Debug)]
-    pub struct State<P: Params> {
-        /// The entity id.
-        pub id: P::EntityId,
-        /// A copy of the global state.
-        pub global: P::GlobalState,
-        /// The per-entity state which might have internal mutability.
-        pub state: P::EntityState,
-    }
-
-    impl<P: Params> Clone for State<P> {
-        fn clone(&self) -> Self {
-            Self {
-                id: self.id.clone(),
-                global: self.global.clone(),
-                state: self.state.clone(),
-            }
-        }
-    }
 
     pub enum Command<P: Params> {
         Spawn(Spawn<P>),
@@ -150,7 +114,7 @@ mod entity_actor {
     pub struct Actor<P: Params> {
         pub recv: mpsc::Receiver<Command<P>>,
         pub main: mpsc::Sender<super::main_actor::InternalCommand<P>>,
-        pub state: State<P>,
+        pub state: P,
         pub tasks: FuturesUnordered<future::Boxed<()>>,
     }
 
@@ -190,7 +154,7 @@ mod entity_actor {
         /// All senders for our receive channel were dropped, so we shut down without waiting for any tasks to complete.
         async fn drop_shutdown_state(self) {
             let Self { state, .. } = self;
-            P::on_shutdown(state, ShutdownCause::Drop).await;
+            state.on_shutdown(ShutdownCause::Drop).await;
         }
 
         /// Soft shutdown state.
@@ -198,7 +162,8 @@ mod entity_actor {
         /// We have received an explicit shutdown command, so we wait for all tasks to complete and then call the shutdown function.
         async fn soft_shutdown_state(mut self) {
             while (self.tasks.next().await).is_some() {}
-            P::on_shutdown(self.state.clone(), ShutdownCause::Soft).await;
+            let Self { state, .. } = self;
+            state.on_shutdown(ShutdownCause::Soft).await;
         }
 
         async fn recycle_state(self) {
@@ -212,15 +177,15 @@ mod entity_actor {
             self.main
                 .send(
                     Shutdown {
-                        id: self.state.id.clone(),
+                        id: self.state.id().clone(),
                         receiver: self.recv,
                     }
                     .into(),
                 )
                 .await
                 .ok();
-            assert_eq!(self.state.state.ref_count(), 1);
-            P::on_shutdown(self.state.clone(), ShutdownCause::Idle).await;
+            assert_eq!(self.state.ref_count(), 1);
+            self.state.on_shutdown(ShutdownCause::Idle).await;
             // Notify the main actor that we have completed shutdown.
             // here we also give back the rest of ourselves so the main actor can recycle us.
             self.main
@@ -256,11 +221,11 @@ mod entity_actor {
                 self.tasks.is_empty(),
                 "Tasks must be empty before recycling"
             );
-            self.state.state.reset();
+            // todo: reset?
+            // we do reset on reuse, but not doing it here might cause a memory leak
         }
     }
 }
-pub use entity_actor::State as ActiveEntityState;
 pub use main_actor::ActorState as EntityManagerState;
 
 mod main_actor {
@@ -272,8 +237,8 @@ mod main_actor {
     use tracing::{error, warn};
 
     use super::{
-        entity_actor, EntityShutdown, Params, Reset, Shutdown, ShutdownAll, ShutdownComplete,
-        Spawn, SpawnArg,
+        entity_actor, EntityShutdown, Params, Shutdown, ShutdownAll, ShutdownComplete, Spawn,
+        SpawnArg,
     };
 
     pub(super) enum Command<P: Params> {
@@ -461,7 +426,7 @@ mod main_actor {
                         );
                     }
                     InternalCommand::ShutdownComplete(ShutdownComplete { state, tasks }) => {
-                        let id = state.id.clone();
+                        let id = state.id().clone();
                         let Some(entity_handle) = self.live.remove(&id) else {
                             error!(
                                 "Received shutdown complete command for unknown entity actor {id:?}"
@@ -485,7 +450,7 @@ mod main_actor {
                             // No commands during shutdown, we can recycle the actor.
                             self.recycle(send, actor);
                         } else {
-                            actor.state.state.reset();
+                            actor.state.reset(&id, &self.state);
                             self.live.insert(id.clone(), EntityHandle::Live { send });
                             return Some(actor.run());
                         }
@@ -516,20 +481,13 @@ mod main_actor {
             let handle = self.live.entry(id.clone()).or_insert_with(|| {
                 if let Some((send, mut actor)) = self.pool.pop() {
                     // Get an actor from the pool of inactive actors and initialize it.
-                    actor.state.id = id.clone();
-                    actor.state.global = self.state.clone();
-                    // strictly speaking this is not needed, since we reset the state when adding the actor to the pool.
-                    actor.state.state.reset();
+                    actor.state.reset(&id, &self.state);
                     task = Some(actor.run());
                     EntityHandle::Live { send }
                 } else {
                     // Create a new entity actor and inbox.
                     let (send, recv) = mpsc::channel(self.entity_inbox_size);
-                    let state: entity_actor::State<P> = entity_actor::State {
-                        id: id.clone(),
-                        global: self.state.clone(),
-                        state: Default::default(),
-                    };
+                    let state = P::new(&id, &self.state);
                     let actor = entity_actor::Actor {
                         main: self.internal_send.clone(),
                         recv,
@@ -839,19 +797,6 @@ mod tests {
             tasks: HashSet<tokio::task::Id>,
         }
 
-        #[derive(Debug, Clone, Default)]
-        struct State(Arc<AtomicRefCell<Inner>>);
-
-        impl Reset for State {
-            fn reset(&mut self) {
-                *self.0.borrow_mut() = Default::default();
-            }
-
-            fn ref_count(&self) -> usize {
-                Arc::strong_count(&self.0)
-            }
-        }
-
         #[derive(Debug, Default)]
         struct Global {
             // the "database" of entity values
@@ -860,36 +805,64 @@ mod tests {
             log: HashMap<u64, Vec<(Event, Instant)>>,
         }
 
-        struct Counters;
-        impl Params for Counters {
+        #[derive(Debug, Clone)]
+        struct CounterState {
+            id: u64,
+            global: Arc<Mutex<Global>>,
+            value: Arc<AtomicRefCell<Inner>>,
+        }
+        impl Params for CounterState {
             type EntityId = u64;
             type GlobalState = Arc<Mutex<Global>>;
-            type EntityState = State;
-            async fn on_shutdown(entity: entity_actor::State<Self>, _cause: ShutdownCause) {
-                let state = entity.state.0.borrow();
-                let mut global = entity.global.lock().unwrap();
+            fn global(&self) -> &Self::GlobalState {
+                &self.global
+            }
+            fn id(&self) -> &Self::EntityId {
+                &self.id
+            }
+            async fn on_shutdown(&self, _cause: ShutdownCause) {
+                let state = self.value.borrow();
+                let mut global = self.global.lock().unwrap();
                 assert_eq!(state.tasks.len(), 1);
                 // persist the state
                 if let Some(value) = state.value {
-                    global.data.insert(entity.id, value);
+                    global.data.insert(self.id, value);
                 }
                 // log the shutdown event
                 global
                     .log
-                    .entry(entity.id)
+                    .entry(self.id)
                     .or_default()
                     .push((Event::Shutdown, Instant::now()));
+            }
+
+            fn new(id: &Self::EntityId, global: &Self::GlobalState) -> Self {
+                Self {
+                    id: *id,
+                    global: global.clone(),
+                    value: Default::default(),
+                }
+            }
+
+            fn reset(&mut self, id: &Self::EntityId, global: &Self::GlobalState) {
+                *self.value.borrow_mut() = Inner::default();
+                self.id = *id;
+                self.global = global.clone();
+            }
+
+            fn ref_count(&self) -> usize {
+                Arc::strong_count(&self.value)
             }
         }
 
         pub struct MemDb {
-            m: EntityManager<Counters>,
+            m: EntityManager<CounterState>,
             global: Arc<Mutex<Global>>,
         }
 
-        impl entity_actor::State<Counters> {
+        impl CounterState {
             async fn with_value(&self, f: impl FnOnce(&mut u128)) -> Result<(), &'static str> {
-                let mut state = self.state.0.borrow_mut();
+                let mut state = self.value.borrow_mut();
                 // lazily load the data from the database
                 if state.value.is_none() {
                     let mut global = self.global.lock().unwrap();
@@ -897,7 +870,7 @@ mod tests {
                     // log the wakeup event
                     global
                         .log
-                        .entry(self.id)
+                        .entry(*self.id())
                         .or_default()
                         .push((Event::Wakeup, Instant::now()));
                 }
@@ -916,7 +889,7 @@ mod tests {
                 let global = Arc::new(Mutex::new(Global::default()));
                 Self {
                     global: global.clone(),
-                    m: EntityManager::<Counters>::new(global, Options::default()),
+                    m: EntityManager::<CounterState>::new(global, Options::default()),
                 }
             }
         }
@@ -997,7 +970,7 @@ mod tests {
         /// simulate it by just not spawning the task as we are supposed to.
         #[tokio::test]
         async fn test_busy() -> TestResult<()> {
-            let mut state = EntityManagerState::<Counters>::new(
+            let mut state = EntityManagerState::<CounterState>::new(
                 Arc::new(Mutex::new(Global::default())),
                 1024,
                 8,
@@ -1009,7 +982,7 @@ mod tests {
             let inc = || {
                 let active = active.clone();
                 let busy = busy.clone();
-                |arg: SpawnArg<Counters>| async move {
+                |arg: SpawnArg<CounterState>| async move {
                     match arg {
                         SpawnArg::Active(_) => {
                             active.fetch_add(1, Ordering::SeqCst);
@@ -1047,12 +1020,12 @@ mod tests {
         /// a SpawnArg::Dead.
         #[tokio::test]
         async fn test_dead() -> TestResult<()> {
-            let manager = EntityManager::<Counters>::new(
+            let manager = EntityManager::<CounterState>::new(
                 Arc::new(Mutex::new(Global::default())),
                 Options::default(),
             );
             let (tx, rx) = oneshot::channel();
-            let killer = |arg: SpawnArg<Counters>| async move {
+            let killer = |arg: SpawnArg<CounterState>| async move {
                 if let SpawnArg::Active(_) = arg {
                     tx.send(()).ok();
                     panic!("Panic to kill the task");
@@ -1062,7 +1035,7 @@ mod tests {
             manager.spawn(1, killer).await?;
             rx.await.expect("Failed to receive kill confirmation");
             let (tx, rx) = oneshot::channel();
-            let counter = |arg: SpawnArg<Counters>| async move {
+            let counter = |arg: SpawnArg<CounterState>| async move {
                 if let SpawnArg::Dead = arg {
                     tx.send(()).ok();
                 }
@@ -1102,26 +1075,16 @@ mod tests {
         #[derive(Debug, Clone, Default)]
         struct EntityState(Arc<AtomicRefCell<State>>);
 
-        impl Reset for EntityState {
-            fn reset(&mut self) {
-                *self.0.borrow_mut() = Default::default();
-            }
-
-            fn ref_count(&self) -> usize {
-                1
-            }
-        }
-
         fn get_path(root: impl AsRef<Path>, id: u64) -> PathBuf {
             root.as_ref().join(hex::encode(id.to_be_bytes()))
         }
 
-        impl entity_actor::State<Counters> {
+        impl CounterState {
             async fn with_value(&self, f: impl FnOnce(&mut u128)) -> Result<(), &'static str> {
-                let Ok(mut r) = self.state.0.try_borrow_mut() else {
+                let Ok(mut r) = self.value.try_borrow_mut() else {
                     panic!("failed to borrow state mutably");
                 };
-                if r.value.is_none() {
+                if r.is_none() {
                     let mut global = self.global.lock().unwrap();
                     global
                         .log
@@ -1144,9 +1107,9 @@ mod tests {
                     let value = u128::from_be_bytes(
                         value.try_into().map_err(|_| "Invalid disk state format")?,
                     );
-                    r.value = Some(value);
+                    *r = Some(value);
                 }
-                let Some(value) = r.value.as_mut() else {
+                let Some(value) = r.as_mut() else {
                     panic!("State must be Memory at this point");
                 };
                 f(value);
@@ -1154,22 +1117,46 @@ mod tests {
             }
         }
 
-        struct Counters;
-        impl Params for Counters {
+        #[derive(Debug, Clone)]
+        struct CounterState {
+            id: u64,
+            global: Arc<Mutex<Global>>,
+            value: Arc<AtomicRefCell<Option<u128>>>,
+        }
+        impl Params for CounterState {
             type EntityId = u64;
             type GlobalState = Arc<Mutex<Global>>;
-            type EntityState = EntityState;
-            async fn on_shutdown(state: entity_actor::State<Self>, _cause: ShutdownCause) {
-                let r = state.state.0.borrow();
-                let mut global = state.global.lock().unwrap();
-                if let Some(value) = r.value {
-                    let path = get_path(&global.path, state.id);
+            fn id(&self) -> &Self::EntityId {
+                &self.id
+            }
+            fn global(&self) -> &Self::GlobalState {
+                &self.global
+            }
+            fn ref_count(&self) -> usize {
+                Arc::strong_count(&self.value)
+            }
+            fn new(id: &Self::EntityId, global: &Self::GlobalState) -> Self {
+                Self {
+                    id: *id,
+                    global: global.clone(),
+                    value: Arc::new(AtomicRefCell::new(None)),
+                }
+            }
+            fn reset(&mut self, id: &Self::EntityId, global: &Self::GlobalState) {
+                self.value.borrow_mut().take();
+                self.id = *id;
+                self.global = global.clone();
+            }
+            async fn on_shutdown(&self, _cause: ShutdownCause) {
+                let mut global = self.global.lock().unwrap();
+                if let Some(value) = self.value.borrow_mut().take() {
+                    let path = get_path(&global.path, self.id);
                     let value_bytes = value.to_be_bytes();
                     std::fs::write(&path, value_bytes).expect("Failed to write disk state");
                 }
                 global
                     .log
-                    .entry(state.id)
+                    .entry(self.id)
                     .or_default()
                     .push((Event::Shutdown, Instant::now()));
             }
@@ -1177,7 +1164,7 @@ mod tests {
 
         pub struct FsDb {
             global: Arc<Mutex<Global>>,
-            m: EntityManager<Counters>,
+            m: EntityManager<CounterState>,
         }
 
         impl FsDb {
@@ -1189,7 +1176,7 @@ mod tests {
                 let global = Arc::new(Mutex::new(global));
                 Self {
                     global: global.clone(),
-                    m: EntityManager::<Counters>::new(global, Options::default()),
+                    m: EntityManager::<CounterState>::new(global, Options::default()),
                 }
             }
         }
