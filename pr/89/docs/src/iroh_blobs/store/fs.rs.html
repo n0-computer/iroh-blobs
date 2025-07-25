@@ -2115,15 +2115,7 @@
 <a href="#2114" id="2114">2114</a>
 <a href="#2115" id="2115">2115</a>
 <a href="#2116" id="2116">2116</a>
-<a href="#2117" id="2117">2117</a>
-<a href="#2118" id="2118">2118</a>
-<a href="#2119" id="2119">2119</a>
-<a href="#2120" id="2120">2120</a>
-<a href="#2121" id="2121">2121</a>
-<a href="#2122" id="2122">2122</a>
-<a href="#2123" id="2123">2123</a>
-<a href="#2124" id="2124">2124</a>
-<a href="#2125" id="2125">2125</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2117" id="2117">2117</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2818,14 +2810,7 @@
         fs::create_dir_all(db_path.parent().unwrap())<span class="question-mark">?</span>;
         <span class="kw">let </span>(db_send, db_recv) = tokio::sync::mpsc::channel(<span class="number">100</span>);
         <span class="kw">let </span>(protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
-        <span class="kw">let </span>db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone());
-        <span class="kw">let </span>db_actor = <span class="kw">match </span>db_actor {
-            <span class="prelude-val">Ok</span>(actor) =&gt; actor,
-            <span class="prelude-val">Err</span>(err) =&gt; {
-                <span class="macro">println!</span>(<span class="string">"failed to create meta actor: {err}"</span>);
-                <span class="kw">return </span><span class="prelude-val">Err</span>(err);
-            }
-        };
+        <span class="kw">let </span>db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())<span class="question-mark">?</span>;
         <span class="kw">let </span>slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -3341,7 +3326,6 @@
         <span class="kw">let </span>(commands_tx, commands_rx) = tokio::sync::mpsc::channel(<span class="number">100</span>);
         <span class="kw">let </span>(fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(<span class="number">100</span>);
         <span class="kw">let </span>gc_config = options.gc.clone();
-        <span class="macro">println!</span>(<span class="string">"Creating actor"</span>);
         <span class="kw">let </span>actor = handle
             .spawn(Actor::new(
                 db_path,

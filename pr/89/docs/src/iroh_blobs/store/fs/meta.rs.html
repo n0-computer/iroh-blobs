@@ -840,8 +840,7 @@
 <a href="#839" id="839">839</a>
 <a href="#840" id="840">840</a>
 <a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
+<a href="#842" id="842">842</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
 </span><span class="attr">#![allow(clippy::result_large_err)]
 </span><span class="kw">use </span>std::{
     collections::HashSet,
@@ -1252,8 +1251,7 @@
         options: BatchOptions,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
         <span class="macro">debug!</span>(<span class="string">"creating or opening meta database at {}"</span>, db_path.display());
-        <span class="kw">let </span>res = redb::Database::create(<span class="kw-2">&amp;</span>db_path);
-        <span class="kw">let </span>db = <span class="kw">match </span>res {
+        <span class="kw">let </span>db = <span class="kw">match </span>redb::Database::create(<span class="kw-2">&amp;</span>db_path) {
             <span class="prelude-val">Ok</span>(db) =&gt; db,
             <span class="prelude-val">Err</span>(DatabaseError::UpgradeRequired(<span class="number">1</span>)) =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">anyhow::anyhow!</span>(<span class="string">"migration from v1 no longer supported"</span>));
