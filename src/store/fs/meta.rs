@@ -409,7 +409,7 @@ impl Actor {
         options: BatchOptions,
     ) -> anyhow::Result<Self> {
         debug!("creating or opening meta database at {}", db_path.display());
-        let db = match redb::Database::create(&db_path) {
+        let db = match redb::Database::create(db_path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
                 return Err(anyhow::anyhow!("migration from v1 no longer supported"));

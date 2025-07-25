@@ -58,22 +58,17 @@ impl Tags {
         Ok(stream.next().await.transpose()?)
     }
 
-    pub async fn set_with_opts(&self, options: SetOptions) -> super::RequestResult<TagInfo> {
+    pub async fn set_with_opts(&self, options: SetOptions) -> super::RequestResult<()> {
         trace!("{:?}", options);
-        let info = TagInfo {
-            name: options.name.clone(),
-            hash: options.value.hash,
-            format: options.value.format,
-        };
         self.client.rpc(options).await??;
-        Ok(info)
+        Ok(())
     }
 
     pub async fn set(
         &self,
         name: impl AsRef<[u8]>,
         value: impl Into<HashAndFormat>,
-    ) -> super::RequestResult<TagInfo> {
+    ) -> super::RequestResult<()> {
         self.set_with_opts(SetOptions {
             name: Tag::from(name.as_ref()),
             value: value.into(),
