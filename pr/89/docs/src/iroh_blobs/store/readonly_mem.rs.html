@@ -355,361 +355,427 @@
 <a href="#354" id="354">354</a>
 <a href="#355" id="355">355</a>
 <a href="#356" id="356">356</a>
-<a href="#357" id="357">357</a></pre></div><pre class="rust"><code><span class="doccomment">//! A readonly in memory database for iroh-blobs, usable for testing and sharing static data.
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a></pre></div><pre class="rust"><code><span class="doccomment">//! Readonly in-memory store.
 //!
-//! Main entry point is [Store].
+//! This can only serve data that is provided at creation time. It is much simpler
+//! than the mutable in-memory store and the file system store, and can serve as a
+//! good starting point for custom implementations.
+//!
+//! It can also be useful as a lightweight store for tests.
 </span><span class="kw">use </span>std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    future::Future,
-    io,
+    collections::HashMap,
+    io::{<span class="self">self</span>, Write},
+    ops::Deref,
     path::PathBuf,
-    sync::Arc,
 };
 
 <span class="kw">use </span>bao_tree::{
-    blake3,
-    io::{outboard::PreOrderMemOutboard, sync::Outboard},
+    io::{
+        mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
+        outboard::PreOrderMemOutboard,
+        sync::ReadAt,
+        Leaf,
+    },
+    BaoTree, ChunkRanges,
 };
 <span class="kw">use </span>bytes::Bytes;
-<span class="kw">use </span>futures_lite::Stream;
-<span class="kw">use </span>iroh_io::AsyncSliceReader;
-<span class="kw">use </span>tokio::io::AsyncWriteExt;
+<span class="kw">use </span>irpc::channel::mpsc;
+<span class="kw">use </span>n0_future::future::{<span class="self">self</span>, yield_now};
+<span class="kw">use </span>range_collections::range_set::RangeSetRange;
+<span class="kw">use </span>ref_cast::RefCast;
+<span class="kw">use </span>tokio::task::{JoinError, JoinSet};
 
-<span class="kw">use super</span>::{BaoBatchWriter, BaoBlobSize, ConsistencyCheckProgress, DbIter, ExportProgressCb};
+<span class="kw">use </span><span class="kw">super</span>::util::BaoTreeSender;
 <span class="kw">use crate</span>::{
-    store::{
-        EntryStatus, ExportMode, ImportMode, ImportProgress, Map, MapEntry, MapEntryMut,
-        ReadableStore,
+    api::{
+        <span class="self">self</span>,
+        blobs::{Bitfield, ExportProgressItem},
+        proto::{
+            <span class="self">self</span>, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
+            ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
+            ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
+            ObserveRequest,
+        },
+        ApiClient, TempTag,
     },
-    util::{
-        progress::{BoxedProgressSender, IdGenerator, ProgressSender},
-        Tag,
-    },
-    BlobFormat, Hash, HashAndFormat, TempTag, IROH_BLOCK_SIZE,
+    store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
+    util::ChunkRangesExt,
+    Hash,
 };
 
-<span class="doccomment">/// A readonly in memory database for iroh-blobs.
-///
-/// This is basically just a HashMap, so it does not allow for any modifications
-/// unless you have a mutable reference to it.
-///
-/// It is therefore useful mostly for testing and sharing static data.
-</span><span class="attr">#[derive(Debug, Clone, Default)]
-</span><span class="kw">pub struct </span>Store(Arc&lt;HashMap&lt;Hash, (PreOrderMemOutboard&lt;Bytes&gt;, Bytes)&gt;&gt;);
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub struct </span>ReadonlyMemStore {
+    client: ApiClient,
+}
 
-<span class="kw">impl</span>&lt;K, V&gt; FromIterator&lt;(K, V)&gt; <span class="kw">for </span>Store
-<span class="kw">where
-    </span>K: Into&lt;String&gt;,
-    V: AsRef&lt;[u8]&gt;,
-{
-    <span class="kw">fn </span>from_iter&lt;T: IntoIterator&lt;Item = (K, V)&gt;&gt;(iter: T) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>(db, _m) = <span class="self">Self</span>::new(iter);
-        db
+<span class="kw">impl </span>Deref <span class="kw">for </span>ReadonlyMemStore {
+    <span class="kw">type </span>Target = <span class="kw">crate</span>::api::Store;
+
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw">crate</span>::api::Store::ref_from_sender(<span class="kw-2">&amp;</span><span class="self">self</span>.client)
     }
 }
 
-<span class="kw">impl </span>Store {
-    <span class="doccomment">/// Create a new [Store] from a sequence of entries.
-    ///
-    /// Returns the database and a map of names to computed blake3 hashes.
-    /// In case of duplicate names, the last entry is used.
-    </span><span class="kw">pub fn </span>new(
-        entries: <span class="kw">impl </span>IntoIterator&lt;Item = (<span class="kw">impl </span>Into&lt;String&gt;, <span class="kw">impl </span>AsRef&lt;[u8]&gt;)&gt;,
-    ) -&gt; (<span class="self">Self</span>, BTreeMap&lt;String, blake3::Hash&gt;) {
-        <span class="kw">let </span><span class="kw-2">mut </span>names = BTreeMap::new();
-        <span class="kw">let </span><span class="kw-2">mut </span>res = HashMap::new();
-        <span class="kw">for </span>(name, data) <span class="kw">in </span>entries.into_iter() {
-            <span class="kw">let </span>name = name.into();
-            <span class="kw">let </span>data: <span class="kw-2">&amp;</span>[u8] = data.as_ref();
-            <span class="comment">// wrap into the right types
-            </span><span class="kw">let </span>outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE).map_data(Bytes::from);
-            <span class="kw">let </span>hash = outboard.root();
-            <span class="comment">// add the name, this assumes that names are unique
-            </span>names.insert(name, hash);
-            <span class="kw">let </span>data = Bytes::from(data.to_vec());
-            <span class="kw">let </span>hash = Hash::from(hash);
-            res.insert(hash, (outboard, data));
+<span class="kw">struct </span>Actor {
+    commands: tokio::sync::mpsc::Receiver&lt;proto::Command&gt;,
+    tasks: JoinSet&lt;()&gt;,
+    data: HashMap&lt;Hash, CompleteStorage&gt;,
+}
+
+<span class="kw">impl </span>Actor {
+    <span class="kw">fn </span>new(
+        commands: tokio::sync::mpsc::Receiver&lt;proto::Command&gt;,
+        data: HashMap&lt;Hash, CompleteStorage&gt;,
+    ) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            data,
+            commands,
+            tasks: JoinSet::new(),
         }
-        (<span class="self">Self</span>(Arc::new(res)), names)
     }
 
-    <span class="doccomment">/// Insert a new entry into the database, and return the hash of the entry.
-    ///
-    /// If the database was shared before, this will make a copy.
-    </span><span class="kw">pub fn </span>insert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, data: <span class="kw">impl </span>AsRef&lt;[u8]&gt;) -&gt; Hash {
-        <span class="kw">let </span>inner = Arc::make_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0</span>);
-        <span class="kw">let </span>data: <span class="kw-2">&amp;</span>[u8] = data.as_ref();
-        <span class="comment">// wrap into the right types
-        </span><span class="kw">let </span>outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE).map_data(Bytes::from);
-        <span class="kw">let </span>hash = outboard.root();
-        <span class="kw">let </span>data = Bytes::from(data.to_vec());
-        <span class="kw">let </span>hash = Hash::from(hash);
-        inner.insert(hash, (outboard, data));
-        hash
-    }
-
-    <span class="doccomment">/// Insert multiple entries into the database, and return the hash of the last entry.
-    </span><span class="kw">pub fn </span>insert_many(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        items: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>AsRef&lt;[u8]&gt;&gt;,
-    ) -&gt; <span class="prelude-ty">Option</span>&lt;Hash&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>hash = <span class="prelude-val">None</span>;
-        <span class="kw">for </span>item <span class="kw">in </span>items.into_iter() {
-            hash = <span class="prelude-val">Some</span>(<span class="self">self</span>.insert(item));
+    <span class="kw">async fn </span>handle_command(<span class="kw-2">&amp;mut </span><span class="self">self</span>, cmd: Command) -&gt; <span class="prelude-ty">Option</span>&lt;irpc::channel::oneshot::Sender&lt;()&gt;&gt; {
+        <span class="kw">match </span>cmd {
+            Command::ImportBao(ImportBaoMsg { tx, .. }) =&gt; {
+                tx.send(<span class="prelude-val">Err</span>(api::Error::Io(io::Error::other(
+                    <span class="string">"import not supported"</span>,
+                ))))
+                .<span class="kw">await
+                </span>.ok();
+            }
+            Command::ImportBytes(ImportBytesMsg { tx, .. }) =&gt; {
+                tx.send(io::Error::other(<span class="string">"import not supported"</span>).into())
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::ImportByteStream(ImportByteStreamMsg { tx, .. }) =&gt; {
+                tx.send(io::Error::other(<span class="string">"import not supported"</span>).into())
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::ImportPath(ImportPathMsg { tx, .. }) =&gt; {
+                tx.send(io::Error::other(<span class="string">"import not supported"</span>).into())
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::Observe(ObserveMsg {
+                inner: ObserveRequest { hash },
+                tx,
+                ..
+            }) =&gt; {
+                <span class="kw">let </span>size = <span class="self">self</span>.data.get_mut(<span class="kw-2">&amp;</span>hash).map(|x| x.data.len() <span class="kw">as </span>u64);
+                <span class="self">self</span>.tasks.spawn(<span class="kw">async move </span>{
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(size) = size {
+                        tx.send(Bitfield::complete(size)).<span class="kw">await</span>.ok();
+                    } <span class="kw">else </span>{
+                        tx.send(Bitfield::empty()).<span class="kw">await</span>.ok();
+                        future::pending::&lt;()&gt;().<span class="kw">await</span>;
+                    };
+                });
+            }
+            Command::ExportBao(ExportBaoMsg {
+                inner: ExportBaoRequest { hash, ranges, .. },
+                tx,
+                ..
+            }) =&gt; {
+                <span class="kw">let </span>entry = <span class="self">self</span>.data.get(<span class="kw-2">&amp;</span>hash).cloned();
+                <span class="self">self</span>.tasks.spawn(export_bao(hash, entry, ranges, tx));
+            }
+            Command::ExportPath(ExportPathMsg {
+                inner: ExportPathRequest { hash, target, .. },
+                tx,
+                ..
+            }) =&gt; {
+                <span class="kw">let </span>entry = <span class="self">self</span>.data.get(<span class="kw-2">&amp;</span>hash).cloned();
+                <span class="self">self</span>.tasks.spawn(export_path(entry, target, tx));
+            }
+            Command::Batch(_cmd) =&gt; {}
+            Command::ClearProtected(cmd) =&gt; {
+                cmd.tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
+            }
+            Command::CreateTag(cmd) =&gt; {
+                cmd.tx
+                    .send(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"create tag not supported"</span>).into()))
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::CreateTempTag(cmd) =&gt; {
+                cmd.tx.send(TempTag::new(cmd.inner.value, <span class="prelude-val">None</span>)).<span class="kw">await</span>.ok();
+            }
+            Command::RenameTag(cmd) =&gt; {
+                cmd.tx
+                    .send(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"rename tag not supported"</span>).into()))
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::DeleteTags(cmd) =&gt; {
+                cmd.tx
+                    .send(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"delete tags not supported"</span>).into()))
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::DeleteBlobs(cmd) =&gt; {
+                cmd.tx
+                    .send(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"delete blobs not supported"</span>).into()))
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::ListBlobs(cmd) =&gt; {
+                <span class="kw">let </span>hashes: Vec&lt;Hash&gt; = <span class="self">self</span>.data.keys().cloned().collect();
+                <span class="self">self</span>.tasks.spawn(<span class="kw">async move </span>{
+                    <span class="kw">for </span>hash <span class="kw">in </span>hashes {
+                        cmd.tx.send(<span class="prelude-val">Ok</span>(hash)).<span class="kw">await</span>.ok();
+                    }
+                });
+            }
+            Command::BlobStatus(cmd) =&gt; {
+                <span class="kw">let </span>hash = cmd.inner.hash;
+                <span class="kw">let </span>entry = <span class="self">self</span>.data.get(<span class="kw-2">&amp;</span>hash);
+                <span class="kw">let </span>status = <span class="kw">if let </span><span class="prelude-val">Some</span>(entry) = entry {
+                    BlobStatus::Complete {
+                        size: entry.data.len() <span class="kw">as </span>u64,
+                    }
+                } <span class="kw">else </span>{
+                    BlobStatus::NotFound
+                };
+                cmd.tx.send(status).<span class="kw">await</span>.ok();
+            }
+            Command::ListTags(cmd) =&gt; {
+                cmd.tx.send(Vec::new()).<span class="kw">await</span>.ok();
+            }
+            Command::SetTag(cmd) =&gt; {
+                cmd.tx
+                    .send(<span class="prelude-val">Err</span>(io::Error::other(<span class="string">"set tag not supported"</span>).into()))
+                    .<span class="kw">await
+                    </span>.ok();
+            }
+            Command::ListTempTags(cmd) =&gt; {
+                cmd.tx.send(Vec::new()).<span class="kw">await</span>.ok();
+            }
+            Command::SyncDb(cmd) =&gt; {
+                cmd.tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
+            }
+            Command::Shutdown(cmd) =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Some</span>(cmd.tx);
+            }
+            Command::ExportRanges(cmd) =&gt; {
+                <span class="kw">let </span>entry = <span class="self">self</span>.data.get(<span class="kw-2">&amp;</span>cmd.inner.hash).cloned();
+                <span class="self">self</span>.tasks.spawn(export_ranges(cmd, entry));
+            }
         }
-        hash
-    }
+        <span class="prelude-val">None
+    </span>}
 
-    <span class="doccomment">/// Get the bytes associated with a hash, if they exist.
-    </span><span class="kw">pub fn </span>get_content(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash) -&gt; <span class="prelude-ty">Option</span>&lt;Bytes&gt; {
-        <span class="kw">let </span>entry = <span class="self">self</span>.<span class="number">0</span>.get(hash)<span class="question-mark">?</span>;
-        <span class="prelude-val">Some</span>(entry.<span class="number">1</span>.clone())
-    }
-
-    <span class="kw">async fn </span>export_impl(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        hash: Hash,
-        target: PathBuf,
-        _mode: ExportMode,
-        progress: <span class="kw">impl </span>Fn(u64) -&gt; io::Result&lt;()&gt; + Send + Sync + <span class="lifetime">'static</span>,
-    ) -&gt; io::Result&lt;()&gt; {
-        <span class="macro">tracing::trace!</span>(<span class="string">"exporting {} to {}"</span>, hash, target.display());
-
-        <span class="kw">if </span>!target.is_absolute() {
-            <span class="kw">return </span><span class="prelude-val">Err</span>(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                <span class="string">"target path must be absolute"</span>,
-            ));
+    <span class="kw">fn </span>log_unit_task(<span class="kw-2">&amp;</span><span class="self">self</span>, res: <span class="prelude-ty">Result</span>&lt;(), JoinError&gt;) {
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = res {
+            <span class="macro">tracing::error!</span>(<span class="string">"task failed: {e}"</span>);
         }
-        <span class="kw">let </span>parent = target.parent().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                <span class="string">"target path has no parent directory"</span>,
+    }
+
+    <span class="kw">async fn </span>run(<span class="kw-2">mut </span><span class="self">self</span>) {
+        <span class="kw">loop </span>{
+            <span class="macro">tokio::select!</span> {
+                <span class="prelude-val">Some</span>(cmd) = <span class="self">self</span>.commands.recv() =&gt; {
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(shutdown) = <span class="self">self</span>.handle_command(cmd).<span class="kw">await </span>{
+                        shutdown.send(()).<span class="kw">await</span>.ok();
+                        <span class="kw">break</span>;
+                    }
+                },
+                <span class="prelude-val">Some</span>(res) = <span class="self">self</span>.tasks.join_next(), <span class="kw">if </span>!<span class="self">self</span>.tasks.is_empty() =&gt; {
+                    <span class="self">self</span>.log_unit_task(res);
+                },
+                <span class="kw">else </span>=&gt; <span class="kw">break</span>,
+            }
+        }
+    }
+}
+
+<span class="kw">async fn </span>export_bao(
+    hash: Hash,
+    entry: <span class="prelude-ty">Option</span>&lt;CompleteStorage&gt;,
+    ranges: ChunkRanges,
+    <span class="kw-2">mut </span>sender: mpsc::Sender&lt;EncodedItem&gt;,
+) {
+    <span class="kw">let </span>entry = <span class="kw">match </span>entry {
+        <span class="prelude-val">Some</span>(entry) =&gt; entry,
+        <span class="prelude-val">None </span>=&gt; {
+            sender
+                .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        <span class="string">"export task ended unexpectedly"</span>,
+                    ),
+                )))
+                .<span class="kw">await
+                </span>.ok();
+            <span class="kw">return</span>;
+        }
+    };
+    <span class="kw">let </span>data = entry.data;
+    <span class="kw">let </span>outboard = entry.outboard;
+    <span class="kw">let </span>size = data.as_ref().len() <span class="kw">as </span>u64;
+    <span class="kw">let </span>tree = BaoTree::new(size, IROH_BLOCK_SIZE);
+    <span class="kw">let </span>outboard = PreOrderMemOutboard {
+        root: hash.into(),
+        tree,
+        data: outboard,
+    };
+    <span class="kw">let </span>sender = BaoTreeSender::ref_cast_mut(<span class="kw-2">&amp;mut </span>sender);
+    traverse_ranges_validated(data.as_ref(), outboard, <span class="kw-2">&amp;</span>ranges, sender)
+        .<span class="kw">await
+        </span>.ok();
+}
+
+<span class="kw">async fn </span>export_ranges(<span class="kw-2">mut </span>cmd: ExportRangesMsg, entry: <span class="prelude-ty">Option</span>&lt;CompleteStorage&gt;) {
+    <span class="kw">let </span><span class="prelude-val">Some</span>(entry) = entry <span class="kw">else </span>{
+        cmd.tx
+            .send(ExportRangesItem::Error(api::Error::io(
+                io::ErrorKind::NotFound,
+                <span class="string">"hash not found"</span>,
+            )))
+            .<span class="kw">await
+            </span>.ok();
+        <span class="kw">return</span>;
+    };
+    <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = export_ranges_impl(cmd.inner, <span class="kw-2">&amp;mut </span>cmd.tx, entry).<span class="kw">await </span>{
+        cmd.tx
+            .send(ExportRangesItem::Error(cause.into()))
+            .<span class="kw">await
+            </span>.ok();
+    }
+}
+
+<span class="kw">async fn </span>export_ranges_impl(
+    cmd: ExportRangesRequest,
+    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ExportRangesItem&gt;,
+    entry: CompleteStorage,
+) -&gt; io::Result&lt;()&gt; {
+    <span class="kw">let </span>ExportRangesRequest { ranges, .. } = cmd;
+    <span class="kw">let </span>data = entry.data;
+    <span class="kw">let </span>size = data.len() <span class="kw">as </span>u64;
+    <span class="kw">let </span>bitfield = Bitfield::complete(size);
+    <span class="kw">for </span>range <span class="kw">in </span>ranges.iter() {
+        <span class="kw">let </span>range = <span class="kw">match </span>range {
+            RangeSetRange::Range(range) =&gt; size.min(<span class="kw-2">*</span>range.start)..size.min(<span class="kw-2">*</span>range.end),
+            RangeSetRange::RangeFrom(range) =&gt; size.min(<span class="kw-2">*</span>range.start)..size,
+        };
+        <span class="kw">let </span>requested = ChunkRanges::bytes(range.start..range.end);
+        <span class="kw">if </span>!bitfield.ranges.is_superset(<span class="kw-2">&amp;</span>requested) {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(io::Error::other(<span class="macro">format!</span>(
+                <span class="string">"missing range: {requested:?}, present: {bitfield:?}"</span>,
+            )));
+        }
+        <span class="kw">let </span>bs = <span class="number">1024</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>offset = range.start;
+        <span class="kw">loop </span>{
+            <span class="kw">let </span>end: u64 = (offset + bs).min(range.end);
+            <span class="kw">let </span>size = (end - offset) <span class="kw">as </span>usize;
+            tx.send(
+                Leaf {
+                    offset,
+                    data: data.read_bytes_at(offset, size)<span class="question-mark">?</span>,
+                }
+                .into(),
             )
-        })<span class="question-mark">?</span>;
-        <span class="comment">// create the directory in which the target file is
-        </span>tokio::fs::create_dir_all(parent).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>data = <span class="self">self
-            </span>.get_content(<span class="kw-2">&amp;</span>hash)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>))<span class="question-mark">?</span>;
-
-        <span class="kw">let </span><span class="kw-2">mut </span>offset = <span class="number">0u64</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>file = tokio::fs::File::create(<span class="kw-2">&amp;</span>target).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">for </span>chunk <span class="kw">in </span>data.chunks(<span class="number">1024 </span>* <span class="number">1024</span>) {
-            progress(offset)<span class="question-mark">?</span>;
-            file.write_all(chunk).<span class="kw">await</span><span class="question-mark">?</span>;
-            offset += chunk.len() <span class="kw">as </span>u64;
-        }
-        file.sync_all().<span class="kw">await</span><span class="question-mark">?</span>;
-        drop(file);
-        <span class="prelude-val">Ok</span>(())
-    }
-}
-
-<span class="doccomment">/// The [MapEntry] implementation for [Store].
-</span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>Entry {
-    outboard: PreOrderMemOutboard&lt;Bytes&gt;,
-    data: Bytes,
-}
-
-<span class="kw">impl </span>MapEntry <span class="kw">for </span>Entry {
-    <span class="kw">fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Hash {
-        <span class="self">self</span>.outboard.root().into()
-    }
-
-    <span class="kw">fn </span>size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BaoBlobSize {
-        BaoBlobSize::Verified(<span class="self">self</span>.data.len() <span class="kw">as </span>u64)
-    }
-
-    <span class="kw">async fn </span>outboard(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;<span class="kw">impl </span>bao_tree::io::fsm::Outboard&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.outboard.clone())
-    }
-
-    <span class="kw">async fn </span>data_reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;<span class="kw">impl </span>AsyncSliceReader&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.data.clone())
-    }
-
-    <span class="kw">fn </span>is_complete(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="bool-val">true
-    </span>}
-}
-
-<span class="kw">impl </span>Map <span class="kw">for </span>Store {
-    <span class="kw">type </span>Entry = Entry;
-
-    <span class="kw">async fn </span>get(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash) -&gt; io::Result&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Entry&gt;&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.<span class="number">0</span>.get(hash).map(|(o, d)| Entry {
-            outboard: o.clone(),
-            data: d.clone(),
-        }))
-    }
-}
-
-<span class="kw">impl </span><span class="kw">super</span>::MapMut <span class="kw">for </span>Store {
-    <span class="kw">type </span>EntryMut = Entry;
-
-    <span class="kw">async fn </span>get_mut(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash) -&gt; io::Result&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::EntryMut&gt;&gt; {
-        <span class="self">self</span>.get(hash).<span class="kw">await
-    </span>}
-
-    <span class="kw">async fn </span>get_or_create(<span class="kw-2">&amp;</span><span class="self">self</span>, _hash: Hash, _size: u64) -&gt; io::Result&lt;Entry&gt; {
-        <span class="prelude-val">Err</span>(io::Error::new(
-            io::ErrorKind::Other,
-            <span class="string">"cannot create temp entry in readonly database"</span>,
-        ))
-    }
-
-    <span class="kw">fn </span>entry_status_sync(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash) -&gt; io::Result&lt;EntryStatus&gt; {
-        <span class="prelude-val">Ok</span>(<span class="kw">match </span><span class="self">self</span>.<span class="number">0</span>.contains_key(hash) {
-            <span class="bool-val">true </span>=&gt; EntryStatus::Complete,
-            <span class="bool-val">false </span>=&gt; EntryStatus::NotFound,
-        })
-    }
-
-    <span class="kw">async fn </span>entry_status(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash) -&gt; io::Result&lt;EntryStatus&gt; {
-        <span class="self">self</span>.entry_status_sync(hash)
-    }
-
-    <span class="kw">async fn </span>insert_complete(<span class="kw-2">&amp;</span><span class="self">self</span>, _entry: Entry) -&gt; io::Result&lt;()&gt; {
-        <span class="comment">// this is unreachable, since we cannot create partial entries
-        </span><span class="macro">unreachable!</span>()
-    }
-}
-
-<span class="kw">impl </span>ReadableStore <span class="kw">for </span>Store {
-    <span class="kw">async fn </span>blobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;DbIter&lt;Hash&gt;&gt; {
-        <span class="prelude-val">Ok</span>(Box::new(
-            <span class="self">self</span>.<span class="number">0
-                </span>.keys()
-                .copied()
-                .map(<span class="prelude-val">Ok</span>)
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-                .into_iter(),
-        ))
-    }
-
-    <span class="kw">async fn </span>tags(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _from: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
-        _to: <span class="prelude-ty">Option</span>&lt;Tag&gt;,
-    ) -&gt; io::Result&lt;DbIter&lt;(Tag, HashAndFormat)&gt;&gt; {
-        <span class="prelude-val">Ok</span>(Box::new(std::iter::empty()))
-    }
-
-    <span class="kw">fn </span>temp_tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = HashAndFormat&gt; + Send + Sync + <span class="lifetime">'static</span>&gt; {
-        Box::new(std::iter::empty())
-    }
-
-    <span class="kw">async fn </span>consistency_check(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _repair: bool,
-        _tx: BoxedProgressSender&lt;ConsistencyCheckProgress&gt;,
-    ) -&gt; io::Result&lt;()&gt; {
-        <span class="prelude-val">Ok</span>(())
-    }
-
-    <span class="kw">async fn </span>export(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        hash: Hash,
-        target: PathBuf,
-        mode: ExportMode,
-        progress: ExportProgressCb,
-    ) -&gt; io::Result&lt;()&gt; {
-        <span class="self">self</span>.export_impl(hash, target, mode, progress).<span class="kw">await
-    </span>}
-
-    <span class="kw">async fn </span>partial_blobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;DbIter&lt;Hash&gt;&gt; {
-        <span class="prelude-val">Ok</span>(Box::new(std::iter::empty()))
-    }
-}
-
-<span class="kw">impl </span>MapEntryMut <span class="kw">for </span>Entry {
-    <span class="kw">async fn </span>batch_writer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;<span class="kw">impl </span>BaoBatchWriter&gt; {
-        <span class="kw">enum </span>Bar {}
-        <span class="kw">impl </span>BaoBatchWriter <span class="kw">for </span>Bar {
-            <span class="kw">async fn </span>write_batch(
-                <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-                _size: u64,
-                _batch: Vec&lt;bao_tree::io::fsm::BaoContentItem&gt;,
-            ) -&gt; io::Result&lt;()&gt; {
-                <span class="macro">unreachable!</span>()
-            }
-
-            <span class="kw">async fn </span>sync(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; io::Result&lt;()&gt; {
-                <span class="macro">unreachable!</span>()
+            .<span class="kw">await</span><span class="question-mark">?</span>;
+            offset = end;
+            <span class="kw">if </span>offset &gt;= range.end {
+                <span class="kw">break</span>;
             }
         }
+    }
+    <span class="prelude-val">Ok</span>(())
+}
 
-        <span class="attr">#[allow(unreachable_code)]
-        </span><span class="prelude-val">Ok</span>(<span class="macro">unreachable!</span>() <span class="kw">as </span>Bar)
+<span class="kw">impl </span>ReadonlyMemStore {
+    <span class="kw">pub fn </span>new(items: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>AsRef&lt;[u8]&gt;&gt;) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>entries = HashMap::new();
+        <span class="kw">for </span>item <span class="kw">in </span>items {
+            <span class="kw">let </span>data = Bytes::copy_from_slice(item.as_ref());
+            <span class="kw">let </span>(hash, entry) = CompleteStorage::create(data);
+            entries.insert(hash, entry);
+        }
+        <span class="kw">let </span>(sender, receiver) = tokio::sync::mpsc::channel(<span class="number">1</span>);
+        <span class="kw">let </span>actor = Actor::new(receiver, entries);
+        tokio::spawn(actor.run());
+        <span class="kw">let </span>local = irpc::LocalSender::from(sender);
+        <span class="self">Self </span>{
+            client: local.into(),
+        }
     }
 }
 
-<span class="kw">impl </span><span class="kw">super</span>::Store <span class="kw">for </span>Store {
-    <span class="kw">async fn </span>import_file(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        data: PathBuf,
-        mode: ImportMode,
-        format: BlobFormat,
-        progress: <span class="kw">impl </span>ProgressSender&lt;Msg = ImportProgress&gt; + IdGenerator,
-    ) -&gt; io::Result&lt;(TempTag, u64)&gt; {
-        <span class="kw">let _ </span>= (data, mode, progress, format);
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
+<span class="kw">async fn </span>export_path(
+    entry: <span class="prelude-ty">Option</span>&lt;CompleteStorage&gt;,
+    target: PathBuf,
+    <span class="kw-2">mut </span>tx: mpsc::Sender&lt;ExportProgressItem&gt;,
+) {
+    <span class="kw">let </span><span class="prelude-val">Some</span>(entry) = entry <span class="kw">else </span>{
+        tx.send(api::Error::io(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>).into())
+            .<span class="kw">await
+            </span>.ok();
+        <span class="kw">return</span>;
+    };
+    <span class="kw">match </span>export_path_impl(entry, target, <span class="kw-2">&amp;mut </span>tx).<span class="kw">await </span>{
+        <span class="prelude-val">Ok</span>(()) =&gt; tx.send(ExportProgressItem::Done).<span class="kw">await</span>.ok(),
+        <span class="prelude-val">Err</span>(cause) =&gt; tx.send(api::Error::from(cause).into()).<span class="kw">await</span>.ok(),
+    };
+}
+
+<span class="kw">async fn </span>export_path_impl(
+    entry: CompleteStorage,
+    target: PathBuf,
+    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ExportProgressItem&gt;,
+) -&gt; io::Result&lt;()&gt; {
+    <span class="kw">let </span>data = entry.data;
+    <span class="comment">// todo: for partial entries make sure to only write the part that is actually present
+    </span><span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::create(<span class="kw-2">&amp;</span>target)<span class="question-mark">?</span>;
+    <span class="kw">let </span>size = data.len() <span class="kw">as </span>u64;
+    tx.send(ExportProgressItem::Size(size)).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; <span class="number">1024 </span>* <span class="number">64</span>];
+    <span class="kw">for </span>offset <span class="kw">in </span>(<span class="number">0</span>..size).step_by(<span class="number">1024 </span>* <span class="number">64</span>) {
+        <span class="kw">let </span>len = std::cmp::min(size - offset, <span class="number">1024 </span>* <span class="number">64</span>) <span class="kw">as </span>usize;
+        <span class="kw">let </span>buf = <span class="kw-2">&amp;mut </span>buf[..len];
+        data.as_ref().read_exact_at(offset, buf)<span class="question-mark">?</span>;
+        file.write_all(buf)<span class="question-mark">?</span>;
+        tx.try_send(ExportProgressItem::CopyProgress(offset))
+            .<span class="kw">await
+            </span>.map_err(|_e| io::Error::other(<span class="string">"error"</span>))<span class="question-mark">?</span>;
+        yield_now().<span class="kw">await</span>;
     }
-
-    <span class="doccomment">/// import a byte slice
-    </span><span class="kw">async fn </span>import_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>, bytes: Bytes, format: BlobFormat) -&gt; io::Result&lt;TempTag&gt; {
-        <span class="kw">let _ </span>= (bytes, format);
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">async fn </span>rename_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, _from: Tag, _to: Tag) -&gt; io::Result&lt;()&gt; {
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">async fn </span>import_stream(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        data: <span class="kw">impl </span>Stream&lt;Item = io::Result&lt;Bytes&gt;&gt; + Unpin + Send,
-        format: BlobFormat,
-        progress: <span class="kw">impl </span>ProgressSender&lt;Msg = ImportProgress&gt; + IdGenerator,
-    ) -&gt; io::Result&lt;(TempTag, u64)&gt; {
-        <span class="kw">let _ </span>= (data, format, progress);
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">async fn </span>set_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, _name: Tag, _hash: HashAndFormat) -&gt; io::Result&lt;()&gt; {
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">async fn </span>delete_tags(<span class="kw-2">&amp;</span><span class="self">self</span>, _from: <span class="prelude-ty">Option</span>&lt;Tag&gt;, _to: <span class="prelude-ty">Option</span>&lt;Tag&gt;) -&gt; io::Result&lt;()&gt; {
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">async fn </span>create_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, _hash: HashAndFormat) -&gt; io::Result&lt;Tag&gt; {
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">fn </span>temp_tag(<span class="kw-2">&amp;</span><span class="self">self</span>, inner: HashAndFormat) -&gt; TempTag {
-        TempTag::new(inner, <span class="prelude-val">None</span>)
-    }
-
-    <span class="kw">async fn </span>gc_run&lt;G, Gut&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw">super</span>::GcConfig, protected_cb: G)
-    <span class="kw">where
-        </span>G: Fn() -&gt; Gut,
-        Gut: Future&lt;Output = BTreeSet&lt;Hash&gt;&gt; + Send,
-    {
-        <span class="kw">super</span>::gc_run_loop(<span class="self">self</span>, config, <span class="kw">move </span>|| <span class="kw">async </span>{ <span class="prelude-val">Ok</span>(()) }, protected_cb).<span class="kw">await
-    </span>}
-
-    <span class="kw">async fn </span>delete(<span class="kw-2">&amp;</span><span class="self">self</span>, _hashes: Vec&lt;Hash&gt;) -&gt; io::Result&lt;()&gt; {
-        <span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::Other, <span class="string">"not implemented"</span>))
-    }
-
-    <span class="kw">async fn </span>shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
-
-    <span class="kw">async fn </span>sync(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;()&gt; {
-        <span class="prelude-val">Ok</span>(())
-    }
+    <span class="prelude-val">Ok</span>(())
 }
 </code></pre></div></section></main></body></html>

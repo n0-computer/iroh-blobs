@@ -943,12 +943,91 @@
 <a href="#942" id="942">942</a>
 <a href="#943" id="943">943</a>
 <a href="#944" id="944">944</a>
-<a href="#945" id="945">945</a></pre></div><pre class="rust"><code><span class="doccomment">//! The client side API
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a>
+<a href="#1018" id="1018">1018</a>
+<a href="#1019" id="1019">1019</a>
+<a href="#1020" id="1020">1020</a></pre></div><pre class="rust"><code><span class="doccomment">//! The low level client side API
 //!
-//! To get data, create a connection using [iroh-net] or use any quinn
-//! connection that was obtained in another way.
+//! Note that while using this API directly is fine, a simpler way to get data
+//! to a store is to use the [`crate::api::remote`] API, in particular the
+//! [`crate::api::remote::Remote::fetch`] function to download data to your
+//! local store.
 //!
-//! Create a request describing the data you want to get.
+//! To get data, create a connection using an [`iroh::Endpoint`].
+//!
+//! Create a [`crate::protocol::GetRequest`] describing the data you want to get.
 //!
 //! Then create a state machine using [fsm::start] and
 //! drive it to completion by calling next on each state.
@@ -956,7 +1035,7 @@
 //! For some states you have to provide additional arguments when calling next,
 //! or you can choose to finish early.
 //!
-//! [iroh-net]: https://docs.rs/iroh-net
+//! [iroh]: https://docs.rs/iroh
 </span><span class="kw">use </span>std::{
     error::Error,
     fmt::{<span class="self">self</span>, Debug},
@@ -965,28 +1044,41 @@
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>bao_tree::{io::fsm::BaoContentItem, ChunkNum};
-<span class="kw">use </span>iroh::endpoint::{<span class="self">self</span>, ClosedStream, RecvStream, SendStream, WriteError};
+<span class="kw">use </span>fsm::RequestCounters;
+<span class="kw">use </span>iroh::endpoint::{<span class="self">self</span>, RecvStream, SendStream};
+<span class="kw">use </span>iroh_io::TokioStreamReader;
+<span class="kw">use </span>n0_snafu::SpanTrace;
+<span class="kw">use </span>nested_enum_utils::common_fields;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
+<span class="kw">use </span>snafu::{Backtrace, IntoError, ResultExt, Snafu};
 <span class="kw">use </span>tracing::{debug, error};
 
-<span class="kw">use crate</span>::{
-    protocol::RangeSpecSeq,
-    util::io::{TrackingReader, TrackingWriter},
-    Hash, IROH_BLOCK_SIZE,
-};
+<span class="kw">use crate</span>::{protocol::ChunkRangesSeq, store::IROH_BLOCK_SIZE, Hash};
 
-<span class="kw">pub mod </span>db;
-<span class="kw">pub mod </span>error;
-<span class="kw">pub mod </span>progress;
+<span class="kw">mod </span>error;
 <span class="kw">pub mod </span>request;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>error::{BadRequestSnafu, LocalFailureSnafu};
+<span class="kw">pub use </span>error::{GetError, GetResult};
+
+<span class="kw">type </span>WrappedRecvStream = TokioStreamReader&lt;RecvStream&gt;;
 
 <span class="doccomment">/// Stats about the transfer.
-</span><span class="attr">#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+</span><span class="attr">#[derive(
+    Debug,
+    Default,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    derive_more::Deref,
+    derive_more::DerefMut,
+)]
 </span><span class="kw">pub struct </span>Stats {
-    <span class="doccomment">/// The number of bytes written
-    </span><span class="kw">pub </span>bytes_written: u64,
-    <span class="doccomment">/// The number of bytes read
-    </span><span class="kw">pub </span>bytes_read: u64,
+    <span class="doccomment">/// Counters
+    </span><span class="attr">#[deref]
+    #[deref_mut]
+    </span><span class="kw">pub </span>counters: RequestCounters,
     <span class="doccomment">/// The time it took to transfer the data
     </span><span class="kw">pub </span>elapsed: Duration,
 }
@@ -994,8 +1086,20 @@
 <span class="kw">impl </span>Stats {
     <span class="doccomment">/// Transfer rate in megabits per second
     </span><span class="kw">pub fn </span>mbits(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; f64 {
-        <span class="kw">let </span>data_len_bit = <span class="self">self</span>.bytes_read * <span class="number">8</span>;
+        <span class="kw">let </span>data_len_bit = <span class="self">self</span>.total_bytes_read() * <span class="number">8</span>;
         data_len_bit <span class="kw">as </span>f64 / (<span class="number">1000. </span>* <span class="number">1000.</span>) / <span class="self">self</span>.elapsed.as_secs_f64()
+    }
+
+    <span class="kw">pub fn </span>total_bytes_read(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.payload_bytes_read + <span class="self">self</span>.other_bytes_read
+    }
+
+    <span class="kw">pub fn </span>combine(<span class="kw-2">&amp;mut </span><span class="self">self</span>, that: <span class="kw-2">&amp;</span>Stats) {
+        <span class="self">self</span>.payload_bytes_written += that.payload_bytes_written;
+        <span class="self">self</span>.other_bytes_written += that.other_bytes_written;
+        <span class="self">self</span>.payload_bytes_read += that.payload_bytes_read;
+        <span class="self">self</span>.other_bytes_read += that.other_bytes_read;
+        <span class="self">self</span>.elapsed += that.elapsed;
     }
 }
 
@@ -1013,27 +1117,65 @@
     <span class="kw">use </span>derive_more::From;
     <span class="kw">use </span>iroh::endpoint::Connection;
     <span class="kw">use </span>iroh_io::{AsyncSliceWriter, AsyncStreamReader, TokioStreamReader};
-    <span class="kw">use </span>tokio::io::AsyncWriteExt;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
     <span class="kw">use crate</span>::{
-        protocol::{GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE},
-        store::BaoBatchWriter,
+        get::error::BadRequestSnafu,
+        protocol::{
+            GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
+        },
     };
-
-    <span class="kw">type </span>WrappedRecvStream = TrackingReader&lt;TokioStreamReader&lt;RecvStream&gt;&gt;;
 
     <span class="macro">self_cell::self_cell!</span> {
         <span class="kw">struct </span>RangesIterInner {
-            owner: RangeSpecSeq,
-            <span class="attr">#[covariant]
+            owner: ChunkRangesSeq,
+            <span class="attr">#[not_covariant]
             </span>dependent: NonEmptyRequestRangeSpecIter,
         }
     }
 
     <span class="doccomment">/// The entry point of the get response machine
-    </span><span class="kw">pub fn </span>start(connection: Connection, request: GetRequest) -&gt; AtInitial {
-        AtInitial::new(connection, request)
+    </span><span class="kw">pub fn </span>start(
+        connection: Connection,
+        request: GetRequest,
+        counters: RequestCounters,
+    ) -&gt; AtInitial {
+        AtInitial::new(connection, request, counters)
+    }
+
+    <span class="doccomment">/// Start with a get many request. Todo: turn this into distinct states.
+    </span><span class="kw">pub async fn </span>start_get_many(
+        connection: Connection,
+        request: GetManyRequest,
+        counters: RequestCounters,
+    ) -&gt; std::result::Result&lt;<span class="prelude-ty">Result</span>&lt;AtStartChild, AtClosing&gt;, GetError&gt; {
+        <span class="kw">let </span>start = Instant::now();
+        <span class="kw">let </span>(<span class="kw-2">mut </span>writer, reader) = connection.open_bi().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>request = Request::GetMany(request);
+        <span class="kw">let </span>request_bytes = postcard::to_stdvec(<span class="kw-2">&amp;</span>request)
+            .map_err(|source| BadRequestSnafu.into_error(source.into()))<span class="question-mark">?</span>;
+        writer.write_all(<span class="kw-2">&amp;</span>request_bytes).<span class="kw">await</span><span class="question-mark">?</span>;
+        writer.finish()<span class="question-mark">?</span>;
+        <span class="kw">let </span>Request::GetMany(request) = request <span class="kw">else </span>{
+            <span class="macro">unreachable!</span>();
+        };
+        <span class="kw">let </span>reader = TokioStreamReader::new(reader);
+        <span class="kw">let </span><span class="kw-2">mut </span>ranges_iter = RangesIter::new(request.ranges.clone());
+        <span class="kw">let </span>first_item = ranges_iter.next();
+        <span class="kw">let </span>misc = Box::new(Misc {
+            counters,
+            start,
+            ranges_iter,
+        });
+        <span class="prelude-val">Ok</span>(<span class="kw">match </span>first_item {
+            <span class="prelude-val">Some</span>((child_offset, child_ranges)) =&gt; <span class="prelude-val">Ok</span>(AtStartChild {
+                ranges: child_ranges,
+                reader,
+                misc,
+                offset: child_offset,
+            }),
+            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(AtClosing::new(misc, reader, <span class="bool-val">true</span>)),
+        })
     }
 
     <span class="doccomment">/// Owned iterator for the ranges in a request
@@ -1049,8 +1191,10 @@
     }
 
     <span class="kw">impl </span>RangesIter {
-        <span class="kw">pub fn </span>new(owner: RangeSpecSeq) -&gt; <span class="self">Self </span>{
-            <span class="self">Self</span>(RangesIterInner::new(owner, |owner| owner.iter_non_empty()))
+        <span class="kw">pub fn </span>new(owner: ChunkRangesSeq) -&gt; <span class="self">Self </span>{
+            <span class="self">Self</span>(RangesIterInner::new(owner, |owner| {
+                owner.iter_non_empty_infinite()
+            }))
         }
 
         <span class="kw">pub fn </span>offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
@@ -1063,8 +1207,7 @@
 
         <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
             <span class="self">self</span>.<span class="number">0</span>.with_dependent_mut(|_owner, iter| {
-                iter.next()
-                    .map(|(offset, ranges)| (offset, ranges.to_chunk_ranges()))
+                iter.next().map(|(offset, ranges)| (offset, ranges.clone()))
             })
         }
     }
@@ -1074,6 +1217,7 @@
     </span><span class="kw">pub struct </span>AtInitial {
         connection: Connection,
         request: GetRequest,
+        counters: RequestCounters,
     }
 
     <span class="kw">impl </span>AtInitial {
@@ -1081,10 +1225,11 @@
         ///
         /// `connection` is an existing connection
         /// `request` is the request to be sent
-        </span><span class="kw">pub fn </span>new(connection: Connection, request: GetRequest) -&gt; <span class="self">Self </span>{
+        </span><span class="kw">pub fn </span>new(connection: Connection, request: GetRequest, counters: RequestCounters) -&gt; <span class="self">Self </span>{
             <span class="self">Self </span>{
                 connection,
                 request,
+                counters,
             }
         }
 
@@ -1092,13 +1237,13 @@
         </span><span class="kw">pub async fn </span>next(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;AtConnected, endpoint::ConnectionError&gt; {
             <span class="kw">let </span>start = Instant::now();
             <span class="kw">let </span>(writer, reader) = <span class="self">self</span>.connection.open_bi().<span class="kw">await</span><span class="question-mark">?</span>;
-            <span class="kw">let </span>reader = TrackingReader::new(TokioStreamReader::new(reader));
-            <span class="kw">let </span>writer = TrackingWriter::new(writer);
+            <span class="kw">let </span>reader = TokioStreamReader::new(reader);
             <span class="prelude-val">Ok</span>(AtConnected {
                 start,
                 reader,
                 writer,
                 request: <span class="self">self</span>.request,
+                counters: <span class="self">self</span>.counters,
             })
         }
     }
@@ -1108,8 +1253,9 @@
     </span><span class="kw">pub struct </span>AtConnected {
         start: Instant,
         reader: WrappedRecvStream,
-        writer: TrackingWriter&lt;SendStream&gt;,
+        writer: SendStream,
         request: GetRequest,
+        counters: RequestCounters,
     }
 
     <span class="doccomment">/// Possible next states after the handshake has been sent
@@ -1124,50 +1270,30 @@
     }
 
     <span class="doccomment">/// Error that you can get from [`AtConnected::next`]
-    </span><span class="attr">#[derive(Debug, thiserror::Error)]
+    </span><span class="attr">#[common_fields({
+        backtrace: <span class="prelude-ty">Option</span>&lt;Backtrace&gt;,
+        <span class="attr">#[snafu(implicit)]
+        </span>span_trace: SpanTrace,
+    })]
+    <span class="attr">#[allow(missing_docs)]
+    #[derive(Debug, Snafu)]
+    #[non_exhaustive]
     </span><span class="kw">pub enum </span>ConnectedNextError {
         <span class="doccomment">/// Error when serializing the request
-        </span><span class="attr">#[error(<span class="string">"postcard ser: {0}"</span>)]
-        </span>PostcardSer(postcard::Error),
+        </span><span class="attr">#[snafu(display(<span class="string">"postcard ser: {source}"</span>))]
+        </span>PostcardSer { source: postcard::Error },
         <span class="doccomment">/// The serialized request is too long to be sent
-        </span><span class="attr">#[error(<span class="string">"request too big"</span>)]
-        </span>RequestTooBig,
+        </span><span class="attr">#[snafu(display(<span class="string">"request too big"</span>))]
+        </span>RequestTooBig {},
         <span class="doccomment">/// Error when writing the request to the [`SendStream`].
-        </span><span class="attr">#[error(<span class="string">"write: {0}"</span>)]
-        </span>Write(<span class="attr">#[from] </span>WriteError),
+        </span><span class="attr">#[snafu(display(<span class="string">"write: {source}"</span>))]
+        </span>Write { source: quinn::WriteError },
         <span class="doccomment">/// Quic connection is closed.
-        </span><span class="attr">#[error(<span class="string">"closed"</span>)]
-        </span>Closed(<span class="attr">#[from] </span>ClosedStream),
+        </span><span class="attr">#[snafu(display(<span class="string">"closed"</span>))]
+        </span>Closed { source: quinn::ClosedStream },
         <span class="doccomment">/// A generic io error
-        </span><span class="attr">#[error(<span class="string">"io {0}"</span>)]
-        </span>Io(io::Error),
-    }
-
-    <span class="kw">impl </span>ConnectedNextError {
-        <span class="kw">fn </span>from_io(cause: io::Error) -&gt; <span class="self">Self </span>{
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(inner) = cause.get_ref() {
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(e) = inner.downcast_ref::&lt;endpoint::WriteError&gt;() {
-                    <span class="self">Self</span>::Write(e.clone())
-                } <span class="kw">else </span>{
-                    <span class="self">Self</span>::Io(cause)
-                }
-            } <span class="kw">else </span>{
-                <span class="self">Self</span>::Io(cause)
-            }
-        }
-    }
-
-    <span class="kw">impl </span>From&lt;ConnectedNextError&gt; <span class="kw">for </span>io::Error {
-        <span class="kw">fn </span>from(cause: ConnectedNextError) -&gt; <span class="self">Self </span>{
-            <span class="kw">match </span>cause {
-                ConnectedNextError::Write(cause) =&gt; cause.into(),
-                ConnectedNextError::Io(cause) =&gt; cause,
-                ConnectedNextError::PostcardSer(cause) =&gt; {
-                    io::Error::new(io::ErrorKind::Other, cause)
-                }
-                <span class="kw">_ </span>=&gt; io::Error::new(io::ErrorKind::Other, cause),
-            }
-        }
+        </span><span class="attr">#[snafu(transparent)]
+        </span>Io { source: io::Error },
     }
 
     <span class="kw">impl </span>AtConnected {
@@ -1183,37 +1309,36 @@
                 reader,
                 <span class="kw-2">mut </span>writer,
                 <span class="kw-2">mut </span>request,
+                <span class="kw-2">mut </span>counters,
             } = <span class="self">self</span>;
             <span class="comment">// 1. Send Request
-            </span>{
+            </span>counters.other_bytes_written += {
                 <span class="macro">debug!</span>(<span class="string">"sending request"</span>);
                 <span class="kw">let </span>wrapped = Request::Get(request);
-                <span class="kw">let </span>request_bytes =
-                    postcard::to_stdvec(<span class="kw-2">&amp;</span>wrapped).map_err(ConnectedNextError::PostcardSer)<span class="question-mark">?</span>;
-                <span class="kw">let </span>Request::Get(x) = wrapped;
+                <span class="kw">let </span>request_bytes = postcard::to_stdvec(<span class="kw-2">&amp;</span>wrapped).context(PostcardSerSnafu)<span class="question-mark">?</span>;
+                <span class="kw">let </span>Request::Get(x) = wrapped <span class="kw">else </span>{
+                    <span class="macro">unreachable!</span>();
+                };
                 request = x;
 
                 <span class="kw">if </span>request_bytes.len() &gt; MAX_MESSAGE_SIZE {
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(ConnectedNextError::RequestTooBig);
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(RequestTooBigSnafu.build());
                 }
 
                 <span class="comment">// write the request itself
-                </span>writer
-                    .write_all(<span class="kw-2">&amp;</span>request_bytes)
-                    .<span class="kw">await
-                    </span>.map_err(ConnectedNextError::from_io)<span class="question-mark">?</span>;
-            }
+                </span>writer.write_all(<span class="kw-2">&amp;</span>request_bytes).<span class="kw">await</span>.context(WriteSnafu)<span class="question-mark">?</span>;
+                request_bytes.len() <span class="kw">as </span>u64
+            };
 
             <span class="comment">// 2. Finish writing before expecting a response
-            </span><span class="kw">let </span>(<span class="kw-2">mut </span>writer, bytes_written) = writer.into_parts();
-            writer.finish()<span class="question-mark">?</span>;
+            </span>writer.finish().context(ClosedSnafu)<span class="question-mark">?</span>;
 
             <span class="kw">let </span>hash = request.hash;
             <span class="kw">let </span>ranges_iter = RangesIter::new(request.ranges);
             <span class="comment">// this is in a box so we don't have to memcpy it on every state transition
             </span><span class="kw">let </span><span class="kw-2">mut </span>misc = Box::new(Misc {
+                counters,
                 start,
-                bytes_written,
                 ranges_iter,
             });
             <span class="prelude-val">Ok</span>(<span class="kw">match </span>misc.ranges_iter.next() {
@@ -1231,7 +1356,7 @@
                             reader,
                             ranges,
                             misc,
-                            child_offset: offset - <span class="number">1</span>,
+                            offset,
                         }
                         .into()
                     }
@@ -1245,7 +1370,7 @@
     </span><span class="attr">#[derive(Debug)]
     </span><span class="kw">pub struct </span>AtStartRoot {
         ranges: ChunkRanges,
-        reader: TrackingReader&lt;TokioStreamReader&lt;RecvStream&gt;&gt;,
+        reader: TokioStreamReader&lt;RecvStream&gt;,
         misc: Box&lt;Misc&gt;,
         hash: Hash,
     }
@@ -1254,9 +1379,9 @@
     </span><span class="attr">#[derive(Debug)]
     </span><span class="kw">pub struct </span>AtStartChild {
         ranges: ChunkRanges,
-        reader: TrackingReader&lt;TokioStreamReader&lt;RecvStream&gt;&gt;,
+        reader: TokioStreamReader&lt;RecvStream&gt;,
         misc: Box&lt;Misc&gt;,
-        child_offset: u64,
+        offset: u64,
     }
 
     <span class="kw">impl </span>AtStartChild {
@@ -1265,8 +1390,8 @@
         /// This must be used to determine the hash needed to call next.
         /// If this is larger than the number of children in the collection,
         /// you can call finish to stop reading the response.
-        </span><span class="kw">pub fn </span>child_offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-            <span class="self">self</span>.child_offset
+        </span><span class="kw">pub fn </span>offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+            <span class="self">self</span>.offset
         }
 
         <span class="doccomment">/// The ranges we have requested for the child
@@ -1329,35 +1454,41 @@
     </span><span class="attr">#[derive(Debug)]
     </span><span class="kw">pub struct </span>AtBlobHeader {
         ranges: ChunkRanges,
-        reader: TrackingReader&lt;TokioStreamReader&lt;RecvStream&gt;&gt;,
+        reader: TokioStreamReader&lt;RecvStream&gt;,
         misc: Box&lt;Misc&gt;,
         hash: Hash,
     }
 
     <span class="doccomment">/// Error that you can get from [`AtBlobHeader::next`]
-    </span><span class="attr">#[derive(Debug, thiserror::Error)]
+    </span><span class="attr">#[common_fields({
+        backtrace: <span class="prelude-ty">Option</span>&lt;Backtrace&gt;,
+        <span class="attr">#[snafu(implicit)]
+        </span>span_trace: SpanTrace,
+    })]
+    <span class="attr">#[non_exhaustive]
+    #[derive(Debug, Snafu)]
     </span><span class="kw">pub enum </span>AtBlobHeaderNextError {
         <span class="doccomment">/// Eof when reading the size header
         ///
         /// This indicates that the provider does not have the requested data.
-        </span><span class="attr">#[error(<span class="string">"not found"</span>)]
-        </span>NotFound,
+        </span><span class="attr">#[snafu(display(<span class="string">"not found"</span>))]
+        </span>NotFound {},
         <span class="doccomment">/// Quinn read error when reading the size header
-        </span><span class="attr">#[error(<span class="string">"read: {0}"</span>)]
-        </span>Read(endpoint::ReadError),
+        </span><span class="attr">#[snafu(display(<span class="string">"read: {source}"</span>))]
+        </span>EndpointRead { source: endpoint::ReadError },
         <span class="doccomment">/// Generic io error
-        </span><span class="attr">#[error(<span class="string">"io: {0}"</span>)]
-        </span>Io(io::Error),
+        </span><span class="attr">#[snafu(display(<span class="string">"io: {source}"</span>))]
+        </span>Io { source: io::Error },
     }
 
     <span class="kw">impl </span>From&lt;AtBlobHeaderNextError&gt; <span class="kw">for </span>io::Error {
         <span class="kw">fn </span>from(cause: AtBlobHeaderNextError) -&gt; <span class="self">Self </span>{
             <span class="kw">match </span>cause {
-                AtBlobHeaderNextError::NotFound =&gt; {
+                AtBlobHeaderNextError::NotFound { .. } =&gt; {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
-                AtBlobHeaderNextError::Read(cause) =&gt; cause.into(),
-                AtBlobHeaderNextError::Io(cause) =&gt; cause,
+                AtBlobHeaderNextError::EndpointRead { source, .. } =&gt; source.into(),
+                AtBlobHeaderNextError::Io { source, .. } =&gt; source,
             }
         }
     }
@@ -1367,16 +1498,17 @@
         </span><span class="kw">pub async fn </span>next(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;(AtBlobContent, u64), AtBlobHeaderNextError&gt; {
             <span class="kw">let </span>size = <span class="self">self</span>.reader.read::&lt;<span class="number">8</span>&gt;().<span class="kw">await</span>.map_err(|cause| {
                 <span class="kw">if </span>cause.kind() == io::ErrorKind::UnexpectedEof {
-                    AtBlobHeaderNextError::NotFound
+                    NotFoundSnafu.build()
                 } <span class="kw">else if let </span><span class="prelude-val">Some</span>(e) = cause
                     .get_ref()
                     .and_then(|x| x.downcast_ref::&lt;endpoint::ReadError&gt;())
                 {
-                    AtBlobHeaderNextError::Read(e.clone())
+                    EndpointReadSnafu.into_error(e.clone())
                 } <span class="kw">else </span>{
-                    AtBlobHeaderNextError::Io(cause)
+                    IoSnafu.into_error(cause)
                 }
             })<span class="question-mark">?</span>;
+            <span class="self">self</span>.misc.other_bytes_read += <span class="number">8</span>;
             <span class="kw">let </span>size = u64::from_le_bytes(size);
             <span class="kw">let </span>stream = ResponseDecoder::new(
                 <span class="self">self</span>.hash.into(),
@@ -1438,16 +1570,6 @@
             <span class="prelude-val">Ok</span>(res)
         }
 
-        <span class="doccomment">/// Write the entire stream for this blob to a batch writer.
-        </span><span class="kw">pub async fn </span>write_all_batch&lt;B&gt;(<span class="self">self</span>, batch: B) -&gt; result::Result&lt;AtEndBlob, DecodeError&gt;
-        <span class="kw">where
-            </span>B: BaoBatchWriter,
-        {
-            <span class="kw">let </span>(content, _size) = <span class="self">self</span>.next().<span class="kw">await</span><span class="question-mark">?</span>;
-            <span class="kw">let </span>res = content.write_all_batch(batch).<span class="kw">await</span><span class="question-mark">?</span>;
-            <span class="prelude-val">Ok</span>(res)
-        }
-
         <span class="doccomment">/// The hash of the blob we are reading.
         </span><span class="kw">pub fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Hash {
             <span class="self">self</span>.hash
@@ -1490,41 +1612,53 @@
     /// provider should never do this, so this is an indication that the provider is
     /// not behaving correctly.
     ///
-    /// The [`DecodeError::Io`] variant is just a fallback for any other io error that
-    /// is not actually a [`ReadError`].
+    /// The [`DecodeError::DecodeIo`] variant is just a fallback for any other io error that
+    /// is not actually a [`DecodeError::Read`].
     ///
     /// [`ReadError`]: endpoint::ReadError
-    </span><span class="attr">#[derive(Debug, thiserror::Error)]
+    </span><span class="attr">#[common_fields({
+        backtrace: <span class="prelude-ty">Option</span>&lt;Backtrace&gt;,
+        <span class="attr">#[snafu(implicit)]
+        </span>span_trace: SpanTrace,
+    })]
+    <span class="attr">#[non_exhaustive]
+    #[derive(Debug, Snafu)]
     </span><span class="kw">pub enum </span>DecodeError {
         <span class="doccomment">/// A chunk was not found or invalid, so the provider stopped sending data
-        </span><span class="attr">#[error(<span class="string">"not found"</span>)]
-        </span>NotFound,
+        </span><span class="attr">#[snafu(display(<span class="string">"not found"</span>))]
+        </span>ChunkNotFound {},
         <span class="doccomment">/// A parent was not found or invalid, so the provider stopped sending data
-        </span><span class="attr">#[error(<span class="string">"parent not found {0:?}"</span>)]
-        </span>ParentNotFound(TreeNode),
+        </span><span class="attr">#[snafu(display(<span class="string">"parent not found {node:?}"</span>))]
+        </span>ParentNotFound { node: TreeNode },
         <span class="doccomment">/// A parent was not found or invalid, so the provider stopped sending data
-        </span><span class="attr">#[error(<span class="string">"chunk not found {0}"</span>)]
-        </span>LeafNotFound(ChunkNum),
+        </span><span class="attr">#[snafu(display(<span class="string">"chunk not found {num}"</span>))]
+        </span>LeafNotFound { num: ChunkNum },
         <span class="doccomment">/// The hash of a parent did not match the expected hash
-        </span><span class="attr">#[error(<span class="string">"parent hash mismatch: {0:?}"</span>)]
-        </span>ParentHashMismatch(TreeNode),
+        </span><span class="attr">#[snafu(display(<span class="string">"parent hash mismatch: {node:?}"</span>))]
+        </span>ParentHashMismatch { node: TreeNode },
         <span class="doccomment">/// The hash of a leaf did not match the expected hash
-        </span><span class="attr">#[error(<span class="string">"leaf hash mismatch: {0}"</span>)]
-        </span>LeafHashMismatch(ChunkNum),
+        </span><span class="attr">#[snafu(display(<span class="string">"leaf hash mismatch: {num}"</span>))]
+        </span>LeafHashMismatch { num: ChunkNum },
         <span class="doccomment">/// Error when reading from the stream
-        </span><span class="attr">#[error(<span class="string">"read: {0}"</span>)]
-        </span>Read(endpoint::ReadError),
+        </span><span class="attr">#[snafu(display(<span class="string">"read: {source}"</span>))]
+        </span>Read { source: endpoint::ReadError },
         <span class="doccomment">/// A generic io error
-        </span><span class="attr">#[error(<span class="string">"io: {0}"</span>)]
-        </span>Io(<span class="attr">#[from] </span>io::Error),
+        </span><span class="attr">#[snafu(display(<span class="string">"io: {source}"</span>))]
+        </span>DecodeIo { source: io::Error },
+    }
+
+    <span class="kw">impl </span>DecodeError {
+        <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>leaf_hash_mismatch(num: ChunkNum) -&gt; <span class="self">Self </span>{
+            LeafHashMismatchSnafu { num }.build()
+        }
     }
 
     <span class="kw">impl </span>From&lt;AtBlobHeaderNextError&gt; <span class="kw">for </span>DecodeError {
         <span class="kw">fn </span>from(cause: AtBlobHeaderNextError) -&gt; <span class="self">Self </span>{
             <span class="kw">match </span>cause {
-                AtBlobHeaderNextError::NotFound =&gt; <span class="self">Self</span>::NotFound,
-                AtBlobHeaderNextError::Read(cause) =&gt; <span class="self">Self</span>::Read(cause),
-                AtBlobHeaderNextError::Io(cause) =&gt; <span class="self">Self</span>::Io(cause),
+                AtBlobHeaderNextError::NotFound { .. } =&gt; ChunkNotFoundSnafu.build(),
+                AtBlobHeaderNextError::EndpointRead { source, .. } =&gt; ReadSnafu.into_error(source),
+                AtBlobHeaderNextError::Io { source, .. } =&gt; DecodeIoSnafu.into_error(source),
             }
         }
     }
@@ -1532,35 +1666,47 @@
     <span class="kw">impl </span>From&lt;DecodeError&gt; <span class="kw">for </span>io::Error {
         <span class="kw">fn </span>from(cause: DecodeError) -&gt; <span class="self">Self </span>{
             <span class="kw">match </span>cause {
-                DecodeError::ParentNotFound(<span class="kw">_</span>) =&gt; {
+                DecodeError::ParentNotFound { .. } =&gt; {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
-                DecodeError::LeafNotFound(<span class="kw">_</span>) =&gt; io::Error::new(io::ErrorKind::UnexpectedEof, cause),
-                DecodeError::Read(cause) =&gt; cause.into(),
-                DecodeError::Io(cause) =&gt; cause,
-                <span class="kw">_ </span>=&gt; io::Error::new(io::ErrorKind::Other, cause),
+                DecodeError::LeafNotFound { .. } =&gt; {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, cause)
+                }
+                DecodeError::Read { source, .. } =&gt; source.into(),
+                DecodeError::DecodeIo { source, .. } =&gt; source,
+                <span class="kw">_ </span>=&gt; io::Error::other(cause),
             }
+        }
+    }
+
+    <span class="kw">impl </span>From&lt;io::Error&gt; <span class="kw">for </span>DecodeError {
+        <span class="kw">fn </span>from(value: io::Error) -&gt; <span class="self">Self </span>{
+            DecodeIoSnafu.into_error(value)
         }
     }
 
     <span class="kw">impl </span>From&lt;bao_tree::io::DecodeError&gt; <span class="kw">for </span>DecodeError {
         <span class="kw">fn </span>from(value: bao_tree::io::DecodeError) -&gt; <span class="self">Self </span>{
             <span class="kw">match </span>value {
-                bao_tree::io::DecodeError::ParentNotFound(x) =&gt; <span class="self">Self</span>::ParentNotFound(x),
-                bao_tree::io::DecodeError::LeafNotFound(x) =&gt; <span class="self">Self</span>::LeafNotFound(x),
-                bao_tree::io::DecodeError::ParentHashMismatch(node) =&gt; {
-                    <span class="self">Self</span>::ParentHashMismatch(node)
+                bao_tree::io::DecodeError::ParentNotFound(x) =&gt; {
+                    ParentNotFoundSnafu { node: x }.build()
                 }
-                bao_tree::io::DecodeError::LeafHashMismatch(chunk) =&gt; <span class="self">Self</span>::LeafHashMismatch(chunk),
+                bao_tree::io::DecodeError::LeafNotFound(x) =&gt; LeafNotFoundSnafu { num: x }.build(),
+                bao_tree::io::DecodeError::ParentHashMismatch(node) =&gt; {
+                    ParentHashMismatchSnafu { node }.build()
+                }
+                bao_tree::io::DecodeError::LeafHashMismatch(chunk) =&gt; {
+                    LeafHashMismatchSnafu { num: chunk }.build()
+                }
                 bao_tree::io::DecodeError::Io(cause) =&gt; {
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(inner) = cause.get_ref() {
                         <span class="kw">if let </span><span class="prelude-val">Some</span>(e) = inner.downcast_ref::&lt;endpoint::ReadError&gt;() {
-                            <span class="self">Self</span>::Read(e.clone())
+                            ReadSnafu.into_error(e.clone())
                         } <span class="kw">else </span>{
-                            <span class="self">Self</span>::Io(cause)
+                            DecodeIoSnafu.into_error(cause)
                         }
                     } <span class="kw">else </span>{
-                        <span class="self">Self</span>::Io(cause)
+                        DecodeIoSnafu.into_error(cause)
                     }
                 }
             }
@@ -1581,8 +1727,17 @@
         </span><span class="kw">pub async fn </span>next(<span class="self">self</span>) -&gt; BlobContentNext {
             <span class="kw">match </span><span class="self">self</span>.stream.next().<span class="kw">await </span>{
                 ResponseDecoderNext::More((stream, res)) =&gt; {
-                    <span class="kw">let </span>next = <span class="self">Self </span>{ stream, ..<span class="self">self </span>};
+                    <span class="kw">let </span><span class="kw-2">mut </span>next = <span class="self">Self </span>{ stream, ..<span class="self">self </span>};
                     <span class="kw">let </span>res = res.map_err(DecodeError::from);
+                    <span class="kw">match </span><span class="kw-2">&amp;</span>res {
+                        <span class="prelude-val">Ok</span>(BaoContentItem::Parent(<span class="kw">_</span>)) =&gt; {
+                            next.misc.other_bytes_read += <span class="number">64</span>;
+                        }
+                        <span class="prelude-val">Ok</span>(BaoContentItem::Leaf(leaf)) =&gt; {
+                            next.misc.payload_bytes_read += leaf.data.len() <span class="kw">as </span>u64;
+                        }
+                        <span class="kw">_ </span>=&gt; {}
+                    }
                     BlobContentNext::More((next, res))
                 }
                 ResponseDecoderNext::Done(stream) =&gt; BlobContentNext::Done(AtEndBlob {
@@ -1605,6 +1760,14 @@
         <span class="doccomment">/// The current offset of the blob we are reading.
         </span><span class="kw">pub fn </span>offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
             <span class="self">self</span>.misc.ranges_iter.offset()
+        }
+
+        <span class="doccomment">/// Current stats
+        </span><span class="kw">pub fn </span>stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Stats {
+            Stats {
+                counters: <span class="self">self</span>.misc.counters,
+                elapsed: <span class="self">self</span>.misc.start.elapsed(),
+            }
         }
 
         <span class="doccomment">/// Drain the response and throw away the result
@@ -1644,39 +1807,6 @@
                 }
             };
             <span class="prelude-val">Ok</span>((done, res))
-        }
-
-        <span class="doccomment">/// Write the entire stream for this blob to a batch writer.
-        </span><span class="kw">pub async fn </span>write_all_batch&lt;B&gt;(<span class="self">self</span>, writer: B) -&gt; result::Result&lt;AtEndBlob, DecodeError&gt;
-        <span class="kw">where
-            </span>B: BaoBatchWriter,
-        {
-            <span class="kw">let </span><span class="kw-2">mut </span>writer = writer;
-            <span class="kw">let </span><span class="kw-2">mut </span>buf = Vec::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>content = <span class="self">self</span>;
-            <span class="kw">let </span>size = content.tree().size();
-            <span class="kw">loop </span>{
-                <span class="kw">match </span>content.next().<span class="kw">await </span>{
-                    BlobContentNext::More((next, item)) =&gt; {
-                        <span class="kw">let </span>item = item<span class="question-mark">?</span>;
-                        <span class="kw">match </span><span class="kw-2">&amp;</span>item {
-                            BaoContentItem::Parent(<span class="kw">_</span>) =&gt; {
-                                buf.push(item);
-                            }
-                            BaoContentItem::Leaf(<span class="kw">_</span>) =&gt; {
-                                buf.push(item);
-                                <span class="kw">let </span>batch = std::mem::take(<span class="kw-2">&amp;mut </span>buf);
-                                writer.write_batch(size, batch).<span class="kw">await</span><span class="question-mark">?</span>;
-                            }
-                        }
-                        content = next;
-                    }
-                    BlobContentNext::Done(end) =&gt; {
-                        <span class="macro">assert!</span>(buf.is_empty());
-                        <span class="kw">return </span><span class="prelude-val">Ok</span>(end);
-                    }
-                }
-            }
         }
 
         <span class="doccomment">/// Write the entire blob to a slice writer and to an optional outboard.
@@ -1767,7 +1897,7 @@
             <span class="kw">if let </span><span class="prelude-val">Some</span>((offset, ranges)) = <span class="self">self</span>.misc.ranges_iter.next() {
                 AtStartChild {
                     reader: <span class="self">self</span>.stream,
-                    child_offset: offset - <span class="number">1</span>,
+                    offset,
                     ranges,
                     misc: <span class="self">self</span>.misc,
                 }
@@ -1798,7 +1928,7 @@
         <span class="doccomment">/// Finish the get response, returning statistics
         </span><span class="kw">pub async fn </span>next(<span class="self">self</span>) -&gt; result::Result&lt;Stats, endpoint::ReadError&gt; {
             <span class="comment">// Shut down the stream
-            </span><span class="kw">let </span>(reader, bytes_read) = <span class="self">self</span>.reader.into_parts();
+            </span><span class="kw">let </span>reader = <span class="self">self</span>.reader;
             <span class="kw">let </span><span class="kw-2">mut </span>reader = reader.into_inner();
             <span class="kw">if </span><span class="self">self</span>.check_extra_data {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(chunk) = reader.read_chunk(<span class="number">8</span>, <span class="bool-val">false</span>).<span class="kw">await</span><span class="question-mark">? </span>{
@@ -1809,48 +1939,68 @@
                 reader.stop(<span class="number">0u8</span>.into()).ok();
             }
             <span class="prelude-val">Ok</span>(Stats {
+                counters: <span class="self">self</span>.misc.counters,
                 elapsed: <span class="self">self</span>.misc.start.elapsed(),
-                bytes_written: <span class="self">self</span>.misc.bytes_written,
-                bytes_read,
             })
         }
     }
 
+    <span class="attr">#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+    </span><span class="kw">pub struct </span>RequestCounters {
+        <span class="doccomment">/// payload bytes written
+        </span><span class="kw">pub </span>payload_bytes_written: u64,
+        <span class="doccomment">/// request, hash pair and size bytes written
+        </span><span class="kw">pub </span>other_bytes_written: u64,
+        <span class="doccomment">/// payload bytes read
+        </span><span class="kw">pub </span>payload_bytes_read: u64,
+        <span class="doccomment">/// hash pair and size bytes read
+        </span><span class="kw">pub </span>other_bytes_read: u64,
+    }
+
     <span class="doccomment">/// Stuff we need to hold on to while going through the machine states
-    </span><span class="attr">#[derive(Debug)]
+    </span><span class="attr">#[derive(Debug, derive_more::Deref, derive_more::DerefMut)]
     </span><span class="kw">struct </span>Misc {
         <span class="doccomment">/// start time for statistics
         </span>start: Instant,
-        <span class="doccomment">/// bytes written for statistics
-        </span>bytes_written: u64,
+        <span class="doccomment">/// counters
+        </span><span class="attr">#[deref]
+        #[deref_mut]
+        </span>counters: RequestCounters,
         <span class="doccomment">/// iterator over the ranges of the collection and the children
         </span>ranges_iter: RangesIter,
     }
 }
 
 <span class="doccomment">/// Error when processing a response
-</span><span class="attr">#[derive(thiserror::Error, Debug)]
+</span><span class="attr">#[common_fields({
+    backtrace: <span class="prelude-ty">Option</span>&lt;Backtrace&gt;,
+    <span class="attr">#[snafu(implicit)]
+    </span>span_trace: SpanTrace,
+})]
+<span class="attr">#[allow(missing_docs)]
+#[non_exhaustive]
+#[derive(Debug, Snafu)]
 </span><span class="kw">pub enum </span>GetResponseError {
     <span class="doccomment">/// Error when opening a stream
-    </span><span class="attr">#[error(<span class="string">"connection: {0}"</span>)]
-    </span>Connection(<span class="attr">#[from] </span>endpoint::ConnectionError),
+    </span><span class="attr">#[snafu(display(<span class="string">"connection: {source}"</span>))]
+    </span>Connection { source: endpoint::ConnectionError },
     <span class="doccomment">/// Error when writing the handshake or request to the stream
-    </span><span class="attr">#[error(<span class="string">"write: {0}"</span>)]
-    </span>Write(<span class="attr">#[from] </span>endpoint::WriteError),
+    </span><span class="attr">#[snafu(display(<span class="string">"write: {source}"</span>))]
+    </span>Write { source: endpoint::WriteError },
     <span class="doccomment">/// Error when reading from the stream
-    </span><span class="attr">#[error(<span class="string">"read: {0}"</span>)]
-    </span>Read(<span class="attr">#[from] </span>endpoint::ReadError),
+    </span><span class="attr">#[snafu(display(<span class="string">"read: {source}"</span>))]
+    </span>Read { source: endpoint::ReadError },
     <span class="doccomment">/// Error when decoding, e.g. hash mismatch
-    </span><span class="attr">#[error(<span class="string">"decode: {0}"</span>)]
-    </span>Decode(bao_tree::io::DecodeError),
+    </span><span class="attr">#[snafu(display(<span class="string">"decode: {source}"</span>))]
+    </span>Decode { source: bao_tree::io::DecodeError },
     <span class="doccomment">/// A generic error
-    </span><span class="attr">#[error(<span class="string">"generic: {0}"</span>)]
-    </span>Generic(anyhow::Error),
+    </span><span class="attr">#[snafu(display(<span class="string">"generic: {source}"</span>))]
+    </span>Generic { source: anyhow::Error },
 }
 
 <span class="kw">impl </span>From&lt;postcard::Error&gt; <span class="kw">for </span>GetResponseError {
     <span class="kw">fn </span>from(cause: postcard::Error) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Generic(cause.into())
+        GenericSnafu.into_error(cause.into())
     }
 }
 
@@ -1861,31 +2011,31 @@
                 <span class="comment">// try to downcast to specific quinn errors
                 </span><span class="kw">if let </span><span class="prelude-val">Some</span>(source) = cause.source() {
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(error) = source.downcast_ref::&lt;endpoint::ConnectionError&gt;() {
-                        <span class="kw">return </span><span class="self">Self</span>::Connection(error.clone());
+                        <span class="kw">return </span>ConnectionSnafu.into_error(error.clone());
                     }
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(error) = source.downcast_ref::&lt;endpoint::ReadError&gt;() {
-                        <span class="kw">return </span><span class="self">Self</span>::Read(error.clone());
+                        <span class="kw">return </span>ReadSnafu.into_error(error.clone());
                     }
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(error) = source.downcast_ref::&lt;endpoint::WriteError&gt;() {
-                        <span class="kw">return </span><span class="self">Self</span>::Write(error.clone());
+                        <span class="kw">return </span>WriteSnafu.into_error(error.clone());
                     }
                 }
-                <span class="self">Self</span>::Generic(cause.into())
+                GenericSnafu.into_error(cause.into())
             }
-            <span class="kw">_ </span>=&gt; <span class="self">Self</span>::Decode(cause),
+            <span class="kw">_ </span>=&gt; DecodeSnafu.into_error(cause),
         }
     }
 }
 
 <span class="kw">impl </span>From&lt;anyhow::Error&gt; <span class="kw">for </span>GetResponseError {
     <span class="kw">fn </span>from(cause: anyhow::Error) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::Generic(cause)
+        GenericSnafu.into_error(cause)
     }
 }
 
 <span class="kw">impl </span>From&lt;GetResponseError&gt; <span class="kw">for </span>std::io::Error {
     <span class="kw">fn </span>from(cause: GetResponseError) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::new(std::io::ErrorKind::Other, cause)
+        <span class="self">Self</span>::other(cause)
     }
 }
 </code></pre></div></section></main></body></html>

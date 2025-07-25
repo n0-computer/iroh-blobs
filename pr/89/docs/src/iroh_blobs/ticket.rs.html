@@ -216,7 +216,23 @@
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
 <a href="#217" id="217">217</a>
-<a href="#218" id="218">218</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tickets for blobs.
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tickets for blobs.
 </span><span class="kw">use </span>std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -224,7 +240,7 @@
 <span class="kw">use </span>iroh_base::ticket::{<span class="self">self</span>, Ticket};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
-<span class="kw">use crate</span>::{BlobFormat, Hash};
+<span class="kw">use crate</span>::{BlobFormat, Hash, HashAndFormat};
 
 <span class="doccomment">/// A token containing everything to get a file from the provider.
 ///
@@ -238,6 +254,15 @@
     </span>format: BlobFormat,
     <span class="doccomment">/// The hash to retrieve.
     </span>hash: Hash,
+}
+
+<span class="kw">impl </span>From&lt;BlobTicket&gt; <span class="kw">for </span>HashAndFormat {
+    <span class="kw">fn </span>from(val: BlobTicket) -&gt; <span class="self">Self </span>{
+        HashAndFormat {
+            hash: val.hash,
+            format: val.format,
+        }
+    }
 }
 
 <span class="doccomment">/// Wire format for [`BlobTicket`].
@@ -288,8 +313,8 @@
         postcard::to_stdvec(<span class="kw-2">&amp;</span>data).expect(<span class="string">"postcard serialization failed"</span>)
     }
 
-    <span class="kw">fn </span>from_bytes(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; std::result::Result&lt;<span class="self">Self</span>, ticket::Error&gt; {
-        <span class="kw">let </span>res: TicketWireFormat = postcard::from_bytes(bytes).map_err(ticket::Error::Postcard)<span class="question-mark">?</span>;
+    <span class="kw">fn </span>from_bytes(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; std::result::Result&lt;<span class="self">Self</span>, ticket::ParseError&gt; {
+        <span class="kw">let </span>res: TicketWireFormat = postcard::from_bytes(bytes)<span class="question-mark">?</span>;
         <span class="kw">let </span>TicketWireFormat::Variant0(Variant0BlobTicket { node, format, hash }) = res;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             node: NodeAddr {
@@ -304,7 +329,7 @@
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>BlobTicket {
-    <span class="kw">type </span><span class="prelude-val">Err </span>= ticket::Error;
+    <span class="kw">type </span><span class="prelude-val">Err </span>= ticket::ParseError;
 
     <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
         Ticket::deserialize(s)
@@ -313,8 +338,8 @@
 
 <span class="kw">impl </span>BlobTicket {
     <span class="doccomment">/// Creates a new ticket.
-    </span><span class="kw">pub fn </span>new(node: NodeAddr, hash: Hash, format: BlobFormat) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ hash, format, node })
+    </span><span class="kw">pub fn </span>new(node: NodeAddr, hash: Hash, format: BlobFormat) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ hash, format, node }
     }
 
     <span class="doccomment">/// The hash of the item this ticket can retrieve.
@@ -330,6 +355,13 @@
     <span class="doccomment">/// The [`BlobFormat`] for this ticket.
     </span><span class="kw">pub fn </span>format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BlobFormat {
         <span class="self">self</span>.format
+    }
+
+    <span class="kw">pub fn </span>hash_and_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashAndFormat {
+        HashAndFormat {
+            hash: <span class="self">self</span>.hash,
+            format: <span class="self">self</span>.format,
+        }
     }
 
     <span class="doccomment">/// True if the ticket is for a collection and should retrieve all blobs in it.
@@ -362,7 +394,7 @@
             <span class="self">Self</span>::from_str(<span class="kw-2">&amp;</span>s).map_err(serde::de::Error::custom)
         } <span class="kw">else </span>{
             <span class="kw">let </span>(peer, format, hash) = Deserialize::deserialize(deserializer)<span class="question-mark">?</span>;
-            <span class="self">Self</span>::new(peer, hash, format).map_err(serde::de::Error::custom)
+            <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new(peer, hash, format))
         }
     }
 }
@@ -372,9 +404,9 @@
     <span class="kw">use </span>std::net::SocketAddr;
 
     <span class="kw">use </span>iroh::{PublicKey, SecretKey};
+    <span class="kw">use </span>iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
-    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     <span class="kw">fn </span>make_ticket() -&gt; BlobTicket {
         <span class="kw">let </span>hash = Hash::new(<span class="string">b"hi there"</span>);

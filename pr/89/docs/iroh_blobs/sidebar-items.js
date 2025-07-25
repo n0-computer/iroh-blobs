@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["ALPN","IROH_BLOCK_SIZE"],"enum":["BlobFormat"],"mod":["cli","downloader","export","format","get","hashseq","metrics","net_protocol","protocol","provider","rpc","store","ticket","util"],"struct":["Hash","HashAndFormat"]};
+window.SIDEBAR_ITEMS = {"enum":["BlobFormat"],"mod":["api","format","get","hashseq","protocol","provider","store","ticket"],"struct":["BlobsProtocol","Hash","HashAndFormat"]};

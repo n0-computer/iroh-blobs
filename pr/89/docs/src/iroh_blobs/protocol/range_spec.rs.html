@@ -558,20 +558,502 @@
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
-<a href="#560" id="560">560</a></pre></div><pre class="rust"><code><span class="doccomment">//! Specifications for ranges selection in blobs and sequences of blobs.
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a></pre></div><pre class="rust"><code><span class="doccomment">//! Specifications for ranges selection in blobs and sequences of blobs.
 //!
-//! The [`RangeSpec`] allows specifying which BAO chunks inside a single blob should be
+//! The [`ChunkRanges`] allows specifying which BAO chunks inside a single blob should be
 //! selected.
 //!
-//! The [`RangeSpecSeq`] builds on top of this to select blob chunks in an entire
+//! The [`ChunkRangesSeq`] builds on top of this to select blob chunks in an entire
 //! collection.
-</span><span class="kw">use </span>std::fmt;
+</span><span class="kw">use </span>std::{fmt, sync::OnceLock};
 
-<span class="kw">use </span>bao_tree::{ChunkNum, ChunkRanges, ChunkRangesRef};
+<span class="kw">pub use </span>bao_tree::ChunkRanges;
+<span class="kw">use </span>bao_tree::{ChunkNum, ChunkRangesRef};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>smallvec::{smallvec, SmallVec};
 
+<span class="kw">pub use </span><span class="kw">crate</span>::util::ChunkRangesExt;
+
+<span class="kw">static </span>CHUNK_RANGES_EMPTY: OnceLock&lt;ChunkRanges&gt; = OnceLock::new();
+
+<span class="kw">fn </span>chunk_ranges_empty() -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>ChunkRanges {
+    CHUNK_RANGES_EMPTY.get_or_init(ChunkRanges::empty)
+}
+
+<span class="attr">#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(from = <span class="string">"wire::RangeSpecSeq"</span>, into = <span class="string">"wire::RangeSpecSeq"</span>)]
+</span><span class="kw">pub struct </span>ChunkRangesSeq(<span class="kw">pub</span>(<span class="kw">crate</span>) SmallVec&lt;[(u64, ChunkRanges); <span class="number">2</span>]&gt;);
+
+<span class="kw">impl </span>std::hash::Hash <span class="kw">for </span>ChunkRangesSeq {
+    <span class="kw">fn </span>hash&lt;H: std::hash::Hasher&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, state: <span class="kw-2">&amp;mut </span>H) {
+        <span class="kw">for </span>(i, r) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0 </span>{
+            i.hash(state);
+            r.boundaries().hash(state);
+        }
+    }
+}
+
+<span class="kw">impl </span>std::ops::Index&lt;u64&gt; <span class="kw">for </span>ChunkRangesSeq {
+    <span class="kw">type </span>Output = ChunkRanges;
+
+    <span class="kw">fn </span>index(<span class="kw-2">&amp;</span><span class="self">self</span>, index: u64) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Output {
+        <span class="kw">match </span><span class="self">self</span>.<span class="number">0</span>.binary_search_by(|(o, <span class="kw">_</span>)| o.cmp(<span class="kw-2">&amp;</span>index)) {
+            <span class="prelude-val">Ok</span>(i) =&gt; <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>[i].<span class="number">1</span>,
+            <span class="prelude-val">Err</span>(i) =&gt; {
+                <span class="kw">if </span>i == <span class="number">0 </span>{
+                    chunk_ranges_empty()
+                } <span class="kw">else </span>{
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>[i - <span class="number">1</span>].<span class="number">1
+                </span>}
+            }
+        }
+    }
+}
+
+<span class="kw">impl </span>ChunkRangesSeq {
+    <span class="kw">pub const fn </span>empty() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>(SmallVec::new_const())
+    }
+
+    <span class="doccomment">/// Request just the first blob.
+    </span><span class="kw">pub fn </span>root() -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>inner = SmallVec::new();
+        inner.push((<span class="number">0</span>, ChunkRanges::all()));
+        inner.push((<span class="number">1</span>, ChunkRanges::empty()));
+        <span class="self">Self</span>(inner)
+    }
+
+    <span class="doccomment">/// A [`ChunkRangesSeq`] containing all chunks from all blobs.
+    ///
+    /// [`ChunkRangesSeq::iter`], will return a full range forever.
+    </span><span class="kw">pub fn </span>all() -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>inner = SmallVec::new();
+        inner.push((<span class="number">0</span>, ChunkRanges::all()));
+        <span class="self">Self</span>(inner)
+    }
+
+    <span class="doccomment">/// A [`ChunkRangesSeq`] getting the verified size for the first blob.
+    </span><span class="kw">pub fn </span>verified_size() -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>inner = SmallVec::new();
+        inner.push((<span class="number">0</span>, ChunkRanges::last_chunk()));
+        inner.push((<span class="number">1</span>, ChunkRanges::empty()));
+        <span class="self">Self</span>(inner)
+    }
+
+    <span class="doccomment">/// A [`ChunkRangesSeq`] getting the entire first blob and verified sizes for all others.
+    </span><span class="kw">pub fn </span>verified_child_sizes() -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>inner = SmallVec::new();
+        inner.push((<span class="number">0</span>, ChunkRanges::all()));
+        inner.push((<span class="number">1</span>, ChunkRanges::last_chunk()));
+        <span class="self">Self</span>(inner)
+    }
+
+    <span class="doccomment">/// Checks if this [`ChunkRangesSeq`] does not select any chunks in the blob.
+    </span><span class="kw">pub fn </span>is_empty(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.<span class="number">0</span>.is_empty()
+    }
+
+    <span class="doccomment">/// Checks if this [`ChunkRangesSeq`] selects all chunks in the blob.
+    </span><span class="kw">pub fn </span>is_all(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="kw">if </span><span class="self">self</span>.<span class="number">0</span>.len() != <span class="number">1 </span>{
+            <span class="kw">return </span><span class="bool-val">false</span>;
+        }
+        <span class="kw">let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, ranges)) = <span class="self">self</span>.<span class="number">0</span>.iter().next() <span class="kw">else </span>{
+            <span class="kw">return </span><span class="bool-val">false</span>;
+        };
+        ranges.is_all()
+    }
+
+    <span class="doccomment">/// If this range seq describes a range for a single item, returns the offset
+    /// and range spec for that item
+    </span><span class="kw">pub fn </span>as_single(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(u64, <span class="kw-2">&amp;</span>ChunkRanges)&gt; {
+        <span class="comment">// we got two elements,
+        // the first element starts at offset 0,
+        // and the second element is empty
+        </span><span class="kw">if </span><span class="self">self</span>.<span class="number">0</span>.len() != <span class="number">2 </span>{
+            <span class="kw">return </span><span class="prelude-val">None</span>;
+        }
+        <span class="kw">let </span>(o1, v1) = <span class="self">self</span>.<span class="number">0</span>.iter().next().unwrap();
+        <span class="kw">let </span>(o2, v2) = <span class="self">self</span>.<span class="number">0</span>.iter().next_back().unwrap();
+        <span class="kw">if </span><span class="kw-2">*</span>o1 == (o2 - <span class="number">1</span>) &amp;&amp; v2.is_empty() {
+            <span class="prelude-val">Some</span>((<span class="kw-2">*</span>o1, v1))
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>}
+    }
+
+    <span class="kw">pub fn </span>is_blob(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="attr">#[allow(clippy::match_like_matches_macro)]
+        </span><span class="kw">match </span><span class="self">self</span>.as_single() {
+            <span class="prelude-val">Some</span>((<span class="number">0</span>, <span class="kw">_</span>)) =&gt; <span class="bool-val">true</span>,
+            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
+        }
+    }
+
+    <span class="doccomment">/// Convenience function to create a [`ChunkRangesSeq`] from an iterator of
+    /// chunk ranges. If the last element is non-empty, it will be repeated
+    /// forever.
+    </span><span class="kw">pub fn </span>from_ranges_infinite(ranges: <span class="kw">impl </span>IntoIterator&lt;Item = ChunkRanges&gt;) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>(ranges, <span class="kw">_</span>) = from_ranges_inner(ranges);
+        <span class="self">Self</span>(ranges)
+    }
+
+    <span class="doccomment">/// Convenience function to create a [`ChunkRangesSeq`] from an iterator of
+    /// chunk ranges. If the last element is non-empty, an empty range will be
+    /// added immediately after it to terminate the sequence.
+    </span><span class="kw">pub fn </span>from_ranges(ranges: <span class="kw">impl </span>IntoIterator&lt;Item = ChunkRanges&gt;) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>(<span class="kw-2">mut </span>res, next) = from_ranges_inner(ranges);
+        <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, r)) = res.iter().next_back() {
+            <span class="kw">if </span>!r.is_empty() {
+                res.push((next, ChunkRanges::empty()));
+            }
+        }
+        <span class="self">Self</span>(res)
+    }
+
+    <span class="doccomment">/// An iterator over blobs in the sequence with a non-empty range spec.
+    ///
+    /// This iterator will only yield items for blobs which have at least one chunk
+    /// selected.
+    ///
+    /// This iterator is infinite if the [`ChunkRangesSeq`] ends on a non-empty [`ChunkRanges`],
+    /// that is all further blobs have selected chunks spans.
+    </span><span class="kw">pub fn </span>iter_non_empty_infinite(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'_</span>&gt; {
+        NonEmptyRequestRangeSpecIter::new(<span class="self">self</span>.iter_infinite())
+    }
+
+    <span class="doccomment">/// True if this range spec sequence repeats the last range spec forever.
+    </span><span class="kw">pub fn </span>is_infinite(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.<span class="number">0
+            </span>.iter()
+            .next_back()
+            .map(|(<span class="kw">_</span>, v)| !v.is_empty())
+            .unwrap_or_default()
+    }
+
+    <span class="kw">pub fn </span>iter_infinite(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ChunkRangesSeqIterInfinite&lt;<span class="lifetime">'_</span>&gt; {
+        ChunkRangesSeqIterInfinite {
+            current: chunk_ranges_empty(),
+            offset: <span class="number">0</span>,
+            remaining: <span class="self">self</span>.<span class="number">0</span>.iter().peekable(),
+        }
+    }
+
+    <span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ChunkRangesSeqIter&lt;<span class="lifetime">'_</span>&gt; {
+        ChunkRangesSeqIter {
+            current: chunk_ranges_empty(),
+            offset: <span class="number">0</span>,
+            remaining: <span class="self">self</span>.<span class="number">0</span>.iter().peekable(),
+        }
+    }
+}
+
+<span class="kw">fn </span>from_ranges_inner(
+    ranges: <span class="kw">impl </span>IntoIterator&lt;Item = ChunkRanges&gt;,
+) -&gt; (SmallVec&lt;[(u64, ChunkRanges); <span class="number">2</span>]&gt;, u64) {
+    <span class="kw">let </span><span class="kw-2">mut </span>res = SmallVec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>i = <span class="number">0</span>;
+    <span class="kw">for </span>range <span class="kw">in </span>ranges.into_iter() {
+        <span class="kw">if </span>range
+            != res
+                .iter()
+                .next_back()
+                .map(|(<span class="kw">_</span>, v)| v)
+                .unwrap_or(<span class="kw-2">&amp;</span>ChunkRanges::empty())
+        {
+            res.push((i, range));
+        }
+        i += <span class="number">1</span>;
+    }
+    (res, i)
+}
+
+<span class="doccomment">/// An infinite iterator yielding [`RangeSpec`]s for each blob in a sequence.
+///
+/// The first item yielded is the [`RangeSpec`] for the first blob in the sequence, the
+/// next item is the [`RangeSpec`] for the next blob, etc.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>ChunkRangesSeqIterInfinite&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="doccomment">/// current value
+    </span>current: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ChunkRanges,
+    <span class="doccomment">/// current offset
+    </span>offset: u64,
+    <span class="doccomment">/// remaining ranges
+    </span>remaining: std::iter::Peekable&lt;std::slice::Iter&lt;<span class="lifetime">'a</span>, (u64, ChunkRanges)&gt;&gt;,
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; ChunkRangesSeqIterInfinite&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="doccomment">/// True if we are at the end of the iterator.
+    ///
+    /// This does not mean that the iterator is terminated, it just means that
+    /// it will repeat the same value forever.
+    </span><span class="kw">pub fn </span>is_at_end(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.remaining.peek().is_none()
+    }
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; Iterator <span class="kw">for </span>ChunkRangesSeqIterInfinite&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">type </span>Item = <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ChunkRanges;
+
+    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+        <span class="kw">loop </span>{
+            <span class="kw">match </span><span class="self">self</span>.remaining.peek() {
+                <span class="prelude-val">Some</span>((offset, <span class="kw">_</span>)) <span class="kw">if </span><span class="self">self</span>.offset &lt; <span class="kw-2">*</span>offset =&gt; {
+                    <span class="comment">// emit current value until we reach the next offset
+                    </span><span class="self">self</span>.offset += <span class="number">1</span>;
+                    <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="self">self</span>.current);
+                }
+                <span class="prelude-val">None </span>=&gt; {
+                    <span class="comment">// no more values, just repeat current forever
+                    </span><span class="self">self</span>.offset += <span class="number">1</span>;
+                    <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="self">self</span>.current);
+                }
+                <span class="prelude-val">Some</span>((<span class="kw">_</span>, ranges)) =&gt; {
+                    <span class="comment">// get next current value, new count, and set remaining
+                    </span><span class="self">self</span>.current = ranges;
+                    <span class="self">self</span>.remaining.next();
+                }
+            }
+        }
+    }
+}
+
+<span class="doccomment">/// An infinite iterator yielding [`RangeSpec`]s for each blob in a sequence.
+///
+/// The first item yielded is the [`RangeSpec`] for the first blob in the sequence, the
+/// next item is the [`RangeSpec`] for the next blob, etc.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>ChunkRangesSeqIter&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="doccomment">/// current value
+    </span>current: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ChunkRanges,
+    <span class="doccomment">/// current offset
+    </span>offset: u64,
+    <span class="doccomment">/// remaining ranges
+    </span>remaining: std::iter::Peekable&lt;std::slice::Iter&lt;<span class="lifetime">'a</span>, (u64, ChunkRanges)&gt;&gt;,
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; Iterator <span class="kw">for </span>ChunkRangesSeqIter&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">type </span>Item = <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ChunkRanges;
+
+    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+        <span class="kw">match </span><span class="self">self</span>.remaining.peek()<span class="question-mark">? </span>{
+            (offset, <span class="kw">_</span>) <span class="kw">if </span><span class="self">self</span>.offset &lt; <span class="kw-2">*</span>offset =&gt; {
+                <span class="comment">// emit current value until we reach the next offset
+                </span><span class="self">self</span>.offset += <span class="number">1</span>;
+                <span class="prelude-val">Some</span>(<span class="self">self</span>.current)
+            }
+            (<span class="kw">_</span>, ranges) =&gt; {
+                <span class="comment">// get next current value, new count, and set remaining
+                </span><span class="self">self</span>.current = ranges;
+                <span class="self">self</span>.remaining.next();
+                <span class="self">self</span>.offset += <span class="number">1</span>;
+                <span class="prelude-val">Some</span>(<span class="self">self</span>.current)
+            }
+        }
+    }
+}
+
+<span class="doccomment">/// An iterator over blobs in the sequence with a non-empty range specs.
+///
+/// default is what to use if the children of this RequestRangeSpec are empty.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
+    inner: ChunkRangesSeqIterInfinite&lt;<span class="lifetime">'a</span>&gt;,
+    count: u64,
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">fn </span>new(inner: ChunkRangesSeqIterInfinite&lt;<span class="lifetime">'a</span>&gt;) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ inner, count: <span class="number">0 </span>}
+    }
+
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.count
+    }
+
+    <span class="kw">pub fn </span>is_at_end(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.inner.is_at_end()
+    }
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; Iterator <span class="kw">for </span>NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">type </span>Item = (u64, <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ChunkRanges);
+
+    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+        <span class="kw">loop </span>{
+            <span class="comment">// unwrapping is safe because we know that the inner iterator will never terminate
+            </span><span class="kw">let </span>curr = <span class="self">self</span>.inner.next().unwrap();
+            <span class="kw">let </span>count = <span class="self">self</span>.count;
+            <span class="comment">// increase count in any case until we are at the end of possible u64 values
+            // we are unlikely to ever reach this limit.
+            </span><span class="self">self</span>.count = <span class="self">self</span>.count.checked_add(<span class="number">1</span>)<span class="question-mark">?</span>;
+            <span class="comment">// yield only if the current value is non-empty
+            </span><span class="kw">if </span>!curr.is_empty() {
+                <span class="kw">break </span><span class="prelude-val">Some</span>((count, curr));
+            } <span class="kw">else if </span><span class="self">self</span>.inner.is_at_end() {
+                <span class="comment">// terminate instead of looping until we run out of u64 values
+                </span><span class="kw">break </span><span class="prelude-val">None</span>;
+            }
+        }
+    }
+}
+
 <span class="doccomment">/// A chunk range specification as a sequence of chunk offsets.
+///
+/// This is just the wire encoding of a [`ChunkRanges`]. You should rarely have to
+/// interact with this directly.
 ///
 /// Offsets encode alternating spans starting on 0, where the first span is always
 /// deselected.
@@ -628,6 +1110,11 @@
         <span class="self">Self</span>(<span class="macro">smallvec!</span>[<span class="number">0</span>])
     }
 
+    <span class="doccomment">/// Creates a [`RangeSpec`] selecting the last chunk, which is also a size proof.
+    </span><span class="kw">pub fn </span>verified_size() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>(<span class="macro">smallvec!</span>[u64::MAX])
+    }
+
     <span class="doccomment">/// Checks if this [`RangeSpec`] does not select any chunks in the blob.
     </span><span class="kw">pub fn </span>is_empty(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.<span class="number">0</span>.is_empty()
@@ -637,6 +1124,22 @@
     </span><span class="kw">pub fn </span>is_all(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.<span class="number">0</span>.len() == <span class="number">1 </span>&amp;&amp; <span class="self">self</span>.<span class="number">0</span>[<span class="number">0</span>] == <span class="number">0
     </span>}
+
+    <span class="doccomment">/// Returns the number of chunks selected by this [`RangeSpec`], as a tuple
+    /// with the minimum and maximum number of chunks.
+    </span><span class="kw">pub fn </span>chunks(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (u64, <span class="prelude-ty">Option</span>&lt;u64&gt;) {
+        <span class="kw">let </span><span class="kw-2">mut </span>min = <span class="number">0</span>;
+        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.<span class="number">0</span>.len() / <span class="number">2 </span>{
+            min += <span class="self">self</span>.<span class="number">0</span>[<span class="number">2 </span>* i + <span class="number">1</span>];
+        }
+        <span class="kw">let </span>max = <span class="kw">if </span><span class="self">self</span>.<span class="number">0</span>.len() % <span class="number">2 </span>!= <span class="number">0 </span>{
+            <span class="comment">// spec is open ended
+            </span><span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
+            <span class="prelude-val">Some</span>(min)
+        };
+        (min, max)
+    }
 
     <span class="doccomment">/// Creates a [`ChunkRanges`] from this [`RangeSpec`].
     </span><span class="kw">pub fn </span>to_chunk_ranges(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ChunkRanges {
@@ -662,250 +1165,52 @@
 
 <span class="kw">impl </span>fmt::Debug <span class="kw">for </span>RangeSpec {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-        <span class="kw">if </span>f.alternate() {
-            f.debug_list()
-                .entries(<span class="self">self</span>.to_chunk_ranges().iter())
-                .finish()
-        } <span class="kw">else if </span><span class="self">self</span>.is_all() {
+        <span class="kw">if </span><span class="self">self</span>.is_all() {
             <span class="macro">write!</span>(f, <span class="string">"all"</span>)
         } <span class="kw">else if </span><span class="self">self</span>.is_empty() {
             <span class="macro">write!</span>(f, <span class="string">"empty"</span>)
+        } <span class="kw">else if </span>!f.alternate() {
+            f.debug_list()
+                .entries(<span class="self">self</span>.to_chunk_ranges().iter())
+                .finish()
         } <span class="kw">else </span>{
             f.debug_list().entries(<span class="self">self</span>.<span class="number">0</span>.iter()).finish()
         }
     }
 }
 
-<span class="doccomment">/// A chunk range specification for a sequence of blobs.
-///
-/// To select chunks in a sequence of blobs this is encoded as a sequence of `(blob_offset,
-/// range_spec)` tuples. Offsets are interpreted in an accumulating fashion.
-///
-/// ## Example:
-///
-/// Suppose two [`RangeSpec`]s `range_a` and `range_b`.
-///
-/// - `[(0, range_a), (2, empty), (3, range_b), (1, empty)]` encodes:
-///   - Select `range_a` for children in the range `[0, 2)`
-///   - do no selection (empty) for children in the range `[2, 2+3) = [2, 5)` (3 children)
-///   - Select `range_b` for children in the range `[5, 5+1) = [5, 6)` (1 children)
-///   - do no selection (empty) for children in the open range `[6, inf)`
-///
-/// Another way to understand this is that offsets represent the number of times the
-/// previous range appears.
-///
-/// Other examples:
-///
-/// - Select `range_a` from all blobs after the 5th one in the sequence: `[(5, range_a)]`.
-///
-/// - Select `range_a` from all blobs in the sequence: `[(0, range_a)]`.
-///
-/// - Select `range_a` from blob 1234: `[(1234, range_a), (1, empty)]`.
-///
-/// - Select nothing: `[]`.
-///
-/// This is a smallvec so that we can avoid allocations in the common case of a single child
-/// range.
-</span><span class="attr">#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Hash)]
-#[repr(transparent)]
-</span><span class="kw">pub struct </span>RangeSpecSeq(SmallVec&lt;[(u64, RangeSpec); <span class="number">2</span>]&gt;);
+<span class="kw">mod </span>wire {
 
-<span class="kw">impl </span>RangeSpecSeq {
-    <span class="attr">#[allow(dead_code)]
-    </span><span class="doccomment">/// A [`RangeSpecSeq`] containing no chunks from any blobs in the sequence.
-    ///
-    /// [`RangeSpecSeq::iter`], will return an empty range forever.
-    </span><span class="kw">pub const fn </span>empty() -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>(SmallVec::new_const())
-    }
+    <span class="kw">use </span>serde::{Deserialize, Serialize};
+    <span class="kw">use </span>smallvec::SmallVec;
 
-    <span class="doccomment">/// If this range seq describes a range for a single item, returns the offset
-    /// and range spec for that item
-    </span><span class="kw">pub fn </span>as_single(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(u64, <span class="kw-2">&amp;</span>RangeSpec)&gt; {
-        <span class="comment">// we got two elements,
-        // the first element starts at offset 0,
-        // and the second element is empty
-        </span><span class="kw">if </span><span class="self">self</span>.<span class="number">0</span>.len() != <span class="number">2 </span>{
-            <span class="kw">return </span><span class="prelude-val">None</span>;
-        }
-        <span class="kw">let </span>(fst_ofs, fst_val) = <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>[<span class="number">0</span>];
-        <span class="kw">let </span>(snd_ofs, snd_val) = <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>[<span class="number">1</span>];
-        <span class="kw">if </span><span class="kw-2">*</span>snd_ofs == <span class="number">1 </span>&amp;&amp; snd_val.is_empty() {
-            <span class="prelude-val">Some</span>((<span class="kw-2">*</span>fst_ofs, fst_val))
-        } <span class="kw">else </span>{
-            <span class="prelude-val">None
-        </span>}
-    }
+    <span class="kw">use super</span>::{ChunkRangesSeq, RangeSpec};
 
-    <span class="doccomment">/// A [`RangeSpecSeq`] containing all chunks from all blobs.
-    ///
-    /// [`RangeSpecSeq::iter`], will return a full range forever.
-    </span><span class="kw">pub fn </span>all() -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>(<span class="macro">smallvec!</span>[(<span class="number">0</span>, RangeSpec::all())])
-    }
+    <span class="attr">#[derive(Deserialize, Serialize)]
+    </span><span class="kw">pub struct </span>RangeSpecSeq(SmallVec&lt;[(u64, RangeSpec); <span class="number">2</span>]&gt;);
 
-    <span class="doccomment">/// Convenience function to create a [`RangeSpecSeq`] from a finite sequence of range sets.
-    </span><span class="kw">pub fn </span>from_ranges(ranges: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>AsRef&lt;ChunkRangesRef&gt;&gt;) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::new(
-            ranges
-                .into_iter()
-                .map(RangeSpec::new)
-                .chain(std::iter::once(RangeSpec::EMPTY)),
-        )
-    }
-
-    <span class="doccomment">/// Convenience function to create a [`RangeSpecSeq`] from a sequence of range sets.
-    ///
-    /// Compared to [`RangeSpecSeq::from_ranges`], this will not add an empty range spec at the end, so the final
-    /// range spec will repeat forever.
-    </span><span class="kw">pub fn </span>from_ranges_infinite(
-        ranges: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>AsRef&lt;ChunkRangesRef&gt;&gt;,
-    ) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::new(ranges.into_iter().map(RangeSpec::new))
-    }
-
-    <span class="doccomment">/// Creates a new range spec sequence from a sequence of range specs.
-    ///
-    /// This will merge adjacent range specs with the same value and thus make
-    /// sure that the resulting sequence is as compact as possible.
-    </span><span class="kw">pub fn </span>new(children: <span class="kw">impl </span>IntoIterator&lt;Item = RangeSpec&gt;) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>res = SmallVec::new();
-        <span class="kw">let </span>before_all = RangeSpec::EMPTY;
-        <span class="kw">for </span>v <span class="kw">in </span>children.into_iter() {
-            <span class="kw">let </span>prev = res.last().map(|(_count, spec)| spec).unwrap_or(<span class="kw-2">&amp;</span>before_all);
-            <span class="kw">if </span><span class="kw-2">&amp;</span>v == prev {
-                count += <span class="number">1</span>;
-            } <span class="kw">else </span>{
-                res.push((count, v.clone()));
-                count = <span class="number">1</span>;
+    <span class="kw">impl </span>From&lt;RangeSpecSeq&gt; <span class="kw">for </span>ChunkRangesSeq {
+        <span class="kw">fn </span>from(wire: RangeSpecSeq) -&gt; <span class="self">Self </span>{
+            <span class="kw">let </span><span class="kw-2">mut </span>offset = <span class="number">0</span>;
+            <span class="kw">let </span><span class="kw-2">mut </span>res = SmallVec::new();
+            <span class="kw">for </span>(delta, spec) <span class="kw">in </span>wire.<span class="number">0</span>.iter() {
+                offset += <span class="kw-2">*</span>delta;
+                res.push((offset, spec.to_chunk_ranges()));
             }
-        }
-        <span class="self">Self</span>(res)
-    }
-
-    <span class="doccomment">/// An infinite iterator of range specs for blobs in the sequence.
-    ///
-    /// Each item yielded by the iterator is the [`RangeSpec`] for a blob in the sequence.
-    /// Thus the first call to `.next()` returns the range spec for the first blob, the next
-    /// call returns the range spec of the second blob, etc.
-    </span><span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RequestRangeSpecIter&lt;<span class="lifetime">'_</span>&gt; {
-        <span class="kw">let </span>before_first = <span class="self">self</span>.<span class="number">0</span>.first().map(|(c, <span class="kw">_</span>)| <span class="kw-2">*</span>c).unwrap_or_default();
-        RequestRangeSpecIter {
-            current: <span class="kw-2">&amp;</span>EMPTY_RANGE_SPEC,
-            count: before_first,
-            remaining: <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>,
+            <span class="self">Self</span>(res)
         }
     }
 
-    <span class="doccomment">/// An iterator over blobs in the sequence with a non-empty range spec.
-    ///
-    /// This iterator will only yield items for blobs which have at least one chunk
-    /// selected.
-    ///
-    /// This iterator is infinite if the [`RangeSpecSeq`] ends on a non-empty [`RangeSpec`],
-    /// that is all further blobs have selected chunks spans.
-    </span><span class="kw">pub fn </span>iter_non_empty(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'_</span>&gt; {
-        NonEmptyRequestRangeSpecIter::new(<span class="self">self</span>.iter())
-    }
-}
-
-<span class="kw">static </span>EMPTY_RANGE_SPEC: RangeSpec = RangeSpec::EMPTY;
-
-<span class="doccomment">/// An infinite iterator yielding [`RangeSpec`]s for each blob in a sequence.
-///
-/// The first item yielded is the [`RangeSpec`] for the first blob in the sequence, the
-/// next item is the [`RangeSpec`] for the next blob, etc.
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>RequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="doccomment">/// current value
-    </span>current: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>RangeSpec,
-    <span class="doccomment">/// number of times to emit current before grabbing next value
-    /// if remaining is empty, this is ignored and current is emitted forever
-    </span>count: u64,
-    <span class="doccomment">/// remaining ranges
-    </span>remaining: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[(u64, RangeSpec)],
-}
-
-<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; RequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="kw">pub fn </span>new(ranges: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[(u64, RangeSpec)]) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>before_first = ranges.first().map(|(c, <span class="kw">_</span>)| <span class="kw-2">*</span>c).unwrap_or_default();
-        RequestRangeSpecIter {
-            current: <span class="kw-2">&amp;</span>EMPTY_RANGE_SPEC,
-            count: before_first,
-            remaining: ranges,
-        }
-    }
-
-    <span class="doccomment">/// True if we are at the end of the iterator.
-    ///
-    /// This does not mean that the iterator is terminated, it just means that
-    /// it will repeat the same value forever.
-    </span><span class="kw">pub fn </span>is_at_end(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.count == <span class="number">0 </span>&amp;&amp; <span class="self">self</span>.remaining.is_empty()
-    }
-}
-
-<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; Iterator <span class="kw">for </span>RequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="kw">type </span>Item = <span class="kw-2">&amp;</span><span class="lifetime">'a </span>RangeSpec;
-
-    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-        <span class="prelude-val">Some</span>(<span class="kw">loop </span>{
-            <span class="kw">break if </span><span class="self">self</span>.count &gt; <span class="number">0 </span>{
-                <span class="comment">// emit current value count times
-                </span><span class="self">self</span>.count -= <span class="number">1</span>;
-                <span class="self">self</span>.current
-            } <span class="kw">else if let </span><span class="prelude-val">Some</span>(((<span class="kw">_</span>, new), rest)) = <span class="self">self</span>.remaining.split_first() {
-                <span class="comment">// get next current value, new count, and set remaining
-                </span><span class="self">self</span>.current = new;
-                <span class="self">self</span>.count = rest.first().map(|(c, <span class="kw">_</span>)| <span class="kw-2">*</span>c).unwrap_or_default();
-                <span class="self">self</span>.remaining = rest;
-                <span class="kw">continue</span>;
-            } <span class="kw">else </span>{
-                <span class="comment">// no more values, just repeat current forever
-                </span><span class="self">self</span>.current
-            };
-        })
-    }
-}
-
-<span class="doccomment">/// An iterator over blobs in the sequence with a non-empty range specs.
-///
-/// default is what to use if the children of this RequestRangeSpec are empty.
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
-    inner: RequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt;,
-    count: u64,
-}
-
-<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="kw">fn </span>new(inner: RequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt;) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ inner, count: <span class="number">0 </span>}
-    }
-
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-        <span class="self">self</span>.count
-    }
-}
-
-<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; Iterator <span class="kw">for </span>NonEmptyRequestRangeSpecIter&lt;<span class="lifetime">'a</span>&gt; {
-    <span class="kw">type </span>Item = (u64, <span class="kw-2">&amp;</span><span class="lifetime">'a </span>RangeSpec);
-
-    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-        <span class="kw">loop </span>{
-            <span class="comment">// unwrapping is safe because we know that the inner iterator will never terminate
-            </span><span class="kw">let </span>curr = <span class="self">self</span>.inner.next().unwrap();
-            <span class="kw">let </span>count = <span class="self">self</span>.count;
-            <span class="comment">// increase count in any case until we are at the end of possible u64 values
-            // we are unlikely to ever reach this limit.
-            </span><span class="self">self</span>.count = <span class="self">self</span>.count.checked_add(<span class="number">1</span>)<span class="question-mark">?</span>;
-            <span class="comment">// yield only if the current value is non-empty
-            </span><span class="kw">if </span>!curr.is_empty() {
-                <span class="kw">break </span><span class="prelude-val">Some</span>((count, curr));
-            } <span class="kw">else if </span><span class="self">self</span>.inner.is_at_end() {
-                <span class="comment">// terminate instead of looping until we run out of u64 values
-                </span><span class="kw">break </span><span class="prelude-val">None</span>;
+    <span class="kw">impl </span>From&lt;ChunkRangesSeq&gt; <span class="kw">for </span>RangeSpecSeq {
+        <span class="kw">fn </span>from(value: ChunkRangesSeq) -&gt; <span class="self">Self </span>{
+            <span class="kw">let </span><span class="kw-2">mut </span>res = SmallVec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>offset = <span class="number">0</span>;
+            <span class="kw">for </span>(i, r) <span class="kw">in </span>value.<span class="number">0</span>.iter() {
+                <span class="kw">let </span>delta = <span class="kw-2">*</span>i - offset;
+                res.push((delta, RangeSpec::new(r)));
+                offset = <span class="kw-2">*</span>i;
             }
+            <span class="self">Self</span>(res)
         }
     }
 }
@@ -914,10 +1219,11 @@
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::ops::Range;
 
+    <span class="kw">use </span>iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
     <span class="kw">use </span>proptest::prelude::<span class="kw-2">*</span>;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
-    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
+    <span class="kw">use </span><span class="kw">crate</span>::util::ChunkRangesExt;
 
     <span class="kw">fn </span>ranges(value_range: Range&lt;u64&gt;) -&gt; <span class="kw">impl </span>Strategy&lt;Value = ChunkRanges&gt; {
         prop::collection::vec((value_range.clone(), value_range), <span class="number">0</span>..<span class="number">16</span>).prop_map(|v| {
@@ -925,34 +1231,34 @@
             <span class="kw">for </span>(a, b) <span class="kw">in </span>v {
                 <span class="kw">let </span>start = a.min(b);
                 <span class="kw">let </span>end = a.max(b);
-                res |= ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
+                res |= ChunkRanges::chunks(start..end);
             }
             res
         })
     }
 
     <span class="kw">fn </span>range_spec_seq_roundtrip_impl(ranges: <span class="kw-2">&amp;</span>[ChunkRanges]) -&gt; Vec&lt;ChunkRanges&gt; {
-        <span class="kw">let </span>spec = RangeSpecSeq::from_ranges(ranges.iter().cloned());
-        spec.iter()
-            .map(|x| x.to_chunk_ranges())
+        <span class="kw">let </span>spec = ChunkRangesSeq::from_ranges(ranges.iter().cloned());
+        spec.iter_infinite()
             .take(ranges.len())
+            .cloned()
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     }
 
     <span class="kw">fn </span>range_spec_seq_bytes_roundtrip_impl(ranges: <span class="kw-2">&amp;</span>[ChunkRanges]) -&gt; Vec&lt;ChunkRanges&gt; {
-        <span class="kw">let </span>spec = RangeSpecSeq::from_ranges(ranges.iter().cloned());
+        <span class="kw">let </span>spec = ChunkRangesSeq::from_ranges(ranges.iter().cloned());
         <span class="kw">let </span>bytes = postcard::to_allocvec(<span class="kw-2">&amp;</span>spec).unwrap();
-        <span class="kw">let </span>spec2: RangeSpecSeq = postcard::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap();
+        <span class="kw">let </span>spec2: ChunkRangesSeq = postcard::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap();
         spec2
-            .iter()
-            .map(|x| x.to_chunk_ranges())
+            .iter_infinite()
             .take(ranges.len())
+            .cloned()
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     }
 
     <span class="kw">fn </span>mk_case(case: Vec&lt;Range&lt;u64&gt;&gt;) -&gt; Vec&lt;ChunkRanges&gt; {
         case.iter()
-            .map(|x| ChunkRanges::from(ChunkNum(x.start)..ChunkNum(x.end)))
+            .map(|x| ChunkRanges::chunks(x.start..x.end))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     }
 
@@ -969,21 +1275,21 @@
                 "</span>,
             ),
             (
-                RangeSpec::new(ChunkRanges::from(ChunkNum(<span class="number">64</span>)..)),
+                RangeSpec::new(ChunkRanges::chunks(<span class="number">64</span>..)),
                 <span class="string">r"
                     01 # length prefix - 1 element
                     40 # span width - 64. everything starting from 64 is included
                 "</span>,
             ),
             (
-                RangeSpec::new(ChunkRanges::from(ChunkNum(<span class="number">10000</span>)..)),
+                RangeSpec::new(ChunkRanges::chunks(<span class="number">10000</span>..)),
                 <span class="string">r"
                     01 # length prefix - 1 element
                     904E # span width - 10000, 904E in postcard varint encoding. everything starting from 10000 is included
                 "</span>,
             ),
             (
-                RangeSpec::new(ChunkRanges::from(..ChunkNum(<span class="number">64</span>))),
+                RangeSpec::new(ChunkRanges::chunks(..<span class="number">64</span>)),
                 <span class="string">r"
                     02 # length prefix - 2 elements
                     00 # span width - 0. everything stating from 0 is included
@@ -991,10 +1297,7 @@
                 "</span>,
             ),
             (
-                RangeSpec::new(
-                    <span class="kw-2">&amp;</span>ChunkRanges::from(ChunkNum(<span class="number">1</span>)..ChunkNum(<span class="number">3</span>))
-                        | <span class="kw-2">&amp;</span>ChunkRanges::from(ChunkNum(<span class="number">9</span>)..ChunkNum(<span class="number">13</span>)),
-                ),
+                RangeSpec::new(<span class="kw-2">&amp;</span>ChunkRanges::chunks(<span class="number">1</span>..<span class="number">3</span>) | <span class="kw-2">&amp;</span>ChunkRanges::chunks(<span class="number">9</span>..<span class="number">13</span>)),
                 <span class="string">r"
                     04 # length prefix - 4 elements
                     01 # span width - 1
@@ -1013,9 +1316,9 @@
     <span class="attr">#[test]
     </span><span class="kw">fn </span>range_spec_seq_wire_format() {
         <span class="kw">let </span>cases = [
-            (RangeSpecSeq::empty(), <span class="string">"00"</span>),
+            (ChunkRangesSeq::empty(), <span class="string">"00"</span>),
             (
-                RangeSpecSeq::all(),
+                ChunkRangesSeq::all(),
                 <span class="string">r"
                     01 # 1 tuple in total
                     # first tuple
@@ -1024,9 +1327,9 @@
             "</span>,
             ),
             (
-                RangeSpecSeq::from_ranges([
-                    ChunkRanges::from(ChunkNum(<span class="number">1</span>)..ChunkNum(<span class="number">3</span>)),
-                    ChunkRanges::from(ChunkNum(<span class="number">7</span>)..ChunkNum(<span class="number">13</span>)),
+                ChunkRangesSeq::from_ranges([
+                    ChunkRanges::chunks(<span class="number">1</span>..<span class="number">3</span>),
+                    ChunkRanges::chunks(<span class="number">7</span>..<span class="number">13</span>),
                 ]),
                 <span class="string">r"
                     03 # 3 tuples in total
@@ -1042,11 +1345,11 @@
                 "</span>,
             ),
             (
-                RangeSpecSeq::from_ranges_infinite([
+                ChunkRangesSeq::from_ranges_infinite([
                     ChunkRanges::empty(),
                     ChunkRanges::empty(),
                     ChunkRanges::empty(),
-                    ChunkRanges::from(ChunkNum(<span class="number">7</span>)..),
+                    ChunkRanges::chunks(<span class="number">7</span>..),
                     ChunkRanges::all(),
                 ]),
                 <span class="string">r"
@@ -1090,12 +1393,13 @@
             (<span class="macro">vec!</span>[<span class="number">1</span>..<span class="number">2</span>, <span class="number">1</span>..<span class="number">2</span>, <span class="number">2</span>..<span class="number">3</span>, <span class="number">2</span>..<span class="number">3</span>], <span class="number">3</span>),
         ] {
             <span class="kw">let </span>case = mk_case(case);
-            <span class="kw">let </span>spec = RangeSpecSeq::from_ranges(case);
+            <span class="kw">let </span>spec = ChunkRangesSeq::from_ranges(case);
             <span class="macro">assert_eq!</span>(spec.<span class="number">0</span>.len(), expected_count);
         }
     }
 
     <span class="macro">proptest!</span> {
+
         <span class="attr">#[test]
         </span><span class="kw">fn </span>range_spec_roundtrip(ranges <span class="kw">in </span>ranges(<span class="number">0</span>..<span class="number">1000</span>)) {
             <span class="kw">let </span>spec = RangeSpec::new(<span class="kw-2">&amp;</span>ranges);

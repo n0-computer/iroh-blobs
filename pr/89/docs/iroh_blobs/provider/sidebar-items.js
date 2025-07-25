@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["AddProgress","BatchAddPathProgress","Event","SentStatus"],"fn":["handle_connection","handle_get","read_request","send_blob"],"struct":["EventSender","ResponseWriter","TransferStats"],"trait":["CustomEventSender"]};
+window.SIDEBAR_ITEMS = {"enum":["Event"],"fn":["handle_connection","handle_get","handle_get_many","handle_observe","handle_push","read_request"],"struct":["CountingReader","EventSender","ProgressReader","ProgressWriter","StreamContext","TransferStats"],"trait":["LazyEvent"]};

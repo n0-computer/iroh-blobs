@@ -656,662 +656,870 @@
 <a href="#655" id="655">655</a>
 <a href="#656" id="656">656</a>
 <a href="#657" id="657">657</a>
-<a href="#658" id="658">658</a></pre></div><pre class="rust"><code><span class="doccomment">//! The server side API
-</span><span class="kw">use </span>std::{fmt::Debug, sync::Arc, time::Duration};
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a></pre></div><pre class="rust"><code><span class="doccomment">//! The low level server side API
+//!
+//! Note that while using this API directly is fine, the standard way
+//! to provide data is to just register a [`crate::BlobsProtocol`] protocol
+//! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
+</span><span class="kw">use </span>std::{
+    fmt::Debug,
+    io,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    task::Poll,
+    time::Duration,
+};
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>bao_tree::io::{
-    fsm::{encode_ranges_validated, Outboard},
-    EncodeError,
+<span class="kw">use </span>bao_tree::ChunkRanges;
+<span class="kw">use </span>iroh::{
+    endpoint::{<span class="self">self</span>, RecvStream, SendStream},
+    NodeId,
 };
-<span class="kw">use </span>futures_lite::future::Boxed <span class="kw">as </span>BoxFuture;
-<span class="kw">use </span>iroh::endpoint::{<span class="self">self</span>, RecvStream, SendStream};
-<span class="kw">use </span>iroh_io::{
-    stats::{SliceReaderStats, StreamWriterStats, TrackingSliceReader, TrackingStreamWriter},
-    AsyncSliceReader, AsyncStreamWriter, TokioStreamWriter,
-};
-<span class="kw">use </span>serde::{Deserialize, Serialize};
-<span class="kw">use </span>tracing::{debug, debug_span, info, trace, warn};
-<span class="kw">use </span>tracing_futures::Instrument;
+<span class="kw">use </span>irpc::channel::oneshot;
+<span class="kw">use </span>n0_future::StreamExt;
+<span class="kw">use </span>serde::de::DeserializeOwned;
+<span class="kw">use </span>tokio::{io::AsyncRead, select, sync::mpsc};
+<span class="kw">use </span>tracing::{debug, debug_span, error, warn, Instrument};
 
 <span class="kw">use crate</span>::{
-    hashseq::parse_hash_seq,
-    protocol::{GetRequest, RangeSpec, Request},
-    store::<span class="kw-2">*</span>,
-    util::{local_pool::LocalPoolHandle, Tag},
-    BlobFormat, Hash,
+    api::{<span class="self">self</span>, blobs::Bitfield, Store},
+    hashseq::HashSeq,
+    protocol::{
+        ChunkRangesSeq, GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest,
+        Request,
+    },
+    Hash,
 };
 
-<span class="doccomment">/// Events emitted by the provider informing about the current status.
-</span><span class="attr">#[derive(Debug, Clone)]
+<span class="doccomment">/// Provider progress events, to keep track of what the provider is doing.
+///
+/// ClientConnected -&gt;
+///    (GetRequestReceived -&gt; (TransferStarted -&gt; TransferProgress*n)*n -&gt; (TransferCompleted | TransferAborted))*n -&gt;
+/// ConnectionClosed
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub enum </span>Event {
-    <span class="doccomment">/// A new collection or tagged blob has been added
-    </span>TaggedBlobAdded {
-        <span class="doccomment">/// The hash of the added data
-        </span>hash: Hash,
-        <span class="doccomment">/// The format of the added data
-        </span>format: BlobFormat,
-        <span class="doccomment">/// The tag of the added data
-        </span>tag: Tag,
-    },
-    <span class="doccomment">/// A new client connected to the node.
+    <span class="doccomment">/// A new client connected to the provider.
     </span>ClientConnected {
-        <span class="doccomment">/// An unique connection id.
-        </span>connection_id: u64,
+        connection_id: u64,
+        node_id: NodeId,
+        permitted: oneshot::Sender&lt;bool&gt;,
     },
-    <span class="doccomment">/// A request was received from a client.
+    <span class="doccomment">/// Connection closed.
+    </span>ConnectionClosed { connection_id: u64 },
+    <span class="doccomment">/// A new get request was received from the provider.
     </span>GetRequestReceived {
-        <span class="doccomment">/// An unique connection id.
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
         </span>connection_id: u64,
-        <span class="doccomment">/// An identifier uniquely identifying this transfer request.
+        <span class="doccomment">/// The request id. There is a new id for each request.
         </span>request_id: u64,
-        <span class="doccomment">/// The hash for which the client wants to receive data.
+        <span class="doccomment">/// The root hash of the request.
         </span>hash: Hash,
+        <span class="doccomment">/// The exact query ranges of the request.
+        </span>ranges: ChunkRangesSeq,
     },
-    <span class="doccomment">/// A sequence of hashes has been found and is being transferred.
-    </span>TransferHashSeqStarted {
-        <span class="doccomment">/// An unique connection id.
+    <span class="doccomment">/// A new get request was received from the provider.
+    </span>GetManyRequestReceived {
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
         </span>connection_id: u64,
-        <span class="doccomment">/// An identifier uniquely identifying this transfer request.
+        <span class="doccomment">/// The request id. There is a new id for each request.
         </span>request_id: u64,
-        <span class="doccomment">/// The number of blobs in the sequence.
-        </span>num_blobs: u64,
+        <span class="doccomment">/// The root hash of the request.
+        </span>hashes: Vec&lt;Hash&gt;,
+        <span class="doccomment">/// The exact query ranges of the request.
+        </span>ranges: ChunkRangesSeq,
     },
-    <span class="doccomment">/// A chunk of a blob was transferred.
-    ///
-    /// These events will be sent with try_send, so you can not assume that you
-    /// will receive all of them.
-    </span>TransferProgress {
-        <span class="doccomment">/// An unique connection id.
+    <span class="doccomment">/// A new get request was received from the provider.
+    </span>PushRequestReceived {
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
         </span>connection_id: u64,
-        <span class="doccomment">/// An identifier uniquely identifying this transfer request.
+        <span class="doccomment">/// The request id. There is a new id for each request.
         </span>request_id: u64,
-        <span class="doccomment">/// The hash for which we are transferring data.
+        <span class="doccomment">/// The root hash of the request.
         </span>hash: Hash,
-        <span class="doccomment">/// Offset up to which we have transferred data.
-        </span>end_offset: u64,
+        <span class="doccomment">/// The exact query ranges of the request.
+        </span>ranges: ChunkRangesSeq,
+        <span class="doccomment">/// Complete this to permit the request.
+        </span>permitted: oneshot::Sender&lt;bool&gt;,
     },
-    <span class="doccomment">/// A blob in a sequence was transferred.
-    </span>TransferBlobCompleted {
-        <span class="doccomment">/// An unique connection id.
+    <span class="doccomment">/// Transfer for the nth blob started.
+    </span>TransferStarted {
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
         </span>connection_id: u64,
-        <span class="doccomment">/// An identifier uniquely identifying this transfer request.
+        <span class="doccomment">/// The request id. There is a new id for each request.
         </span>request_id: u64,
-        <span class="doccomment">/// The hash of the blob
-        </span>hash: Hash,
-        <span class="doccomment">/// The index of the blob in the sequence.
+        <span class="doccomment">/// The index of the blob in the request. 0 for the first blob or for raw blob requests.
         </span>index: u64,
-        <span class="doccomment">/// The size of the blob transferred.
+        <span class="doccomment">/// The hash of the blob. This is the hash of the request for the first blob, the child hash (index-1) for subsequent blobs.
+        </span>hash: Hash,
+        <span class="doccomment">/// The size of the blob. This is the full size of the blob, not the size we are sending.
         </span>size: u64,
     },
-    <span class="doccomment">/// A request was completed and the data was sent to the client.
-    </span>TransferCompleted {
-        <span class="doccomment">/// An unique connection id.
+    <span class="doccomment">/// Progress of the transfer.
+    </span>TransferProgress {
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
         </span>connection_id: u64,
-        <span class="doccomment">/// An identifier uniquely identifying this transfer request.
+        <span class="doccomment">/// The request id. There is a new id for each request.
         </span>request_id: u64,
-        <span class="doccomment">/// statistics about the transfer
+        <span class="doccomment">/// The index of the blob in the request. 0 for the first blob or for raw blob requests.
+        </span>index: u64,
+        <span class="doccomment">/// The end offset of the chunk that was sent.
+        </span>end_offset: u64,
+    },
+    <span class="doccomment">/// Entire transfer completed.
+    </span>TransferCompleted {
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
+        </span>connection_id: u64,
+        <span class="doccomment">/// The request id. There is a new id for each request.
+        </span>request_id: u64,
+        <span class="doccomment">/// Statistics about the transfer.
         </span>stats: Box&lt;TransferStats&gt;,
     },
-    <span class="doccomment">/// A request was aborted because the client disconnected.
+    <span class="doccomment">/// Entire transfer aborted
     </span>TransferAborted {
-        <span class="doccomment">/// The quic connection id.
+        <span class="doccomment">/// The connection id. Multiple requests can be sent over the same connection.
         </span>connection_id: u64,
-        <span class="doccomment">/// An identifier uniquely identifying this request.
+        <span class="doccomment">/// The request id. There is a new id for each request.
         </span>request_id: u64,
-        <span class="doccomment">/// statistics about the transfer. This is None if the transfer
-        /// was aborted before any data was sent.
+        <span class="doccomment">/// Statistics about the part of the transfer that was aborted.
         </span>stats: <span class="prelude-ty">Option</span>&lt;Box&lt;TransferStats&gt;&gt;,
     },
 }
 
-<span class="doccomment">/// The stats for a transfer of a collection or blob.
-</span><span class="attr">#[derive(Debug, Clone, Copy, Default)]
+<span class="doccomment">/// Statistics about a successful or failed transfer.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>TransferStats {
-    <span class="doccomment">/// Stats for sending to the client.
-    </span><span class="kw">pub </span>send: StreamWriterStats,
-    <span class="doccomment">/// Stats for reading from disk.
-    </span><span class="kw">pub </span>read: SliceReaderStats,
-    <span class="doccomment">/// The total duration of the transfer.
+    <span class="doccomment">/// The number of bytes sent that are part of the payload.
+    </span><span class="kw">pub </span>payload_bytes_sent: u64,
+    <span class="doccomment">/// The number of bytes sent that are not part of the payload.
+    ///
+    /// Hash pairs and the initial size header.
+    </span><span class="kw">pub </span>other_bytes_sent: u64,
+    <span class="doccomment">/// The number of bytes read from the stream.
+    ///
+    /// This is the size of the request.
+    </span><span class="kw">pub </span>bytes_read: u64,
+    <span class="doccomment">/// Total duration from reading the request to transfer completed.
     </span><span class="kw">pub </span>duration: Duration,
-}
-
-<span class="doccomment">/// Progress updates for the add operation.
-</span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>AddProgress {
-    <span class="doccomment">/// An item was found with name `name`, from now on referred to via `id`
-    </span>Found {
-        <span class="doccomment">/// A new unique id for this entry.
-        </span>id: u64,
-        <span class="doccomment">/// The name of the entry.
-        </span>name: String,
-        <span class="doccomment">/// The size of the entry in bytes.
-        </span>size: u64,
-    },
-    <span class="doccomment">/// We got progress ingesting item `id`.
-    </span>Progress {
-        <span class="doccomment">/// The unique id of the entry.
-        </span>id: u64,
-        <span class="doccomment">/// The offset of the progress, in bytes.
-        </span>offset: u64,
-    },
-    <span class="doccomment">/// We are done with `id`, and the hash is `hash`.
-    </span>Done {
-        <span class="doccomment">/// The unique id of the entry.
-        </span>id: u64,
-        <span class="doccomment">/// The hash of the entry.
-        </span>hash: Hash,
-    },
-    <span class="doccomment">/// We are done with the whole operation.
-    </span>AllDone {
-        <span class="doccomment">/// The hash of the created data.
-        </span>hash: Hash,
-        <span class="doccomment">/// The format of the added data.
-        </span>format: BlobFormat,
-        <span class="doccomment">/// The tag of the added data.
-        </span>tag: Tag,
-    },
-    <span class="doccomment">/// We got an error and need to abort.
-    ///
-    /// This will be the last message in the stream.
-    </span>Abort(serde_error::Error),
-}
-
-<span class="doccomment">/// Progress updates for the batch add operation.
-</span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>BatchAddPathProgress {
-    <span class="doccomment">/// An item was found with the given size
-    </span>Found {
-        <span class="doccomment">/// The size of the entry in bytes.
-        </span>size: u64,
-    },
-    <span class="doccomment">/// We got progress ingesting the item.
-    </span>Progress {
-        <span class="doccomment">/// The offset of the progress, in bytes.
-        </span>offset: u64,
-    },
-    <span class="doccomment">/// We are done, and the hash is `hash`.
-    </span>Done {
-        <span class="doccomment">/// The hash of the entry.
-        </span>hash: Hash,
-    },
-    <span class="doccomment">/// We got an error and need to abort.
-    ///
-    /// This will be the last message in the stream.
-    </span>Abort(serde_error::Error),
 }
 
 <span class="doccomment">/// Read the request from the getter.
 ///
-/// Will fail if there is an error while reading, if the reader
-/// contains more data than the Request, or if no valid request is sent.
+/// Will fail if there is an error while reading, or if no valid request is sent.
 ///
-/// When successful, the buffer is empty after this function call.
-</span><span class="kw">pub async fn </span>read_request(<span class="kw-2">mut </span>reader: RecvStream) -&gt; <span class="prelude-ty">Result</span>&lt;Request&gt; {
-    <span class="kw">let </span>payload = reader
-        .read_to_end(<span class="kw">crate</span>::protocol::MAX_MESSAGE_SIZE)
-        .<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="kw">let </span>request: Request = postcard::from_bytes(<span class="kw-2">&amp;</span>payload)<span class="question-mark">?</span>;
-    <span class="prelude-val">Ok</span>(request)
+/// This will read exactly the number of bytes needed for the request, and
+/// leave the rest of the stream for the caller to read.
+///
+/// It is up to the caller do decide if there should be more data.
+</span><span class="kw">pub async fn </span>read_request(reader: <span class="kw-2">&amp;mut </span>ProgressReader) -&gt; <span class="prelude-ty">Result</span>&lt;Request&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>counting = CountingReader::new(<span class="kw-2">&amp;mut </span>reader.inner);
+    <span class="kw">let </span>res = Request::read_async(<span class="kw-2">&amp;mut </span>counting).<span class="kw">await</span><span class="question-mark">?</span>;
+    reader.bytes_read += counting.read();
+    <span class="prelude-val">Ok</span>(res)
 }
 
-<span class="doccomment">/// Transfers a blob or hash sequence to the client.
-///
-/// The difference to [`handle_get`] is that we already have a reader for the
-/// root blob and outboard.
-///
-/// First, it transfers the root blob. Then, if needed, it sequentially
-/// transfers each individual blob data.
-///
-/// The transfer fail if there is an error writing to the writer or reading from
-/// the database.
-///
-/// If a blob from the hash sequence cannot be found in the database, the
-/// transfer will return with [`SentStatus::NotFound`]. If the transfer completes
-/// successfully, it will return with [`SentStatus::Sent`].
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>transfer_hash_seq&lt;D: Map&gt;(
-    request: GetRequest,
-    <span class="comment">// Store from which to fetch blobs.
-    </span>db: <span class="kw-2">&amp;</span>D,
-    <span class="comment">// Response writer, containing the quinn stream.
-    </span>writer: <span class="kw-2">&amp;mut </span>ResponseWriter,
-    <span class="comment">// the collection to transfer
-    </span><span class="kw-2">mut </span>outboard: <span class="kw">impl </span>Outboard,
-    <span class="kw-2">mut </span>data: <span class="kw">impl </span>AsyncSliceReader,
-    stats: <span class="kw-2">&amp;mut </span>TransferStats,
-) -&gt; <span class="prelude-ty">Result</span>&lt;SentStatus&gt; {
-    <span class="kw">let </span>hash = request.hash;
-    <span class="kw">let </span>events = writer.events.clone();
-    <span class="kw">let </span>request_id = writer.request_id();
-    <span class="kw">let </span>connection_id = writer.connection_id();
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>StreamContext {
+    <span class="doccomment">/// The connection ID from the connection
+    </span><span class="kw">pub </span>connection_id: u64,
+    <span class="doccomment">/// The request ID from the recv stream
+    </span><span class="kw">pub </span>request_id: u64,
+    <span class="doccomment">/// The number of bytes written that are part of the payload
+    </span><span class="kw">pub </span>payload_bytes_sent: u64,
+    <span class="doccomment">/// The number of bytes written that are not part of the payload
+    </span><span class="kw">pub </span>other_bytes_sent: u64,
+    <span class="doccomment">/// The number of bytes read from the stream
+    </span><span class="kw">pub </span>bytes_read: u64,
+    <span class="doccomment">/// The progress sender to send events to
+    </span><span class="kw">pub </span>progress: EventSender,
+}
 
-    <span class="comment">// if the request is just for the root, we don't need to deserialize the collection
-    </span><span class="kw">let </span>just_root = <span class="macro">matches!</span>(request.ranges.as_single(), <span class="prelude-val">Some</span>((<span class="number">0</span>, <span class="kw">_</span>)));
-    <span class="kw">let </span><span class="kw-2">mut </span>c = <span class="kw">if </span>!just_root {
-        <span class="comment">// parse the hash seq
-        </span><span class="kw">let </span>(stream, num_blobs) = parse_hash_seq(<span class="kw-2">&amp;mut </span>data).<span class="kw">await</span><span class="question-mark">?</span>;
-        writer
-            .events
-            .send(|| Event::TransferHashSeqStarted {
-                connection_id: writer.connection_id(),
-                request_id: writer.request_id(),
-                num_blobs,
+<span class="doccomment">/// Wrapper for a [`quinn::SendStream`] with additional per request information.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>ProgressWriter {
+    <span class="doccomment">/// The quinn::SendStream to write to
+    </span><span class="kw">pub </span>inner: SendStream,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) context: StreamContext,
+}
+
+<span class="kw">impl </span>Deref <span class="kw">for </span>ProgressWriter {
+    <span class="kw">type </span>Target = StreamContext;
+
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.context
+    }
+}
+
+<span class="kw">impl </span>DerefMut <span class="kw">for </span>ProgressWriter {
+    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.context
+    }
+}
+
+<span class="kw">impl </span>StreamContext {
+    <span class="doccomment">/// Increase the write count due to a non-payload write.
+    </span><span class="kw">pub fn </span>log_other_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) {
+        <span class="self">self</span>.other_bytes_sent += len <span class="kw">as </span>u64;
+    }
+
+    <span class="kw">pub async fn </span>send_transfer_completed(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="self">self</span>.progress
+            .send(|| Event::TransferCompleted {
+                connection_id: <span class="self">self</span>.connection_id,
+                request_id: <span class="self">self</span>.request_id,
+                stats: Box::new(TransferStats {
+                    payload_bytes_sent: <span class="self">self</span>.payload_bytes_sent,
+                    other_bytes_sent: <span class="self">self</span>.other_bytes_sent,
+                    bytes_read: <span class="self">self</span>.bytes_read,
+                    duration: Duration::ZERO,
+                }),
             })
             .<span class="kw">await</span>;
-        <span class="prelude-val">Some</span>(stream)
-    } <span class="kw">else </span>{
-        <span class="prelude-val">None
-    </span>};
+    }
 
-    <span class="kw">let </span>mk_progress = |end_offset| Event::TransferProgress {
-        connection_id,
-        request_id,
-        hash,
-        end_offset,
-    };
+    <span class="kw">pub async fn </span>send_transfer_aborted(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="self">self</span>.progress
+            .send(|| Event::TransferAborted {
+                connection_id: <span class="self">self</span>.connection_id,
+                request_id: <span class="self">self</span>.request_id,
+                stats: <span class="prelude-val">Some</span>(Box::new(TransferStats {
+                    payload_bytes_sent: <span class="self">self</span>.payload_bytes_sent,
+                    other_bytes_sent: <span class="self">self</span>.other_bytes_sent,
+                    bytes_read: <span class="self">self</span>.bytes_read,
+                    duration: Duration::ZERO,
+                })),
+            })
+            .<span class="kw">await</span>;
+    }
 
-    <span class="kw">let </span><span class="kw-2">mut </span>prev = <span class="number">0</span>;
-    <span class="kw">for </span>(offset, ranges) <span class="kw">in </span>request.ranges.iter_non_empty() {
-        <span class="comment">// create a tracking writer so we can get some stats for writing
-        </span><span class="kw">let </span><span class="kw-2">mut </span>tw = writer.tracking_writer();
-        <span class="kw">if </span>offset == <span class="number">0 </span>{
-            <span class="macro">debug!</span>(<span class="string">"writing ranges '{:?}' of sequence {}"</span>, ranges, hash);
-            <span class="comment">// wrap the data reader in a tracking reader so we can get some stats for reading
-            </span><span class="kw">let </span><span class="kw-2">mut </span>tracking_reader = TrackingSliceReader::new(<span class="kw-2">&amp;mut </span>data);
-            <span class="kw">let </span><span class="kw-2">mut </span>sending_reader =
-                SendingSliceReader::new(<span class="kw-2">&amp;mut </span>tracking_reader, <span class="kw-2">&amp;</span>events, mk_progress);
-            <span class="comment">// send the root
-            </span>tw.write(outboard.tree().size().to_le_bytes().as_slice())
-                .<span class="kw">await</span><span class="question-mark">?</span>;
-            encode_ranges_validated(
-                <span class="kw-2">&amp;mut </span>sending_reader,
-                <span class="kw-2">&amp;mut </span>outboard,
-                <span class="kw-2">&amp;</span>ranges.to_chunk_ranges(),
-                <span class="kw-2">&amp;mut </span>tw,
-            )
-            .<span class="kw">await</span><span class="question-mark">?</span>;
-            stats.read += tracking_reader.stats();
-            stats.send += tw.stats();
-            <span class="macro">debug!</span>(
-                <span class="string">"finished writing ranges '{:?}' of collection {}"</span>,
-                ranges, hash
-            );
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>c = c.as_mut().context(<span class="string">"collection parser not available"</span>)<span class="question-mark">?</span>;
-            <span class="macro">debug!</span>(<span class="string">"wrtiting ranges '{:?}' of child {}"</span>, ranges, offset);
-            <span class="comment">// skip to the next blob if there is a gap
-            </span><span class="kw">if </span>prev &lt; offset - <span class="number">1 </span>{
-                c.skip(offset - prev - <span class="number">1</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(hash) = c.next().<span class="kw">await</span><span class="question-mark">? </span>{
-                tokio::task::yield_now().<span class="kw">await</span>;
-                <span class="kw">let </span>(status, size, blob_read_stats) =
-                    send_blob(db, hash, ranges, <span class="kw-2">&amp;mut </span>tw, events.clone(), mk_progress).<span class="kw">await</span><span class="question-mark">?</span>;
-                stats.send += tw.stats();
-                stats.read += blob_read_stats;
-                <span class="kw">if </span>SentStatus::NotFound == status {
-                    writer.inner.finish()<span class="question-mark">?</span>;
-                    <span class="kw">return </span><span class="prelude-val">Ok</span>(status);
+    <span class="doccomment">/// Increase the write count due to a payload write, and notify the progress sender.
+    ///
+    /// `index` is the index of the blob in the request.
+    /// `offset` is the offset in the blob where the write started.
+    /// `len` is the length of the write.
+    </span><span class="kw">pub fn </span>notify_payload_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, index: u64, offset: u64, len: usize) {
+        <span class="self">self</span>.payload_bytes_sent += len <span class="kw">as </span>u64;
+        <span class="self">self</span>.progress.try_send(|| Event::TransferProgress {
+            connection_id: <span class="self">self</span>.connection_id,
+            request_id: <span class="self">self</span>.request_id,
+            index,
+            end_offset: offset + len <span class="kw">as </span>u64,
+        });
+    }
+
+    <span class="doccomment">/// Send a get request received event.
+    ///
+    /// This sends all the required information to make sense of subsequent events such as
+    /// [`Event::TransferStarted`] and [`Event::TransferProgress`].
+    </span><span class="kw">pub async fn </span>send_get_request_received(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash, ranges: <span class="kw-2">&amp;</span>ChunkRangesSeq) {
+        <span class="self">self</span>.progress
+            .send(|| Event::GetRequestReceived {
+                connection_id: <span class="self">self</span>.connection_id,
+                request_id: <span class="self">self</span>.request_id,
+                hash: <span class="kw-2">*</span>hash,
+                ranges: ranges.clone(),
+            })
+            .<span class="kw">await</span>;
+    }
+
+    <span class="doccomment">/// Send a get request received event.
+    ///
+    /// This sends all the required information to make sense of subsequent events such as
+    /// [`Event::TransferStarted`] and [`Event::TransferProgress`].
+    </span><span class="kw">pub async fn </span>send_get_many_request_received(<span class="kw-2">&amp;</span><span class="self">self</span>, hashes: <span class="kw-2">&amp;</span>[Hash], ranges: <span class="kw-2">&amp;</span>ChunkRangesSeq) {
+        <span class="self">self</span>.progress
+            .send(|| Event::GetManyRequestReceived {
+                connection_id: <span class="self">self</span>.connection_id,
+                request_id: <span class="self">self</span>.request_id,
+                hashes: hashes.to_vec(),
+                ranges: ranges.clone(),
+            })
+            .<span class="kw">await</span>;
+    }
+
+    <span class="doccomment">/// Authorize a push request.
+    ///
+    /// This will send a request to the event sender, and wait for a response if a
+    /// progress sender is enabled. If not, it will always fail.
+    ///
+    /// We want to make accepting push requests very explicit, since this allows
+    /// remote nodes to add arbitrary data to our store.
+    </span><span class="attr">#[must_use = <span class="string">"permit should be checked by the caller"</span>]
+    </span><span class="kw">pub async fn </span>authorize_push_request(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash, ranges: <span class="kw-2">&amp;</span>ChunkRangesSeq) -&gt; bool {
+        <span class="kw">let </span><span class="kw-2">mut </span>wait_for_permit = <span class="prelude-val">None</span>;
+        <span class="comment">// send the request, including the permit channel
+        </span><span class="self">self</span>.progress
+            .send(|| {
+                <span class="kw">let </span>(tx, rx) = oneshot::channel();
+                wait_for_permit = <span class="prelude-val">Some</span>(rx);
+                Event::PushRequestReceived {
+                    connection_id: <span class="self">self</span>.connection_id,
+                    request_id: <span class="self">self</span>.request_id,
+                    hash: <span class="kw-2">*</span>hash,
+                    ranges: ranges.clone(),
+                    permitted: tx,
                 }
-
-                writer
-                    .events
-                    .send(|| Event::TransferBlobCompleted {
-                        connection_id: writer.connection_id(),
-                        request_id: writer.request_id(),
-                        hash,
-                        index: offset - <span class="number">1</span>,
-                        size,
-                    })
-                    .<span class="kw">await</span>;
-            } <span class="kw">else </span>{
-                <span class="comment">// nothing more we can send
-                </span><span class="kw">break</span>;
-            }
-            prev = offset;
-        }
+            })
+            .<span class="kw">await</span>;
+        <span class="comment">// wait for the permit, if necessary
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(wait_for_permit) = wait_for_permit {
+            <span class="comment">// if somebody does not handle the request, they will drop the channel,
+            // and this will fail immediately.
+            </span>wait_for_permit.<span class="kw">await</span>.unwrap_or(<span class="bool-val">false</span>)
+        } <span class="kw">else </span>{
+            <span class="bool-val">false
+        </span>}
     }
 
-    <span class="macro">debug!</span>(<span class="string">"done writing"</span>);
-    <span class="prelude-val">Ok</span>(SentStatus::Sent)
-}
-
-<span class="kw">struct </span>SendingSliceReader&lt;<span class="lifetime">'a</span>, R, F&gt; {
-    inner: R,
-    sender: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>EventSender,
-    make_event: F,
-}
-
-<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, R: AsyncSliceReader, F: Fn(u64) -&gt; Event&gt; SendingSliceReader&lt;<span class="lifetime">'a</span>, R, F&gt; {
-    <span class="kw">fn </span>new(inner: R, sender: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>EventSender, make_event: F) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            inner,
-            sender,
-            make_event,
-        }
-    }
-}
-
-<span class="kw">impl</span>&lt;R: AsyncSliceReader, F: Fn(u64) -&gt; Event&gt; AsyncSliceReader <span class="kw">for </span>SendingSliceReader&lt;<span class="lifetime">'_</span>, R, F&gt; {
-    <span class="kw">async fn </span>read_at(<span class="kw-2">&amp;mut </span><span class="self">self</span>, offset: u64, len: usize) -&gt; std::io::Result&lt;bytes::Bytes&gt; {
-        <span class="kw">let </span>res = <span class="self">self</span>.inner.read_at(offset, len).<span class="kw">await</span>;
-        <span class="kw">if let </span><span class="prelude-val">Ok</span>(res) = res.as_ref() {
-            <span class="kw">let </span>end_offset = offset + res.len() <span class="kw">as </span>u64;
-            <span class="self">self</span>.sender.try_send(|| (<span class="self">self</span>.make_event)(end_offset));
-        }
-        res
-    }
-
-    <span class="kw">async fn </span>size(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; std::io::Result&lt;u64&gt; {
-        <span class="self">self</span>.inner.size().<span class="kw">await
-    </span>}
-}
-
-<span class="doccomment">/// Trait for sending blob events.
-</span><span class="kw">pub trait </span>CustomEventSender: std::fmt::Debug + Sync + Send + <span class="lifetime">'static </span>{
-    <span class="doccomment">/// Send an event and wait for it to be sent.
-    </span><span class="kw">fn </span>send(<span class="kw-2">&amp;</span><span class="self">self</span>, event: Event) -&gt; BoxFuture&lt;()&gt;;
-
-    <span class="doccomment">/// Try to send an event.
-    </span><span class="kw">fn </span>try_send(<span class="kw-2">&amp;</span><span class="self">self</span>, event: Event);
-}
-
-<span class="doccomment">/// A sender for events related to blob transfers.
-///
-/// The sender is disabled by default.
-</span><span class="attr">#[derive(Debug, Clone, Default)]
-</span><span class="kw">pub struct </span>EventSender {
-    inner: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>CustomEventSender&gt;&gt;,
-}
-
-<span class="kw">impl</span>&lt;T: CustomEventSender&gt; From&lt;T&gt; <span class="kw">for </span>EventSender {
-    <span class="kw">fn </span>from(inner: T) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            inner: <span class="prelude-val">Some</span>(Arc::new(inner)),
-        }
-    }
-}
-
-<span class="kw">impl </span>EventSender {
-    <span class="doccomment">/// Create a new event sender.
-    </span><span class="kw">pub fn </span>new(inner: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>CustomEventSender&gt;&gt;) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ inner }
-    }
-
-    <span class="doccomment">/// Send an event.
-    ///
-    /// If the inner sender is not set, the function to produce the event will
-    /// not be called. So any cost associated with gathering information for the
-    /// event will not be incurred.
-    </span><span class="kw">pub async fn </span>send(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw">impl </span>FnOnce() -&gt; Event) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(inner) = <span class="kw-2">&amp;</span><span class="self">self</span>.inner {
-            <span class="kw">let </span>event = event();
-            inner.as_ref().send(event).<span class="kw">await</span>;
-        }
-    }
-
-    <span class="doccomment">/// Try to send an event.
-    ///
-    /// This will just drop the event if it can not be sent immediately. So it
-    /// is only appropriate for events that are not critical, such as
-    /// self-contained progress updates.
-    </span><span class="kw">pub fn </span>try_send(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw">impl </span>FnOnce() -&gt; Event) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(inner) = <span class="kw-2">&amp;</span><span class="self">self</span>.inner {
-            <span class="kw">let </span>event = event();
-            inner.as_ref().try_send(event);
-        }
+    <span class="doccomment">/// Send a transfer started event.
+    </span><span class="kw">pub async fn </span>send_transfer_started(<span class="kw-2">&amp;</span><span class="self">self</span>, index: u64, hash: <span class="kw-2">&amp;</span>Hash, size: u64) {
+        <span class="self">self</span>.progress
+            .send(|| Event::TransferStarted {
+                connection_id: <span class="self">self</span>.connection_id,
+                request_id: <span class="self">self</span>.request_id,
+                index,
+                hash: <span class="kw-2">*</span>hash,
+                size,
+            })
+            .<span class="kw">await</span>;
     }
 }
 
 <span class="doccomment">/// Handle a single connection.
-</span><span class="kw">pub async fn </span>handle_connection&lt;D: Map&gt;(
+</span><span class="kw">pub async fn </span>handle_connection(
     connection: endpoint::Connection,
-    db: D,
-    events: EventSender,
-    rt: LocalPoolHandle,
+    store: Store,
+    progress: EventSender,
 ) {
     <span class="kw">let </span>connection_id = connection.stable_id() <span class="kw">as </span>u64;
     <span class="kw">let </span>span = <span class="macro">debug_span!</span>(<span class="string">"connection"</span>, connection_id);
     <span class="kw">async move </span>{
+        <span class="kw">let </span><span class="prelude-val">Ok</span>(node_id) = connection.remote_node_id() <span class="kw">else </span>{
+            <span class="macro">warn!</span>(<span class="string">"failed to get node id"</span>);
+            <span class="kw">return</span>;
+        };
+        <span class="kw">if </span>!progress
+            .authorize_client_connection(connection_id, node_id)
+            .<span class="kw">await
+        </span>{
+            <span class="macro">debug!</span>(<span class="string">"client not authorized to connect"</span>);
+            <span class="kw">return</span>;
+        }
         <span class="kw">while let </span><span class="prelude-val">Ok</span>((writer, reader)) = connection.accept_bi().<span class="kw">await </span>{
             <span class="comment">// The stream ID index is used to identify this request.  Requests only arrive in
             // bi-directional RecvStreams initiated by the client, so this uniquely identifies them.
             </span><span class="kw">let </span>request_id = reader.id().index();
             <span class="kw">let </span>span = <span class="macro">debug_span!</span>(<span class="string">"stream"</span>, stream_id = %request_id);
-            <span class="kw">let </span>writer = ResponseWriter {
-                connection_id,
-                events: events.clone(),
+            <span class="kw">let </span>store = store.clone();
+            <span class="kw">let </span><span class="kw-2">mut </span>writer = ProgressWriter {
                 inner: writer,
+                context: StreamContext {
+                    connection_id,
+                    request_id,
+                    payload_bytes_sent: <span class="number">0</span>,
+                    other_bytes_sent: <span class="number">0</span>,
+                    bytes_read: <span class="number">0</span>,
+                    progress: progress.clone(),
+                },
             };
-            events
-                .send(|| Event::ClientConnected { connection_id })
-                .<span class="kw">await</span>;
-            <span class="kw">let </span>db = db.clone();
-            rt.spawn_detached(|| {
+            tokio::spawn(
                 <span class="kw">async move </span>{
-                    <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = handle_stream(db, reader, writer).<span class="kw">await </span>{
-                        <span class="macro">warn!</span>(<span class="string">"error: {err:#?}"</span>,);
+                    <span class="kw">match </span>handle_stream(store, reader, <span class="kw-2">&amp;mut </span>writer).<span class="kw">await </span>{
+                        <span class="prelude-val">Ok</span>(()) =&gt; {
+                            writer.send_transfer_completed().<span class="kw">await</span>;
+                        }
+                        <span class="prelude-val">Err</span>(err) =&gt; {
+                            <span class="macro">warn!</span>(<span class="string">"error: {err:#?}"</span>,);
+                            writer.send_transfer_aborted().<span class="kw">await</span>;
+                        }
                     }
                 }
-                .instrument(span)
-            });
+                .instrument(span),
+            );
         }
+        progress
+            .send(Event::ConnectionClosed { connection_id })
+            .<span class="kw">await</span>;
     }
     .instrument(span)
     .<span class="kw">await
 </span>}
 
-<span class="kw">async fn </span>handle_stream&lt;D: Map&gt;(db: D, reader: RecvStream, writer: ResponseWriter) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<span class="kw">async fn </span>handle_stream(
+    store: Store,
+    reader: RecvStream,
+    writer: <span class="kw-2">&amp;mut </span>ProgressWriter,
+) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="comment">// 1. Decode the request.
     </span><span class="macro">debug!</span>(<span class="string">"reading request"</span>);
-    <span class="kw">let </span>request = <span class="kw">match </span>read_request(reader).<span class="kw">await </span>{
-        <span class="prelude-val">Ok</span>(r) =&gt; r,
+    <span class="kw">let </span><span class="kw-2">mut </span>reader = ProgressReader {
+        inner: reader,
+        context: StreamContext {
+            connection_id: writer.connection_id,
+            request_id: writer.request_id,
+            payload_bytes_sent: <span class="number">0</span>,
+            other_bytes_sent: <span class="number">0</span>,
+            bytes_read: <span class="number">0</span>,
+            progress: writer.progress.clone(),
+        },
+    };
+    <span class="kw">let </span>request = <span class="kw">match </span>read_request(<span class="kw-2">&amp;mut </span>reader).<span class="kw">await </span>{
+        <span class="prelude-val">Ok</span>(request) =&gt; request,
         <span class="prelude-val">Err</span>(e) =&gt; {
-            writer.notify_transfer_aborted(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-            <span class="kw">return </span><span class="prelude-val">Err</span>(e);
+            <span class="comment">// todo: increase invalid requests metric counter
+            </span><span class="kw">return </span><span class="prelude-val">Err</span>(e);
         }
     };
 
     <span class="kw">match </span>request {
-        Request::Get(request) =&gt; handle_get(db, request, writer).<span class="kw">await</span>,
-    }
+        Request::Get(request) =&gt; {
+            <span class="comment">// we expect no more bytes after the request, so if there are more bytes, it is an invalid request.
+            </span>reader.inner.read_to_end(<span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+            <span class="comment">// move the context so we don't lose the bytes read
+            </span>writer.context = reader.context;
+            handle_get(store, request, writer).<span class="kw">await
+        </span>}
+        Request::GetMany(request) =&gt; {
+            <span class="comment">// we expect no more bytes after the request, so if there are more bytes, it is an invalid request.
+            </span>reader.inner.read_to_end(<span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+            <span class="comment">// move the context so we don't lose the bytes read
+            </span>writer.context = reader.context;
+            handle_get_many(store, request, writer).<span class="kw">await
+        </span>}
+        Request::Observe(request) =&gt; {
+            <span class="comment">// we expect no more bytes after the request, so if there are more bytes, it is an invalid request.
+            </span>reader.inner.read_to_end(<span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+            handle_observe(store, request, writer).<span class="kw">await
+        </span>}
+        Request::Push(request) =&gt; {
+            writer.inner.finish()<span class="question-mark">?</span>;
+            handle_push(store, request, reader).<span class="kw">await
+        </span>}
+        <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"unsupported request: {request:?}"</span>),
+        <span class="comment">// Request::Push(request) =&gt; handle_push(store, request, writer).await,
+    </span>}
 }
 
 <span class="doccomment">/// Handle a single get request.
 ///
-/// Requires the request, a database, and a writer.
-</span><span class="kw">pub async fn </span>handle_get&lt;D: Map&gt;(
-    db: D,
+/// Requires a database, the request, and a writer.
+</span><span class="kw">pub async fn </span>handle_get(
+    store: Store,
     request: GetRequest,
-    <span class="kw-2">mut </span>writer: ResponseWriter,
+    writer: <span class="kw-2">&amp;mut </span>ProgressWriter,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span>hash = request.hash;
-    <span class="macro">debug!</span>(%hash, <span class="string">"received request"</span>);
+    <span class="macro">debug!</span>(%hash, <span class="string">"get received request"</span>);
+
     writer
-        .events
-        .send(|| Event::GetRequestReceived {
-            hash,
-            connection_id: writer.connection_id(),
-            request_id: writer.request_id(),
-        })
+        .send_get_request_received(<span class="kw-2">&amp;</span>hash, <span class="kw-2">&amp;</span>request.ranges)
         .<span class="kw">await</span>;
-
-    <span class="comment">// 4. Attempt to find hash
-    </span><span class="kw">match </span>db.get(<span class="kw-2">&amp;</span>hash).<span class="kw">await</span><span class="question-mark">? </span>{
-        <span class="comment">// Collection or blob request
-        </span><span class="prelude-val">Some</span>(entry) =&gt; {
-            <span class="kw">let </span><span class="kw-2">mut </span>stats = Box::&lt;TransferStats&gt;::default();
-            <span class="kw">let </span>t0 = std::time::Instant::now();
-            <span class="comment">// 5. Transfer data!
-            </span><span class="kw">let </span>res = transfer_hash_seq(
-                request,
-                <span class="kw-2">&amp;</span>db,
-                <span class="kw-2">&amp;mut </span>writer,
-                entry.outboard().<span class="kw">await</span><span class="question-mark">?</span>,
-                entry.data_reader().<span class="kw">await</span><span class="question-mark">?</span>,
-                <span class="kw-2">&amp;mut </span>stats,
-            )
-            .<span class="kw">await</span>;
-            stats.duration = t0.elapsed();
-            <span class="kw">match </span>res {
-                <span class="prelude-val">Ok</span>(SentStatus::Sent) =&gt; {
-                    writer.notify_transfer_completed(<span class="kw-2">&amp;</span>hash, stats).<span class="kw">await</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>hash_seq = <span class="prelude-val">None</span>;
+    <span class="kw">for </span>(offset, ranges) <span class="kw">in </span>request.ranges.iter_non_empty_infinite() {
+        <span class="kw">if </span>offset == <span class="number">0 </span>{
+            send_blob(<span class="kw-2">&amp;</span>store, offset, hash, ranges.clone(), writer).<span class="kw">await</span><span class="question-mark">?</span>;
+        } <span class="kw">else </span>{
+            <span class="comment">// todo: this assumes that 1. the hashseq is complete and 2. it is
+            // small enough to fit in memory.
+            //
+            // This should really read the hashseq from the store in chunks,
+            // only where needed, so we can deal with holes and large hashseqs.
+            </span><span class="kw">let </span>hash_seq = <span class="kw">match </span><span class="kw-2">&amp;</span>hash_seq {
+                <span class="prelude-val">Some</span>(b) =&gt; b,
+                <span class="prelude-val">None </span>=&gt; {
+                    <span class="kw">let </span>bytes = store.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>;
+                    <span class="kw">let </span>hs = HashSeq::try_from(bytes)<span class="question-mark">?</span>;
+                    hash_seq = <span class="prelude-val">Some</span>(hs);
+                    hash_seq.as_ref().unwrap()
                 }
-                <span class="prelude-val">Ok</span>(SentStatus::NotFound) =&gt; {
-                    writer.notify_transfer_aborted(<span class="prelude-val">Some</span>(stats)).<span class="kw">await</span>;
-                }
-                <span class="prelude-val">Err</span>(e) =&gt; {
-                    writer.notify_transfer_aborted(<span class="prelude-val">Some</span>(stats)).<span class="kw">await</span>;
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(e);
-                }
-            }
-
-            <span class="macro">debug!</span>(<span class="string">"finished response"</span>);
+            };
+            <span class="kw">let </span>o = usize::try_from(offset - <span class="number">1</span>).context(<span class="string">"offset too large"</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span><span class="prelude-val">Some</span>(hash) = hash_seq.get(o) <span class="kw">else </span>{
+                <span class="kw">break</span>;
+            };
+            send_blob(<span class="kw-2">&amp;</span>store, offset, hash, ranges.clone(), writer).<span class="kw">await</span><span class="question-mark">?</span>;
         }
-        <span class="prelude-val">None </span>=&gt; {
-            <span class="macro">debug!</span>(<span class="string">"not found {}"</span>, hash);
-            writer.notify_transfer_aborted(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-            writer.inner.finish()<span class="question-mark">?</span>;
-        }
-    };
+    }
 
     <span class="prelude-val">Ok</span>(())
 }
 
-<span class="doccomment">/// A helper struct that combines a quinn::SendStream with auxiliary information
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>ResponseWriter {
-    inner: SendStream,
-    events: EventSender,
-    connection_id: u64,
+<span class="doccomment">/// Handle a single get request.
+///
+/// Requires a database, the request, and a writer.
+</span><span class="kw">pub async fn </span>handle_get_many(
+    store: Store,
+    request: GetManyRequest,
+    writer: <span class="kw-2">&amp;mut </span>ProgressWriter,
+) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="macro">debug!</span>(<span class="string">"get_many received request"</span>);
+    writer
+        .send_get_many_request_received(<span class="kw-2">&amp;</span>request.hashes, <span class="kw-2">&amp;</span>request.ranges)
+        .<span class="kw">await</span>;
+    <span class="kw">let </span>request_ranges = request.ranges.iter_infinite();
+    <span class="kw">for </span>(child, (hash, ranges)) <span class="kw">in </span>request.hashes.iter().zip(request_ranges).enumerate() {
+        <span class="kw">if </span>!ranges.is_empty() {
+            send_blob(<span class="kw-2">&amp;</span>store, child <span class="kw">as </span>u64, <span class="kw-2">*</span>hash, ranges.clone(), writer).<span class="kw">await</span><span class="question-mark">?</span>;
+        }
+    }
+    <span class="prelude-val">Ok</span>(())
 }
 
-<span class="kw">impl </span>ResponseWriter {
-    <span class="kw">fn </span>tracking_writer(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; TrackingStreamWriter&lt;TokioStreamWriter&lt;<span class="kw-2">&amp;mut </span>SendStream&gt;&gt; {
-        TrackingStreamWriter::new(TokioStreamWriter(<span class="kw-2">&amp;mut </span><span class="self">self</span>.inner))
+<span class="doccomment">/// Handle a single push request.
+///
+/// Requires a database, the request, and a reader.
+</span><span class="kw">pub async fn </span>handle_push(
+    store: Store,
+    request: PushRequest,
+    <span class="kw-2">mut </span>reader: ProgressReader,
+) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">let </span>hash = request.hash;
+    <span class="macro">debug!</span>(%hash, <span class="string">"push received request"</span>);
+    <span class="kw">if </span>!reader.authorize_push_request(<span class="kw-2">&amp;</span>hash, <span class="kw-2">&amp;</span>request.ranges).<span class="kw">await </span>{
+        <span class="macro">debug!</span>(<span class="string">"push request not authorized"</span>);
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+    };
+    <span class="kw">let </span><span class="kw-2">mut </span>request_ranges = request.ranges.iter_infinite();
+    <span class="kw">let </span>root_ranges = request_ranges.next().expect(<span class="string">"infinite iterator"</span>);
+    <span class="kw">if </span>!root_ranges.is_empty() {
+        <span class="comment">// todo: send progress from import_bao_quinn or rename to import_bao_quinn_with_progress
+        </span>store
+            .import_bao_quinn(hash, root_ranges.clone(), <span class="kw-2">&amp;mut </span>reader.inner)
+            .<span class="kw">await</span><span class="question-mark">?</span>;
     }
-
-    <span class="kw">fn </span>connection_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-        <span class="self">self</span>.connection_id
+    <span class="kw">if </span>request.ranges.is_blob() {
+        <span class="macro">debug!</span>(<span class="string">"push request complete"</span>);
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
-
-    <span class="kw">fn </span>request_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-        <span class="self">self</span>.inner.id().index()
+    <span class="comment">// todo: we assume here that the hash sequence is complete. For some requests this might not be the case. We would need `LazyHashSeq` for that, but it is buggy as of now!
+    </span><span class="kw">let </span>hash_seq = store.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span>hash_seq = HashSeq::try_from(hash_seq)<span class="question-mark">?</span>;
+    <span class="kw">for </span>(child_hash, child_ranges) <span class="kw">in </span>hash_seq.into_iter().zip(request_ranges) {
+        <span class="kw">if </span>child_ranges.is_empty() {
+            <span class="kw">continue</span>;
+        }
+        store
+            .import_bao_quinn(child_hash, child_ranges.clone(), <span class="kw-2">&amp;mut </span>reader.inner)
+            .<span class="kw">await</span><span class="question-mark">?</span>;
     }
-
-    <span class="kw">fn </span>print_stats(stats: <span class="kw-2">&amp;</span>TransferStats) {
-        <span class="kw">let </span>send = stats.send.total();
-        <span class="kw">let </span>read = stats.read.total();
-        <span class="kw">let </span>total_sent_bytes = send.size;
-        <span class="kw">let </span>send_duration = send.stats.duration;
-        <span class="kw">let </span>read_duration = read.stats.duration;
-        <span class="kw">let </span>total_duration = stats.duration;
-        <span class="kw">let </span>other_duration = total_duration
-            .saturating_sub(send_duration)
-            .saturating_sub(read_duration);
-        <span class="kw">let </span>avg_send_size = total_sent_bytes.checked_div(send.stats.count).unwrap_or(<span class="number">0</span>);
-        <span class="macro">info!</span>(
-            <span class="string">"sent {} bytes in {}s"</span>,
-            total_sent_bytes,
-            total_duration.as_secs_f64()
-        );
-        <span class="macro">debug!</span>(
-            <span class="string">"{}s sending, {}s reading, {}s other"</span>,
-            send_duration.as_secs_f64(),
-            read_duration.as_secs_f64(),
-            other_duration.as_secs_f64()
-        );
-        <span class="macro">trace!</span>(
-            <span class="string">"send_count: {} avg_send_size {}"</span>,
-            send.stats.count,
-            avg_send_size,
-        )
-    }
-
-    <span class="kw">async fn </span>notify_transfer_completed(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: <span class="kw-2">&amp;</span>Hash, stats: Box&lt;TransferStats&gt;) {
-        <span class="macro">info!</span>(<span class="string">"transfer completed for {}"</span>, hash);
-        <span class="self">Self</span>::print_stats(<span class="kw-2">&amp;</span>stats);
-        <span class="self">self</span>.events
-            .send(<span class="kw">move </span>|| Event::TransferCompleted {
-                connection_id: <span class="self">self</span>.connection_id(),
-                request_id: <span class="self">self</span>.request_id(),
-                stats,
-            })
-            .<span class="kw">await</span>;
-    }
-
-    <span class="kw">async fn </span>notify_transfer_aborted(<span class="kw-2">&amp;</span><span class="self">self</span>, stats: <span class="prelude-ty">Option</span>&lt;Box&lt;TransferStats&gt;&gt;) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(stats) = <span class="kw-2">&amp;</span>stats {
-            <span class="self">Self</span>::print_stats(stats);
-        };
-        <span class="self">self</span>.events
-            .send(<span class="kw">move </span>|| Event::TransferAborted {
-                connection_id: <span class="self">self</span>.connection_id(),
-                request_id: <span class="self">self</span>.request_id(),
-                stats,
-            })
-            .<span class="kw">await</span>;
-    }
-}
-
-<span class="doccomment">/// Status  of a send operation
-</span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq)]
-</span><span class="kw">pub enum </span>SentStatus {
-    <span class="doccomment">/// The requested data was sent
-    </span>Sent,
-    <span class="doccomment">/// The requested data was not found
-    </span>NotFound,
+    <span class="prelude-val">Ok</span>(())
 }
 
 <span class="doccomment">/// Send a blob to the client.
-</span><span class="kw">pub async fn </span>send_blob&lt;D: Map, W: AsyncStreamWriter&gt;(
-    db: <span class="kw-2">&amp;</span>D,
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>send_blob(
+    store: <span class="kw-2">&amp;</span>Store,
+    index: u64,
     hash: Hash,
-    ranges: <span class="kw-2">&amp;</span>RangeSpec,
-    <span class="kw-2">mut </span>writer: W,
-    events: EventSender,
-    mk_progress: <span class="kw">impl </span>Fn(u64) -&gt; Event,
-) -&gt; <span class="prelude-ty">Result</span>&lt;(SentStatus, u64, SliceReaderStats)&gt; {
-    <span class="kw">match </span>db.get(<span class="kw-2">&amp;</span>hash).<span class="kw">await</span><span class="question-mark">? </span>{
-        <span class="prelude-val">Some</span>(entry) =&gt; {
-            <span class="kw">let </span>outboard = entry.outboard().<span class="kw">await</span><span class="question-mark">?</span>;
-            <span class="kw">let </span>size = outboard.tree().size();
-            <span class="kw">let </span><span class="kw-2">mut </span>file_reader = TrackingSliceReader::new(entry.data_reader().<span class="kw">await</span><span class="question-mark">?</span>);
-            <span class="kw">let </span><span class="kw-2">mut </span>sending_reader =
-                SendingSliceReader::new(<span class="kw-2">&amp;mut </span>file_reader, <span class="kw-2">&amp;</span>events, mk_progress);
-            writer.write(size.to_le_bytes().as_slice()).<span class="kw">await</span><span class="question-mark">?</span>;
-            encode_ranges_validated(
-                <span class="kw-2">&amp;mut </span>sending_reader,
-                outboard,
-                <span class="kw-2">&amp;</span>ranges.to_chunk_ranges(),
-                writer,
-            )
-            .<span class="kw">await
-            </span>.map_err(|e| encode_error_to_anyhow(e, <span class="kw-2">&amp;</span>hash))<span class="question-mark">?</span>;
+    ranges: ChunkRanges,
+    writer: <span class="kw-2">&amp;mut </span>ProgressWriter,
+) -&gt; api::Result&lt;()&gt; {
+    <span class="prelude-val">Ok</span>(store
+        .export_bao(hash, ranges)
+        .write_quinn_with_progress(<span class="kw-2">&amp;mut </span>writer.inner, <span class="kw-2">&amp;mut </span>writer.context, <span class="kw-2">&amp;</span>hash, index)
+        .<span class="kw">await</span><span class="question-mark">?</span>)
+}
 
-            <span class="prelude-val">Ok</span>((SentStatus::Sent, size, file_reader.stats()))
+<span class="doccomment">/// Handle a single push request.
+///
+/// Requires a database, the request, and a reader.
+</span><span class="kw">pub async fn </span>handle_observe(
+    store: Store,
+    request: ObserveRequest,
+    writer: <span class="kw-2">&amp;mut </span>ProgressWriter,
+) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>stream = store.observe(request.hash).stream().<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>old = stream
+        .next()
+        .<span class="kw">await
+        </span>.ok_or(<span class="macro">anyhow::anyhow!</span>(<span class="string">"observe stream closed before first value"</span>))<span class="question-mark">?</span>;
+    <span class="comment">// send the initial bitfield
+    </span>send_observe_item(writer, <span class="kw-2">&amp;</span>old).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="comment">// send updates until the remote loses interest
+    </span><span class="kw">loop </span>{
+        <span class="macro">select!</span> {
+            new = stream.next() =&gt; {
+                <span class="kw">let </span>new = new.context(<span class="string">"observe stream closed"</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>diff = old.diff(<span class="kw-2">&amp;</span>new);
+                <span class="kw">if </span>diff.is_empty() {
+                    <span class="kw">continue</span>;
+                }
+                send_observe_item(writer, <span class="kw-2">&amp;</span>diff).<span class="kw">await</span><span class="question-mark">?</span>;
+                old = new;
+            }
+            <span class="kw">_ </span>= writer.inner.stopped() =&gt; {
+                <span class="macro">debug!</span>(<span class="string">"observer closed"</span>);
+                <span class="kw">break</span>;
+            }
         }
-        <span class="kw">_ </span>=&gt; {
-            <span class="macro">debug!</span>(<span class="string">"blob not found {}"</span>, hash.to_hex());
-            <span class="prelude-val">Ok</span>((SentStatus::NotFound, <span class="number">0</span>, SliceReaderStats::default()))
+    }
+    <span class="prelude-val">Ok</span>(())
+}
+
+<span class="kw">async fn </span>send_observe_item(writer: <span class="kw-2">&amp;mut </span>ProgressWriter, item: <span class="kw-2">&amp;</span>Bitfield) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">use </span>irpc::util::AsyncWriteVarintExt;
+    <span class="kw">let </span>item = ObserveItem::from(item);
+    <span class="kw">let </span>len = writer.inner.write_length_prefixed(item).<span class="kw">await</span><span class="question-mark">?</span>;
+    writer.log_other_write(len);
+    <span class="prelude-val">Ok</span>(())
+}
+
+<span class="doccomment">/// Helper to lazyly create an [`Event`], in the case that the event creation
+/// is expensive and we want to avoid it if the progress sender is disabled.
+</span><span class="kw">pub trait </span>LazyEvent {
+    <span class="kw">fn </span>call(<span class="self">self</span>) -&gt; Event;
+}
+
+<span class="kw">impl</span>&lt;T&gt; LazyEvent <span class="kw">for </span>T
+<span class="kw">where
+    </span>T: FnOnce() -&gt; Event,
+{
+    <span class="kw">fn </span>call(<span class="self">self</span>) -&gt; Event {
+        <span class="self">self</span>()
+    }
+}
+
+<span class="kw">impl </span>LazyEvent <span class="kw">for </span>Event {
+    <span class="kw">fn </span>call(<span class="self">self</span>) -&gt; Event {
+        <span class="self">self
+    </span>}
+}
+
+<span class="doccomment">/// A sender for provider events.
+</span><span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub struct </span>EventSender(EventSenderInner);
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">enum </span>EventSenderInner {
+    Disabled,
+    Enabled(mpsc::Sender&lt;Event&gt;),
+}
+
+<span class="kw">impl </span>EventSender {
+    <span class="kw">pub fn </span>new(sender: <span class="prelude-ty">Option</span>&lt;mpsc::Sender&lt;Event&gt;&gt;) -&gt; <span class="self">Self </span>{
+        <span class="kw">match </span>sender {
+            <span class="prelude-val">Some</span>(sender) =&gt; <span class="self">Self</span>(EventSenderInner::Enabled(sender)),
+            <span class="prelude-val">None </span>=&gt; <span class="self">Self</span>(EventSenderInner::Disabled),
+        }
+    }
+
+    <span class="doccomment">/// Send a client connected event, if the progress sender is enabled.
+    ///
+    /// This will permit the client to connect if the sender is disabled.
+    </span><span class="attr">#[must_use = <span class="string">"permit should be checked by the caller"</span>]
+    </span><span class="kw">pub async fn </span>authorize_client_connection(<span class="kw-2">&amp;</span><span class="self">self</span>, connection_id: u64, node_id: NodeId) -&gt; bool {
+        <span class="kw">let </span><span class="kw-2">mut </span>wait_for_permit = <span class="prelude-val">None</span>;
+        <span class="self">self</span>.send(|| {
+            <span class="kw">let </span>(tx, rx) = oneshot::channel();
+            wait_for_permit = <span class="prelude-val">Some</span>(rx);
+            Event::ClientConnected {
+                connection_id,
+                node_id,
+                permitted: tx,
+            }
+        })
+        .<span class="kw">await</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(wait_for_permit) = wait_for_permit {
+            <span class="comment">// if we have events configured, and they drop the channel, we consider that as a no!
+            // todo: this will be confusing and needs to be properly documented.
+            </span>wait_for_permit.<span class="kw">await</span>.unwrap_or(<span class="bool-val">false</span>)
+        } <span class="kw">else </span>{
+            <span class="bool-val">true
+        </span>}
+    }
+
+    <span class="doccomment">/// Send an ephemeral event, if the progress sender is enabled.
+    ///
+    /// The event will only be created if the sender is enabled.
+    </span><span class="kw">fn </span>try_send(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw">impl </span>LazyEvent) {
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0 </span>{
+            EventSenderInner::Enabled(sender) =&gt; {
+                <span class="kw">let </span>value = event.call();
+                sender.try_send(value).ok();
+            }
+            EventSenderInner::Disabled =&gt; {}
+        }
+    }
+
+    <span class="doccomment">/// Send a mandatory event, if the progress sender is enabled.
+    ///
+    /// The event only be created if the sender is enabled.
+    </span><span class="kw">async fn </span>send(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw">impl </span>LazyEvent) {
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0 </span>{
+            EventSenderInner::Enabled(sender) =&gt; {
+                <span class="kw">let </span>value = event.call();
+                <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = sender.send(value).<span class="kw">await </span>{
+                    <span class="macro">error!</span>(<span class="string">"failed to send progress event: {:?}"</span>, err);
+                }
+            }
+            EventSenderInner::Disabled =&gt; {}
         }
     }
 }
 
-<span class="kw">fn </span>encode_error_to_anyhow(err: EncodeError, hash: <span class="kw-2">&amp;</span>Hash) -&gt; anyhow::Error {
-    <span class="kw">match </span>err {
-        EncodeError::LeafHashMismatch(x) =&gt; anyhow::Error::from(EncodeError::LeafHashMismatch(x))
-            .context(<span class="macro">format!</span>(<span class="string">"hash {} offset {}"</span>, hash.to_hex(), x.to_bytes())),
-        EncodeError::ParentHashMismatch(n) =&gt; {
-            <span class="kw">let </span>r = n.chunk_range();
-            anyhow::Error::from(EncodeError::ParentHashMismatch(n)).context(<span class="macro">format!</span>(
-                <span class="string">"hash {} range {}..{}"</span>,
-                hash.to_hex(),
-                r.start.to_bytes(),
-                r.end.to_bytes()
-            ))
+<span class="kw">pub struct </span>ProgressReader {
+    inner: RecvStream,
+    context: StreamContext,
+}
+
+<span class="kw">impl </span>Deref <span class="kw">for </span>ProgressReader {
+    <span class="kw">type </span>Target = StreamContext;
+
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.context
+    }
+}
+
+<span class="kw">impl </span>DerefMut <span class="kw">for </span>ProgressReader {
+    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.context
+    }
+}
+
+<span class="kw">pub struct </span>CountingReader&lt;R&gt; {
+    <span class="kw">pub </span>inner: R,
+    <span class="kw">pub </span>read: u64,
+}
+
+<span class="kw">impl</span>&lt;R&gt; CountingReader&lt;R&gt; {
+    <span class="kw">pub fn </span>new(inner: R) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ inner, read: <span class="number">0 </span>}
+    }
+
+    <span class="kw">pub fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.read
+    }
+}
+
+<span class="kw">impl </span>CountingReader&lt;<span class="kw-2">&amp;mut </span>iroh::endpoint::RecvStream&gt; {
+    <span class="kw">pub async fn </span>read_to_end_as&lt;T: DeserializeOwned&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, max_size: usize) -&gt; io::Result&lt;T&gt; {
+        <span class="kw">let </span>data = <span class="self">self
+            </span>.inner
+            .read_to_end(max_size)
+            .<span class="kw">await
+            </span>.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))<span class="question-mark">?</span>;
+        <span class="kw">let </span>value = postcard::from_bytes(<span class="kw-2">&amp;</span>data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))<span class="question-mark">?</span>;
+        <span class="self">self</span>.read += data.len() <span class="kw">as </span>u64;
+        <span class="prelude-val">Ok</span>(value)
+    }
+}
+
+<span class="kw">impl</span>&lt;R: AsyncRead + Unpin&gt; AsyncRead <span class="kw">for </span>CountingReader&lt;R&gt; {
+    <span class="kw">fn </span>poll_read(
+        <span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;,
+        cx: <span class="kw-2">&amp;mut </span>std::task::Context&lt;<span class="lifetime">'_</span>&gt;,
+        buf: <span class="kw-2">&amp;mut </span>tokio::io::ReadBuf&lt;<span class="lifetime">'_</span>&gt;,
+    ) -&gt; Poll&lt;io::Result&lt;()&gt;&gt; {
+        <span class="kw">let </span>this = <span class="self">self</span>.get_mut();
+        <span class="kw">let </span>result = Pin::new(<span class="kw-2">&amp;mut </span>this.inner).poll_read(cx, buf);
+        <span class="kw">if let </span>Poll::Ready(<span class="prelude-val">Ok</span>(())) = result {
+            this.read += buf.filled().len() <span class="kw">as </span>u64;
         }
-        e =&gt; anyhow::Error::from(e).context(<span class="macro">format!</span>(<span class="string">"hash {}"</span>, hash.to_hex())),
+        result
     }
 }
 </code></pre></div></section></main></body></html>

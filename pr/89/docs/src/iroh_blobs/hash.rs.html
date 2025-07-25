@@ -600,12 +600,36 @@
 <a href="#599" id="599">599</a>
 <a href="#600" id="600">600</a>
 <a href="#601" id="601">601</a>
-<a href="#602" id="602">602</a></pre></div><pre class="rust"><code><span class="doccomment">//! The blake3 hash used in Iroh.
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a></pre></div><pre class="rust"><code><span class="doccomment">//! The blake3 hash used in Iroh.
 
 </span><span class="kw">use </span>std::{borrow::Borrow, fmt, str::FromStr};
 
+<span class="kw">use </span>arrayvec::ArrayString;
+<span class="kw">use </span>bao_tree::blake3;
+<span class="kw">use </span>n0_snafu::SpanTrace;
+<span class="kw">use </span>nested_enum_utils::common_fields;
 <span class="kw">use </span>postcard::experimental::max_size::MaxSize;
 <span class="kw">use </span>serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+<span class="kw">use </span>snafu::{Backtrace, ResultExt, Snafu};
+
+<span class="kw">use </span><span class="kw">crate</span>::store::util::DD;
 
 <span class="doccomment">/// Hash type used throughout.
 </span><span class="attr">#[derive(PartialEq, Eq, Copy, Clone, Hash)]
@@ -614,14 +638,6 @@
 <span class="kw">impl </span>fmt::Debug <span class="kw">for </span>Hash {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
         f.debug_tuple(<span class="string">"Hash"</span>).field(<span class="kw-2">&amp;</span>DD(<span class="self">self</span>.to_hex())).finish()
-    }
-}
-
-<span class="kw">struct </span>DD&lt;T: fmt::Display&gt;(T);
-
-<span class="kw">impl</span>&lt;T: fmt::Display&gt; fmt::Debug <span class="kw">for </span>DD&lt;T&gt; {
-    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-        fmt::Display::fmt(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>, f)
     }
 }
 
@@ -655,8 +671,12 @@
 
     <span class="doccomment">/// Convert to a hex string limited to the first 5bytes for a friendly string
     /// representation of the hash.
-    </span><span class="kw">pub fn </span>fmt_short(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        data_encoding::HEXLOWER.encode(<span class="kw-2">&amp;</span><span class="self">self</span>.as_bytes()[..<span class="number">5</span>])
+    </span><span class="kw">pub fn </span>fmt_short(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrayString&lt;<span class="number">10</span>&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>res = ArrayString::new();
+        data_encoding::HEXLOWER
+            .encode_write(<span class="kw-2">&amp;</span><span class="self">self</span>.as_bytes()[..<span class="number">5</span>], <span class="kw-2">&amp;mut </span>res)
+            .unwrap();
+        res
     }
 }
 
@@ -722,25 +742,33 @@
 
 <span class="kw">impl </span>fmt::Display <span class="kw">for </span>Hash {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-        <span class="comment">// result will be 52 bytes
-        </span><span class="kw">let </span><span class="kw-2">mut </span>res = [<span class="string">b'b'</span>; <span class="number">52</span>];
-        <span class="comment">// write the encoded bytes
-        </span>data_encoding::BASE32_NOPAD.encode_mut(<span class="self">self</span>.as_bytes(), <span class="kw-2">&amp;mut </span>res);
-        <span class="comment">// convert to string, this is guaranteed to succeed
-        </span><span class="kw">let </span>t = std::str::from_utf8_mut(res.as_mut()).unwrap();
-        <span class="comment">// hack since data_encoding doesn't have BASE32LOWER_NOPAD as a const
-        </span>t.make_ascii_lowercase();
-        <span class="comment">// write the str, no allocations
-        </span>f.write_str(t)
-    }
+        f.write_str(<span class="kw-2">&amp;</span><span class="self">self</span>.to_hex())
+        <span class="comment">// // result will be 52 bytes
+        // let mut res = [b'b'; 52];
+        // // write the encoded bytes
+        // data_encoding::BASE32_NOPAD.encode_mut(self.as_bytes(), &amp;mut res);
+        // // convert to string, this is guaranteed to succeed
+        // let t = std::str::from_utf8_mut(res.as_mut()).unwrap();
+        // // hack since data_encoding doesn't have BASE32LOWER_NOPAD as a const
+        // t.make_ascii_lowercase();
+        // // write the str, no allocations
+        // f.write_str(t)
+    </span>}
 }
 
-<span class="attr">#[derive(Debug, thiserror::Error)]
+<span class="attr">#[common_fields({
+    backtrace: <span class="prelude-ty">Option</span>&lt;Backtrace&gt;,
+    <span class="attr">#[snafu(implicit)]
+    </span>span_trace: SpanTrace,
+})]
+<span class="attr">#[allow(missing_docs)]
+#[non_exhaustive]
+#[derive(Debug, Snafu)]
 </span><span class="kw">pub enum </span>HexOrBase32ParseError {
-    <span class="attr">#[error(<span class="string">"Invalid length"</span>)]
-    </span>DecodeInvalidLength,
-    <span class="attr">#[error(<span class="string">"Failed to decode {0}"</span>)]
-    </span>Decode(<span class="attr">#[from] </span>data_encoding::DecodeError),
+    <span class="attr">#[snafu(display(<span class="string">"Invalid length"</span>))]
+    </span>DecodeInvalidLength {},
+    <span class="attr">#[snafu(display(<span class="string">"Failed to decode {source}"</span>))]
+    </span>Decode { source: data_encoding::DecodeError },
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>Hash {
@@ -753,20 +781,15 @@
             <span class="comment">// hex
             </span>data_encoding::HEXLOWER.decode_mut(s.as_bytes(), <span class="kw-2">&amp;mut </span>bytes)
         } <span class="kw">else </span>{
-            <span class="kw">let </span>input = s.to_ascii_uppercase();
-            <span class="kw">let </span>input = input.as_bytes();
-            <span class="kw">if </span>data_encoding::BASE32_NOPAD.decode_len(input.len())<span class="question-mark">? </span>!= bytes.len() {
-                <span class="kw">return </span><span class="prelude-val">Err</span>(HexOrBase32ParseError::DecodeInvalidLength);
-            }
-            data_encoding::BASE32_NOPAD.decode_mut(input, <span class="kw-2">&amp;mut </span>bytes)
+            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), <span class="kw-2">&amp;mut </span>bytes)
         };
         <span class="kw">match </span>res {
             <span class="prelude-val">Ok</span>(len) =&gt; {
                 <span class="kw">if </span>len != <span class="number">32 </span>{
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(HexOrBase32ParseError::DecodeInvalidLength);
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(DecodeInvalidLengthSnafu.build());
                 }
             }
-            <span class="prelude-val">Err</span>(partial) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(partial.error.into()),
+            <span class="prelude-val">Err</span>(partial) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(partial.error).context(DecodeSnafu),
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self</span>(blake3::Hash::from_bytes(bytes)))
     }
@@ -850,7 +873,7 @@
 }
 
 <span class="doccomment">/// A hash and format pair
-</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, MaxSize, Hash)]
+</span><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, MaxSize, Hash)]
 </span><span class="kw">pub struct </span>HashAndFormat {
     <span class="doccomment">/// The hash
     </span><span class="kw">pub </span>hash: Hash,
@@ -858,13 +881,28 @@
     </span><span class="kw">pub </span>format: BlobFormat,
 }
 
-<span class="kw">impl </span>From&lt;Hash&gt; <span class="kw">for </span>HashAndFormat {
-    <span class="kw">fn </span>from(hash: Hash) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>::raw(hash)
+<span class="kw">impl </span>std::fmt::Debug <span class="kw">for </span>HashAndFormat {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+        std::fmt::Debug::fmt(<span class="kw-2">&amp;</span>(DD(<span class="self">self</span>.hash.to_hex()), <span class="self">self</span>.format), f)
     }
 }
 
-<span class="attr">#[cfg(feature = <span class="string">"redb"</span>)]
+<span class="kw">impl </span>From&lt;(Hash, BlobFormat)&gt; <span class="kw">for </span>HashAndFormat {
+    <span class="kw">fn </span>from((hash, format): (Hash, BlobFormat)) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ hash, format }
+    }
+}
+
+<span class="kw">impl </span>From&lt;Hash&gt; <span class="kw">for </span>HashAndFormat {
+    <span class="kw">fn </span>from(hash: Hash) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            hash,
+            format: BlobFormat::Raw,
+        }
+    }
+}
+
+<span class="comment">// #[cfg(feature = "redb")]
 </span><span class="kw">mod </span>redb_support {
     <span class="kw">use </span>postcard::experimental::max_size::MaxSize;
     <span class="kw">use </span>redb::{Key <span class="kw">as </span>RedbKey, Value <span class="kw">as </span>RedbValue};
@@ -1029,10 +1067,11 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
+
+    <span class="kw">use </span>iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
     <span class="kw">use </span>serde_test::{assert_tokens, Configure, Token};
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
-    <span class="kw">use crate</span>::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_display_parse_roundtrip() {
@@ -1073,8 +1112,8 @@
         <span class="macro">assert_eq_hex!</span>(serialized, expected);
     }
 
-    <span class="attr">#[cfg(feature = <span class="string">"redb"</span>)]
-    #[test]
+    <span class="comment">// #[cfg(feature = "redb")]
+    </span><span class="attr">#[test]
     </span><span class="kw">fn </span>hash_redb() {
         <span class="kw">use </span>redb::Value <span class="kw">as </span>RedbValue;
         <span class="kw">let </span>bytes: [u8; <span class="number">32</span>] = (<span class="number">0</span>..<span class="number">32</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().as_slice().try_into().unwrap();
@@ -1098,8 +1137,8 @@
         <span class="macro">assert_eq_hex!</span>(serialized, expected);
     }
 
-    <span class="attr">#[cfg(feature = <span class="string">"redb"</span>)]
-    #[test]
+    <span class="comment">// #[cfg(feature = "redb")]
+    </span><span class="attr">#[test]
     </span><span class="kw">fn </span>hash_and_format_redb() {
         <span class="kw">use </span>redb::Value <span class="kw">as </span>RedbValue;
         <span class="kw">let </span>hash_bytes: [u8; <span class="number">32</span>] = (<span class="number">0</span>..<span class="number">32</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().as_slice().try_into().unwrap();
@@ -1143,7 +1182,7 @@
         assert_tokens(<span class="kw-2">&amp;</span>hash.compact(), <span class="kw-2">&amp;</span>tokens);
 
         <span class="kw">let </span>tokens = <span class="macro">vec!</span>[Token::String(
-            <span class="string">"5khrmpntq2bjexseshc6ldklwnig56gbj23yvbxjbdcwestheahq"</span>,
+            <span class="string">"ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f"</span>,
         )];
         assert_tokens(<span class="kw-2">&amp;</span>hash.readable(), <span class="kw-2">&amp;</span>tokens);
     }
@@ -1165,7 +1204,7 @@
         <span class="kw">let </span>de = serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap();
         <span class="macro">assert_eq!</span>(hash, de);
         <span class="comment">// 52 bytes of base32 + 2 quotes
-        </span><span class="macro">assert_eq!</span>(ser.len(), <span class="number">54</span>);
+        </span><span class="macro">assert_eq!</span>(ser.len(), <span class="number">66</span>);
     }
 
     <span class="attr">#[test]
@@ -1195,11 +1234,6 @@
         <span class="kw">let </span>ser = serde_json::to_string(<span class="kw-2">&amp;</span>haf).unwrap();
         <span class="kw">let </span>de = serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap();
         <span class="macro">assert_eq!</span>(haf, de);
-    }
-
-    <span class="attr">#[test]
-    </span><span class="kw">fn </span>test_hash_invalid() {
-        <span class="kw">let _ </span>= Hash::from_str(<span class="string">"invalid"</span>).unwrap_err();
     }
 }
 </code></pre></div></section></main></body></html>

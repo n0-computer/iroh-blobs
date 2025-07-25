@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Entry","Store"]};
+window.SIDEBAR_ITEMS = {"struct":["ReadonlyMemStore"]};

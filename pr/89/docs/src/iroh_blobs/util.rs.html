@@ -416,422 +416,706 @@
 <a href="#415" id="415">415</a>
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utility functions and types.
-</span><span class="kw">use </span>std::{
-    borrow::Borrow,
-    fmt,
-    io::{BufReader, Read},
-    sync::{Arc, Weak},
-    time::SystemTime,
-};
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::ops::{Bound, RangeBounds};
 
-<span class="kw">use </span>bao_tree::{io::outboard::PreOrderOutboard, BaoTree, ChunkRanges};
-<span class="kw">use </span>bytes::Bytes;
-<span class="kw">use </span>derive_more::{Debug, Display, From, Into};
-<span class="kw">use </span>range_collections::range_set::RangeSetRange;
-<span class="kw">use </span>serde::{Deserialize, Serialize};
+<span class="kw">use </span>bao_tree::{io::round_up_to_chunks, ChunkNum, ChunkRanges};
+<span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
 
-<span class="kw">use crate</span>::{BlobFormat, Hash, HashAndFormat, IROH_BLOCK_SIZE};
+<span class="kw">pub mod </span>channel;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>temp_tag;
+<span class="kw">pub mod </span>serde {
+    <span class="comment">// Module that handles io::Error serialization/deserialization
+    </span><span class="kw">pub mod </span>io_error_serde {
+        <span class="kw">use </span>std::{fmt, io};
 
-<span class="kw">pub mod </span>fs;
-<span class="kw">pub mod </span>io;
-<span class="kw">mod </span>mem_or_file;
-<span class="kw">pub mod </span>progress;
-<span class="kw">pub use </span>mem_or_file::MemOrFile;
-<span class="kw">mod </span>sparse_mem_file;
-<span class="kw">pub use </span>sparse_mem_file::SparseMemFile;
-<span class="kw">pub mod </span>local_pool;
+        <span class="kw">use </span>serde::{
+            de::{<span class="self">self</span>, SeqAccess, Visitor},
+            ser::SerializeTuple,
+            Deserializer, Serializer,
+        };
 
-<span class="attr">#[cfg(test)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>hexdump;
+        <span class="kw">fn </span>error_kind_to_u8(kind: io::ErrorKind) -&gt; u8 {
+            <span class="kw">match </span>kind {
+                io::ErrorKind::AddrInUse =&gt; <span class="number">0</span>,
+                io::ErrorKind::AddrNotAvailable =&gt; <span class="number">1</span>,
+                io::ErrorKind::AlreadyExists =&gt; <span class="number">2</span>,
+                io::ErrorKind::ArgumentListTooLong =&gt; <span class="number">3</span>,
+                io::ErrorKind::BrokenPipe =&gt; <span class="number">4</span>,
+                io::ErrorKind::ConnectionAborted =&gt; <span class="number">5</span>,
+                io::ErrorKind::ConnectionRefused =&gt; <span class="number">6</span>,
+                io::ErrorKind::ConnectionReset =&gt; <span class="number">7</span>,
+                io::ErrorKind::CrossesDevices =&gt; <span class="number">8</span>,
+                io::ErrorKind::Deadlock =&gt; <span class="number">9</span>,
+                io::ErrorKind::DirectoryNotEmpty =&gt; <span class="number">10</span>,
+                io::ErrorKind::ExecutableFileBusy =&gt; <span class="number">11</span>,
+                io::ErrorKind::FileTooLarge =&gt; <span class="number">12</span>,
+                io::ErrorKind::HostUnreachable =&gt; <span class="number">13</span>,
+                io::ErrorKind::Interrupted =&gt; <span class="number">14</span>,
+                io::ErrorKind::InvalidData =&gt; <span class="number">15</span>,
+                io::ErrorKind::InvalidInput =&gt; <span class="number">17</span>,
+                io::ErrorKind::IsADirectory =&gt; <span class="number">18</span>,
+                io::ErrorKind::NetworkDown =&gt; <span class="number">19</span>,
+                io::ErrorKind::NetworkUnreachable =&gt; <span class="number">20</span>,
+                io::ErrorKind::NotADirectory =&gt; <span class="number">21</span>,
+                io::ErrorKind::NotConnected =&gt; <span class="number">22</span>,
+                io::ErrorKind::NotFound =&gt; <span class="number">23</span>,
+                io::ErrorKind::NotSeekable =&gt; <span class="number">24</span>,
+                io::ErrorKind::Other =&gt; <span class="number">25</span>,
+                io::ErrorKind::OutOfMemory =&gt; <span class="number">26</span>,
+                io::ErrorKind::PermissionDenied =&gt; <span class="number">27</span>,
+                io::ErrorKind::QuotaExceeded =&gt; <span class="number">28</span>,
+                io::ErrorKind::ReadOnlyFilesystem =&gt; <span class="number">29</span>,
+                io::ErrorKind::ResourceBusy =&gt; <span class="number">30</span>,
+                io::ErrorKind::StaleNetworkFileHandle =&gt; <span class="number">31</span>,
+                io::ErrorKind::StorageFull =&gt; <span class="number">32</span>,
+                io::ErrorKind::TimedOut =&gt; <span class="number">33</span>,
+                io::ErrorKind::TooManyLinks =&gt; <span class="number">34</span>,
+                io::ErrorKind::UnexpectedEof =&gt; <span class="number">35</span>,
+                io::ErrorKind::Unsupported =&gt; <span class="number">36</span>,
+                io::ErrorKind::WouldBlock =&gt; <span class="number">37</span>,
+                io::ErrorKind::WriteZero =&gt; <span class="number">38</span>,
+                <span class="kw">_ </span>=&gt; <span class="number">25</span>,
+            }
+        }
 
-<span class="doccomment">/// A tag
-</span><span class="attr">#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, From, Into)]
-</span><span class="kw">pub struct </span>Tag(<span class="kw">pub </span>Bytes);
+        <span class="kw">fn </span>u8_to_error_kind(num: u8) -&gt; io::ErrorKind {
+            <span class="kw">match </span>num {
+                <span class="number">0 </span>=&gt; io::ErrorKind::AddrInUse,
+                <span class="number">1 </span>=&gt; io::ErrorKind::AddrNotAvailable,
+                <span class="number">2 </span>=&gt; io::ErrorKind::AlreadyExists,
+                <span class="number">3 </span>=&gt; io::ErrorKind::ArgumentListTooLong,
+                <span class="number">4 </span>=&gt; io::ErrorKind::BrokenPipe,
+                <span class="number">5 </span>=&gt; io::ErrorKind::ConnectionAborted,
+                <span class="number">6 </span>=&gt; io::ErrorKind::ConnectionRefused,
+                <span class="number">7 </span>=&gt; io::ErrorKind::ConnectionReset,
+                <span class="number">8 </span>=&gt; io::ErrorKind::CrossesDevices,
+                <span class="number">9 </span>=&gt; io::ErrorKind::Deadlock,
+                <span class="number">10 </span>=&gt; io::ErrorKind::DirectoryNotEmpty,
+                <span class="number">11 </span>=&gt; io::ErrorKind::ExecutableFileBusy,
+                <span class="number">12 </span>=&gt; io::ErrorKind::FileTooLarge,
+                <span class="number">13 </span>=&gt; io::ErrorKind::HostUnreachable,
+                <span class="number">14 </span>=&gt; io::ErrorKind::Interrupted,
+                <span class="number">15 </span>=&gt; io::ErrorKind::InvalidData,
+                <span class="comment">// 16 =&gt; io::ErrorKind::InvalidFilename,
+                </span><span class="number">17 </span>=&gt; io::ErrorKind::InvalidInput,
+                <span class="number">18 </span>=&gt; io::ErrorKind::IsADirectory,
+                <span class="number">19 </span>=&gt; io::ErrorKind::NetworkDown,
+                <span class="number">20 </span>=&gt; io::ErrorKind::NetworkUnreachable,
+                <span class="number">21 </span>=&gt; io::ErrorKind::NotADirectory,
+                <span class="number">22 </span>=&gt; io::ErrorKind::NotConnected,
+                <span class="number">23 </span>=&gt; io::ErrorKind::NotFound,
+                <span class="number">24 </span>=&gt; io::ErrorKind::NotSeekable,
+                <span class="number">25 </span>=&gt; io::ErrorKind::Other,
+                <span class="number">26 </span>=&gt; io::ErrorKind::OutOfMemory,
+                <span class="number">27 </span>=&gt; io::ErrorKind::PermissionDenied,
+                <span class="number">28 </span>=&gt; io::ErrorKind::QuotaExceeded,
+                <span class="number">29 </span>=&gt; io::ErrorKind::ReadOnlyFilesystem,
+                <span class="number">30 </span>=&gt; io::ErrorKind::ResourceBusy,
+                <span class="number">31 </span>=&gt; io::ErrorKind::StaleNetworkFileHandle,
+                <span class="number">32 </span>=&gt; io::ErrorKind::StorageFull,
+                <span class="number">33 </span>=&gt; io::ErrorKind::TimedOut,
+                <span class="number">34 </span>=&gt; io::ErrorKind::TooManyLinks,
+                <span class="number">35 </span>=&gt; io::ErrorKind::UnexpectedEof,
+                <span class="number">36 </span>=&gt; io::ErrorKind::Unsupported,
+                <span class="number">37 </span>=&gt; io::ErrorKind::WouldBlock,
+                <span class="number">38 </span>=&gt; io::ErrorKind::WriteZero,
+                <span class="kw">_ </span>=&gt; io::ErrorKind::Other,
+            }
+        }
 
-<span class="attr">#[cfg(feature = <span class="string">"redb"</span>)]
-</span><span class="kw">mod </span>redb_support {
-    <span class="kw">use </span>bytes::Bytes;
-    <span class="kw">use </span>redb::{Key <span class="kw">as </span>RedbKey, Value <span class="kw">as </span>RedbValue};
-
-    <span class="kw">use </span><span class="kw">super</span>::Tag;
-
-    <span class="kw">impl </span>RedbValue <span class="kw">for </span>Tag {
-        <span class="kw">type </span>SelfType&lt;<span class="lifetime">'a</span>&gt; = <span class="self">Self</span>;
-
-        <span class="kw">type </span>AsBytes&lt;<span class="lifetime">'a</span>&gt; = bytes::Bytes;
-
-        <span class="kw">fn </span>fixed_width() -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
-            <span class="prelude-val">None
-        </span>}
-
-        <span class="kw">fn </span>from_bytes&lt;<span class="lifetime">'a</span>&gt;(data: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[u8]) -&gt; <span class="self">Self</span>::SelfType&lt;<span class="lifetime">'a</span>&gt;
+        <span class="kw">pub fn </span>serialize&lt;S&gt;(error: <span class="kw-2">&amp;</span>io::Error, serializer: S) -&gt; <span class="prelude-ty">Result</span>&lt;S::Ok, S::Error&gt;
         <span class="kw">where
-            </span><span class="self">Self</span>: <span class="lifetime">'a</span>,
+            </span>S: Serializer,
         {
-            <span class="self">Self</span>(Bytes::copy_from_slice(data))
+            <span class="kw">let </span><span class="kw-2">mut </span>tup = serializer.serialize_tuple(<span class="number">2</span>)<span class="question-mark">?</span>;
+            tup.serialize_element(<span class="kw-2">&amp;</span>error_kind_to_u8(error.kind()))<span class="question-mark">?</span>;
+            tup.serialize_element(<span class="kw-2">&amp;</span>error.to_string())<span class="question-mark">?</span>;
+            tup.end()
         }
 
-        <span class="kw">fn </span>as_bytes&lt;<span class="lifetime">'a</span>, <span class="lifetime">'b</span>: <span class="lifetime">'a</span>&gt;(value: <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="self">Self</span>::SelfType&lt;<span class="lifetime">'b</span>&gt;) -&gt; <span class="self">Self</span>::AsBytes&lt;<span class="lifetime">'a</span>&gt;
+        <span class="kw">pub fn </span>deserialize&lt;<span class="lifetime">'de</span>, D&gt;(deserializer: D) -&gt; <span class="prelude-ty">Result</span>&lt;io::Error, D::Error&gt;
         <span class="kw">where
-            </span><span class="self">Self</span>: <span class="lifetime">'a</span>,
-            <span class="self">Self</span>: <span class="lifetime">'b</span>,
+            </span>D: Deserializer&lt;<span class="lifetime">'de</span>&gt;,
         {
-            value.<span class="number">0</span>.clone()
-        }
+            <span class="kw">struct </span>IoErrorVisitor;
 
-        <span class="kw">fn </span>type_name() -&gt; redb::TypeName {
-            redb::TypeName::new(<span class="string">"Tag"</span>)
-        }
-    }
+            <span class="kw">impl</span>&lt;<span class="lifetime">'de</span>&gt; Visitor&lt;<span class="lifetime">'de</span>&gt; <span class="kw">for </span>IoErrorVisitor {
+                <span class="kw">type </span>Value = io::Error;
 
-    <span class="kw">impl </span>RedbKey <span class="kw">for </span>Tag {
-        <span class="kw">fn </span>compare(data1: <span class="kw-2">&amp;</span>[u8], data2: <span class="kw-2">&amp;</span>[u8]) -&gt; std::cmp::Ordering {
-            data1.cmp(data2)
-        }
-    }
-}
-
-<span class="kw">impl </span>From&lt;<span class="kw-2">&amp;</span>[u8]&gt; <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>from(value: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>(Bytes::copy_from_slice(value))
-    }
-}
-
-<span class="kw">impl </span>AsRef&lt;[u8]&gt; <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>as_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {
-        <span class="self">self</span>.<span class="number">0</span>.as_ref()
-    }
-}
-
-<span class="kw">impl </span>Borrow&lt;[u8]&gt; <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>borrow(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {
-        <span class="self">self</span>.<span class="number">0</span>.as_ref()
-    }
-}
-
-<span class="kw">impl </span>From&lt;String&gt; <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>from(value: String) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>(Bytes::from(value))
-    }
-}
-
-<span class="kw">impl </span>From&lt;<span class="kw-2">&amp;</span>str&gt; <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>from(value: <span class="kw-2">&amp;</span>str) -&gt; <span class="self">Self </span>{
-        <span class="self">Self</span>(Bytes::from(value.to_owned()))
-    }
-}
-
-<span class="kw">impl </span>Display <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-        <span class="kw">let </span>bytes = <span class="self">self</span>.<span class="number">0</span>.as_ref();
-        <span class="kw">match </span>std::str::from_utf8(bytes) {
-            <span class="prelude-val">Ok</span>(s) =&gt; <span class="macro">write!</span>(f, <span class="string">"\"{}\""</span>, s),
-            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, hex::encode(bytes)),
-        }
-    }
-}
-
-<span class="kw">struct </span>DD&lt;T: fmt::Display&gt;(T);
-
-<span class="kw">impl</span>&lt;T: fmt::Display&gt; fmt::Debug <span class="kw">for </span>DD&lt;T&gt; {
-    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-        fmt::Display::fmt(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>, f)
-    }
-}
-
-<span class="kw">impl </span>Debug <span class="kw">for </span>Tag {
-    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-        f.debug_tuple(<span class="string">"Tag"</span>).field(<span class="kw-2">&amp;</span>DD(<span class="self">self</span>)).finish()
-    }
-}
-
-<span class="kw">impl </span>Tag {
-    <span class="doccomment">/// Create a new tag that does not exist yet.
-    </span><span class="kw">pub fn </span>auto(time: SystemTime, exists: <span class="kw">impl </span>Fn(<span class="kw-2">&amp;</span>[u8]) -&gt; bool) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>now = chrono::DateTime::&lt;chrono::Utc&gt;::from(time);
-        <span class="kw">let </span><span class="kw-2">mut </span>i = <span class="number">0</span>;
-        <span class="kw">loop </span>{
-            <span class="kw">let </span><span class="kw-2">mut </span>text = <span class="macro">format!</span>(<span class="string">"auto-{}"</span>, now.format(<span class="string">"%Y-%m-%dT%H:%M:%S%.3fZ"</span>));
-            <span class="kw">if </span>i != <span class="number">0 </span>{
-                text.push_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"-{}"</span>, i));
-            }
-            <span class="kw">if </span>!exists(text.as_bytes()) {
-                <span class="kw">return </span><span class="self">Self</span>::from(text);
-            }
-            i += <span class="number">1</span>;
-        }
-    }
-
-    <span class="doccomment">/// The successor of this tag in lexicographic order.
-    </span><span class="kw">pub fn </span>successor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="self">self</span>.<span class="number">0</span>.to_vec();
-        <span class="comment">// increment_vec(&amp;mut bytes);
-        </span>bytes.push(<span class="number">0</span>);
-        <span class="self">Self</span>(bytes.into())
-    }
-
-    <span class="doccomment">/// If this is a prefix, get the next prefix.
-    ///
-    /// This is like successor, except that it will return None if the prefix is all 0xFF instead of appending a 0 byte.
-    </span><span class="kw">pub fn </span>next_prefix(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="self">self</span>.<span class="number">0</span>.to_vec();
-        <span class="kw">if </span>next_prefix(<span class="kw-2">&amp;mut </span>bytes) {
-            <span class="prelude-val">Some</span>(<span class="self">Self</span>(bytes.into()))
-        } <span class="kw">else </span>{
-            <span class="prelude-val">None
-        </span>}
-    }
-}
-
-<span class="doccomment">/// Option for commands that allow setting a tag
-</span><span class="attr">#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>SetTagOption {
-    <span class="doccomment">/// A tag will be automatically generated
-    </span>Auto,
-    <span class="doccomment">/// The tag is explicitly named
-    </span>Named(Tag),
-}
-
-<span class="doccomment">/// Trait used from temp tags to notify an abstract store that a temp tag is
-/// being dropped.
-</span><span class="kw">pub trait </span>TagDrop: std::fmt::Debug + Send + Sync + <span class="lifetime">'static </span>{
-    <span class="doccomment">/// Called on drop
-    </span><span class="kw">fn </span>on_drop(<span class="kw-2">&amp;</span><span class="self">self</span>, inner: <span class="kw-2">&amp;</span>HashAndFormat);
-}
-
-<span class="doccomment">/// A trait for things that can track liveness of blobs and collections.
-///
-/// This trait works together with [TempTag] to keep track of the liveness of a
-/// blob or collection.
-///
-/// It is important to include the format in the liveness tracking, since
-/// protecting a collection means protecting the blob and all its children,
-/// whereas protecting a raw blob only protects the blob itself.
-</span><span class="kw">pub trait </span>TagCounter: TagDrop + Sized {
-    <span class="doccomment">/// Called on creation of a temp tag
-    </span><span class="kw">fn </span>on_create(<span class="kw-2">&amp;</span><span class="self">self</span>, inner: <span class="kw-2">&amp;</span>HashAndFormat);
-
-    <span class="doccomment">/// Get this as a weak reference for use in temp tags
-    </span><span class="kw">fn </span>as_weak(<span class="self">self</span>: <span class="kw-2">&amp;</span>Arc&lt;<span class="self">Self</span>&gt;) -&gt; Weak&lt;<span class="kw">dyn </span>TagDrop&gt; {
-        <span class="kw">let </span>on_drop: Arc&lt;<span class="kw">dyn </span>TagDrop&gt; = <span class="self">self</span>.clone();
-        Arc::downgrade(<span class="kw-2">&amp;</span>on_drop)
-    }
-
-    <span class="doccomment">/// Create a new temp tag for the given hash and format
-    </span><span class="kw">fn </span>temp_tag(<span class="self">self</span>: <span class="kw-2">&amp;</span>Arc&lt;<span class="self">Self</span>&gt;, inner: HashAndFormat) -&gt; TempTag {
-        <span class="self">self</span>.on_create(<span class="kw-2">&amp;</span>inner);
-        TempTag::new(inner, <span class="prelude-val">Some</span>(<span class="self">self</span>.as_weak()))
-    }
-}
-
-<span class="doccomment">/// A hash and format pair that is protected from garbage collection.
-///
-/// If format is raw, this will protect just the blob
-/// If format is collection, this will protect the collection and all blobs in it
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>TempTag {
-    <span class="doccomment">/// The hash and format we are pinning
-    </span>inner: HashAndFormat,
-    <span class="doccomment">/// optional callback to call on drop
-    </span>on_drop: <span class="prelude-ty">Option</span>&lt;Weak&lt;<span class="kw">dyn </span>TagDrop&gt;&gt;,
-}
-
-<span class="kw">impl </span>TempTag {
-    <span class="doccomment">/// Create a new temp tag for the given hash and format
-    ///
-    /// This should only be used by store implementations.
-    ///
-    /// The caller is responsible for increasing the refcount on creation and to
-    /// make sure that temp tags that are created between a mark phase and a sweep
-    /// phase are protected.
-    </span><span class="kw">pub fn </span>new(inner: HashAndFormat, on_drop: <span class="prelude-ty">Option</span>&lt;Weak&lt;<span class="kw">dyn </span>TagDrop&gt;&gt;) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{ inner, on_drop }
-    }
-
-    <span class="doccomment">/// The hash of the pinned item
-    </span><span class="kw">pub fn </span>inner(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>HashAndFormat {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.inner
-    }
-
-    <span class="doccomment">/// The hash of the pinned item
-    </span><span class="kw">pub fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Hash {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.inner.hash
-    }
-
-    <span class="doccomment">/// The format of the pinned item
-    </span><span class="kw">pub fn </span>format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; BlobFormat {
-        <span class="self">self</span>.inner.format
-    }
-
-    <span class="doccomment">/// The hash and format of the pinned item
-    </span><span class="kw">pub fn </span>hash_and_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashAndFormat {
-        <span class="self">self</span>.inner
-    }
-
-    <span class="doccomment">/// Keep the item alive until the end of the process
-    </span><span class="kw">pub fn </span>leak(<span class="kw-2">mut </span><span class="self">self</span>) {
-        <span class="comment">// set the liveness tracker to None, so that the refcount is not decreased
-        // during drop. This means that the refcount will never reach 0 and the
-        // item will not be gced until the end of the process.
-        </span><span class="self">self</span>.on_drop = <span class="prelude-val">None</span>;
-    }
-}
-
-<span class="kw">impl </span>Drop <span class="kw">for </span>TempTag {
-    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(on_drop) = <span class="self">self</span>.on_drop.take() {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(on_drop) = on_drop.upgrade() {
-                on_drop.on_drop(<span class="kw-2">&amp;</span><span class="self">self</span>.inner);
-            }
-        }
-    }
-}
-
-<span class="doccomment">/// Get the number of bytes given a set of chunk ranges and the total size.
-///
-/// If some ranges are out of bounds, they will be clamped to the size.
-</span><span class="kw">pub fn </span>total_bytes(ranges: ChunkRanges, size: u64) -&gt; u64 {
-    ranges
-        .iter()
-        .map(|range| {
-            <span class="kw">let </span>(start, end) = <span class="kw">match </span>range {
-                RangeSetRange::Range(r) =&gt; {
-                    (r.start.to_bytes().min(size), r.end.to_bytes().min(size))
+                <span class="kw">fn </span>expecting(<span class="kw-2">&amp;</span><span class="self">self</span>, formatter: <span class="kw-2">&amp;mut </span>fmt::Formatter) -&gt; fmt::Result {
+                    formatter.write_str(<span class="string">"a tuple of (u32, String) representing io::Error"</span>)
                 }
-                RangeSetRange::RangeFrom(range) =&gt; (range.start.to_bytes().min(size), size),
+
+                <span class="kw">fn </span>visit_seq&lt;A&gt;(<span class="self">self</span>, <span class="kw-2">mut </span>seq: A) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Value, A::Error&gt;
+                <span class="kw">where
+                    </span>A: SeqAccess&lt;<span class="lifetime">'de</span>&gt;,
+                {
+                    <span class="kw">let </span>num: u8 = seq
+                        .next_element()<span class="question-mark">?
+                        </span>.ok_or_else(|| de::Error::invalid_length(<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>))<span class="question-mark">?</span>;
+                    <span class="kw">let </span>message: String = seq
+                        .next_element()<span class="question-mark">?
+                        </span>.ok_or_else(|| de::Error::invalid_length(<span class="number">1</span>, <span class="kw-2">&amp;</span><span class="self">self</span>))<span class="question-mark">?</span>;
+                    <span class="kw">let </span>kind = u8_to_error_kind(num);
+                    <span class="prelude-val">Ok</span>(io::Error::new(kind, message))
+                }
+            }
+
+            deserializer.deserialize_tuple(<span class="number">2</span>, IoErrorVisitor)
+        }
+    }
+
+    <span class="attr">#[cfg(test)]
+    </span><span class="kw">mod </span>tests {
+        <span class="kw">use </span>std::io::{<span class="self">self</span>, ErrorKind};
+
+        <span class="kw">use </span>postcard;
+        <span class="kw">use </span>serde::{Deserialize, Serialize};
+
+        <span class="kw">use </span><span class="kw">super</span>::io_error_serde;
+
+        <span class="attr">#[derive(Serialize, Deserialize)]
+        </span><span class="kw">struct </span>TestError(<span class="attr">#[serde(with = <span class="string">"io_error_serde"</span>)] </span>io::Error);
+
+        <span class="attr">#[test]
+        </span><span class="kw">fn </span>test_roundtrip_error_kinds() {
+            <span class="kw">let </span>message = <span class="string">"test error"</span>;
+            <span class="kw">let </span>kinds = [
+                ErrorKind::AddrInUse,
+                ErrorKind::AddrNotAvailable,
+                ErrorKind::AlreadyExists,
+                ErrorKind::ArgumentListTooLong,
+                ErrorKind::BrokenPipe,
+                ErrorKind::ConnectionAborted,
+                ErrorKind::ConnectionRefused,
+                ErrorKind::ConnectionReset,
+                ErrorKind::CrossesDevices,
+                ErrorKind::Deadlock,
+                ErrorKind::DirectoryNotEmpty,
+                ErrorKind::ExecutableFileBusy,
+                ErrorKind::FileTooLarge,
+                ErrorKind::HostUnreachable,
+                ErrorKind::Interrupted,
+                ErrorKind::InvalidData,
+                <span class="comment">// ErrorKind::InvalidFilename,
+                </span>ErrorKind::InvalidInput,
+                ErrorKind::IsADirectory,
+                ErrorKind::NetworkDown,
+                ErrorKind::NetworkUnreachable,
+                ErrorKind::NotADirectory,
+                ErrorKind::NotConnected,
+                ErrorKind::NotFound,
+                ErrorKind::NotSeekable,
+                ErrorKind::Other,
+                ErrorKind::OutOfMemory,
+                ErrorKind::PermissionDenied,
+                ErrorKind::QuotaExceeded,
+                ErrorKind::ReadOnlyFilesystem,
+                ErrorKind::ResourceBusy,
+                ErrorKind::StaleNetworkFileHandle,
+                ErrorKind::StorageFull,
+                ErrorKind::TimedOut,
+                ErrorKind::TooManyLinks,
+                ErrorKind::UnexpectedEof,
+                ErrorKind::Unsupported,
+                ErrorKind::WouldBlock,
+                ErrorKind::WriteZero,
+            ];
+
+            <span class="kw">for </span>kind <span class="kw">in </span>kinds {
+                <span class="kw">let </span>err = TestError(io::Error::new(kind, message));
+                <span class="kw">let </span>serialized = postcard::to_allocvec(<span class="kw-2">&amp;</span>err).unwrap();
+                <span class="kw">let </span>deserialized: TestError = postcard::from_bytes(<span class="kw-2">&amp;</span>serialized).unwrap();
+
+                <span class="macro">assert_eq!</span>(err.<span class="number">0</span>.kind(), deserialized.<span class="number">0</span>.kind());
+                <span class="macro">assert_eq!</span>(err.<span class="number">0</span>.to_string(), deserialized.<span class="number">0</span>.to_string());
+            }
+        }
+    }
+}
+
+<span class="kw">pub trait </span>ChunkRangesExt {
+    <span class="kw">fn </span>last_chunk() -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>chunk(offset: u64) -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>bytes(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>chunks(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>offset(offset: u64) -&gt; <span class="self">Self</span>;
+}
+
+<span class="kw">impl </span>ChunkRangesExt <span class="kw">for </span>ChunkRanges {
+    <span class="kw">fn </span>last_chunk() -&gt; <span class="self">Self </span>{
+        ChunkRanges::from(ChunkNum(u64::MAX)..)
+    }
+
+    <span class="doccomment">/// Create a chunk range that contains a single chunk.
+    </span><span class="kw">fn </span>chunk(offset: u64) -&gt; <span class="self">Self </span>{
+        ChunkRanges::from(ChunkNum(offset)..ChunkNum(offset + <span class="number">1</span>))
+    }
+
+    <span class="doccomment">/// Create a range of chunks that contains the given byte ranges.
+    /// The byte ranges are rounded up to the nearest chunk size.
+    </span><span class="kw">fn </span>bytes(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self </span>{
+        round_up_to_chunks(<span class="kw-2">&amp;</span>bounds_from_range(ranges, |v| v))
+    }
+
+    <span class="doccomment">/// Create a range of chunks from u64 chunk bounds.
+    ///
+    /// This is equivalent but more convenient than using the ChunkNum newtype.
+    </span><span class="kw">fn </span>chunks(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self </span>{
+        bounds_from_range(ranges, ChunkNum)
+    }
+
+    <span class="doccomment">/// Create a chunk range that contains a single byte offset.
+    </span><span class="kw">fn </span>offset(offset: u64) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::bytes(offset..offset + <span class="number">1</span>)
+    }
+}
+
+<span class="comment">// todo: move to range_collections
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bounds_from_range&lt;R, T, F&gt;(range: R, f: F) -&gt; RangeSet2&lt;T&gt;
+<span class="kw">where
+    </span>R: RangeBounds&lt;u64&gt;,
+    T: RangeSetEntry,
+    F: Fn(u64) -&gt; T,
+{
+    <span class="kw">let </span>from = <span class="kw">match </span>range.start_bound() {
+        Bound::Included(start) =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>start),
+        Bound::Excluded(start) =&gt; {
+            <span class="kw">let </span><span class="prelude-val">Some</span>(start) = start.checked_add(<span class="number">1</span>) <span class="kw">else </span>{
+                <span class="kw">return </span>RangeSet2::empty();
             };
-            end.saturating_sub(start)
-        })
-        .reduce(u64::saturating_add)
-        .unwrap_or_default()
+            <span class="prelude-val">Some</span>(start)
+        }
+        Bound::Unbounded =&gt; <span class="prelude-val">None</span>,
+    };
+    <span class="kw">let </span>to = <span class="kw">match </span>range.end_bound() {
+        Bound::Included(end) =&gt; end.checked_add(<span class="number">1</span>),
+        Bound::Excluded(end) =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>end),
+        Bound::Unbounded =&gt; <span class="prelude-val">None</span>,
+    };
+    <span class="kw">match </span>(from, to) {
+        (<span class="prelude-val">Some</span>(from), <span class="prelude-val">Some</span>(to)) =&gt; RangeSet2::from(f(from)..f(to)),
+        (<span class="prelude-val">Some</span>(from), <span class="prelude-val">None</span>) =&gt; RangeSet2::from(f(from)..),
+        (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(to)) =&gt; RangeSet2::from(..f(to)),
+        (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; RangeSet2::all(),
+    }
 }
 
-<span class="doccomment">/// A non-sendable marker type
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>NonSend {
-    _marker: std::marker::PhantomData&lt;std::rc::Rc&lt;()&gt;&gt;,
-}
+<span class="kw">pub mod </span>outboard_with_progress {
+    <span class="kw">use </span>std::io::{<span class="self">self</span>, BufReader, Read};
 
-<span class="kw">impl </span>NonSend {
-    <span class="doccomment">/// Create a new non-sendable marker.
-    </span><span class="attr">#[allow(dead_code)]
-    </span><span class="kw">pub const fn </span>new() -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            _marker: std::marker::PhantomData,
+    <span class="kw">use </span>bao_tree::{
+        blake3,
+        io::{
+            outboard::PreOrderOutboard,
+            sync::{OutboardMut, WriteAt},
+        },
+        iter::BaoChunk,
+        BaoTree, ChunkNum,
+    };
+    <span class="kw">use </span>smallvec::SmallVec;
+
+    <span class="kw">use </span><span class="kw">super</span>::sink::Sink;
+
+    <span class="kw">fn </span>hash_subtree(start_chunk: u64, data: <span class="kw-2">&amp;</span>[u8], is_root: bool) -&gt; blake3::Hash {
+        <span class="kw">use </span>blake3::hazmat::{ChainingValue, HasherExt};
+        <span class="kw">if </span>is_root {
+            <span class="macro">debug_assert!</span>(start_chunk == <span class="number">0</span>);
+            blake3::hash(data)
+        } <span class="kw">else </span>{
+            <span class="kw">let </span><span class="kw-2">mut </span>hasher = blake3::Hasher::new();
+            hasher.set_input_offset(start_chunk * <span class="number">1024</span>);
+            hasher.update(data);
+            <span class="kw">let </span>non_root_hash: ChainingValue = hasher.finalize_non_root();
+            blake3::Hash::from(non_root_hash)
+        }
+    }
+
+    <span class="kw">fn </span>parent_cv(
+        left_child: <span class="kw-2">&amp;</span>blake3::Hash,
+        right_child: <span class="kw-2">&amp;</span>blake3::Hash,
+        is_root: bool,
+    ) -&gt; blake3::Hash {
+        <span class="kw">use </span>blake3::hazmat::{merge_subtrees_non_root, merge_subtrees_root, ChainingValue, Mode};
+        <span class="kw">let </span>left_child: ChainingValue = <span class="kw-2">*</span>left_child.as_bytes();
+        <span class="kw">let </span>right_child: ChainingValue = <span class="kw-2">*</span>right_child.as_bytes();
+        <span class="kw">if </span>is_root {
+            merge_subtrees_root(<span class="kw-2">&amp;</span>left_child, <span class="kw-2">&amp;</span>right_child, Mode::Hash)
+        } <span class="kw">else </span>{
+            blake3::Hash::from(merge_subtrees_non_root(
+                <span class="kw-2">&amp;</span>left_child,
+                <span class="kw-2">&amp;</span>right_child,
+                Mode::Hash,
+            ))
+        }
+    }
+
+    <span class="kw">pub async fn </span>init_outboard&lt;R, W, P&gt;(
+        data: R,
+        outboard: <span class="kw-2">&amp;mut </span>PreOrderOutboard&lt;W&gt;,
+        progress: <span class="kw-2">&amp;mut </span>P,
+    ) -&gt; std::io::Result&lt;std::result::Result&lt;(), P::Error&gt;&gt;
+    <span class="kw">where
+        </span>W: WriteAt,
+        R: Read,
+        P: Sink&lt;ChunkNum&gt;,
+    {
+        <span class="comment">// wrap the reader in a buffered reader, so we read in large chunks
+        // this reduces the number of io ops
+        </span><span class="kw">let </span>size = usize::try_from(outboard.tree.size()).unwrap_or(usize::MAX);
+        <span class="kw">let </span>read_buf_size = size.min(<span class="number">1024 </span>* <span class="number">1024</span>);
+        <span class="kw">let </span>chunk_buf_size = size.min(outboard.tree.block_size().bytes());
+        <span class="kw">let </span>reader = BufReader::with_capacity(read_buf_size, data);
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = SmallVec::&lt;[u8; <span class="number">128</span>]&gt;::from_elem(<span class="number">0u8</span>, chunk_buf_size);
+        <span class="kw">let </span>res = init_impl(outboard.tree, reader, outboard, <span class="kw-2">&amp;mut </span>buffer, progress).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(res)
+    }
+
+    <span class="kw">async fn </span>init_impl&lt;W, P&gt;(
+        tree: BaoTree,
+        <span class="kw-2">mut </span>data: <span class="kw">impl </span>Read,
+        outboard: <span class="kw-2">&amp;mut </span>PreOrderOutboard&lt;W&gt;,
+        buffer: <span class="kw-2">&amp;mut </span>[u8],
+        progress: <span class="kw-2">&amp;mut </span>P,
+    ) -&gt; io::Result&lt;std::result::Result&lt;(), P::Error&gt;&gt;
+    <span class="kw">where
+        </span>W: WriteAt,
+        P: Sink&lt;ChunkNum&gt;,
+    {
+        <span class="comment">// do not allocate for small trees
+        </span><span class="kw">let </span><span class="kw-2">mut </span>stack = SmallVec::&lt;[blake3::Hash; <span class="number">10</span>]&gt;::new();
+        <span class="comment">// debug_assert!(buffer.len() == tree.chunk_group_bytes());
+        </span><span class="kw">for </span>item <span class="kw">in </span>tree.post_order_chunks_iter() {
+            <span class="kw">match </span>item {
+                BaoChunk::Parent { is_root, node, .. } =&gt; {
+                    <span class="kw">let </span>right_hash = stack.pop().unwrap();
+                    <span class="kw">let </span>left_hash = stack.pop().unwrap();
+                    outboard.save(node, <span class="kw-2">&amp;</span>(left_hash, right_hash))<span class="question-mark">?</span>;
+                    <span class="kw">let </span>parent = parent_cv(<span class="kw-2">&amp;</span>left_hash, <span class="kw-2">&amp;</span>right_hash, is_root);
+                    stack.push(parent);
+                }
+                BaoChunk::Leaf {
+                    size,
+                    is_root,
+                    start_chunk,
+                    ..
+                } =&gt; {
+                    <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = progress.send(start_chunk).<span class="kw">await </span>{
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Err</span>(err));
+                    }
+                    <span class="kw">let </span>buf = <span class="kw-2">&amp;mut </span>buffer[..size];
+                    data.read_exact(buf)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>hash = hash_subtree(start_chunk.<span class="number">0</span>, buf, is_root);
+                    stack.push(hash);
+                }
+            }
+        }
+        <span class="macro">debug_assert_eq!</span>(stack.len(), <span class="number">1</span>);
+        outboard.root = stack.pop().unwrap();
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">Ok</span>(()))
+    }
+
+    <span class="attr">#[cfg(test)]
+    </span><span class="kw">mod </span>tests {
+        <span class="kw">use </span>bao_tree::{
+            blake3,
+            io::{outboard::PreOrderOutboard, sync::CreateOutboard},
+            BaoTree,
+        };
+        <span class="kw">use </span>testresult::TestResult;
+
+        <span class="kw">use crate</span>::{
+            store::{fs::tests::test_data, IROH_BLOCK_SIZE},
+            util::{outboard_with_progress::init_outboard, sink::Drain},
+        };
+
+        <span class="attr">#[tokio::test]
+        </span><span class="kw">async fn </span>init_outboard_with_progress() -&gt; TestResult&lt;()&gt; {
+            <span class="kw">for </span>size <span class="kw">in </span>[<span class="number">1024 </span>* <span class="number">18 </span>+ <span class="number">1</span>] {
+                <span class="kw">let </span>data = test_data(size);
+                <span class="kw">let </span><span class="kw-2">mut </span>o1 = PreOrderOutboard::&lt;Vec&lt;u8&gt;&gt; {
+                    tree: BaoTree::new(data.len() <span class="kw">as </span>u64, IROH_BLOCK_SIZE),
+                    ..Default::default()
+                };
+                <span class="kw">let </span><span class="kw-2">mut </span>o2 = o1.clone();
+                o1.init_from(data.as_ref())<span class="question-mark">?</span>;
+                init_outboard(data.as_ref(), <span class="kw-2">&amp;mut </span>o2, <span class="kw-2">&amp;mut </span>Drain).<span class="kw">await</span><span class="question-mark">??</span>;
+                <span class="macro">assert_eq!</span>(o1.root, blake3::hash(<span class="kw-2">&amp;</span>data));
+                <span class="macro">assert_eq!</span>(o1.root, o2.root);
+                <span class="macro">assert_eq!</span>(o1.data, o2.data);
+            }
+            <span class="prelude-val">Ok</span>(())
         }
     }
 }
 
-<span class="doccomment">/// copy a limited slice from a slice as a `Bytes`.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>copy_limited_slice(bytes: <span class="kw-2">&amp;</span>[u8], offset: u64, len: usize) -&gt; Bytes {
-    bytes[limited_range(offset, len, bytes.len())]
-        .to_vec()
-        .into()
-}
+<span class="kw">pub mod </span>sink {
+    <span class="kw">use </span>std::{future::Future, io};
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>limited_range(offset: u64, len: usize, buf_len: usize) -&gt; std::ops::Range&lt;usize&gt; {
-    <span class="kw">if </span>offset &lt; buf_len <span class="kw">as </span>u64 {
-        <span class="kw">let </span>start = offset <span class="kw">as </span>usize;
-        <span class="kw">let </span>end = start.saturating_add(len).min(buf_len);
-        start..end
-    } <span class="kw">else </span>{
-        <span class="number">0</span>..<span class="number">0
-    </span>}
-}
+    <span class="kw">use </span>irpc::RpcMessage;
 
-<span class="doccomment">/// zero copy get a limited slice from a `Bytes` as a `Bytes`.
-</span><span class="attr">#[allow(dead_code)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_limited_slice(bytes: <span class="kw-2">&amp;</span>Bytes, offset: u64, len: usize) -&gt; Bytes {
-    bytes.slice(limited_range(offset, len, bytes.len()))
-}
+    <span class="doccomment">/// Our version of a sink, that can be mapped etc.
+    </span><span class="kw">pub trait </span>Sink&lt;Item&gt; {
+        <span class="kw">type </span>Error;
+        <span class="kw">fn </span>send(
+            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+            value: Item,
+        ) -&gt; <span class="kw">impl </span>Future&lt;Output = std::result::Result&lt;(), <span class="self">Self</span>::Error&gt;&gt;;
 
-<span class="doccomment">/// Compute raw outboard size, without the size header.
-</span><span class="attr">#[allow(dead_code)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>raw_outboard_size(size: u64) -&gt; u64 {
-    BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
-}
-
-<span class="doccomment">/// Given a prefix, increment it lexographically.
-///
-/// If the prefix is all FF, this will return false because there is no
-/// higher prefix than that.
-</span><span class="attr">#[allow(dead_code)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>next_prefix(bytes: <span class="kw-2">&amp;mut </span>[u8]) -&gt; bool {
-    <span class="kw">for </span>byte <span class="kw">in </span>bytes.iter_mut().rev() {
-        <span class="kw">if </span><span class="kw-2">*</span>byte &lt; <span class="number">255 </span>{
-            <span class="kw-2">*</span>byte += <span class="number">1</span>;
-            <span class="kw">return </span><span class="bool-val">true</span>;
+        <span class="kw">fn </span>with_map_err&lt;F, U&gt;(<span class="self">self</span>, f: F) -&gt; WithMapErr&lt;<span class="self">Self</span>, F&gt;
+        <span class="kw">where
+            </span><span class="self">Self</span>: Sized,
+            F: Fn(<span class="self">Self</span>::Error) -&gt; U + Send + <span class="lifetime">'static</span>,
+        {
+            WithMapErr { inner: <span class="self">self</span>, f }
         }
-        <span class="kw-2">*</span>byte = <span class="number">0</span>;
-    }
-    <span class="bool-val">false
-</span>}
 
-<span class="doccomment">/// Synchronously compute the outboard of a file, and return hash and outboard.
-///
-/// It is assumed that the file is not modified while this is running.
-///
-/// If it is modified while or after this is running, the outboard will be
-/// invalid, so any attempt to compute a slice from it will fail.
-///
-/// If the size of the file is changed while this is running, an error will be
-/// returned.
-///
-/// The computed outboard is without length prefix.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>compute_outboard(
-    read: <span class="kw">impl </span>Read,
-    size: u64,
-    progress: <span class="kw">impl </span>Fn(u64) -&gt; std::io::Result&lt;()&gt; + Send + Sync + <span class="lifetime">'static</span>,
-) -&gt; std::io::Result&lt;(Hash, <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;)&gt; {
-    <span class="kw">use </span>bao_tree::io::sync::CreateOutboard;
-
-    <span class="comment">// wrap the reader in a progress reader, so we can report progress.
-    </span><span class="kw">let </span>reader = ProgressReader::new(read, progress);
-    <span class="comment">// wrap the reader in a buffered reader, so we read in large chunks
-    // this reduces the number of io ops and also the number of progress reports
-    </span><span class="kw">let </span>buf_size = usize::try_from(size).unwrap_or(usize::MAX).min(<span class="number">1024 </span>* <span class="number">1024</span>);
-    <span class="kw">let </span>reader = BufReader::with_capacity(buf_size, reader);
-
-    <span class="kw">let </span>ob = PreOrderOutboard::&lt;Vec&lt;u8&gt;&gt;::create_sized(reader, size, IROH_BLOCK_SIZE)<span class="question-mark">?</span>;
-    <span class="kw">let </span>root = ob.root.into();
-    <span class="kw">let </span>data = ob.data;
-    <span class="macro">tracing::trace!</span>(%root, <span class="string">"done"</span>);
-    <span class="kw">let </span>data = <span class="kw">if </span>!data.is_empty() { <span class="prelude-val">Some</span>(data) } <span class="kw">else </span>{ <span class="prelude-val">None </span>};
-    <span class="prelude-val">Ok</span>((root, data))
-}
-
-<span class="doccomment">/// Compute raw outboard, without the size header.
-</span><span class="attr">#[cfg(test)]
-#[allow(dead_code)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>raw_outboard(data: <span class="kw-2">&amp;</span>[u8]) -&gt; (Vec&lt;u8&gt;, Hash) {
-    <span class="kw">let </span>res = bao_tree::io::outboard::PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
-    (res.data, res.root.into())
-}
-
-<span class="doccomment">/// A reader that calls a callback with the number of bytes read after each read.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>ProgressReader&lt;R, F: Fn(u64) -&gt; std::io::Result&lt;()&gt;&gt; {
-    inner: R,
-    offset: u64,
-    cb: F,
-}
-
-<span class="kw">impl</span>&lt;R: std::io::Read, F: Fn(u64) -&gt; std::io::Result&lt;()&gt;&gt; ProgressReader&lt;R, F&gt; {
-    <span class="kw">pub fn </span>new(inner: R, cb: F) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            inner,
-            offset: <span class="number">0</span>,
-            cb,
+        <span class="kw">fn </span>with_map&lt;F, U&gt;(<span class="self">self</span>, f: F) -&gt; WithMap&lt;<span class="self">Self</span>, F&gt;
+        <span class="kw">where
+            </span><span class="self">Self</span>: Sized,
+            F: Fn(U) -&gt; Item + Send + <span class="lifetime">'static</span>,
+        {
+            WithMap { inner: <span class="self">self</span>, f }
         }
     }
-}
 
-<span class="kw">impl</span>&lt;R: std::io::Read, F: Fn(u64) -&gt; std::io::Result&lt;()&gt;&gt; std::io::Read <span class="kw">for </span>ProgressReader&lt;R, F&gt; {
-    <span class="kw">fn </span>read(<span class="kw-2">&amp;mut </span><span class="self">self</span>, buf: <span class="kw-2">&amp;mut </span>[u8]) -&gt; std::io::Result&lt;usize&gt; {
-        <span class="kw">let </span>read = <span class="self">self</span>.inner.read(buf)<span class="question-mark">?</span>;
-        <span class="self">self</span>.offset += read <span class="kw">as </span>u64;
-        (<span class="self">self</span>.cb)(<span class="self">self</span>.offset)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(read)
+    <span class="kw">impl</span>&lt;I, T&gt; Sink&lt;T&gt; <span class="kw">for </span><span class="kw-2">&amp;mut </span>I
+    <span class="kw">where
+        </span>I: Sink&lt;T&gt;,
+    {
+        <span class="kw">type </span>Error = I::Error;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: T) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            (<span class="kw-2">*</span><span class="self">self</span>).send(value).<span class="kw">await
+        </span>}
+    }
+
+    <span class="kw">pub struct </span>IrpcSenderSink&lt;T&gt;(<span class="kw">pub </span>irpc::channel::mpsc::Sender&lt;T&gt;);
+
+    <span class="kw">impl</span>&lt;T&gt; Sink&lt;T&gt; <span class="kw">for </span>IrpcSenderSink&lt;T&gt;
+    <span class="kw">where
+        </span>T: RpcMessage,
+    {
+        <span class="kw">type </span>Error = irpc::channel::SendError;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: T) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            <span class="self">self</span>.<span class="number">0</span>.send(value).<span class="kw">await
+        </span>}
+    }
+
+    <span class="kw">pub struct </span>IrpcSenderRefSink&lt;<span class="lifetime">'a</span>, T&gt;(<span class="kw">pub </span><span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw-2">mut </span>irpc::channel::mpsc::Sender&lt;T&gt;);
+
+    <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, T&gt; Sink&lt;T&gt; <span class="kw">for </span>IrpcSenderRefSink&lt;<span class="lifetime">'a</span>, T&gt;
+    <span class="kw">where
+        </span>T: RpcMessage,
+    {
+        <span class="kw">type </span>Error = irpc::channel::SendError;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: T) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            <span class="self">self</span>.<span class="number">0</span>.send(value).<span class="kw">await
+        </span>}
+    }
+
+    <span class="kw">pub struct </span>TokioMpscSenderSink&lt;T&gt;(<span class="kw">pub </span>tokio::sync::mpsc::Sender&lt;T&gt;);
+
+    <span class="kw">impl</span>&lt;T&gt; Sink&lt;T&gt; <span class="kw">for </span>TokioMpscSenderSink&lt;T&gt; {
+        <span class="kw">type </span>Error = tokio::sync::mpsc::error::SendError&lt;T&gt;;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: T) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            <span class="self">self</span>.<span class="number">0</span>.send(value).<span class="kw">await
+        </span>}
+    }
+
+    <span class="kw">pub struct </span>WithMapErr&lt;P, F&gt; {
+        inner: P,
+        f: F,
+    }
+
+    <span class="kw">impl</span>&lt;P, F, E, U&gt; Sink&lt;U&gt; <span class="kw">for </span>WithMapErr&lt;P, F&gt;
+    <span class="kw">where
+        </span>P: Sink&lt;U&gt;,
+        F: Fn(P::Error) -&gt; E + Send + <span class="lifetime">'static</span>,
+    {
+        <span class="kw">type </span>Error = E;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: U) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            <span class="kw">match </span><span class="self">self</span>.inner.send(value).<span class="kw">await </span>{
+                <span class="prelude-val">Ok</span>(()) =&gt; <span class="prelude-val">Ok</span>(()),
+                <span class="prelude-val">Err</span>(err) =&gt; {
+                    <span class="kw">let </span>err = (<span class="self">self</span>.f)(err);
+                    <span class="prelude-val">Err</span>(err)
+                }
+            }
+        }
+    }
+
+    <span class="kw">pub struct </span>WithMap&lt;P, F&gt; {
+        inner: P,
+        f: F,
+    }
+
+    <span class="kw">impl</span>&lt;P, F, T, U&gt; Sink&lt;T&gt; <span class="kw">for </span>WithMap&lt;P, F&gt;
+    <span class="kw">where
+        </span>P: Sink&lt;U&gt;,
+        F: Fn(T) -&gt; U + Send + <span class="lifetime">'static</span>,
+    {
+        <span class="kw">type </span>Error = P::Error;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: T) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            <span class="self">self</span>.inner.send((<span class="self">self</span>.f)(value)).<span class="kw">await
+        </span>}
+    }
+
+    <span class="kw">pub struct </span>Drain;
+
+    <span class="kw">impl</span>&lt;T&gt; Sink&lt;T&gt; <span class="kw">for </span>Drain {
+        <span class="kw">type </span>Error = io::Error;
+
+        <span class="kw">async fn </span>send(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _offset: T) -&gt; std::result::Result&lt;(), <span class="self">Self</span>::Error&gt; {
+            io::Result::Ok(())
+        }
     }
 }
 </code></pre></div></section></main></body></html>

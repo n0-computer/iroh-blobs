@@ -327,38 +327,19 @@
 <a href="#326" id="326">326</a>
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
-<a href="#329" id="329">329</a>
-<a href="#330" id="330">330</a>
-<a href="#331" id="331">331</a>
-<a href="#332" id="332">332</a>
-<a href="#333" id="333">333</a>
-<a href="#334" id="334">334</a>
-<a href="#335" id="335">335</a>
-<a href="#336" id="336">336</a>
-<a href="#337" id="337">337</a>
-<a href="#338" id="338">338</a>
-<a href="#339" id="339">339</a>
-<a href="#340" id="340">340</a>
-<a href="#341" id="341">341</a>
-<a href="#342" id="342">342</a>
-<a href="#343" id="343">343</a>
-<a href="#344" id="344">344</a>
-<a href="#345" id="345">345</a>
-<a href="#346" id="346">346</a>
-<a href="#347" id="347">347</a></pre></div><pre class="rust"><code><span class="doccomment">//! The collection type used by iroh
+<a href="#329" id="329">329</a></pre></div><pre class="rust"><code><span class="doccomment">//! The collection type used by iroh
 </span><span class="kw">use </span>std::{collections::BTreeMap, future::Future};
 
 <span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>bao_tree::blake3;
 <span class="kw">use </span>bytes::Bytes;
-<span class="kw">use </span>iroh_io::AsyncSliceReaderExt;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use crate</span>::{
+    api::{blobs::AddBytesOptions, Store},
     get::{fsm, Stats},
     hashseq::HashSeq,
-    store::MapEntry,
-    util::TempTag,
+    util::temp_tag::TempTag,
     BlobFormat, Hash,
 };
 
@@ -415,6 +396,12 @@
 </span><span class="kw">pub trait </span>SimpleStore {
     <span class="doccomment">/// Load a blob from the store
     </span><span class="kw">fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; <span class="kw">impl </span>Future&lt;Output = anyhow::Result&lt;Bytes&gt;&gt; + Send + <span class="lifetime">'_</span>;
+}
+
+<span class="kw">impl </span>SimpleStore <span class="kw">for </span><span class="kw">crate</span>::api::Store {
+    <span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: Hash) -&gt; anyhow::Result&lt;Bytes&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>)
+    }
 }
 
 <span class="doccomment">/// Metadata for a collection
@@ -497,7 +484,7 @@
         <span class="kw">let </span>end = <span class="kw">loop </span>{
             <span class="kw">match </span>curr {
                 fsm::EndBlobNext::MoreChildren(more) =&gt; {
-                    <span class="kw">let </span>child_offset = more.child_offset();
+                    <span class="kw">let </span>child_offset = more.offset() - <span class="number">1</span>;
                     <span class="kw">let </span><span class="prelude-val">Some</span>(hash) = links.get(usize::try_from(child_offset)<span class="question-mark">?</span>) <span class="kw">else </span>{
                         <span class="kw">break </span>more.finish();
                     };
@@ -527,44 +514,21 @@
         <span class="prelude-val">Ok</span>(<span class="self">Self</span>::from_parts(hs.into_iter().skip(<span class="number">1</span>), meta))
     }
 
-    <span class="doccomment">/// Load a collection from a store given a root hash
-    ///
-    /// This assumes that both the links and the metadata of the collection is stored in the store.
-    /// It does not require that all child blobs are stored in the store.
-    </span><span class="kw">pub async fn </span>load_db&lt;D&gt;(db: <span class="kw-2">&amp;</span>D, root: <span class="kw-2">&amp;</span>Hash) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt;
-    <span class="kw">where
-        </span>D: <span class="kw">crate</span>::store::Map,
-    {
-        <span class="kw">let </span>links_entry = db.get(root).<span class="kw">await</span><span class="question-mark">?</span>.context(<span class="string">"links not found"</span>)<span class="question-mark">?</span>;
-        <span class="macro">anyhow::ensure!</span>(links_entry.is_complete(), <span class="string">"links not complete"</span>);
-        <span class="kw">let </span>links_bytes = links_entry.data_reader().<span class="kw">await</span><span class="question-mark">?</span>.read_to_end().<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>links = HashSeq::try_from(links_bytes)<span class="question-mark">?</span>;
-        <span class="kw">let </span>meta_hash = links.pop_front().context(<span class="string">"meta hash not found"</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>meta_entry = db.get(<span class="kw-2">&amp;</span>meta_hash).<span class="kw">await</span><span class="question-mark">?</span>.context(<span class="string">"meta not found"</span>)<span class="question-mark">?</span>;
-        <span class="macro">anyhow::ensure!</span>(links_entry.is_complete(), <span class="string">"links not complete"</span>);
-        <span class="kw">let </span>meta_bytes = meta_entry.data_reader().<span class="kw">await</span><span class="question-mark">?</span>.read_to_end().<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>meta: CollectionMeta = postcard::from_bytes(<span class="kw-2">&amp;</span>meta_bytes)<span class="question-mark">?</span>;
-        <span class="macro">anyhow::ensure!</span>(
-            meta.names.len() == links.len(),
-            <span class="string">"names and links length mismatch"
-        </span>);
-        <span class="prelude-val">Ok</span>(<span class="self">Self</span>::from_parts(links, meta))
-    }
-
     <span class="doccomment">/// Store a collection in a store. returns the root hash of the collection
     /// as a TempTag.
-    </span><span class="kw">pub async fn </span>store&lt;D&gt;(<span class="self">self</span>, db: <span class="kw-2">&amp;</span>D) -&gt; anyhow::Result&lt;TempTag&gt;
-    <span class="kw">where
-        </span>D: <span class="kw">crate</span>::store::Store,
-    {
+    </span><span class="kw">pub async fn </span>store(<span class="self">self</span>, db: <span class="kw-2">&amp;</span>Store) -&gt; anyhow::Result&lt;TempTag&gt; {
         <span class="kw">let </span>(links, meta) = <span class="self">self</span>.into_parts();
         <span class="kw">let </span>meta_bytes = postcard::to_stdvec(<span class="kw-2">&amp;</span>meta)<span class="question-mark">?</span>;
-        <span class="kw">let </span>meta_tag = db.import_bytes(meta_bytes.into(), BlobFormat::Raw).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>meta_tag = db.add_bytes(meta_bytes).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>links_bytes = std::iter::once(<span class="kw-2">*</span>meta_tag.hash())
             .chain(links)
             .collect::&lt;HashSeq&gt;();
         <span class="kw">let </span>links_tag = db
-            .import_bytes(links_bytes.into(), BlobFormat::HashSeq)
+            .add_bytes_with_opts(AddBytesOptions {
+                data: links_bytes.into(),
+                format: BlobFormat::HashSeq,
+            })
+            .temp_tag()
             .<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(links_tag)
     }
@@ -658,7 +622,7 @@
         <span class="kw">let </span>collection = (<span class="number">0</span>..<span class="number">3</span>)
             .map(|i| {
                 (
-                    <span class="macro">format!</span>(<span class="string">"blob{}"</span>, i),
+                    <span class="macro">format!</span>(<span class="string">"blob{i}"</span>),
                     <span class="kw">crate</span>::Hash::from(blake3::hash(<span class="kw-2">&amp;</span>[i <span class="kw">as </span>u8])),
                 )
             })

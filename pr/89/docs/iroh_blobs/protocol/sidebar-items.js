@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["ALPN","MAX_MESSAGE_SIZE"],"enum":["Closed","Request"],"struct":["GetRequest","NonEmptyRequestRangeSpecIter","RangeSpec","RangeSpecSeq","UnknownErrorCode"]};
+window.SIDEBAR_ITEMS = {"constant":["ALPN","MAX_MESSAGE_SIZE"],"enum":["Closed","Request","RequestType"],"mod":["builder"],"struct":["ChunkRangesSeq","GetManyRequest","GetRequest","NonEmptyRequestRangeSpecIter","ObserveItem","ObserveRequest","PushRequest","RangeSpec","UnknownErrorCode"],"trait":["ChunkRangesExt"],"type":["ChunkRanges"]};

@@ -60,77 +60,20 @@
 <a href="#59" id="59">59</a>
 <a href="#60" id="60">60</a>
 <a href="#61" id="61">61</a>
-<a href="#62" id="62">62</a>
-<a href="#63" id="63">63</a>
-<a href="#64" id="64">64</a>
-<a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a>
-<a href="#67" id="67">67</a>
-<a href="#68" id="68">68</a>
-<a href="#69" id="69">69</a>
-<a href="#70" id="70">70</a>
-<a href="#71" id="71">71</a>
-<a href="#72" id="72">72</a>
-<a href="#73" id="73">73</a>
-<a href="#74" id="74">74</a>
-<a href="#75" id="75">75</a>
-<a href="#76" id="76">76</a>
-<a href="#77" id="77">77</a>
-<a href="#78" id="78">78</a>
-<a href="#79" id="79">79</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    fs::OpenOptions,
-    io::{<span class="self">self</span>, Write},
-    path::Path,
-};
+<a href="#62" id="62">62</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::future::Future;
 
-<span class="doccomment">/// overwrite a file with the given data.
-///
-/// This is almost like `std::fs::write`, but it does not truncate the file.
-///
-/// So if you overwrite a file with less data than it had before, the file will
-/// still have the same size as before.
-///
-/// Also, if you overwrite a file with the same data as it had before, the
-/// file will be unchanged even if the overwrite operation is interrupted.
-</span><span class="kw">pub fn </span>overwrite_and_sync(path: <span class="kw-2">&amp;</span>Path, data: <span class="kw-2">&amp;</span>[u8]) -&gt; io::Result&lt;std::fs::File&gt; {
-    <span class="macro">tracing::trace!</span>(
-        <span class="string">"overwriting file {} with {} bytes"</span>,
-        path.display(),
-        data.len()
-    );
-    <span class="comment">// std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    // tracing::error!("{}", path.parent().unwrap().display());
-    // tracing::error!("{}", path.parent().unwrap().metadata().unwrap().is_dir());
-    </span><span class="kw">let </span><span class="kw-2">mut </span>file = OpenOptions::new()
-        .write(<span class="bool-val">true</span>)
-        .create(<span class="bool-val">true</span>)
-        .truncate(<span class="bool-val">false</span>)
-        .open(path)<span class="question-mark">?</span>;
-    file.write_all(data)<span class="question-mark">?</span>;
-    <span class="comment">// todo: figure out if it is safe to not sync here
-    </span>file.sync_all()<span class="question-mark">?</span>;
-    <span class="prelude-val">Ok</span>(file)
-}
+<span class="kw">use </span>tokio::{select, sync::mpsc};
 
-<span class="doccomment">/// Read a file into memory and then delete it.
-</span><span class="kw">pub fn </span>read_and_remove(path: <span class="kw-2">&amp;</span>Path) -&gt; io::Result&lt;Vec&lt;u8&gt;&gt; {
-    <span class="kw">let </span>data = std::fs::read(path)<span class="question-mark">?</span>;
-    <span class="comment">// todo: should we fail here or just log a warning?
-    // remove could fail e.g. on windows if the file is still open
-    </span>std::fs::remove_file(path)<span class="question-mark">?</span>;
-    <span class="prelude-val">Ok</span>(data)
-}
-
-<span class="doccomment">/// A wrapper for a flume receiver that allows peeking at the next message.
+<span class="doccomment">/// A wrapper for a tokio mpsc receiver that allows peeking at the next message.
 </span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>PeekableFlumeReceiver&lt;T&gt; {
+</span><span class="kw">pub struct </span>PeekableReceiver&lt;T&gt; {
     msg: <span class="prelude-ty">Option</span>&lt;T&gt;,
-    recv: async_channel::Receiver&lt;T&gt;,
+    recv: mpsc::Receiver&lt;T&gt;,
 }
 
 <span class="attr">#[allow(dead_code)]
-</span><span class="kw">impl</span>&lt;T&gt; PeekableFlumeReceiver&lt;T&gt; {
-    <span class="kw">pub fn </span>new(recv: async_channel::Receiver&lt;T&gt;) -&gt; <span class="self">Self </span>{
+</span><span class="kw">impl</span>&lt;T&gt; PeekableReceiver&lt;T&gt; {
+    <span class="kw">pub fn </span>new(recv: mpsc::Receiver&lt;T&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ msg: <span class="prelude-val">None</span>, recv }
     }
 
@@ -138,11 +81,34 @@
     ///
     /// Will block if there are no messages.
     /// Returns None only if there are no more messages (sender is dropped).
+    ///
+    /// Cancel safe because the only async operation is the recv() call, which is cancel safe.
     </span><span class="kw">pub async fn </span>recv(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;T&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(msg) = <span class="self">self</span>.msg.take() {
             <span class="kw">return </span><span class="prelude-val">Some</span>(msg);
         }
-        <span class="self">self</span>.recv.recv().<span class="kw">await</span>.ok()
+        <span class="self">self</span>.recv.recv().<span class="kw">await
+    </span>}
+
+    <span class="doccomment">/// Receive the next message, but only if it passes the filter.
+    ///
+    /// Cancel safe because the only async operation is the [Self::recv] call, which is cancel safe.
+    </span><span class="kw">pub async fn </span>extract&lt;U&gt;(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        f: <span class="kw">impl </span>Fn(T) -&gt; std::result::Result&lt;U, T&gt;,
+        timeout: <span class="kw">impl </span>Future + Unpin,
+    ) -&gt; <span class="prelude-ty">Option</span>&lt;U&gt; {
+        <span class="kw">let </span>msg = <span class="macro">select!</span> {
+            x = <span class="self">self</span>.recv() =&gt; x<span class="question-mark">?</span>,
+            <span class="kw">_ </span>= timeout =&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
+        };
+        <span class="kw">match </span>f(msg) {
+            <span class="prelude-val">Ok</span>(u) =&gt; <span class="prelude-val">Some</span>(u),
+            <span class="prelude-val">Err</span>(msg) =&gt; {
+                <span class="self">self</span>.msg = <span class="prelude-val">Some</span>(msg);
+                <span class="prelude-val">None
+            </span>}
+        }
     }
 
     <span class="doccomment">/// Push back a message. This will only work if there is room for it.

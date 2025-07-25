@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["GetResponseError"],"mod":["db","error","fsm","progress","request"],"struct":["Stats"]};
+window.SIDEBAR_ITEMS = {"enum":["GetError","GetResponseError"],"mod":["fsm","request"],"struct":["Stats"],"type":["GetResult"]};
