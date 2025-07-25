@@ -693,7 +693,14 @@ impl Actor {
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
         let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
-        let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone());
+        let db_actor = match db_actor {
+            Ok(actor) => actor,
+            Err(err) => {
+                println!("failed to create meta actor: {err}");
+                return Err(err);
+            }
+        };
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -1209,6 +1216,7 @@ impl FsStore {
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
+        println!("Creating actor");
         let actor = handle
             .spawn(Actor::new(
                 db_path,
