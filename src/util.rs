@@ -1,418 +1,560 @@
-//! Utility functions and types.
-use std::{
-    borrow::Borrow,
-    fmt,
-    io::{BufReader, Read},
-    sync::{Arc, Weak},
-    time::SystemTime,
-};
+use std::ops::{Bound, RangeBounds};
 
-use bao_tree::{io::outboard::PreOrderOutboard, BaoTree, ChunkRanges};
-use bytes::Bytes;
-use derive_more::{Debug, Display, From, Into};
-use range_collections::range_set::RangeSetRange;
-use serde::{Deserialize, Serialize};
+use bao_tree::{io::round_up_to_chunks, ChunkNum, ChunkRanges};
+use range_collections::{range_set::RangeSetEntry, RangeSet2};
 
-use crate::{BlobFormat, Hash, HashAndFormat, IROH_BLOCK_SIZE};
+pub mod channel;
+pub(crate) mod temp_tag;
+pub mod serde {
+    // Module that handles io::Error serialization/deserialization
+    pub mod io_error_serde {
+        use std::{fmt, io};
 
-pub mod fs;
-pub mod io;
-mod mem_or_file;
-pub mod progress;
-pub use mem_or_file::MemOrFile;
-mod sparse_mem_file;
-pub use sparse_mem_file::SparseMemFile;
-pub mod local_pool;
+        use serde::{
+            de::{self, SeqAccess, Visitor},
+            ser::SerializeTuple,
+            Deserializer, Serializer,
+        };
 
-#[cfg(test)]
-pub(crate) mod hexdump;
-
-/// A tag
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, From, Into)]
-pub struct Tag(pub Bytes);
-
-#[cfg(feature = "redb")]
-mod redb_support {
-    use bytes::Bytes;
-    use redb::{Key as RedbKey, Value as RedbValue};
-
-    use super::Tag;
-
-    impl RedbValue for Tag {
-        type SelfType<'a> = Self;
-
-        type AsBytes<'a> = bytes::Bytes;
-
-        fn fixed_width() -> Option<usize> {
-            None
+        fn error_kind_to_u8(kind: io::ErrorKind) -> u8 {
+            match kind {
+                io::ErrorKind::AddrInUse => 0,
+                io::ErrorKind::AddrNotAvailable => 1,
+                io::ErrorKind::AlreadyExists => 2,
+                io::ErrorKind::ArgumentListTooLong => 3,
+                io::ErrorKind::BrokenPipe => 4,
+                io::ErrorKind::ConnectionAborted => 5,
+                io::ErrorKind::ConnectionRefused => 6,
+                io::ErrorKind::ConnectionReset => 7,
+                io::ErrorKind::CrossesDevices => 8,
+                io::ErrorKind::Deadlock => 9,
+                io::ErrorKind::DirectoryNotEmpty => 10,
+                io::ErrorKind::ExecutableFileBusy => 11,
+                io::ErrorKind::FileTooLarge => 12,
+                io::ErrorKind::HostUnreachable => 13,
+                io::ErrorKind::Interrupted => 14,
+                io::ErrorKind::InvalidData => 15,
+                io::ErrorKind::InvalidInput => 17,
+                io::ErrorKind::IsADirectory => 18,
+                io::ErrorKind::NetworkDown => 19,
+                io::ErrorKind::NetworkUnreachable => 20,
+                io::ErrorKind::NotADirectory => 21,
+                io::ErrorKind::NotConnected => 22,
+                io::ErrorKind::NotFound => 23,
+                io::ErrorKind::NotSeekable => 24,
+                io::ErrorKind::Other => 25,
+                io::ErrorKind::OutOfMemory => 26,
+                io::ErrorKind::PermissionDenied => 27,
+                io::ErrorKind::QuotaExceeded => 28,
+                io::ErrorKind::ReadOnlyFilesystem => 29,
+                io::ErrorKind::ResourceBusy => 30,
+                io::ErrorKind::StaleNetworkFileHandle => 31,
+                io::ErrorKind::StorageFull => 32,
+                io::ErrorKind::TimedOut => 33,
+                io::ErrorKind::TooManyLinks => 34,
+                io::ErrorKind::UnexpectedEof => 35,
+                io::ErrorKind::Unsupported => 36,
+                io::ErrorKind::WouldBlock => 37,
+                io::ErrorKind::WriteZero => 38,
+                _ => 25,
+            }
         }
 
-        fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+        fn u8_to_error_kind(num: u8) -> io::ErrorKind {
+            match num {
+                0 => io::ErrorKind::AddrInUse,
+                1 => io::ErrorKind::AddrNotAvailable,
+                2 => io::ErrorKind::AlreadyExists,
+                3 => io::ErrorKind::ArgumentListTooLong,
+                4 => io::ErrorKind::BrokenPipe,
+                5 => io::ErrorKind::ConnectionAborted,
+                6 => io::ErrorKind::ConnectionRefused,
+                7 => io::ErrorKind::ConnectionReset,
+                8 => io::ErrorKind::CrossesDevices,
+                9 => io::ErrorKind::Deadlock,
+                10 => io::ErrorKind::DirectoryNotEmpty,
+                11 => io::ErrorKind::ExecutableFileBusy,
+                12 => io::ErrorKind::FileTooLarge,
+                13 => io::ErrorKind::HostUnreachable,
+                14 => io::ErrorKind::Interrupted,
+                15 => io::ErrorKind::InvalidData,
+                // 16 => io::ErrorKind::InvalidFilename,
+                17 => io::ErrorKind::InvalidInput,
+                18 => io::ErrorKind::IsADirectory,
+                19 => io::ErrorKind::NetworkDown,
+                20 => io::ErrorKind::NetworkUnreachable,
+                21 => io::ErrorKind::NotADirectory,
+                22 => io::ErrorKind::NotConnected,
+                23 => io::ErrorKind::NotFound,
+                24 => io::ErrorKind::NotSeekable,
+                25 => io::ErrorKind::Other,
+                26 => io::ErrorKind::OutOfMemory,
+                27 => io::ErrorKind::PermissionDenied,
+                28 => io::ErrorKind::QuotaExceeded,
+                29 => io::ErrorKind::ReadOnlyFilesystem,
+                30 => io::ErrorKind::ResourceBusy,
+                31 => io::ErrorKind::StaleNetworkFileHandle,
+                32 => io::ErrorKind::StorageFull,
+                33 => io::ErrorKind::TimedOut,
+                34 => io::ErrorKind::TooManyLinks,
+                35 => io::ErrorKind::UnexpectedEof,
+                36 => io::ErrorKind::Unsupported,
+                37 => io::ErrorKind::WouldBlock,
+                38 => io::ErrorKind::WriteZero,
+                _ => io::ErrorKind::Other,
+            }
+        }
+
+        pub fn serialize<S>(error: &io::Error, serializer: S) -> Result<S::Ok, S::Error>
         where
-            Self: 'a,
+            S: Serializer,
         {
-            Self(Bytes::copy_from_slice(data))
+            let mut tup = serializer.serialize_tuple(2)?;
+            tup.serialize_element(&error_kind_to_u8(error.kind()))?;
+            tup.serialize_element(&error.to_string())?;
+            tup.end()
         }
 
-        fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<io::Error, D::Error>
         where
-            Self: 'a,
-            Self: 'b,
+            D: Deserializer<'de>,
         {
-            value.0.clone()
-        }
+            struct IoErrorVisitor;
 
-        fn type_name() -> redb::TypeName {
-            redb::TypeName::new("Tag")
-        }
-    }
+            impl<'de> Visitor<'de> for IoErrorVisitor {
+                type Value = io::Error;
 
-    impl RedbKey for Tag {
-        fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
-            data1.cmp(data2)
-        }
-    }
-}
-
-impl From<&[u8]> for Tag {
-    fn from(value: &[u8]) -> Self {
-        Self(Bytes::copy_from_slice(value))
-    }
-}
-
-impl AsRef<[u8]> for Tag {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
-impl Borrow<[u8]> for Tag {
-    fn borrow(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
-impl From<String> for Tag {
-    fn from(value: String) -> Self {
-        Self(Bytes::from(value))
-    }
-}
-
-impl From<&str> for Tag {
-    fn from(value: &str) -> Self {
-        Self(Bytes::from(value.to_owned()))
-    }
-}
-
-impl Display for Tag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let bytes = self.0.as_ref();
-        match std::str::from_utf8(bytes) {
-            Ok(s) => write!(f, "\"{}\"", s),
-            Err(_) => write!(f, "{}", hex::encode(bytes)),
-        }
-    }
-}
-
-struct DD<T: fmt::Display>(T);
-
-impl<T: fmt::Display> fmt::Debug for DD<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl Debug for Tag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Tag").field(&DD(self)).finish()
-    }
-}
-
-impl Tag {
-    /// Create a new tag that does not exist yet.
-    pub fn auto(time: SystemTime, exists: impl Fn(&[u8]) -> bool) -> Self {
-        let now = chrono::DateTime::<chrono::Utc>::from(time);
-        let mut i = 0;
-        loop {
-            let mut text = format!("auto-{}", now.format("%Y-%m-%dT%H:%M:%S%.3fZ"));
-            if i != 0 {
-                text.push_str(&format!("-{}", i));
-            }
-            if !exists(text.as_bytes()) {
-                return Self::from(text);
-            }
-            i += 1;
-        }
-    }
-
-    /// The successor of this tag in lexicographic order.
-    pub fn successor(&self) -> Self {
-        let mut bytes = self.0.to_vec();
-        // increment_vec(&mut bytes);
-        bytes.push(0);
-        Self(bytes.into())
-    }
-
-    /// If this is a prefix, get the next prefix.
-    ///
-    /// This is like successor, except that it will return None if the prefix is all 0xFF instead of appending a 0 byte.
-    pub fn next_prefix(&self) -> Option<Self> {
-        let mut bytes = self.0.to_vec();
-        if next_prefix(&mut bytes) {
-            Some(Self(bytes.into()))
-        } else {
-            None
-        }
-    }
-}
-
-/// Option for commands that allow setting a tag
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum SetTagOption {
-    /// A tag will be automatically generated
-    Auto,
-    /// The tag is explicitly named
-    Named(Tag),
-}
-
-/// Trait used from temp tags to notify an abstract store that a temp tag is
-/// being dropped.
-pub trait TagDrop: std::fmt::Debug + Send + Sync + 'static {
-    /// Called on drop
-    fn on_drop(&self, inner: &HashAndFormat);
-}
-
-/// A trait for things that can track liveness of blobs and collections.
-///
-/// This trait works together with [TempTag] to keep track of the liveness of a
-/// blob or collection.
-///
-/// It is important to include the format in the liveness tracking, since
-/// protecting a collection means protecting the blob and all its children,
-/// whereas protecting a raw blob only protects the blob itself.
-pub trait TagCounter: TagDrop + Sized {
-    /// Called on creation of a temp tag
-    fn on_create(&self, inner: &HashAndFormat);
-
-    /// Get this as a weak reference for use in temp tags
-    fn as_weak(self: &Arc<Self>) -> Weak<dyn TagDrop> {
-        let on_drop: Arc<dyn TagDrop> = self.clone();
-        Arc::downgrade(&on_drop)
-    }
-
-    /// Create a new temp tag for the given hash and format
-    fn temp_tag(self: &Arc<Self>, inner: HashAndFormat) -> TempTag {
-        self.on_create(&inner);
-        TempTag::new(inner, Some(self.as_weak()))
-    }
-}
-
-/// A hash and format pair that is protected from garbage collection.
-///
-/// If format is raw, this will protect just the blob
-/// If format is collection, this will protect the collection and all blobs in it
-#[derive(Debug)]
-pub struct TempTag {
-    /// The hash and format we are pinning
-    inner: HashAndFormat,
-    /// optional callback to call on drop
-    on_drop: Option<Weak<dyn TagDrop>>,
-}
-
-impl TempTag {
-    /// Create a new temp tag for the given hash and format
-    ///
-    /// This should only be used by store implementations.
-    ///
-    /// The caller is responsible for increasing the refcount on creation and to
-    /// make sure that temp tags that are created between a mark phase and a sweep
-    /// phase are protected.
-    pub fn new(inner: HashAndFormat, on_drop: Option<Weak<dyn TagDrop>>) -> Self {
-        Self { inner, on_drop }
-    }
-
-    /// The hash of the pinned item
-    pub fn inner(&self) -> &HashAndFormat {
-        &self.inner
-    }
-
-    /// The hash of the pinned item
-    pub fn hash(&self) -> &Hash {
-        &self.inner.hash
-    }
-
-    /// The format of the pinned item
-    pub fn format(&self) -> BlobFormat {
-        self.inner.format
-    }
-
-    /// The hash and format of the pinned item
-    pub fn hash_and_format(&self) -> HashAndFormat {
-        self.inner
-    }
-
-    /// Keep the item alive until the end of the process
-    pub fn leak(mut self) {
-        // set the liveness tracker to None, so that the refcount is not decreased
-        // during drop. This means that the refcount will never reach 0 and the
-        // item will not be gced until the end of the process.
-        self.on_drop = None;
-    }
-}
-
-impl Drop for TempTag {
-    fn drop(&mut self) {
-        if let Some(on_drop) = self.on_drop.take() {
-            if let Some(on_drop) = on_drop.upgrade() {
-                on_drop.on_drop(&self.inner);
-            }
-        }
-    }
-}
-
-/// Get the number of bytes given a set of chunk ranges and the total size.
-///
-/// If some ranges are out of bounds, they will be clamped to the size.
-pub fn total_bytes(ranges: ChunkRanges, size: u64) -> u64 {
-    ranges
-        .iter()
-        .map(|range| {
-            let (start, end) = match range {
-                RangeSetRange::Range(r) => {
-                    (r.start.to_bytes().min(size), r.end.to_bytes().min(size))
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a tuple of (u32, String) representing io::Error")
                 }
-                RangeSetRange::RangeFrom(range) => (range.start.to_bytes().min(size), size),
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let num: u8 = seq
+                        .next_element()?
+                        .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                    let message: String = seq
+                        .next_element()?
+                        .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                    let kind = u8_to_error_kind(num);
+                    Ok(io::Error::new(kind, message))
+                }
+            }
+
+            deserializer.deserialize_tuple(2, IoErrorVisitor)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::io::{self, ErrorKind};
+
+        use postcard;
+        use serde::{Deserialize, Serialize};
+
+        use super::io_error_serde;
+
+        #[derive(Serialize, Deserialize)]
+        struct TestError(#[serde(with = "io_error_serde")] io::Error);
+
+        #[test]
+        fn test_roundtrip_error_kinds() {
+            let message = "test error";
+            let kinds = [
+                ErrorKind::AddrInUse,
+                ErrorKind::AddrNotAvailable,
+                ErrorKind::AlreadyExists,
+                ErrorKind::ArgumentListTooLong,
+                ErrorKind::BrokenPipe,
+                ErrorKind::ConnectionAborted,
+                ErrorKind::ConnectionRefused,
+                ErrorKind::ConnectionReset,
+                ErrorKind::CrossesDevices,
+                ErrorKind::Deadlock,
+                ErrorKind::DirectoryNotEmpty,
+                ErrorKind::ExecutableFileBusy,
+                ErrorKind::FileTooLarge,
+                ErrorKind::HostUnreachable,
+                ErrorKind::Interrupted,
+                ErrorKind::InvalidData,
+                // ErrorKind::InvalidFilename,
+                ErrorKind::InvalidInput,
+                ErrorKind::IsADirectory,
+                ErrorKind::NetworkDown,
+                ErrorKind::NetworkUnreachable,
+                ErrorKind::NotADirectory,
+                ErrorKind::NotConnected,
+                ErrorKind::NotFound,
+                ErrorKind::NotSeekable,
+                ErrorKind::Other,
+                ErrorKind::OutOfMemory,
+                ErrorKind::PermissionDenied,
+                ErrorKind::QuotaExceeded,
+                ErrorKind::ReadOnlyFilesystem,
+                ErrorKind::ResourceBusy,
+                ErrorKind::StaleNetworkFileHandle,
+                ErrorKind::StorageFull,
+                ErrorKind::TimedOut,
+                ErrorKind::TooManyLinks,
+                ErrorKind::UnexpectedEof,
+                ErrorKind::Unsupported,
+                ErrorKind::WouldBlock,
+                ErrorKind::WriteZero,
+            ];
+
+            for kind in kinds {
+                let err = TestError(io::Error::new(kind, message));
+                let serialized = postcard::to_allocvec(&err).unwrap();
+                let deserialized: TestError = postcard::from_bytes(&serialized).unwrap();
+
+                assert_eq!(err.0.kind(), deserialized.0.kind());
+                assert_eq!(err.0.to_string(), deserialized.0.to_string());
+            }
+        }
+    }
+}
+
+pub trait ChunkRangesExt {
+    fn last_chunk() -> Self;
+    fn chunk(offset: u64) -> Self;
+    fn bytes(ranges: impl RangeBounds<u64>) -> Self;
+    fn chunks(ranges: impl RangeBounds<u64>) -> Self;
+    fn offset(offset: u64) -> Self;
+}
+
+impl ChunkRangesExt for ChunkRanges {
+    fn last_chunk() -> Self {
+        ChunkRanges::from(ChunkNum(u64::MAX)..)
+    }
+
+    /// Create a chunk range that contains a single chunk.
+    fn chunk(offset: u64) -> Self {
+        ChunkRanges::from(ChunkNum(offset)..ChunkNum(offset + 1))
+    }
+
+    /// Create a range of chunks that contains the given byte ranges.
+    /// The byte ranges are rounded up to the nearest chunk size.
+    fn bytes(ranges: impl RangeBounds<u64>) -> Self {
+        round_up_to_chunks(&bounds_from_range(ranges, |v| v))
+    }
+
+    /// Create a range of chunks from u64 chunk bounds.
+    ///
+    /// This is equivalent but more convenient than using the ChunkNum newtype.
+    fn chunks(ranges: impl RangeBounds<u64>) -> Self {
+        bounds_from_range(ranges, ChunkNum)
+    }
+
+    /// Create a chunk range that contains a single byte offset.
+    fn offset(offset: u64) -> Self {
+        Self::bytes(offset..offset + 1)
+    }
+}
+
+// todo: move to range_collections
+pub(crate) fn bounds_from_range<R, T, F>(range: R, f: F) -> RangeSet2<T>
+where
+    R: RangeBounds<u64>,
+    T: RangeSetEntry,
+    F: Fn(u64) -> T,
+{
+    let from = match range.start_bound() {
+        Bound::Included(start) => Some(*start),
+        Bound::Excluded(start) => {
+            let Some(start) = start.checked_add(1) else {
+                return RangeSet2::empty();
             };
-            end.saturating_sub(start)
-        })
-        .reduce(u64::saturating_add)
-        .unwrap_or_default()
+            Some(start)
+        }
+        Bound::Unbounded => None,
+    };
+    let to = match range.end_bound() {
+        Bound::Included(end) => end.checked_add(1),
+        Bound::Excluded(end) => Some(*end),
+        Bound::Unbounded => None,
+    };
+    match (from, to) {
+        (Some(from), Some(to)) => RangeSet2::from(f(from)..f(to)),
+        (Some(from), None) => RangeSet2::from(f(from)..),
+        (None, Some(to)) => RangeSet2::from(..f(to)),
+        (None, None) => RangeSet2::all(),
+    }
 }
 
-/// A non-sendable marker type
-#[derive(Debug)]
-pub(crate) struct NonSend {
-    _marker: std::marker::PhantomData<std::rc::Rc<()>>,
-}
+pub mod outboard_with_progress {
+    use std::io::{self, BufReader, Read};
 
-impl NonSend {
-    /// Create a new non-sendable marker.
-    #[allow(dead_code)]
-    pub const fn new() -> Self {
-        Self {
-            _marker: std::marker::PhantomData,
+    use bao_tree::{
+        blake3,
+        io::{
+            outboard::PreOrderOutboard,
+            sync::{OutboardMut, WriteAt},
+        },
+        iter::BaoChunk,
+        BaoTree, ChunkNum,
+    };
+    use smallvec::SmallVec;
+
+    use super::sink::Sink;
+
+    fn hash_subtree(start_chunk: u64, data: &[u8], is_root: bool) -> blake3::Hash {
+        use blake3::hazmat::{ChainingValue, HasherExt};
+        if is_root {
+            debug_assert!(start_chunk == 0);
+            blake3::hash(data)
+        } else {
+            let mut hasher = blake3::Hasher::new();
+            hasher.set_input_offset(start_chunk * 1024);
+            hasher.update(data);
+            let non_root_hash: ChainingValue = hasher.finalize_non_root();
+            blake3::Hash::from(non_root_hash)
+        }
+    }
+
+    fn parent_cv(
+        left_child: &blake3::Hash,
+        right_child: &blake3::Hash,
+        is_root: bool,
+    ) -> blake3::Hash {
+        use blake3::hazmat::{merge_subtrees_non_root, merge_subtrees_root, ChainingValue, Mode};
+        let left_child: ChainingValue = *left_child.as_bytes();
+        let right_child: ChainingValue = *right_child.as_bytes();
+        if is_root {
+            merge_subtrees_root(&left_child, &right_child, Mode::Hash)
+        } else {
+            blake3::Hash::from(merge_subtrees_non_root(
+                &left_child,
+                &right_child,
+                Mode::Hash,
+            ))
+        }
+    }
+
+    pub async fn init_outboard<R, W, P>(
+        data: R,
+        outboard: &mut PreOrderOutboard<W>,
+        progress: &mut P,
+    ) -> std::io::Result<std::result::Result<(), P::Error>>
+    where
+        W: WriteAt,
+        R: Read,
+        P: Sink<ChunkNum>,
+    {
+        // wrap the reader in a buffered reader, so we read in large chunks
+        // this reduces the number of io ops
+        let size = usize::try_from(outboard.tree.size()).unwrap_or(usize::MAX);
+        let read_buf_size = size.min(1024 * 1024);
+        let chunk_buf_size = size.min(outboard.tree.block_size().bytes());
+        let reader = BufReader::with_capacity(read_buf_size, data);
+        let mut buffer = SmallVec::<[u8; 128]>::from_elem(0u8, chunk_buf_size);
+        let res = init_impl(outboard.tree, reader, outboard, &mut buffer, progress).await?;
+        Ok(res)
+    }
+
+    async fn init_impl<W, P>(
+        tree: BaoTree,
+        mut data: impl Read,
+        outboard: &mut PreOrderOutboard<W>,
+        buffer: &mut [u8],
+        progress: &mut P,
+    ) -> io::Result<std::result::Result<(), P::Error>>
+    where
+        W: WriteAt,
+        P: Sink<ChunkNum>,
+    {
+        // do not allocate for small trees
+        let mut stack = SmallVec::<[blake3::Hash; 10]>::new();
+        // debug_assert!(buffer.len() == tree.chunk_group_bytes());
+        for item in tree.post_order_chunks_iter() {
+            match item {
+                BaoChunk::Parent { is_root, node, .. } => {
+                    let right_hash = stack.pop().unwrap();
+                    let left_hash = stack.pop().unwrap();
+                    outboard.save(node, &(left_hash, right_hash))?;
+                    let parent = parent_cv(&left_hash, &right_hash, is_root);
+                    stack.push(parent);
+                }
+                BaoChunk::Leaf {
+                    size,
+                    is_root,
+                    start_chunk,
+                    ..
+                } => {
+                    if let Err(err) = progress.send(start_chunk).await {
+                        return Ok(Err(err));
+                    }
+                    let buf = &mut buffer[..size];
+                    data.read_exact(buf)?;
+                    let hash = hash_subtree(start_chunk.0, buf, is_root);
+                    stack.push(hash);
+                }
+            }
+        }
+        debug_assert_eq!(stack.len(), 1);
+        outboard.root = stack.pop().unwrap();
+        Ok(Ok(()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use bao_tree::{
+            blake3,
+            io::{outboard::PreOrderOutboard, sync::CreateOutboard},
+            BaoTree,
+        };
+        use testresult::TestResult;
+
+        use crate::{
+            store::{fs::tests::test_data, IROH_BLOCK_SIZE},
+            util::{outboard_with_progress::init_outboard, sink::Drain},
+        };
+
+        #[tokio::test]
+        async fn init_outboard_with_progress() -> TestResult<()> {
+            for size in [1024 * 18 + 1] {
+                let data = test_data(size);
+                let mut o1 = PreOrderOutboard::<Vec<u8>> {
+                    tree: BaoTree::new(data.len() as u64, IROH_BLOCK_SIZE),
+                    ..Default::default()
+                };
+                let mut o2 = o1.clone();
+                o1.init_from(data.as_ref())?;
+                init_outboard(data.as_ref(), &mut o2, &mut Drain).await??;
+                assert_eq!(o1.root, blake3::hash(&data));
+                assert_eq!(o1.root, o2.root);
+                assert_eq!(o1.data, o2.data);
+            }
+            Ok(())
         }
     }
 }
 
-/// copy a limited slice from a slice as a `Bytes`.
-pub(crate) fn copy_limited_slice(bytes: &[u8], offset: u64, len: usize) -> Bytes {
-    bytes[limited_range(offset, len, bytes.len())]
-        .to_vec()
-        .into()
-}
+pub mod sink {
+    use std::{future::Future, io};
 
-pub(crate) fn limited_range(offset: u64, len: usize, buf_len: usize) -> std::ops::Range<usize> {
-    if offset < buf_len as u64 {
-        let start = offset as usize;
-        let end = start.saturating_add(len).min(buf_len);
-        start..end
-    } else {
-        0..0
-    }
-}
+    use irpc::RpcMessage;
 
-/// zero copy get a limited slice from a `Bytes` as a `Bytes`.
-#[allow(dead_code)]
-pub(crate) fn get_limited_slice(bytes: &Bytes, offset: u64, len: usize) -> Bytes {
-    bytes.slice(limited_range(offset, len, bytes.len()))
-}
+    /// Our version of a sink, that can be mapped etc.
+    pub trait Sink<Item> {
+        type Error;
+        fn send(
+            &mut self,
+            value: Item,
+        ) -> impl Future<Output = std::result::Result<(), Self::Error>>;
 
-/// Compute raw outboard size, without the size header.
-#[allow(dead_code)]
-pub(crate) fn raw_outboard_size(size: u64) -> u64 {
-    BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
-}
-
-/// Given a prefix, increment it lexographically.
-///
-/// If the prefix is all FF, this will return false because there is no
-/// higher prefix than that.
-#[allow(dead_code)]
-pub(crate) fn next_prefix(bytes: &mut [u8]) -> bool {
-    for byte in bytes.iter_mut().rev() {
-        if *byte < 255 {
-            *byte += 1;
-            return true;
+        fn with_map_err<F, U>(self, f: F) -> WithMapErr<Self, F>
+        where
+            Self: Sized,
+            F: Fn(Self::Error) -> U + Send + 'static,
+        {
+            WithMapErr { inner: self, f }
         }
-        *byte = 0;
-    }
-    false
-}
 
-/// Synchronously compute the outboard of a file, and return hash and outboard.
-///
-/// It is assumed that the file is not modified while this is running.
-///
-/// If it is modified while or after this is running, the outboard will be
-/// invalid, so any attempt to compute a slice from it will fail.
-///
-/// If the size of the file is changed while this is running, an error will be
-/// returned.
-///
-/// The computed outboard is without length prefix.
-pub(crate) fn compute_outboard(
-    read: impl Read,
-    size: u64,
-    progress: impl Fn(u64) -> std::io::Result<()> + Send + Sync + 'static,
-) -> std::io::Result<(Hash, Option<Vec<u8>>)> {
-    use bao_tree::io::sync::CreateOutboard;
-
-    // wrap the reader in a progress reader, so we can report progress.
-    let reader = ProgressReader::new(read, progress);
-    // wrap the reader in a buffered reader, so we read in large chunks
-    // this reduces the number of io ops and also the number of progress reports
-    let buf_size = usize::try_from(size).unwrap_or(usize::MAX).min(1024 * 1024);
-    let reader = BufReader::with_capacity(buf_size, reader);
-
-    let ob = PreOrderOutboard::<Vec<u8>>::create_sized(reader, size, IROH_BLOCK_SIZE)?;
-    let root = ob.root.into();
-    let data = ob.data;
-    tracing::trace!(%root, "done");
-    let data = if !data.is_empty() { Some(data) } else { None };
-    Ok((root, data))
-}
-
-/// Compute raw outboard, without the size header.
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn raw_outboard(data: &[u8]) -> (Vec<u8>, Hash) {
-    let res = bao_tree::io::outboard::PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
-    (res.data, res.root.into())
-}
-
-/// A reader that calls a callback with the number of bytes read after each read.
-pub(crate) struct ProgressReader<R, F: Fn(u64) -> std::io::Result<()>> {
-    inner: R,
-    offset: u64,
-    cb: F,
-}
-
-impl<R: std::io::Read, F: Fn(u64) -> std::io::Result<()>> ProgressReader<R, F> {
-    pub fn new(inner: R, cb: F) -> Self {
-        Self {
-            inner,
-            offset: 0,
-            cb,
+        fn with_map<F, U>(self, f: F) -> WithMap<Self, F>
+        where
+            Self: Sized,
+            F: Fn(U) -> Item + Send + 'static,
+        {
+            WithMap { inner: self, f }
         }
     }
-}
 
-impl<R: std::io::Read, F: Fn(u64) -> std::io::Result<()>> std::io::Read for ProgressReader<R, F> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.offset += read as u64;
-        (self.cb)(self.offset)?;
-        Ok(read)
+    impl<I, T> Sink<T> for &mut I
+    where
+        I: Sink<T>,
+    {
+        type Error = I::Error;
+
+        async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
+            (*self).send(value).await
+        }
+    }
+
+    pub struct IrpcSenderSink<T>(pub irpc::channel::mpsc::Sender<T>);
+
+    impl<T> Sink<T> for IrpcSenderSink<T>
+    where
+        T: RpcMessage,
+    {
+        type Error = irpc::channel::SendError;
+
+        async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
+            self.0.send(value).await
+        }
+    }
+
+    pub struct IrpcSenderRefSink<'a, T>(pub &'a mut irpc::channel::mpsc::Sender<T>);
+
+    impl<'a, T> Sink<T> for IrpcSenderRefSink<'a, T>
+    where
+        T: RpcMessage,
+    {
+        type Error = irpc::channel::SendError;
+
+        async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
+            self.0.send(value).await
+        }
+    }
+
+    pub struct TokioMpscSenderSink<T>(pub tokio::sync::mpsc::Sender<T>);
+
+    impl<T> Sink<T> for TokioMpscSenderSink<T> {
+        type Error = tokio::sync::mpsc::error::SendError<T>;
+
+        async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
+            self.0.send(value).await
+        }
+    }
+
+    pub struct WithMapErr<P, F> {
+        inner: P,
+        f: F,
+    }
+
+    impl<P, F, E, U> Sink<U> for WithMapErr<P, F>
+    where
+        P: Sink<U>,
+        F: Fn(P::Error) -> E + Send + 'static,
+    {
+        type Error = E;
+
+        async fn send(&mut self, value: U) -> std::result::Result<(), Self::Error> {
+            match self.inner.send(value).await {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let err = (self.f)(err);
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    pub struct WithMap<P, F> {
+        inner: P,
+        f: F,
+    }
+
+    impl<P, F, T, U> Sink<T> for WithMap<P, F>
+    where
+        P: Sink<U>,
+        F: Fn(T) -> U + Send + 'static,
+    {
+        type Error = P::Error;
+
+        async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
+            self.inner.send((self.f)(value)).await
+        }
+    }
+
+    pub struct Drain;
+
+    impl<T> Sink<T> for Drain {
+        type Error = io::Error;
+
+        async fn send(&mut self, _offset: T) -> std::result::Result<(), Self::Error> {
+            io::Result::Ok(())
+        }
     }
 }

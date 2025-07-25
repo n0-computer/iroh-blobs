@@ -1,17 +1,347 @@
 //! Specifications for ranges selection in blobs and sequences of blobs.
 //!
-//! The [`RangeSpec`] allows specifying which BAO chunks inside a single blob should be
+//! The [`ChunkRanges`] allows specifying which BAO chunks inside a single blob should be
 //! selected.
 //!
-//! The [`RangeSpecSeq`] builds on top of this to select blob chunks in an entire
+//! The [`ChunkRangesSeq`] builds on top of this to select blob chunks in an entire
 //! collection.
-use std::fmt;
+use std::{fmt, sync::OnceLock};
 
-use bao_tree::{ChunkNum, ChunkRanges, ChunkRangesRef};
+pub use bao_tree::ChunkRanges;
+use bao_tree::{ChunkNum, ChunkRangesRef};
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 
+pub use crate::util::ChunkRangesExt;
+
+static CHUNK_RANGES_EMPTY: OnceLock<ChunkRanges> = OnceLock::new();
+
+fn chunk_ranges_empty() -> &'static ChunkRanges {
+    CHUNK_RANGES_EMPTY.get_or_init(ChunkRanges::empty)
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]
+pub struct ChunkRangesSeq(pub(crate) SmallVec<[(u64, ChunkRanges); 2]>);
+
+impl std::hash::Hash for ChunkRangesSeq {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for (i, r) in &self.0 {
+            i.hash(state);
+            r.boundaries().hash(state);
+        }
+    }
+}
+
+impl std::ops::Index<u64> for ChunkRangesSeq {
+    type Output = ChunkRanges;
+
+    fn index(&self, index: u64) -> &Self::Output {
+        match self.0.binary_search_by(|(o, _)| o.cmp(&index)) {
+            Ok(i) => &self.0[i].1,
+            Err(i) => {
+                if i == 0 {
+                    chunk_ranges_empty()
+                } else {
+                    &self.0[i - 1].1
+                }
+            }
+        }
+    }
+}
+
+impl ChunkRangesSeq {
+    pub const fn empty() -> Self {
+        Self(SmallVec::new_const())
+    }
+
+    /// Request just the first blob.
+    pub fn root() -> Self {
+        let mut inner = SmallVec::new();
+        inner.push((0, ChunkRanges::all()));
+        inner.push((1, ChunkRanges::empty()));
+        Self(inner)
+    }
+
+    /// A [`ChunkRangesSeq`] containing all chunks from all blobs.
+    ///
+    /// [`ChunkRangesSeq::iter`], will return a full range forever.
+    pub fn all() -> Self {
+        let mut inner = SmallVec::new();
+        inner.push((0, ChunkRanges::all()));
+        Self(inner)
+    }
+
+    /// A [`ChunkRangesSeq`] getting the verified size for the first blob.
+    pub fn verified_size() -> Self {
+        let mut inner = SmallVec::new();
+        inner.push((0, ChunkRanges::last_chunk()));
+        inner.push((1, ChunkRanges::empty()));
+        Self(inner)
+    }
+
+    /// A [`ChunkRangesSeq`] getting the entire first blob and verified sizes for all others.
+    pub fn verified_child_sizes() -> Self {
+        let mut inner = SmallVec::new();
+        inner.push((0, ChunkRanges::all()));
+        inner.push((1, ChunkRanges::last_chunk()));
+        Self(inner)
+    }
+
+    /// Checks if this [`ChunkRangesSeq`] does not select any chunks in the blob.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Checks if this [`ChunkRangesSeq`] selects all chunks in the blob.
+    pub fn is_all(&self) -> bool {
+        if self.0.len() != 1 {
+            return false;
+        }
+        let Some((_, ranges)) = self.0.iter().next() else {
+            return false;
+        };
+        ranges.is_all()
+    }
+
+    /// If this range seq describes a range for a single item, returns the offset
+    /// and range spec for that item
+    pub fn as_single(&self) -> Option<(u64, &ChunkRanges)> {
+        // we got two elements,
+        // the first element starts at offset 0,
+        // and the second element is empty
+        if self.0.len() != 2 {
+            return None;
+        }
+        let (o1, v1) = self.0.iter().next().unwrap();
+        let (o2, v2) = self.0.iter().next_back().unwrap();
+        if *o1 == (o2 - 1) && v2.is_empty() {
+            Some((*o1, v1))
+        } else {
+            None
+        }
+    }
+
+    pub fn is_blob(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
+        match self.as_single() {
+            Some((0, _)) => true,
+            _ => false,
+        }
+    }
+
+    /// Convenience function to create a [`ChunkRangesSeq`] from an iterator of
+    /// chunk ranges. If the last element is non-empty, it will be repeated
+    /// forever.
+    pub fn from_ranges_infinite(ranges: impl IntoIterator<Item = ChunkRanges>) -> Self {
+        let (ranges, _) = from_ranges_inner(ranges);
+        Self(ranges)
+    }
+
+    /// Convenience function to create a [`ChunkRangesSeq`] from an iterator of
+    /// chunk ranges. If the last element is non-empty, an empty range will be
+    /// added immediately after it to terminate the sequence.
+    pub fn from_ranges(ranges: impl IntoIterator<Item = ChunkRanges>) -> Self {
+        let (mut res, next) = from_ranges_inner(ranges);
+        if let Some((_, r)) = res.iter().next_back() {
+            if !r.is_empty() {
+                res.push((next, ChunkRanges::empty()));
+            }
+        }
+        Self(res)
+    }
+
+    /// An iterator over blobs in the sequence with a non-empty range spec.
+    ///
+    /// This iterator will only yield items for blobs which have at least one chunk
+    /// selected.
+    ///
+    /// This iterator is infinite if the [`ChunkRangesSeq`] ends on a non-empty [`ChunkRanges`],
+    /// that is all further blobs have selected chunks spans.
+    pub fn iter_non_empty_infinite(&self) -> NonEmptyRequestRangeSpecIter<'_> {
+        NonEmptyRequestRangeSpecIter::new(self.iter_infinite())
+    }
+
+    /// True if this range spec sequence repeats the last range spec forever.
+    pub fn is_infinite(&self) -> bool {
+        self.0
+            .iter()
+            .next_back()
+            .map(|(_, v)| !v.is_empty())
+            .unwrap_or_default()
+    }
+
+    pub fn iter_infinite(&self) -> ChunkRangesSeqIterInfinite<'_> {
+        ChunkRangesSeqIterInfinite {
+            current: chunk_ranges_empty(),
+            offset: 0,
+            remaining: self.0.iter().peekable(),
+        }
+    }
+
+    pub fn iter(&self) -> ChunkRangesSeqIter<'_> {
+        ChunkRangesSeqIter {
+            current: chunk_ranges_empty(),
+            offset: 0,
+            remaining: self.0.iter().peekable(),
+        }
+    }
+}
+
+fn from_ranges_inner(
+    ranges: impl IntoIterator<Item = ChunkRanges>,
+) -> (SmallVec<[(u64, ChunkRanges); 2]>, u64) {
+    let mut res = SmallVec::new();
+    let mut i = 0;
+    for range in ranges.into_iter() {
+        if range
+            != res
+                .iter()
+                .next_back()
+                .map(|(_, v)| v)
+                .unwrap_or(&ChunkRanges::empty())
+        {
+            res.push((i, range));
+        }
+        i += 1;
+    }
+    (res, i)
+}
+
+/// An infinite iterator yielding [`RangeSpec`]s for each blob in a sequence.
+///
+/// The first item yielded is the [`RangeSpec`] for the first blob in the sequence, the
+/// next item is the [`RangeSpec`] for the next blob, etc.
+#[derive(Debug)]
+pub struct ChunkRangesSeqIterInfinite<'a> {
+    /// current value
+    current: &'a ChunkRanges,
+    /// current offset
+    offset: u64,
+    /// remaining ranges
+    remaining: std::iter::Peekable<std::slice::Iter<'a, (u64, ChunkRanges)>>,
+}
+
+impl<'a> ChunkRangesSeqIterInfinite<'a> {
+    /// True if we are at the end of the iterator.
+    ///
+    /// This does not mean that the iterator is terminated, it just means that
+    /// it will repeat the same value forever.
+    pub fn is_at_end(&mut self) -> bool {
+        self.remaining.peek().is_none()
+    }
+}
+
+impl<'a> Iterator for ChunkRangesSeqIterInfinite<'a> {
+    type Item = &'a ChunkRanges;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.remaining.peek() {
+                Some((offset, _)) if self.offset < *offset => {
+                    // emit current value until we reach the next offset
+                    self.offset += 1;
+                    return Some(self.current);
+                }
+                None => {
+                    // no more values, just repeat current forever
+                    self.offset += 1;
+                    return Some(self.current);
+                }
+                Some((_, ranges)) => {
+                    // get next current value, new count, and set remaining
+                    self.current = ranges;
+                    self.remaining.next();
+                }
+            }
+        }
+    }
+}
+
+/// An infinite iterator yielding [`RangeSpec`]s for each blob in a sequence.
+///
+/// The first item yielded is the [`RangeSpec`] for the first blob in the sequence, the
+/// next item is the [`RangeSpec`] for the next blob, etc.
+#[derive(Debug)]
+pub struct ChunkRangesSeqIter<'a> {
+    /// current value
+    current: &'a ChunkRanges,
+    /// current offset
+    offset: u64,
+    /// remaining ranges
+    remaining: std::iter::Peekable<std::slice::Iter<'a, (u64, ChunkRanges)>>,
+}
+
+impl<'a> Iterator for ChunkRangesSeqIter<'a> {
+    type Item = &'a ChunkRanges;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.remaining.peek()? {
+            (offset, _) if self.offset < *offset => {
+                // emit current value until we reach the next offset
+                self.offset += 1;
+                Some(self.current)
+            }
+            (_, ranges) => {
+                // get next current value, new count, and set remaining
+                self.current = ranges;
+                self.remaining.next();
+                self.offset += 1;
+                Some(self.current)
+            }
+        }
+    }
+}
+
+/// An iterator over blobs in the sequence with a non-empty range specs.
+///
+/// default is what to use if the children of this RequestRangeSpec are empty.
+#[derive(Debug)]
+pub struct NonEmptyRequestRangeSpecIter<'a> {
+    inner: ChunkRangesSeqIterInfinite<'a>,
+    count: u64,
+}
+
+impl<'a> NonEmptyRequestRangeSpecIter<'a> {
+    fn new(inner: ChunkRangesSeqIterInfinite<'a>) -> Self {
+        Self { inner, count: 0 }
+    }
+
+    pub(crate) fn offset(&self) -> u64 {
+        self.count
+    }
+
+    pub fn is_at_end(&mut self) -> bool {
+        self.inner.is_at_end()
+    }
+}
+
+impl<'a> Iterator for NonEmptyRequestRangeSpecIter<'a> {
+    type Item = (u64, &'a ChunkRanges);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // unwrapping is safe because we know that the inner iterator will never terminate
+            let curr = self.inner.next().unwrap();
+            let count = self.count;
+            // increase count in any case until we are at the end of possible u64 values
+            // we are unlikely to ever reach this limit.
+            self.count = self.count.checked_add(1)?;
+            // yield only if the current value is non-empty
+            if !curr.is_empty() {
+                break Some((count, curr));
+            } else if self.inner.is_at_end() {
+                // terminate instead of looping until we run out of u64 values
+                break None;
+            }
+        }
+    }
+}
+
 /// A chunk range specification as a sequence of chunk offsets.
+///
+/// This is just the wire encoding of a [`ChunkRanges`]. You should rarely have to
+/// interact with this directly.
 ///
 /// Offsets encode alternating spans starting on 0, where the first span is always
 /// deselected.
@@ -68,6 +398,11 @@ impl RangeSpec {
         Self(smallvec![0])
     }
 
+    /// Creates a [`RangeSpec`] selecting the last chunk, which is also a size proof.
+    pub fn verified_size() -> Self {
+        Self(smallvec![u64::MAX])
+    }
+
     /// Checks if this [`RangeSpec`] does not select any chunks in the blob.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -76,6 +411,22 @@ impl RangeSpec {
     /// Checks if this [`RangeSpec`] selects all chunks in the blob.
     pub fn is_all(&self) -> bool {
         self.0.len() == 1 && self.0[0] == 0
+    }
+
+    /// Returns the number of chunks selected by this [`RangeSpec`], as a tuple
+    /// with the minimum and maximum number of chunks.
+    pub fn chunks(&self) -> (u64, Option<u64>) {
+        let mut min = 0;
+        for i in 0..self.0.len() / 2 {
+            min += self.0[2 * i + 1];
+        }
+        let max = if self.0.len() % 2 != 0 {
+            // spec is open ended
+            None
+        } else {
+            Some(min)
+        };
+        (min, max)
     }
 
     /// Creates a [`ChunkRanges`] from this [`RangeSpec`].
@@ -102,250 +453,52 @@ impl RangeSpec {
 
 impl fmt::Debug for RangeSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            f.debug_list()
-                .entries(self.to_chunk_ranges().iter())
-                .finish()
-        } else if self.is_all() {
+        if self.is_all() {
             write!(f, "all")
         } else if self.is_empty() {
             write!(f, "empty")
+        } else if !f.alternate() {
+            f.debug_list()
+                .entries(self.to_chunk_ranges().iter())
+                .finish()
         } else {
             f.debug_list().entries(self.0.iter()).finish()
         }
     }
 }
 
-/// A chunk range specification for a sequence of blobs.
-///
-/// To select chunks in a sequence of blobs this is encoded as a sequence of `(blob_offset,
-/// range_spec)` tuples. Offsets are interpreted in an accumulating fashion.
-///
-/// ## Example:
-///
-/// Suppose two [`RangeSpec`]s `range_a` and `range_b`.
-///
-/// - `[(0, range_a), (2, empty), (3, range_b), (1, empty)]` encodes:
-///   - Select `range_a` for children in the range `[0, 2)`
-///   - do no selection (empty) for children in the range `[2, 2+3) = [2, 5)` (3 children)
-///   - Select `range_b` for children in the range `[5, 5+1) = [5, 6)` (1 children)
-///   - do no selection (empty) for children in the open range `[6, inf)`
-///
-/// Another way to understand this is that offsets represent the number of times the
-/// previous range appears.
-///
-/// Other examples:
-///
-/// - Select `range_a` from all blobs after the 5th one in the sequence: `[(5, range_a)]`.
-///
-/// - Select `range_a` from all blobs in the sequence: `[(0, range_a)]`.
-///
-/// - Select `range_a` from blob 1234: `[(1234, range_a), (1, empty)]`.
-///
-/// - Select nothing: `[]`.
-///
-/// This is a smallvec so that we can avoid allocations in the common case of a single child
-/// range.
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Hash)]
-#[repr(transparent)]
-pub struct RangeSpecSeq(SmallVec<[(u64, RangeSpec); 2]>);
+mod wire {
 
-impl RangeSpecSeq {
-    #[allow(dead_code)]
-    /// A [`RangeSpecSeq`] containing no chunks from any blobs in the sequence.
-    ///
-    /// [`RangeSpecSeq::iter`], will return an empty range forever.
-    pub const fn empty() -> Self {
-        Self(SmallVec::new_const())
-    }
+    use serde::{Deserialize, Serialize};
+    use smallvec::SmallVec;
 
-    /// If this range seq describes a range for a single item, returns the offset
-    /// and range spec for that item
-    pub fn as_single(&self) -> Option<(u64, &RangeSpec)> {
-        // we got two elements,
-        // the first element starts at offset 0,
-        // and the second element is empty
-        if self.0.len() != 2 {
-            return None;
-        }
-        let (fst_ofs, fst_val) = &self.0[0];
-        let (snd_ofs, snd_val) = &self.0[1];
-        if *snd_ofs == 1 && snd_val.is_empty() {
-            Some((*fst_ofs, fst_val))
-        } else {
-            None
-        }
-    }
+    use super::{ChunkRangesSeq, RangeSpec};
 
-    /// A [`RangeSpecSeq`] containing all chunks from all blobs.
-    ///
-    /// [`RangeSpecSeq::iter`], will return a full range forever.
-    pub fn all() -> Self {
-        Self(smallvec![(0, RangeSpec::all())])
-    }
+    #[derive(Deserialize, Serialize)]
+    pub struct RangeSpecSeq(SmallVec<[(u64, RangeSpec); 2]>);
 
-    /// Convenience function to create a [`RangeSpecSeq`] from a finite sequence of range sets.
-    pub fn from_ranges(ranges: impl IntoIterator<Item = impl AsRef<ChunkRangesRef>>) -> Self {
-        Self::new(
-            ranges
-                .into_iter()
-                .map(RangeSpec::new)
-                .chain(std::iter::once(RangeSpec::EMPTY)),
-        )
-    }
-
-    /// Convenience function to create a [`RangeSpecSeq`] from a sequence of range sets.
-    ///
-    /// Compared to [`RangeSpecSeq::from_ranges`], this will not add an empty range spec at the end, so the final
-    /// range spec will repeat forever.
-    pub fn from_ranges_infinite(
-        ranges: impl IntoIterator<Item = impl AsRef<ChunkRangesRef>>,
-    ) -> Self {
-        Self::new(ranges.into_iter().map(RangeSpec::new))
-    }
-
-    /// Creates a new range spec sequence from a sequence of range specs.
-    ///
-    /// This will merge adjacent range specs with the same value and thus make
-    /// sure that the resulting sequence is as compact as possible.
-    pub fn new(children: impl IntoIterator<Item = RangeSpec>) -> Self {
-        let mut count = 0;
-        let mut res = SmallVec::new();
-        let before_all = RangeSpec::EMPTY;
-        for v in children.into_iter() {
-            let prev = res.last().map(|(_count, spec)| spec).unwrap_or(&before_all);
-            if &v == prev {
-                count += 1;
-            } else {
-                res.push((count, v.clone()));
-                count = 1;
+    impl From<RangeSpecSeq> for ChunkRangesSeq {
+        fn from(wire: RangeSpecSeq) -> Self {
+            let mut offset = 0;
+            let mut res = SmallVec::new();
+            for (delta, spec) in wire.0.iter() {
+                offset += *delta;
+                res.push((offset, spec.to_chunk_ranges()));
             }
-        }
-        Self(res)
-    }
-
-    /// An infinite iterator of range specs for blobs in the sequence.
-    ///
-    /// Each item yielded by the iterator is the [`RangeSpec`] for a blob in the sequence.
-    /// Thus the first call to `.next()` returns the range spec for the first blob, the next
-    /// call returns the range spec of the second blob, etc.
-    pub fn iter(&self) -> RequestRangeSpecIter<'_> {
-        let before_first = self.0.first().map(|(c, _)| *c).unwrap_or_default();
-        RequestRangeSpecIter {
-            current: &EMPTY_RANGE_SPEC,
-            count: before_first,
-            remaining: &self.0,
+            Self(res)
         }
     }
 
-    /// An iterator over blobs in the sequence with a non-empty range spec.
-    ///
-    /// This iterator will only yield items for blobs which have at least one chunk
-    /// selected.
-    ///
-    /// This iterator is infinite if the [`RangeSpecSeq`] ends on a non-empty [`RangeSpec`],
-    /// that is all further blobs have selected chunks spans.
-    pub fn iter_non_empty(&self) -> NonEmptyRequestRangeSpecIter<'_> {
-        NonEmptyRequestRangeSpecIter::new(self.iter())
-    }
-}
-
-static EMPTY_RANGE_SPEC: RangeSpec = RangeSpec::EMPTY;
-
-/// An infinite iterator yielding [`RangeSpec`]s for each blob in a sequence.
-///
-/// The first item yielded is the [`RangeSpec`] for the first blob in the sequence, the
-/// next item is the [`RangeSpec`] for the next blob, etc.
-#[derive(Debug)]
-pub struct RequestRangeSpecIter<'a> {
-    /// current value
-    current: &'a RangeSpec,
-    /// number of times to emit current before grabbing next value
-    /// if remaining is empty, this is ignored and current is emitted forever
-    count: u64,
-    /// remaining ranges
-    remaining: &'a [(u64, RangeSpec)],
-}
-
-impl<'a> RequestRangeSpecIter<'a> {
-    pub fn new(ranges: &'a [(u64, RangeSpec)]) -> Self {
-        let before_first = ranges.first().map(|(c, _)| *c).unwrap_or_default();
-        RequestRangeSpecIter {
-            current: &EMPTY_RANGE_SPEC,
-            count: before_first,
-            remaining: ranges,
-        }
-    }
-
-    /// True if we are at the end of the iterator.
-    ///
-    /// This does not mean that the iterator is terminated, it just means that
-    /// it will repeat the same value forever.
-    pub fn is_at_end(&self) -> bool {
-        self.count == 0 && self.remaining.is_empty()
-    }
-}
-
-impl<'a> Iterator for RequestRangeSpecIter<'a> {
-    type Item = &'a RangeSpec;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(loop {
-            break if self.count > 0 {
-                // emit current value count times
-                self.count -= 1;
-                self.current
-            } else if let Some(((_, new), rest)) = self.remaining.split_first() {
-                // get next current value, new count, and set remaining
-                self.current = new;
-                self.count = rest.first().map(|(c, _)| *c).unwrap_or_default();
-                self.remaining = rest;
-                continue;
-            } else {
-                // no more values, just repeat current forever
-                self.current
-            };
-        })
-    }
-}
-
-/// An iterator over blobs in the sequence with a non-empty range specs.
-///
-/// default is what to use if the children of this RequestRangeSpec are empty.
-#[derive(Debug)]
-pub struct NonEmptyRequestRangeSpecIter<'a> {
-    inner: RequestRangeSpecIter<'a>,
-    count: u64,
-}
-
-impl<'a> NonEmptyRequestRangeSpecIter<'a> {
-    fn new(inner: RequestRangeSpecIter<'a>) -> Self {
-        Self { inner, count: 0 }
-    }
-
-    pub(crate) fn offset(&self) -> u64 {
-        self.count
-    }
-}
-
-impl<'a> Iterator for NonEmptyRequestRangeSpecIter<'a> {
-    type Item = (u64, &'a RangeSpec);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            // unwrapping is safe because we know that the inner iterator will never terminate
-            let curr = self.inner.next().unwrap();
-            let count = self.count;
-            // increase count in any case until we are at the end of possible u64 values
-            // we are unlikely to ever reach this limit.
-            self.count = self.count.checked_add(1)?;
-            // yield only if the current value is non-empty
-            if !curr.is_empty() {
-                break Some((count, curr));
-            } else if self.inner.is_at_end() {
-                // terminate instead of looping until we run out of u64 values
-                break None;
+    impl From<ChunkRangesSeq> for RangeSpecSeq {
+        fn from(value: ChunkRangesSeq) -> Self {
+            let mut res = SmallVec::new();
+            let mut offset = 0;
+            for (i, r) in value.0.iter() {
+                let delta = *i - offset;
+                res.push((delta, RangeSpec::new(r)));
+                offset = *i;
             }
+            Self(res)
         }
     }
 }
@@ -354,10 +507,11 @@ impl<'a> Iterator for NonEmptyRequestRangeSpecIter<'a> {
 mod tests {
     use std::ops::Range;
 
+    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
     use proptest::prelude::*;
 
     use super::*;
-    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
+    use crate::util::ChunkRangesExt;
 
     fn ranges(value_range: Range<u64>) -> impl Strategy<Value = ChunkRanges> {
         prop::collection::vec((value_range.clone(), value_range), 0..16).prop_map(|v| {
@@ -365,34 +519,34 @@ mod tests {
             for (a, b) in v {
                 let start = a.min(b);
                 let end = a.max(b);
-                res |= ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
+                res |= ChunkRanges::chunks(start..end);
             }
             res
         })
     }
 
     fn range_spec_seq_roundtrip_impl(ranges: &[ChunkRanges]) -> Vec<ChunkRanges> {
-        let spec = RangeSpecSeq::from_ranges(ranges.iter().cloned());
-        spec.iter()
-            .map(|x| x.to_chunk_ranges())
+        let spec = ChunkRangesSeq::from_ranges(ranges.iter().cloned());
+        spec.iter_infinite()
             .take(ranges.len())
+            .cloned()
             .collect::<Vec<_>>()
     }
 
     fn range_spec_seq_bytes_roundtrip_impl(ranges: &[ChunkRanges]) -> Vec<ChunkRanges> {
-        let spec = RangeSpecSeq::from_ranges(ranges.iter().cloned());
+        let spec = ChunkRangesSeq::from_ranges(ranges.iter().cloned());
         let bytes = postcard::to_allocvec(&spec).unwrap();
-        let spec2: RangeSpecSeq = postcard::from_bytes(&bytes).unwrap();
+        let spec2: ChunkRangesSeq = postcard::from_bytes(&bytes).unwrap();
         spec2
-            .iter()
-            .map(|x| x.to_chunk_ranges())
+            .iter_infinite()
             .take(ranges.len())
+            .cloned()
             .collect::<Vec<_>>()
     }
 
     fn mk_case(case: Vec<Range<u64>>) -> Vec<ChunkRanges> {
         case.iter()
-            .map(|x| ChunkRanges::from(ChunkNum(x.start)..ChunkNum(x.end)))
+            .map(|x| ChunkRanges::chunks(x.start..x.end))
             .collect::<Vec<_>>()
     }
 
@@ -409,21 +563,21 @@ mod tests {
                 ",
             ),
             (
-                RangeSpec::new(ChunkRanges::from(ChunkNum(64)..)),
+                RangeSpec::new(ChunkRanges::chunks(64..)),
                 r"
                     01 # length prefix - 1 element
                     40 # span width - 64. everything starting from 64 is included
                 ",
             ),
             (
-                RangeSpec::new(ChunkRanges::from(ChunkNum(10000)..)),
+                RangeSpec::new(ChunkRanges::chunks(10000..)),
                 r"
                     01 # length prefix - 1 element
                     904E # span width - 10000, 904E in postcard varint encoding. everything starting from 10000 is included
                 ",
             ),
             (
-                RangeSpec::new(ChunkRanges::from(..ChunkNum(64))),
+                RangeSpec::new(ChunkRanges::chunks(..64)),
                 r"
                     02 # length prefix - 2 elements
                     00 # span width - 0. everything stating from 0 is included
@@ -431,10 +585,7 @@ mod tests {
                 ",
             ),
             (
-                RangeSpec::new(
-                    &ChunkRanges::from(ChunkNum(1)..ChunkNum(3))
-                        | &ChunkRanges::from(ChunkNum(9)..ChunkNum(13)),
-                ),
+                RangeSpec::new(&ChunkRanges::chunks(1..3) | &ChunkRanges::chunks(9..13)),
                 r"
                     04 # length prefix - 4 elements
                     01 # span width - 1
@@ -453,9 +604,9 @@ mod tests {
     #[test]
     fn range_spec_seq_wire_format() {
         let cases = [
-            (RangeSpecSeq::empty(), "00"),
+            (ChunkRangesSeq::empty(), "00"),
             (
-                RangeSpecSeq::all(),
+                ChunkRangesSeq::all(),
                 r"
                     01 # 1 tuple in total
                     # first tuple
@@ -464,9 +615,9 @@ mod tests {
             ",
             ),
             (
-                RangeSpecSeq::from_ranges([
-                    ChunkRanges::from(ChunkNum(1)..ChunkNum(3)),
-                    ChunkRanges::from(ChunkNum(7)..ChunkNum(13)),
+                ChunkRangesSeq::from_ranges([
+                    ChunkRanges::chunks(1..3),
+                    ChunkRanges::chunks(7..13),
                 ]),
                 r"
                     03 # 3 tuples in total
@@ -482,11 +633,11 @@ mod tests {
                 ",
             ),
             (
-                RangeSpecSeq::from_ranges_infinite([
+                ChunkRangesSeq::from_ranges_infinite([
                     ChunkRanges::empty(),
                     ChunkRanges::empty(),
                     ChunkRanges::empty(),
-                    ChunkRanges::from(ChunkNum(7)..),
+                    ChunkRanges::chunks(7..),
                     ChunkRanges::all(),
                 ]),
                 r"
@@ -530,12 +681,13 @@ mod tests {
             (vec![1..2, 1..2, 2..3, 2..3], 3),
         ] {
             let case = mk_case(case);
-            let spec = RangeSpecSeq::from_ranges(case);
+            let spec = ChunkRangesSeq::from_ranges(case);
             assert_eq!(spec.0.len(), expected_count);
         }
     }
 
     proptest! {
+
         #[test]
         fn range_spec_roundtrip(ranges in ranges(0..1000)) {
             let spec = RangeSpec::new(&ranges);

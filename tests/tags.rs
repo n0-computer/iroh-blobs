@@ -1,20 +1,23 @@
-#![cfg(all(feature = "net_protocol", feature = "rpc"))]
-use futures_lite::StreamExt;
-use futures_util::Stream;
-use iroh::Endpoint;
-use iroh_blobs::{
-    net_protocol::Blobs,
-    rpc::{
-        client::tags::{self, TagInfo},
-        proto::RpcService,
-    },
-    Hash, HashAndFormat,
+use std::{
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    ops::Deref,
 };
+
+use iroh_blobs::{
+    api::{
+        self,
+        tags::{TagInfo, Tags},
+        Store,
+    },
+    store::{fs::FsStore, mem::MemStore},
+    BlobFormat, Hash, HashAndFormat,
+};
+use n0_future::{Stream, StreamExt};
 use testresult::TestResult;
 
-async fn to_vec<T>(stream: impl Stream<Item = anyhow::Result<T>>) -> anyhow::Result<Vec<T>> {
+async fn to_vec<T>(stream: impl Stream<Item = api::Result<T>>) -> api::Result<Vec<T>> {
     let res = stream.collect::<Vec<_>>().await;
-    res.into_iter().collect::<anyhow::Result<Vec<_>>>()
+    res.into_iter().collect::<api::Result<Vec<_>>>()
 }
 
 fn expected(tags: impl IntoIterator<Item = &'static str>) -> Vec<TagInfo> {
@@ -23,18 +26,15 @@ fn expected(tags: impl IntoIterator<Item = &'static str>) -> Vec<TagInfo> {
         .collect()
 }
 
-async fn set<C: quic_rpc::Connector<RpcService>>(
-    tags: &tags::Client<C>,
-    names: impl IntoIterator<Item = &str>,
-) -> TestResult<()> {
+async fn set(tags: &Tags, names: impl IntoIterator<Item = &str>) -> TestResult<()> {
     for name in names {
         tags.set(name, Hash::new(name)).await?;
     }
     Ok(())
 }
 
-async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -> TestResult<()> {
-    set(&tags, ["a", "b", "c", "d", "e"]).await?;
+async fn tags_smoke(tags: &Tags) -> TestResult<()> {
+    set(tags, ["a", "b", "c", "d", "e"]).await?;
     let stream = tags.list().await?;
     let res = to_vec(stream).await?;
     assert_eq!(res, expected(["a", "b", "c", "d", "e"]));
@@ -65,7 +65,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
     let res = to_vec(stream).await?;
     assert_eq!(res, expected([]));
 
-    set(&tags, ["a", "aa", "aaa", "aab", "b"]).await?;
+    set(tags, ["a", "aa", "aaa", "aab", "b"]).await?;
 
     let stream = tags.list_prefix("aa").await?;
     let res = to_vec(stream).await?;
@@ -81,7 +81,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
     let res = to_vec(stream).await?;
     assert_eq!(res, expected([]));
 
-    set(&tags, ["a", "b", "c"]).await?;
+    set(tags, ["a", "b", "c"]).await?;
 
     assert_eq!(
         tags.get("b").await?,
@@ -107,12 +107,12 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
         vec![TagInfo {
             name: "a".into(),
             hash: Hash::new("a"),
-            format: iroh_blobs::BlobFormat::HashSeq,
+            format: BlobFormat::HashSeq,
         }]
     );
 
     tags.delete_all().await?;
-    set(&tags, ["c"]).await?;
+    set(tags, ["c"]).await?;
     tags.rename("c", "f").await?;
     let stream = tags.list().await?;
     let res = to_vec(stream).await?;
@@ -121,7 +121,7 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
         vec![TagInfo {
             name: "f".into(),
             hash: Hash::new("c"),
-            format: iroh_blobs::BlobFormat::Raw,
+            format: BlobFormat::Raw,
         }]
     );
 
@@ -132,19 +132,30 @@ async fn tags_smoke<C: quic_rpc::Connector<RpcService>>(tags: tags::Client<C>) -
 
 #[tokio::test]
 async fn tags_smoke_mem() -> TestResult<()> {
-    let endpoint = Endpoint::builder().bind().await?;
-    let blobs = Blobs::memory().build(&endpoint);
-    let client = blobs.client();
-    tags_smoke(client.tags()).await
+    tracing_subscriber::fmt::try_init().ok();
+    let store = MemStore::new();
+    tags_smoke(store.tags()).await
 }
 
 #[tokio::test]
 async fn tags_smoke_fs() -> TestResult<()> {
+    tracing_subscriber::fmt::try_init().ok();
     let td = tempfile::tempdir()?;
-    let endpoint = Endpoint::builder().bind().await?;
-    let blobs = Blobs::persistent(td.path().join("blobs.db"))
-        .await?
-        .build(&endpoint);
-    let client = blobs.client();
-    tags_smoke(client.tags()).await
+    let store = FsStore::load(td.path().join("a")).await?;
+    tags_smoke(store.tags()).await
+}
+
+#[tokio::test]
+async fn tags_smoke_fs_rpc() -> TestResult<()> {
+    tracing_subscriber::fmt::try_init().ok();
+    let unspecified = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+    let (server, cert) = irpc::util::make_server_endpoint(unspecified)?;
+    let client = irpc::util::make_client_endpoint(unspecified, &[cert.as_ref()])?;
+    let td = tempfile::tempdir()?;
+    let store = FsStore::load(td.path().join("a")).await?;
+    tokio::spawn(store.deref().clone().listen(server.clone()));
+    let api = Store::connect(client, server.local_addr()?);
+    tags_smoke(api.tags()).await?;
+    api.shutdown().await?;
+    Ok(())
 }

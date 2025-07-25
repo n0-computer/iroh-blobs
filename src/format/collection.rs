@@ -4,14 +4,13 @@ use std::{collections::BTreeMap, future::Future};
 use anyhow::Context;
 use bao_tree::blake3;
 use bytes::Bytes;
-use iroh_io::AsyncSliceReaderExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api::{blobs::AddBytesOptions, Store},
     get::{fsm, Stats},
     hashseq::HashSeq,
-    store::MapEntry,
-    util::TempTag,
+    util::temp_tag::TempTag,
     BlobFormat, Hash,
 };
 
@@ -68,6 +67,12 @@ impl IntoIterator for Collection {
 pub trait SimpleStore {
     /// Load a blob from the store
     fn load(&self, hash: Hash) -> impl Future<Output = anyhow::Result<Bytes>> + Send + '_;
+}
+
+impl SimpleStore for crate::api::Store {
+    async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
+        Ok(self.get_bytes(hash).await?)
+    }
 }
 
 /// Metadata for a collection
@@ -150,7 +155,7 @@ impl Collection {
         let end = loop {
             match curr {
                 fsm::EndBlobNext::MoreChildren(more) => {
-                    let child_offset = more.child_offset();
+                    let child_offset = more.offset() - 1;
                     let Some(hash) = links.get(usize::try_from(child_offset)?) else {
                         break more.finish();
                     };
@@ -180,44 +185,21 @@ impl Collection {
         Ok(Self::from_parts(hs.into_iter().skip(1), meta))
     }
 
-    /// Load a collection from a store given a root hash
-    ///
-    /// This assumes that both the links and the metadata of the collection is stored in the store.
-    /// It does not require that all child blobs are stored in the store.
-    pub async fn load_db<D>(db: &D, root: &Hash) -> anyhow::Result<Self>
-    where
-        D: crate::store::Map,
-    {
-        let links_entry = db.get(root).await?.context("links not found")?;
-        anyhow::ensure!(links_entry.is_complete(), "links not complete");
-        let links_bytes = links_entry.data_reader().await?.read_to_end().await?;
-        let mut links = HashSeq::try_from(links_bytes)?;
-        let meta_hash = links.pop_front().context("meta hash not found")?;
-        let meta_entry = db.get(&meta_hash).await?.context("meta not found")?;
-        anyhow::ensure!(links_entry.is_complete(), "links not complete");
-        let meta_bytes = meta_entry.data_reader().await?.read_to_end().await?;
-        let meta: CollectionMeta = postcard::from_bytes(&meta_bytes)?;
-        anyhow::ensure!(
-            meta.names.len() == links.len(),
-            "names and links length mismatch"
-        );
-        Ok(Self::from_parts(links, meta))
-    }
-
     /// Store a collection in a store. returns the root hash of the collection
     /// as a TempTag.
-    pub async fn store<D>(self, db: &D) -> anyhow::Result<TempTag>
-    where
-        D: crate::store::Store,
-    {
+    pub async fn store(self, db: &Store) -> anyhow::Result<TempTag> {
         let (links, meta) = self.into_parts();
         let meta_bytes = postcard::to_stdvec(&meta)?;
-        let meta_tag = db.import_bytes(meta_bytes.into(), BlobFormat::Raw).await?;
+        let meta_tag = db.add_bytes(meta_bytes).temp_tag().await?;
         let links_bytes = std::iter::once(*meta_tag.hash())
             .chain(links)
             .collect::<HashSeq>();
         let links_tag = db
-            .import_bytes(links_bytes.into(), BlobFormat::HashSeq)
+            .add_bytes_with_opts(AddBytesOptions {
+                data: links_bytes.into(),
+                format: BlobFormat::HashSeq,
+            })
+            .temp_tag()
             .await?;
         Ok(links_tag)
     }
@@ -311,7 +293,7 @@ mod tests {
         let collection = (0..3)
             .map(|i| {
                 (
-                    format!("blob{}", i),
+                    format!("blob{i}"),
                     crate::Hash::from(blake3::hash(&[i as u8])),
                 )
             })

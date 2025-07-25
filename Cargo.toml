@@ -1,186 +1,72 @@
 [package]
 name = "iroh-blobs"
-version = "0.34.1"
+version = "0.91.0"
 edition = "2021"
-readme = "README.md"
-description = "blob and collection transfer support for iroh"
+description = "content-addressed blobs for iroh"
 license = "MIT OR Apache-2.0"
 authors = ["dignifiedquire <me@dignifiedquire.com>", "n0 team"]
 repository = "https://github.com/n0-computer/iroh-blobs"
-keywords = ["hashing", "quic", "blake3"]
+keywords = ["hashing", "quic", "blake3", "streaming"]
 
 # Sadly this also needs to be updated in .github/workflows/ci.yml
-rust-version = "1.81"
+rust-version = "1.85"
 
 [dependencies]
-anyhow = { version = "1" }
-async-channel = "2.3.1"
-bao-tree = { version = "0.15", features = [
-    "tokio_fsm",
-    "validate",
-], default-features = false }
-blake3 = { version = "1.8" }
-bytes = { version = "1.7", features = ["serde"] }
-chrono = "0.4.31"
-clap = { version = "4.5.20", features = ["derive"], optional = true }
-data-encoding = { version = "2.3.3" }
-derive_more = { version = "1.0.0", features = [
-    "debug",
-    "display",
-    "deref",
-    "deref_mut",
-    "from",
-    "try_into",
-    "into",
-] }
-futures-buffered = "0.2.4"
-futures-lite = "2.3"
-futures-util = { version = "0.3.30", optional = true }
-genawaiter = { version = "0.99.1", features = ["futures03"] }
-hashlink = { version = "0.9.0", optional = true }
+anyhow = "1.0.95"
+bao-tree = { version = "0.15.1", features = ["experimental-mixed", "tokio_fsm", "validate", "serde"], default-features = false }
+bytes = { version = "1", features = ["serde"] }
+derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debug", "display", "deref", "deref_mut"] }
+futures-lite = "2.6.0"
+quinn = { package = "iroh-quinn", version = "0.14.0" }
+n0-future = "0.1.2"
+n0-snafu = "0.2.0"
+range-collections = { version = "0.4.6", features = ["serde"] }
+redb = { version = "=2.4" }
+smallvec = { version = "1", features = ["serde", "const_new"] }
+snafu = "0.8.5"
+tokio = { version = "1.43.0", features = ["full"] }
+tokio-util = { version = "0.7.13", features = ["full"] }
+tracing = "0.1.41"
+iroh-io = "0.6.1"
+rand = "0.8.5"
 hex = "0.4.3"
-indicatif = { version = "0.17.8", optional = true }
-iroh-base = { version = "0.34" }
-iroh-io = { version = "0.6.0", features = ["stats"] }
-iroh-metrics = { version = "0.32", default-features = false }
-iroh = "0.34"
-nested_enum_utils = { version = "0.1.0", optional = true }
-num_cpus = "1.15.0"
-oneshot = "0.1.8"
-parking_lot = { version = "0.12.1", optional = true }
-portable-atomic = { version = "1", optional = true }
-postcard = { version = "1", default-features = false, features = [
-    "alloc",
-    "use-std",
-    "experimental-derive",
-] }
-quic-rpc = { version = "0.19", optional = true }
-quic-rpc-derive = { version = "0.19", optional = true }
-rand = "0.8"
-range-collections = "0.4.0"
-redb = { version = "=2.4", optional = true }
-reflink-copy = { version = "0.1.8", optional = true }
-self_cell = "1.0.1"
-serde = { version = "1", features = ["derive"] }
-serde-error = "0.1.3"
-smallvec = { version = "1.10.0", features = ["serde", "const_new"] }
-strum = { version = "0.26.3", optional = true }
-ssh-key = { version = "0.6", optional = true, features = ["ed25519"] }
-tempfile = { version = "3.10.0", optional = true }
-thiserror = "2"
-tokio = { version = "1", features = ["fs"] }
-tokio-util = { version = "0.7", features = ["io-util", "io"] }
-tracing = "0.1"
-tracing-futures = "0.2.5"
-walkdir = { version = "2.5.0", optional = true }
-
-# Examples
-console = { version = "0.15.8", optional = true }
-tracing-test = "0.2.5"
+serde = "1.0.217"
+postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
+data-encoding = "2.8.0"
+chrono = "0.4.39"
+nested_enum_utils = "0.2.1"
+ref-cast = "1.0.24"
+arrayvec = "0.7.6"
+iroh = "0.90"
+self_cell = "1.1.0"
+genawaiter = { version = "0.99.1", features = ["futures03"] }
+iroh-base = "0.90"
+reflink-copy = "0.1.24"
+irpc = { version = "0.5.0", features = ["rpc", "quinn_endpoint_setup", "message_spans", "stream", "derive"], default-features = false }
+iroh-metrics = { version = "0.35" }
 
 [dev-dependencies]
-http-body = "1.0"
-iroh = { version = "0.34", features = ["test-utils"] }
-quinn = { package = "iroh-quinn", version = "0.13", features = ["ring"] }
-futures-buffered = "0.2.4"
-proptest = "1.0.0"
-serde_json = "1.0.107"
-serde_test = "1.0.176"
-testresult = "0.4.0"
-tokio = { version = "1", features = ["macros", "test-util"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rcgen = "0.13"
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-tempfile = "3.10.0"
-futures-util = "0.3.30"
-testdir = "0.9.1"
+clap = { version = "4.5.31", features = ["derive"] }
+hex = "0.4.3"
+iroh-test = "0.31.0"
+proptest = "1.6.0"
+serde_json = "1.0.138"
+serde_test = "1.0.177"
+tempfile = "3.17.1"
+test-strategy = "0.4.0"
+testresult = "0.4.1"
+tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
+tracing-test = "0.2.5"
+walkdir = "2.5.0"
+iroh = { version = "0.90", features = ["discovery-local-network"]}
 
 [features]
-default = ["fs-store", "net_protocol", "rpc"]
-downloader = ["dep:parking_lot", "tokio-util/time", "dep:hashlink"]
-net_protocol = ["downloader", "dep:futures-util"]
-fs-store = ["dep:reflink-copy", "redb", "dep:tempfile"]
-metrics = ["iroh-metrics/metrics"]
-redb = ["dep:redb"]
-cli = ["rpc", "dep:clap", "dep:indicatif", "dep:console"]
-rpc = [
-  "dep:quic-rpc",
-  "dep:quic-rpc-derive",
-  "dep:nested_enum_utils",
-  "dep:strum",
-  "dep:futures-util",
-  "dep:portable-atomic",
-  "dep:walkdir",
-  "dep:ssh-key",
-  "downloader",
-]
+hide-proto-docs = []
+metrics = []
+default = ["hide-proto-docs"]
 
-example-iroh = [
-  "dep:clap",
-  "dep:indicatif",
-  "dep:console",
-  "iroh/discovery-local-network"
-]
-test = ["quic-rpc/quinn-transport", "quic-rpc/test-utils"]
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "iroh_docsrs"]
-
-[[example]]
-name = "provide-bytes"
-
-[[example]]
-name = "fetch-fsm"
-
-[[example]]
-name = "fetch-stream"
-
-[[example]]
-name = "transfer"
-required-features = ["rpc"]
-
-[[example]]
-name = "hello-world-fetch"
-required-features = ["example-iroh"]
-
-[[example]]
-name = "hello-world-provide"
-required-features = ["example-iroh"]
-
-[[example]]
-name = "discovery-local-network"
-required-features = ["example-iroh"]
-
-[[example]]
-name = "custom-protocol"
-required-features = ["example-iroh"]
-
-[lints.rust]
-missing_debug_implementations = "warn"
-
-# We use this --cfg for documenting the cargo features on which an API
-# is available.  To preview this locally use: RUSTFLAGS="--cfg
-# iroh_docsrs cargo +nightly doc --all-features".  We use our own
-# iroh_docsrs instead of the common docsrs to avoid also enabling this
-# feature in any dependencies, because some indirect dependencies
-# require a feature enabled when using `--cfg docsrs` which we can not
-# do.  To enable for a crate set `#![cfg_attr(iroh_docsrs,
-# feature(doc_cfg))]` in the crate.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(iroh_docsrs)"] }
-
-[lints.clippy]
-unused-async = "warn"
-
-[profile.dev-ci]
-inherits = 'dev'
-opt-level = 1
-
-[profile.optimized-release]
-inherits = 'release'
-debug = false
-lto = true
-debug-assertions = false
-opt-level = 3
-panic = 'abort'
-incremental = false
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
+irpc-derive = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }

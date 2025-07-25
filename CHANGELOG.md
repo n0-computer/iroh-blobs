@@ -2,6 +2,27 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.35.0](https://github.com/n0-computer/iroh-blobs/compare/v0.34.1..0.35.0) - 2025-05-12
+
+### ⛰️  Features
+
+- [**breaking**] Allow configuring the downloader when creating a blobs protocol handler ([#76](https://github.com/n0-computer/iroh-blobs/issues/76)) - ([60be4ff](https://github.com/n0-computer/iroh-blobs/commit/60be4ffda6123f558dcbb5b72b84c653fe65d2a9))
+
+### 🐛 Bug Fixes
+
+- Use latest bao-tree ([#82](https://github.com/n0-computer/iroh-blobs/issues/82)) - ([fbc6f47](https://github.com/n0-computer/iroh-blobs/commit/fbc6f47889b74bf2295b0f88820c393cc8ed4f17))
+
+### 🚜 Refactor
+
+- [**breaking**] Update to latest iroh-metrics version, use non-global metrics collection ([#85](https://github.com/n0-computer/iroh-blobs/issues/85)) - ([0308a77](https://github.com/n0-computer/iroh-blobs/commit/0308a77f9bc949a6f75750b514cdb99cfc1143f7))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump mozilla-actions/sccache-action from 0.0.8 to 0.0.9 in the github-actions group ([#79](https://github.com/n0-computer/iroh-blobs/issues/79)) - ([d2ff3b1](https://github.com/n0-computer/iroh-blobs/commit/d2ff3b121c89e1ccade90b425b44c937d66882ab))
+- Post correct link to discord about flaky failures. ([#83](https://github.com/n0-computer/iroh-blobs/issues/83)) - ([ce939a2](https://github.com/n0-computer/iroh-blobs/commit/ce939a2134fbda7bf80fe711dcedae0a73951cc4))
+- Fix redb version to the latest version that uses edition 2021 ([#88](https://github.com/n0-computer/iroh-blobs/issues/88)) - ([25af32b](https://github.com/n0-computer/iroh-blobs/commit/25af32b65ff3494bdf8389ab1a5daea4a4bf1014))
+- Update to `iroh` v0.35 ([#91](https://github.com/n0-computer/iroh-blobs/issues/91)) - ([8a975ec](https://github.com/n0-computer/iroh-blobs/commit/8a975ecda8bca5e8988db911857012e6817b456e))
+
 ## [0.34.1](https://github.com/n0-computer/iroh-blobs/compare/v0.34.0..0.34.1) - 2025-04-07
 
 ### ⛰️  Features

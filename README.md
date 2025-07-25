@@ -1,5 +1,7 @@
 # iroh-blobs
 
+**NOTE: this version of iroh-blobs is not yet considered production quality. For now, if you need production quality, use iroh-blobs 0.35**
+
 This crate provides blob and blob sequence transfer support for iroh. It implements a simple request-response protocol based on BLAKE3 verified streaming.
 
 A request describes data in terms of BLAKE3 hashes and byte ranges. It is possible to request blobs or ranges of blobs, as well as entire sequences of blobs in one request.
@@ -20,6 +22,7 @@ This crate is used together with [iroh](https://crates.io/crates/iroh). Connecti
 
 - **Requester:** The side that asks for data. It is initiating requests to one or many providers.
 
+A node can be a provider and a requester at the same time.
 
 ## Getting started
 
@@ -29,9 +32,9 @@ Iroh provides a [`Router`](https://docs.rs/iroh/latest/iroh/protocol/struct.Rout
 
 Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 
-```rust
+```rust,no_run
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{store::Store, net_protocol::Blobs};
+use iroh_blobs::{store::mem::MemStore, BlobsProtocol};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,24 +42,23 @@ async fn main() -> anyhow::Result<()> {
     // we've built at number0
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 
-    // create an in-memory blob store
-    // use `iroh_blobs::net_protocol::Blobs::persistent` to load or create a
-    // persistent blob store from a path
-    let blobs = Blobs::memory().build(&endpoint);
-
-    // turn on the "rpc" feature if you need to create blobs and tags clients
-    let blobs_client = blobs.client();
-    let tags_client = blobs_client.tags();
+    // create a protocol handler using an in-memory blob store.
+    let store = MemStore::new();
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
 
     // build the router
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
-    // do fun stuff with the blobs protocol!
+    let tag = blobs.add_slice(b"Hello world").await?;
+    println!("We are now serving {}", blobs.ticket(tag).await?);
+
+    // wait for control-c
+    tokio::signal::ctrl_c().await;
+
+    // clean shutdown of router and store
     router.shutdown().await?;
-    drop(tags_client);
     Ok(())
 }
 ```

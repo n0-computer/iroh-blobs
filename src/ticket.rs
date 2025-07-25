@@ -6,7 +6,7 @@ use iroh::{NodeAddr, NodeId, RelayUrl};
 use iroh_base::ticket::{self, Ticket};
 use serde::{Deserialize, Serialize};
 
-use crate::{BlobFormat, Hash};
+use crate::{BlobFormat, Hash, HashAndFormat};
 
 /// A token containing everything to get a file from the provider.
 ///
@@ -20,6 +20,15 @@ pub struct BlobTicket {
     format: BlobFormat,
     /// The hash to retrieve.
     hash: Hash,
+}
+
+impl From<BlobTicket> for HashAndFormat {
+    fn from(val: BlobTicket) -> Self {
+        HashAndFormat {
+            hash: val.hash,
+            format: val.format,
+        }
+    }
 }
 
 /// Wire format for [`BlobTicket`].
@@ -70,8 +79,8 @@ impl Ticket for BlobTicket {
         postcard::to_stdvec(&data).expect("postcard serialization failed")
     }
 
-    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ticket::Error> {
-        let res: TicketWireFormat = postcard::from_bytes(bytes).map_err(ticket::Error::Postcard)?;
+    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ticket::ParseError> {
+        let res: TicketWireFormat = postcard::from_bytes(bytes)?;
         let TicketWireFormat::Variant0(Variant0BlobTicket { node, format, hash }) = res;
         Ok(Self {
             node: NodeAddr {
@@ -86,7 +95,7 @@ impl Ticket for BlobTicket {
 }
 
 impl FromStr for BlobTicket {
-    type Err = ticket::Error;
+    type Err = ticket::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ticket::deserialize(s)
@@ -95,8 +104,8 @@ impl FromStr for BlobTicket {
 
 impl BlobTicket {
     /// Creates a new ticket.
-    pub fn new(node: NodeAddr, hash: Hash, format: BlobFormat) -> Result<Self> {
-        Ok(Self { hash, format, node })
+    pub fn new(node: NodeAddr, hash: Hash, format: BlobFormat) -> Self {
+        Self { hash, format, node }
     }
 
     /// The hash of the item this ticket can retrieve.
@@ -112,6 +121,13 @@ impl BlobTicket {
     /// The [`BlobFormat`] for this ticket.
     pub fn format(&self) -> BlobFormat {
         self.format
+    }
+
+    pub fn hash_and_format(&self) -> HashAndFormat {
+        HashAndFormat {
+            hash: self.hash,
+            format: self.format,
+        }
     }
 
     /// True if the ticket is for a collection and should retrieve all blobs in it.
@@ -144,7 +160,7 @@ impl<'de> Deserialize<'de> for BlobTicket {
             Self::from_str(&s).map_err(serde::de::Error::custom)
         } else {
             let (peer, format, hash) = Deserialize::deserialize(deserializer)?;
-            Self::new(peer, hash, format).map_err(serde::de::Error::custom)
+            Ok(Self::new(peer, hash, format))
         }
     }
 }
@@ -154,9 +170,9 @@ mod tests {
     use std::net::SocketAddr;
 
     use iroh::{PublicKey, SecretKey};
+    use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     use super::*;
-    use crate::{assert_eq_hex, util::hexdump::parse_hexdump};
 
     fn make_ticket() -> BlobTicket {
         let hash = Hash::new(b"hi there");

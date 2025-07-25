@@ -1,32 +1,18 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{
-    net_protocol::Blobs,
-    rpc::client::blobs::WrapOption,
-    store::{ExportFormat, ExportMode},
-    ticket::BlobTicket,
-    util::SetTagOption,
-};
+use iroh_blobs::{store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-    // We initialize the Blobs protocol in-memory
-    let blobs = Blobs::memory().build(&endpoint);
 
-    // Now we build a router that accepts blobs connections & routes them
-    // to the blobs protocol.
-    let router = Router::builder(endpoint)
-        .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn()
-        .await?;
-
-    // We use a blobs client to interact with the blobs protocol we're running locally:
-    let blobs_client = blobs.client();
+    // We initialize an in-memory backing store for iroh-blobs
+    let store = MemStore::new();
+    // Then we initialize a struct that can accept blobs requests over iroh connections
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
 
     // Grab all passed in arguments, the first one is the binary itself, so we skip it.
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,16 +26,12 @@ async fn main() -> Result<()> {
 
             println!("Hashing file.");
 
-            // keep the file in place and link it, instead of copying it into the in-memory blobs database
-            let in_place = true;
-            let blob = blobs_client
-                .add_from_path(abs_path, in_place, SetTagOption::Auto, WrapOption::NoWrap)
-                .await?
-                .finish()
-                .await?;
+            // When we import a blob, we get back a "tag" that refers to said blob in the store
+            // and allows us to control when/if it gets garbage-collected
+            let tag = store.blobs().add_path(abs_path).await?;
 
-            let node_id = router.endpoint().node_id();
-            let ticket = BlobTicket::new(node_id.into(), blob.hash, blob.format)?;
+            let node_id = endpoint.node_id();
+            let ticket = BlobTicket::new(node_id.into(), tag.hash, tag.format);
 
             println!("File hashed. Fetch this file by running:");
             println!(
@@ -57,36 +39,43 @@ async fn main() -> Result<()> {
                 filename.display()
             );
 
+            // For sending files we build a router that accepts blobs connections & routes them
+            // to the blobs protocol.
+            let router = Router::builder(endpoint)
+                .accept(iroh_blobs::ALPN, blobs)
+                .spawn();
+
             tokio::signal::ctrl_c().await?;
+
+            // Gracefully shut down the node
+            println!("Shutting down.");
+            router.shutdown().await?;
         }
         ["receive", ticket, filename] => {
             let filename: PathBuf = filename.parse()?;
             let abs_path = std::path::absolute(filename)?;
             let ticket: BlobTicket = ticket.parse()?;
 
+            // For receiving files, we create a "downloader" that allows us to fetch files
+            // from other nodes via iroh connections
+            let downloader = store.downloader(&endpoint);
+
             println!("Starting download.");
 
-            blobs_client
-                .download(ticket.hash(), ticket.node_addr().clone())
-                .await?
-                .finish()
+            downloader
+                .download(ticket.hash(), Some(ticket.node_addr().node_id))
                 .await?;
 
             println!("Finished download.");
             println!("Copying to destination.");
 
-            blobs_client
-                .export(
-                    ticket.hash(),
-                    abs_path,
-                    ExportFormat::Blob,
-                    ExportMode::Copy,
-                )
-                .await?
-                .finish()
-                .await?;
+            store.blobs().export(ticket.hash(), abs_path).await?;
 
             println!("Finished copying.");
+
+            // Gracefully shut down the node
+            println!("Shutting down.");
+            endpoint.close().await;
         }
         _ => {
             println!("Couldn't parse command line arguments: {args:?}");
@@ -99,10 +88,6 @@ async fn main() -> Result<()> {
             println!("    cargo run --example transfer -- receive [TICKET] [FILE]");
         }
     }
-
-    // Gracefully shut down the node
-    println!("Shutting down.");
-    router.shutdown().await?;
 
     Ok(())
 }
