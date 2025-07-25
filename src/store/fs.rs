@@ -117,7 +117,7 @@ use crate::{
                 BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
                 OutboardReader,
             },
-            util::entity_manager::{self, ActiveEntityState},
+            util::entity_manager,
         },
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         Hash, IROH_BLOCK_SIZE,
@@ -211,21 +211,39 @@ impl TaskContext {
     }
 }
 
-#[derive(Debug)]
-struct EmParams;
-
-impl entity_manager::Params for EmParams {
+impl entity_manager::Params for HashContext {
     type EntityId = Hash;
 
     type GlobalState = Arc<TaskContext>;
 
-    type EntityState = BaoFileHandle;
+    fn id(&self) -> &Self::EntityId {
+        &self.id
+    }
 
-    async fn on_shutdown(
-        state: entity_manager::ActiveEntityState<Self>,
-        _cause: entity_manager::ShutdownCause,
-    ) {
-        state.persist().await;
+    fn global(&self) -> &Self::GlobalState {
+        &self.global
+    }
+
+    fn ref_count(&self) -> usize {
+        self.state.receiver_count() + self.state.receiver_count()
+    }
+
+    fn new(id: &Self::EntityId, global: &Self::GlobalState) -> Self {
+        Self {
+            id: *id,
+            global: global.clone(),
+            state: BaoFileHandle::default(),
+        }
+    }
+
+    fn reset(&mut self, id: &Self::EntityId, global: &Self::GlobalState) {
+        self.id = *id;
+        self.global = global.clone();
+        self.state.send_replace(BaoFileStorage::Initial);
+    }
+
+    async fn on_shutdown(&self, _cause: entity_manager::ShutdownCause) {
+        self.persist().await;
     }
 }
 
@@ -240,7 +258,7 @@ struct Actor {
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
     // Entity manager that handles concurrency for entities.
-    handles: EntityManagerState<EmParams>,
+    handles: EntityManagerState<HashContext>,
     // temp tags
     temp_tags: TempTags,
     // waiters for idle state.
@@ -249,7 +267,12 @@ struct Actor {
     _rt: RtWrapper,
 }
 
-type HashContext = ActiveEntityState<EmParams>;
+#[derive(Debug, Clone)]
+struct HashContext {
+    id: Hash,
+    global: Arc<TaskContext>,
+    state: BaoFileHandle,
+}
 
 impl SyncEntityApi for HashContext {
     /// Load the state from the database.
@@ -677,11 +700,11 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 
     /// Opportunity to send an error if spawning fails due to the task being busy (inbox full)
     /// or dead (e.g. panic in one of the running tasks).
-    fn on_error(self, arg: SpawnArg<EmParams>) -> impl Future<Output = ()> + Send + 'static;
+    fn on_error(self, arg: SpawnArg<HashContext>) -> impl Future<Output = ()> + Send + 'static;
 
     async fn spawn(
         self,
-        manager: &mut entity_manager::EntityManagerState<EmParams>,
+        manager: &mut entity_manager::EntityManagerState<HashContext>,
         tasks: &mut JoinSet<()>,
     ) where
         Self: Sized,
@@ -715,13 +738,13 @@ impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.observe(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self, _arg: SpawnArg<HashContext>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_path(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
+    async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
             SpawnArg::Dead => io::Error::other("entity is dead"),
@@ -737,7 +760,7 @@ impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_bao(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
+    async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
             SpawnArg::Dead => io::Error::other("entity is dead"),
@@ -753,7 +776,7 @@ impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_ranges(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
+    async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
             SpawnArg::Dead => io::Error::other("entity is dead"),
@@ -769,7 +792,7 @@ impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.import_bao(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
+    async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
             SpawnArg::Dead => io::Error::other("entity is dead"),
@@ -788,7 +811,7 @@ impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
         let (tt, cmd) = self;
         ctx.finish_import(cmd, tt).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
+    async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
             SpawnArg::Dead => io::Error::other("entity is dead"),
