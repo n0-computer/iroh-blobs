@@ -190,12 +190,7 @@
 <a href="#189" id="189">189</a>
 <a href="#190" id="190">190</a>
 <a href="#191" id="191">191</a>
-<a href="#192" id="192">192</a>
-<a href="#193" id="193">193</a>
-<a href="#194" id="194">194</a>
-<a href="#195" id="195">195</a>
-<a href="#196" id="196">196</a>
-<a href="#197" id="197">197</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags API
+<a href="#192" id="192">192</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags API
 //!
 //! The main entry point is the [`Tags`] struct.
 </span><span class="kw">use </span>std::ops::RangeBounds;
@@ -255,22 +250,17 @@
         <span class="prelude-val">Ok</span>(stream.next().<span class="kw">await</span>.transpose()<span class="question-mark">?</span>)
     }
 
-    <span class="kw">pub async fn </span>set_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: SetOptions) -&gt; <span class="kw">super</span>::RequestResult&lt;TagInfo&gt; {
+    <span class="kw">pub async fn </span>set_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: SetOptions) -&gt; <span class="kw">super</span>::RequestResult&lt;()&gt; {
         <span class="macro">trace!</span>(<span class="string">"{:?}"</span>, options);
-        <span class="kw">let </span>info = TagInfo {
-            name: options.name.clone(),
-            hash: options.value.hash,
-            format: options.value.format,
-        };
         <span class="self">self</span>.client.rpc(options).<span class="kw">await</span><span class="question-mark">??</span>;
-        <span class="prelude-val">Ok</span>(info)
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">pub async fn </span>set(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         name: <span class="kw">impl </span>AsRef&lt;[u8]&gt;,
         value: <span class="kw">impl </span>Into&lt;HashAndFormat&gt;,
-    ) -&gt; <span class="kw">super</span>::RequestResult&lt;TagInfo&gt; {
+    ) -&gt; <span class="kw">super</span>::RequestResult&lt;()&gt; {
         <span class="self">self</span>.set_with_opts(SetOptions {
             name: Tag::from(name.as_ref()),
             value: value.into(),
