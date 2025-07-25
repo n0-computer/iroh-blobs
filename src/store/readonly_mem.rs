@@ -37,7 +37,7 @@ use crate::{
             self, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
             ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
             ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
-            ObserveRequest,
+            ObserveRequest, WaitIdleMsg,
         },
         ApiClient, TempTag,
     },
@@ -62,6 +62,7 @@ impl Deref for ReadonlyMemStore {
 struct Actor {
     commands: tokio::sync::mpsc::Receiver<proto::Command>,
     tasks: JoinSet<()>,
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     data: HashMap<Hash, CompleteStorage>,
 }
 
@@ -74,6 +75,7 @@ impl Actor {
             data,
             commands,
             tasks: JoinSet::new(),
+            idle_waiters: Vec::new(),
         }
     }
 
@@ -85,6 +87,15 @@ impl Actor {
                 ))))
                 .await
                 .ok();
+            }
+            Command::WaitIdle(WaitIdleMsg { tx, .. }) => {
+                if self.tasks.is_empty() {
+                    // we are currently idle
+                    tx.send(()).await.ok();
+                } else {
+                    // wait for idle state
+                    self.idle_waiters.push(tx);
+                }
             }
             Command::ImportBytes(ImportBytesMsg { tx, .. }) => {
                 tx.send(io::Error::other("import not supported").into())
@@ -226,6 +237,12 @@ impl Actor {
                 },
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     self.log_unit_task(res);
+                    if self.tasks.is_empty() {
+                        // we are idle now
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
+                    }
                 },
                 else => break,
             }
