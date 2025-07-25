@@ -4,7 +4,8 @@ use std::{
     time::Duration,
 };
 
-use super::{gc::GcConfig, meta::raw_outboard_size, temp_name};
+pub use super::gc::GcConfig;
+use super::{meta::raw_outboard_size, temp_name};
 use crate::Hash;
 
 /// Options for directories used by the file store.
