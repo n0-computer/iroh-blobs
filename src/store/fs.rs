@@ -239,6 +239,8 @@ impl entity_manager::Params for HashContext {
     fn reset(&mut self, id: &Self::EntityId, global: &Self::GlobalState) {
         self.id = *id;
         self.global = global.clone();
+        // this is identical to self.state = BaoFileHandle::default(),
+        // but does not allocate a new handle.
         self.state.send_replace(BaoFileStorage::Initial);
     }
 
