@@ -2270,7 +2270,9 @@
 <a href="#2269" id="2269">2269</a>
 <a href="#2270" id="2270">2270</a>
 <a href="#2271" id="2271">2271</a>
-<a href="#2272" id="2272">2272</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2272" id="2272">2272</a>
+<a href="#2273" id="2273">2273</a>
+<a href="#2274" id="2274">2274</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2511,7 +2513,9 @@
     <span class="kw">fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: <span class="kw-2">&amp;</span><span class="self">Self</span>::EntityId, global: <span class="kw-2">&amp;</span><span class="self">Self</span>::GlobalState) {
         <span class="self">self</span>.id = <span class="kw-2">*</span>id;
         <span class="self">self</span>.global = global.clone();
-        <span class="self">self</span>.state.send_replace(BaoFileStorage::Initial);
+        <span class="comment">// this is identical to self.state = BaoFileHandle::default(),
+        // but does not allocate a new handle.
+        </span><span class="self">self</span>.state.send_replace(BaoFileStorage::Initial);
     }
 
     <span class="kw">async fn </span>on_shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>, _cause: entity_manager::ShutdownCause) {
