@@ -341,6 +341,10 @@ impl Store {
     ///
     /// Note that a store is not guaranteed to become idle, if it is being
     /// interacted with concurrently. So this might wait forever.
+    ///
+    /// Also note that once you get the callback, the store is not guaranteed to
+    /// still be idle. All this tells you that there was a point in time where
+    /// the store was idle between the call and the response.
     pub async fn wait_idle(&self) -> irpc::Result<()> {
         let msg = WaitIdleRequest;
         self.client.rpc(msg).await?;
