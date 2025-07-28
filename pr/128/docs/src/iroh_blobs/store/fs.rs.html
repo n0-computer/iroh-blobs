@@ -3376,7 +3376,7 @@
 
 <span class="kw">impl </span>FsStore {
     <span class="kw">fn </span>new(
-        sender: irpc::LocalSender&lt;proto::BlobsApi&gt;,
+        sender: irpc::LocalSender&lt;proto::Request&gt;,
         db: tokio::sync::mpsc::Sender&lt;InternalCommand&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{

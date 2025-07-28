@@ -789,7 +789,7 @@
 
 <span class="attr">#[rpc_requests(message = Command, alias = <span class="string">"Msg"</span>)]
 #[derive(Debug, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>BlobsApi {
+</span><span class="kw">pub enum </span>Request {
     <span class="attr">#[rpc(tx = mpsc::Sender&lt;<span class="kw">super</span>::Result&lt;Hash&gt;&gt;)]
     </span>ListBlobs(ListRequest),
     <span class="attr">#[rpc(tx = oneshot::Sender&lt;Scope&gt;, rx = mpsc::Receiver&lt;BatchResponse&gt;)]
