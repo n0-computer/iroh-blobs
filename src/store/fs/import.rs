@@ -38,9 +38,8 @@ use crate::{
     api::{
         blobs::{AddProgressItem, ImportMode},
         proto::{
-            BlobsApi, HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest,
-            ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest, ImportPathMsg,
-            ImportPathRequest, Scope,
+            HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest, ImportByteStreamUpdate,
+            ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, Request, Scope,
         },
     },
     store::{
@@ -136,12 +135,12 @@ impl std::fmt::Debug for ImportEntry {
     }
 }
 
-impl Channels<BlobsApi> for ImportEntry {
+impl Channels<Request> for ImportEntry {
     type Tx = mpsc::Sender<AddProgressItem>;
     type Rx = NoReceiver;
 }
 
-pub type ImportEntryMsg = WithChannels<ImportEntry, BlobsApi>;
+pub type ImportEntryMsg = WithChannels<ImportEntry, Request>;
 
 impl HashSpecific for ImportEntryMsg {
     fn hash(&self) -> Hash {

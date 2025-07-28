@@ -88,7 +88,7 @@ impl HashSpecific for CreateTagMsg {
 
 #[rpc_requests(message = Command, alias = "Msg")]
 #[derive(Debug, Serialize, Deserialize)]
-pub enum BlobsApi {
+pub enum Request {
     #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]
     ListBlobs(ListRequest),
     #[rpc(tx = oneshot::Sender<Scope>, rx = mpsc::Receiver<BatchResponse>)]
