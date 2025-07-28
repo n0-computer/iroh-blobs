@@ -29,6 +29,7 @@ use crate::{
         tags::TagInfo,
     },
     util::channel::oneshot,
+    Hash,
 };
 mod proto;
 pub use proto::*;
@@ -43,7 +44,7 @@ use super::{
     util::PeekableReceiver,
     BaoFilePart,
 };
-use crate::store::{util::Tag, Hash, IROH_BLOCK_SIZE};
+use crate::store::{util::Tag, IROH_BLOCK_SIZE};
 
 /// Error type for message handler functions of the redb actor.
 ///

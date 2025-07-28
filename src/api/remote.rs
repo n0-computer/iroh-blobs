@@ -1065,12 +1065,16 @@ mod tests {
 
     use crate::{
         protocol::{ChunkRangesSeq, GetRequest},
-        store::fs::{tests::INTERESTING_SIZES, FsStore},
+        test::INTERESTING_SIZES,
         tests::{add_test_hash_seq, add_test_hash_seq_incomplete},
         util::ChunkRangesExt,
     };
 
+    #[cfg(feature = "fs-store")]
+    use crate::store::fs::FsStore;
+
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn test_local_info_raw() -> TestResult<()> {
         let td = tempfile::tempdir()?;
         let store = FsStore::load(td.path().join("blobs.db")).await?;
@@ -1089,6 +1093,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn test_local_info_hash_seq_large() -> TestResult<()> {
         let sizes = (0..1024 + 5).collect::<Vec<_>>();
         let relevant_sizes = sizes[32 * 16..32 * 32]
@@ -1118,6 +1123,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn test_local_info_hash_seq() -> TestResult<()> {
         let sizes = INTERESTING_SIZES;
         let total_size = sizes.iter().map(|x| *x as u64).sum::<u64>();
@@ -1205,6 +1211,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn test_local_info_complex_request() -> TestResult<()> {
         let sizes = INTERESTING_SIZES;
         let hash_seq_size = (sizes.len() as u64) * 32;

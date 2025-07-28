@@ -239,8 +239,7 @@ dependencies = [
 [[package]]
 name = "bao-tree"
 version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff16d65e48353db458be63ee395c03028f24564fd48668389bd65fd945f5ac36"
+source = "git+https://github.com/n0-computer/bao-tree.git?branch=Frando%2Fwasm#7b34f06cc9e4322fb85cb7c64fce8383568f6535"
 dependencies = [
  "blake3",
  "bytes",
@@ -1764,7 +1763,6 @@ dependencies = [
  "test-strategy",
  "testresult",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "tracing-test",
@@ -1927,7 +1925,7 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.5.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#b363f00518389cd74722f38f3f73be96582f6940"
+source = "git+https://github.com/n0-computer/irpc.git?branch=Frando%2Fvarint-feature#3cb4704021524275b47cf9f8a814b242709d4bf6"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -1949,7 +1947,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.4.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#b363f00518389cd74722f38f3f73be96582f6940"
+source = "git+https://github.com/n0-computer/irpc.git?branch=Frando%2Fvarint-feature#3cb4704021524275b47cf9f8a814b242709d4bf6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2713,8 +2711,7 @@ dependencies = [
 [[package]]
 name = "positioned-io"
 version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8078ce4d22da5e8f57324d985cc9befe40c49ab0507a192d6be9e59584495c9"
+source = "git+https://github.com/Frando/positioned-io?branch=Frando%2Fwasm#7e023d676ade0738b5a2a2a133e196cf781ec9c6"
 dependencies = [
  "libc",
  "winapi",
@@ -4029,12 +4026,10 @@ checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-util",
  "hashbrown",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 

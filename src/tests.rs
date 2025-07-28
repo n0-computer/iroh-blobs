@@ -17,17 +17,14 @@ use crate::{
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
     provider::Event,
-    store::{
-        fs::{
-            tests::{create_n0_bao, test_data, INTERESTING_SIZES},
-            FsStore,
-        },
-        mem::MemStore,
-        util::observer::Combine,
-    },
+    store::{mem::MemStore, util::observer::Combine},
+    test::{create_n0_bao, test_data, INTERESTING_SIZES},
     util::sink::Drain,
     BlobFormat, Hash, HashAndFormat,
 };
+
+#[cfg(feature = "fs-store")]
+use crate::store::fs::FsStore;
 
 // #[tokio::test]
 // #[traced_test]
@@ -239,6 +236,7 @@ async fn two_nodes_get_blobs(
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn two_nodes_get_blobs_fs() -> TestResult<()> {
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
     two_nodes_get_blobs(r1, &store1, r2, &store2).await
@@ -283,6 +281,7 @@ async fn two_nodes_observe(
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn two_nodes_observe_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
@@ -325,6 +324,7 @@ async fn two_nodes_get_many(
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn two_nodes_get_many_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
@@ -403,6 +403,7 @@ async fn two_nodes_push_blobs(
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn two_nodes_push_blobs_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
@@ -480,10 +481,12 @@ async fn check_presence(store: &Store, sizes: &[usize]) -> TestResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "fs-store")]
 pub async fn node_test_setup_fs(db_path: PathBuf) -> TestResult<(Router, FsStore, PathBuf)> {
     node_test_setup_with_events_fs(db_path, None).await
 }
 
+#[cfg(feature = "fs-store")]
 pub async fn node_test_setup_with_events_fs(
     db_path: PathBuf,
     events: Option<mpsc::Sender<Event>>,
@@ -513,6 +516,7 @@ pub async fn node_test_setup_with_events_mem(
 ///
 /// Note that this does not configure discovery, so nodes will only find each other
 /// with full node addresses, not just node ids!
+#[cfg(feature = "fs-store")]
 async fn two_node_test_setup_fs() -> TestResult<(
     TempDir,
     (Router, FsStore, PathBuf),
@@ -552,6 +556,7 @@ async fn two_nodes_hash_seq(
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn two_nodes_hash_seq_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
@@ -566,6 +571,7 @@ async fn two_nodes_hash_seq_mem() -> TestResult<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn two_nodes_hash_seq_progress() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
@@ -585,6 +591,7 @@ async fn two_nodes_hash_seq_progress() -> TestResult<()> {
 ///
 /// The client requests the hash sequence and the children, but does not store the data.
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn node_serve_hash_seq() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
@@ -620,6 +627,7 @@ async fn node_serve_hash_seq() -> TestResult<()> {
 ///
 /// The client requests them all one by one, but does not store it.
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn node_serve_blobs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
@@ -655,6 +663,7 @@ async fn node_serve_blobs() -> TestResult<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn node_smoke_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
@@ -691,6 +700,7 @@ async fn node_smoke(store: &Store) -> TestResult<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn test_export_chunk() -> TestResult {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
@@ -726,6 +736,7 @@ async fn test_export_ranges(
 }
 
 #[tokio::test]
+#[cfg(feature = "fs-store")]
 async fn export_ranges_smoke_fs() -> TestResult {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;

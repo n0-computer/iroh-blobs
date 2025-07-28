@@ -283,6 +283,7 @@ where
     }
 }
 
+#[cfg(feature = "fs-store")]
 pub mod outboard_with_progress {
     use std::io::{self, BufReader, Read};
 
@@ -407,7 +408,8 @@ pub mod outboard_with_progress {
         use testresult::TestResult;
 
         use crate::{
-            store::{fs::tests::test_data, IROH_BLOCK_SIZE},
+            store::IROH_BLOCK_SIZE,
+            test::test_data,
             util::{outboard_with_progress::init_outboard, sink::Drain},
         };
 

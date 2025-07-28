@@ -1,10 +1,9 @@
 //! Error returned from get operations
 use std::io;
 
-use iroh::endpoint::{self, ClosedStream};
+use iroh::endpoint::{self, ClosedStream, ConnectionError, ReadError, WriteError};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
-use quinn::{ConnectionError, ReadError, WriteError};
 use snafu::{Backtrace, IntoError, Snafu};
 
 use crate::{
@@ -227,9 +226,9 @@ impl From<ClosedStream> for GetError {
     }
 }
 
-impl From<quinn::WriteError> for GetError {
-    fn from(value: quinn::WriteError) -> Self {
-        use quinn::WriteError;
+impl From<WriteError> for GetError {
+    fn from(value: WriteError) -> Self {
+        use WriteError;
         match value {
             e @ WriteError::Stopped(_) => RemoteResetSnafu.into_error(e.into()),
             WriteError::ConnectionLost(conn_error) => conn_error.into(),

@@ -12,9 +12,11 @@ use bao_tree::{blake3, io::mixed::EncodedItem};
 use bytes::Bytes;
 use derive_more::{From, Into};
 
+#[cfg(feature = "fs-store")]
 mod mem_or_file;
 mod sparse_mem_file;
 use irpc::channel::mpsc;
+#[cfg(feature = "fs-store")]
 pub use mem_or_file::{FixedSize, MemOrFile};
 use range_collections::{range_set::RangeSetEntry, RangeSetRef};
 use ref_cast::RefCast;
@@ -198,6 +200,7 @@ impl<T: RangeSetEntry + Clone> RangeSetExt<T> for RangeSetRef<T> {
     }
 }
 
+#[cfg(feature = "fs-store")]
 pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> io::Result<()> {
     // Build Vec with space for hash
     let mut buffer = Vec::with_capacity(32 + 128);
@@ -219,6 +222,7 @@ pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> io:
     Ok(())
 }
 
+#[cfg(feature = "fs-store")]
 pub fn read_checksummed_and_truncate<T: DeserializeOwned>(path: impl AsRef<Path>) -> io::Result<T> {
     let path = path.as_ref();
     let mut file = OpenOptions::new()
@@ -290,6 +294,7 @@ pub fn read_checksummed<T: DeserializeOwned>(path: impl AsRef<Path>) -> io::Resu
 }
 
 /// Helper trait for bytes for debugging
+#[cfg(feature = "fs-store")]
 pub trait SliceInfoExt: AsRef<[u8]> {
     // get the addr of the actual data, to check if data was copied
     fn addr(&self) -> usize;
@@ -306,6 +311,7 @@ pub trait SliceInfoExt: AsRef<[u8]> {
     }
 }
 
+#[cfg(feature = "fs-store")]
 impl<T: AsRef<[u8]>> SliceInfoExt for T {
     fn addr(&self) -> usize {
         self.as_ref() as *const [u8] as *const u8 as usize
@@ -316,6 +322,7 @@ impl<T: AsRef<[u8]>> SliceInfoExt for T {
     }
 }
 
+#[cfg(feature = "fs-store")]
 pub fn symbol_string(data: &[u8]) -> ArrayString<12> {
     const SYMBOLS: &[char] = &[
         '😀', '😂', '😍', '😎', '😢', '😡', '😱', '😴', '🤓', '🤔', '🤗', '🤢', '🤡', '🤖', '👽',

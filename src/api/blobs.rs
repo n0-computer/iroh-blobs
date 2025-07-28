@@ -23,10 +23,10 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
+use iroh::endpoint::SendStream;
 use iroh_io::{AsyncStreamReader, TokioStreamReader};
 use irpc::channel::{mpsc, oneshot};
 use n0_future::{future, stream, Stream, StreamExt};
-use quinn::SendStream;
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
@@ -1058,7 +1058,7 @@ impl ExportBaoProgress {
         Ok(data)
     }
 
-    pub async fn write_quinn(self, target: &mut quinn::SendStream) -> super::ExportBaoResult<()> {
+    pub async fn write_quinn(self, target: &mut SendStream) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
         while let Some(item) = rx.recv().await? {
             match item {

@@ -220,14 +220,11 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
     use super::*;
+    #[cfg(feature = "fs-store")]
+    use crate::store::fs::FsStore;
     use crate::{
-        store::{
-            fs::{
-                tests::{create_n0_bao, test_data, INTERESTING_SIZES},
-                FsStore,
-            },
-            mem::MemStore,
-        },
+        store::mem::MemStore,
+        test::{create_n0_bao, test_data, INTERESTING_SIZES},
         util::ChunkRangesExt,
     };
 
@@ -303,6 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn reader_partial_fs() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let store = FsStore::load(testdir.path().to_owned()).await?;
@@ -318,6 +316,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn reader_smoke_fs() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let store = FsStore::load(testdir.path().to_owned()).await?;

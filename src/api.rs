@@ -12,10 +12,11 @@
 //!
 //! You can also [`connect`](Store::connect) to a remote store that is listening
 //! to rpc requests.
-use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
+use std::{io, ops::Deref};
 
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
+#[cfg(feature = "rpc")]
 use irpc::rpc::{listen, Handler};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
@@ -116,6 +117,7 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::Recv(e) => RecvSnafu.into_error(e),
             irpc::Error::Send(e) => SendSnafu.into_error(e),
             irpc::Error::Request(e) => RequestSnafu.into_error(e),
+            #[cfg(feature = "rpc")]
             irpc::Error::Write(e) => ExportBaoIoSnafu.into_error(e.into()),
         }
     }
@@ -196,6 +198,7 @@ impl From<irpc::channel::RecvError> for Error {
     }
 }
 
+#[cfg(feature = "rpc")]
 impl From<irpc::rpc::WriteError> for Error {
     fn from(e: irpc::rpc::WriteError) -> Self {
         Self::Io(e.into())
@@ -274,15 +277,17 @@ impl Store {
     }
 
     /// Connect to a remote store as a rpc client.
-    pub fn connect(endpoint: quinn::Endpoint, addr: SocketAddr) -> Self {
+    #[cfg(feature = "rpc")]
+    pub fn connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::quinn(endpoint, addr);
         Store::from_sender(sender)
     }
 
     /// Listen on a quinn endpoint for incoming rpc connections.
+    #[cfg(feature = "rpc")]
     pub async fn listen(self, endpoint: quinn::Endpoint) {
         let local = self.client.as_local().unwrap().clone();
-        let handler: Handler<BlobsApi> = Arc::new(move |req, rx, tx| {
+        let handler: Handler<BlobsApi> = std::sync::Arc::new(move |req, rx, tx| {
             let local = local.clone();
             Box::pin({
                 match req {
@@ -332,6 +337,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "rpc")]
     pub(crate) fn from_sender(client: ApiClient) -> Self {
         Self { client }
     }

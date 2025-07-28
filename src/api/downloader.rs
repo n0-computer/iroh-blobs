@@ -17,7 +17,6 @@ use n0_future::{future, stream, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
 use tokio::{sync::Mutex, task::JoinSet};
-use tokio_util::time::FutureExt;
 use tracing::{info, instrument::Instrument, warn};
 
 use super::{remote::GetConnection, Store};
@@ -32,7 +31,7 @@ pub struct Downloader {
     client: irpc::Client<SwarmProtocol>,
 }
 
-#[rpc_requests(message = SwarmMsg, alias = "Msg")]
+#[rpc_requests(message = SwarmMsg, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 enum SwarmProtocol {
     #[rpc(tx = mpsc::Sender<DownloadProgessItem>)]
@@ -609,12 +608,12 @@ impl DialNode {
             }
             SlotState::Initial => {}
         }
-        let res = self
-            .pool
-            .endpoint()
-            .connect(self.id, self.pool.alpn())
-            .timeout(self.pool.0.connect_timeout)
-            .await;
+
+        let res = n0_future::time::timeout(
+            self.pool.0.connect_timeout,
+            self.pool.endpoint().connect(self.id, self.pool.alpn()),
+        )
+        .await;
         match res {
             Ok(Ok(conn)) => {
                 info!("Connected to node {}", self.id);
@@ -678,7 +677,7 @@ impl ContentDiscovery for Shuffled {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "fs-store"))]
 mod tests {
     use std::ops::Deref;
 

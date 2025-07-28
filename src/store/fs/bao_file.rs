@@ -40,8 +40,9 @@ use crate::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, SizeInfo, SparseMemFile, DD,
         },
-        Hash, IROH_BLOCK_SIZE,
+        IROH_BLOCK_SIZE,
     },
+    Hash,
 };
 
 /// Storage for complete blobs. There is no longer any uncertainty about the

@@ -25,7 +25,7 @@ use std::{
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
-use iroh::endpoint::{self, RecvStream, SendStream};
+use iroh::endpoint::{self, ClosedStream, RecvStream, SendStream, WriteError};
 use iroh_io::TokioStreamReader;
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
@@ -267,10 +267,10 @@ pub mod fsm {
         RequestTooBig {},
         /// Error when writing the request to the [`SendStream`].
         #[snafu(display("write: {source}"))]
-        Write { source: quinn::WriteError },
+        Write { source: WriteError },
         /// Quic connection is closed.
         #[snafu(display("closed"))]
-        Closed { source: quinn::ClosedStream },
+        Closed { source: ClosedStream },
         /// A generic io error
         #[snafu(transparent)]
         Io { source: io::Error },

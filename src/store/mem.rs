@@ -58,13 +58,13 @@ use crate::{
     },
     store::{
         util::{SizeInfo, SparseMemFile, Tag},
-        HashAndFormat, IROH_BLOCK_SIZE,
+        IROH_BLOCK_SIZE,
     },
     util::{
         temp_tag::{TagDrop, TempTagScope, TempTags},
         ChunkRangesExt,
     },
-    BlobFormat, Hash,
+    BlobFormat, Hash, HashAndFormat,
 };
 
 #[derive(Debug, Default)]
@@ -717,7 +717,13 @@ async fn import_byte_stream(
     import_bytes(res.into(), scope, format, tx).await
 }
 
+#[cfg(not(feature = "fs"))]
+async fn import_path(_cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+    anyhow::bail!("fs feature is disabled, cannot import from path")
+}
+
 #[instrument(skip_all, fields(path = %cmd.path.display()))]
+#[cfg(feature = "fs")]
 async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
     let ImportPathMsg {
         inner:
