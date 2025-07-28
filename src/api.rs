@@ -19,7 +19,7 @@ use iroh::Endpoint;
 use irpc::rpc::{listen, Handler};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
-use proto::{Request, ShutdownRequest, SyncDbRequest};
+use proto::{BlobsApi, ShutdownRequest, SyncDbRequest};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, IntoError, Snafu};
@@ -32,7 +32,7 @@ pub mod remote;
 pub mod tags;
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
-pub(crate) type ApiClient = irpc::Client<proto::Command, proto::Request, proto::StoreService>;
+pub(crate) type ApiClient = irpc::Client<proto::BlobsApi>;
 
 #[common_fields({
     backtrace: Option<Backtrace>,
@@ -281,43 +281,43 @@ impl Store {
 
     /// Listen on a quinn endpoint for incoming rpc connections.
     pub async fn listen(self, endpoint: quinn::Endpoint) {
-        let local = self.client.local().unwrap().clone();
-        let handler: Handler<Request> = Arc::new(move |req, rx, tx| {
+        let local = self.client.as_local().unwrap().clone();
+        let handler: Handler<BlobsApi> = Arc::new(move |req, rx, tx| {
             let local = local.clone();
             Box::pin({
                 match req {
-                    Request::SetTag(msg) => local.send((msg, tx)),
-                    Request::CreateTag(msg) => local.send((msg, tx)),
-                    Request::DeleteTags(msg) => local.send((msg, tx)),
-                    Request::RenameTag(msg) => local.send((msg, tx)),
-                    Request::ListTags(msg) => local.send((msg, tx)),
+                    BlobsApi::SetTag(msg) => local.send((msg, tx)),
+                    BlobsApi::CreateTag(msg) => local.send((msg, tx)),
+                    BlobsApi::DeleteTags(msg) => local.send((msg, tx)),
+                    BlobsApi::RenameTag(msg) => local.send((msg, tx)),
+                    BlobsApi::ListTags(msg) => local.send((msg, tx)),
 
-                    Request::ListTempTags(msg) => local.send((msg, tx)),
-                    Request::CreateTempTag(msg) => local.send((msg, tx)),
+                    BlobsApi::ListTempTags(msg) => local.send((msg, tx)),
+                    BlobsApi::CreateTempTag(msg) => local.send((msg, tx)),
 
-                    Request::BlobStatus(msg) => local.send((msg, tx)),
+                    BlobsApi::BlobStatus(msg) => local.send((msg, tx)),
 
-                    Request::ImportBytes(msg) => local.send((msg, tx)),
-                    Request::ImportByteStream(msg) => local.send((msg, tx, rx)),
-                    Request::ImportBao(msg) => local.send((msg, tx, rx)),
-                    Request::ImportPath(msg) => local.send((msg, tx)),
-                    Request::ListBlobs(msg) => local.send((msg, tx)),
-                    Request::DeleteBlobs(msg) => local.send((msg, tx)),
-                    Request::Batch(msg) => local.send((msg, tx, rx)),
+                    BlobsApi::ImportBytes(msg) => local.send((msg, tx)),
+                    BlobsApi::ImportByteStream(msg) => local.send((msg, tx, rx)),
+                    BlobsApi::ImportBao(msg) => local.send((msg, tx, rx)),
+                    BlobsApi::ImportPath(msg) => local.send((msg, tx)),
+                    BlobsApi::ListBlobs(msg) => local.send((msg, tx)),
+                    BlobsApi::DeleteBlobs(msg) => local.send((msg, tx)),
+                    BlobsApi::Batch(msg) => local.send((msg, tx, rx)),
 
-                    Request::ExportBao(msg) => local.send((msg, tx)),
-                    Request::ExportRanges(msg) => local.send((msg, tx)),
-                    Request::ExportPath(msg) => local.send((msg, tx)),
+                    BlobsApi::ExportBao(msg) => local.send((msg, tx)),
+                    BlobsApi::ExportRanges(msg) => local.send((msg, tx)),
+                    BlobsApi::ExportPath(msg) => local.send((msg, tx)),
 
-                    Request::Observe(msg) => local.send((msg, tx)),
+                    BlobsApi::Observe(msg) => local.send((msg, tx)),
 
-                    Request::ClearProtected(msg) => local.send((msg, tx)),
-                    Request::SyncDb(msg) => local.send((msg, tx)),
-                    Request::Shutdown(msg) => local.send((msg, tx)),
+                    BlobsApi::ClearProtected(msg) => local.send((msg, tx)),
+                    BlobsApi::SyncDb(msg) => local.send((msg, tx)),
+                    BlobsApi::Shutdown(msg) => local.send((msg, tx)),
                 }
             })
         });
-        listen::<Request>(endpoint, handler).await
+        listen::<BlobsApi>(endpoint, handler).await
     }
 
     pub async fn sync_db(&self) -> RequestResult<()> {

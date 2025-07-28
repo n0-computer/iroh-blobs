@@ -1435,7 +1435,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.59.0",
 ]
 
 [[package]]
@@ -1927,7 +1927,7 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.5.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#5cc624832cfed2653a20442851c203935039d6bc"
+source = "git+https://github.com/n0-computer/irpc.git?branch=main#b363f00518389cd74722f38f3f73be96582f6940"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -1949,7 +1949,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.4.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#5cc624832cfed2653a20442851c203935039d6bc"
+source = "git+https://github.com/n0-computer/irpc.git?branch=main#b363f00518389cd74722f38f3f73be96582f6940"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4543,7 +4543,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

@@ -29,15 +29,10 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Downloader {
-    client: irpc::Client<SwarmMsg, SwarmProtocol, DownloaderService>,
+    client: irpc::Client<SwarmProtocol>,
 }
 
-#[derive(Debug, Clone)]
-pub struct DownloaderService;
-
-impl irpc::Service for DownloaderService {}
-
-#[rpc_requests(DownloaderService, message = SwarmMsg, alias = "Msg")]
+#[rpc_requests(message = SwarmMsg, alias = "Msg")]
 #[derive(Debug, Serialize, Deserialize)]
 enum SwarmProtocol {
     #[rpc(tx = mpsc::Sender<DownloadProgessItem>)]

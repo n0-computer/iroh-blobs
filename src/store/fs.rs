@@ -1259,7 +1259,7 @@ impl AsRef<Store> for FsStore {
 
 impl FsStore {
     fn new(
-        sender: irpc::LocalSender<proto::Command, proto::StoreService>,
+        sender: irpc::LocalSender<proto::BlobsApi>,
         db: tokio::sync::mpsc::Sender<InternalCommand>,
     ) -> Self {
         Self {
