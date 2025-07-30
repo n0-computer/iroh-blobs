@@ -68,4 +68,4 @@ default = ["hide-proto-docs"]
 [patch.crates-io]
 iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
 iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "0-91-0" }
