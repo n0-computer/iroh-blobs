@@ -37,12 +37,12 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.90"
+iroh = "0.91"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.90"
+iroh-base = "0.91"
 reflink-copy = "0.1.24"
-irpc = { version = "0.5.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
 
 [dev-dependencies]
@@ -58,14 +58,9 @@ testresult = "0.4.1"
 tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
-iroh = { version = "0.90", features = ["discovery-local-network"]}
+iroh = { version = "0.91", features = ["discovery-local-network"]}
 
 [features]
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs"]
-
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "0-91-0" }
