@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["BatchOptions","GcConfig","InlineOptions","Options","PathOptions"]};
+window.SIDEBAR_ITEMS = {"enum":["ProtectOutcome"],"struct":["BatchOptions","GcConfig","InlineOptions","Options","PathOptions"],"type":["ProtectCb"]};
