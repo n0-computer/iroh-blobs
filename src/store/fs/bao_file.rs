@@ -502,6 +502,10 @@ impl BaoFileStorage {
 }
 
 /// A cheaply cloneable handle to a bao file, including the hash and the configuration.
+///
+/// You must call [Self::persist] to write the bitfield to disk, if you want to persist
+/// the file handle, otherwise the bitfield will not be written to disk and will have
+/// to be reconstructed on next use.
 #[derive(Debug, Clone, derive_more::Deref)]
 pub(crate) struct BaoFileHandle(Arc<watch::Sender<BaoFileStorage>>);
 

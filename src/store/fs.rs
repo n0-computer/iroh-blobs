@@ -221,9 +221,6 @@ impl entity_manager::Params for EmParams {
         state: entity_manager::ActiveEntityState<Self>,
         cause: entity_manager::ShutdownCause,
     ) {
-        // this isn't strictly necessary. Drop will run anyway as soon as the
-        // state is reset to it's default value. Doing it here means that we
-        // have exact control over where it happens.
         if let Some(mut handle) = state.state.0.lock().await.take() {
             trace!("shutting down hash: {}, cause: {cause:?}", state.id);
             handle.persist(&state);
