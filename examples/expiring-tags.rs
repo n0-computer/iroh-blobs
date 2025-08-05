@@ -143,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
     let options = Options {
         path: PathOptions::new(&path),
         gc: Some(GcConfig {
+            add_protected: None,
             interval: Duration::from_secs(10),
         }),
         inline: InlineOptions::default(),

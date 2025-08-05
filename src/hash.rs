@@ -111,7 +111,7 @@ impl From<&[u8; 32]> for Hash {
 
 impl PartialOrd for Hash {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.0.as_bytes().cmp(other.0.as_bytes()))
+        Some(self.cmp(other))
     }
 }
 
