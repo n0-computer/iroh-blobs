@@ -117,7 +117,7 @@ use crate::{
                 BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
                 OutboardReader,
             },
-            util::entity_manager,
+            util::entity_manager::{self, EntityState},
         },
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         Hash, IROH_BLOCK_SIZE,
@@ -211,12 +211,12 @@ impl TaskContext {
     }
 }
 
-impl entity_manager::Params for HashContext {
-    type EntityId = Hash;
+impl entity_manager::EntityState for HashContext {
+    type Id = Hash;
 
     type GlobalState = Arc<TaskContext>;
 
-    fn id(&self) -> &Self::EntityId {
+    fn id(&self) -> &Self::Id {
         &self.id
     }
 
@@ -228,7 +228,7 @@ impl entity_manager::Params for HashContext {
         self.state.sender_count() + self.state.receiver_count()
     }
 
-    fn new(id: &Self::EntityId, global: &Self::GlobalState) -> Self {
+    fn new(id: &Self::Id, global: &Self::GlobalState) -> Self {
         Self {
             id: *id,
             global: global.clone(),
@@ -236,7 +236,7 @@ impl entity_manager::Params for HashContext {
         }
     }
 
-    fn reset(&mut self, id: &Self::EntityId, global: &Self::GlobalState) {
+    fn reset(&mut self, id: &Self::Id, global: &Self::GlobalState) {
         self.id = *id;
         self.global = global.clone();
         // this is identical to self.state = BaoFileHandle::default(),
@@ -244,8 +244,25 @@ impl entity_manager::Params for HashContext {
         self.state.send_replace(BaoFileStorage::Initial);
     }
 
+    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
     async fn on_shutdown(&self, _cause: entity_manager::ShutdownCause) {
-        self.persist().await;
+        self.state.send_if_modified(|guard| {
+            let hash = &self.id;
+            let BaoFileStorage::Partial(fs) = guard.take() else {
+                return false;
+            };
+            let path = self.global.options.path.bitfield_path(hash);
+            trace!("writing bitfield for hash {} to {}", hash, path.display());
+            if let Err(cause) = fs.sync_all(&path) {
+                error!(
+                    "failed to write bitfield for {} at {}: {:?}",
+                    hash,
+                    path.display(),
+                    cause
+                );
+            }
+            false
+        });
     }
 }
 
@@ -878,7 +895,7 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 }
 
 /// The minimal API you need to implement for an entity for a store to work.
-trait EntityApi {
+trait EntityApi: EntityState {
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -891,8 +908,6 @@ trait EntityApi {
     async fn export_bao(&self, cmd: ExportBaoMsg);
     /// Export the entry to a local file.
     async fn export_path(&self, cmd: ExportPathMsg);
-    /// Persist the entry at the end of its lifecycle.
-    async fn persist(&self);
 }
 
 /// A more opinionated API that can be used as a helper to save implementation
@@ -999,27 +1014,6 @@ impl EntityApi for HashContext {
             Err(cause) => AddProgressItem::Error(cause),
         };
         cmd.tx.send(res).await.ok();
-    }
-
-    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
-    async fn persist(&self) {
-        self.state.send_if_modified(|guard| {
-            let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
-                return false;
-            };
-            let path = self.global.options.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            false
-        });
     }
 }
 
