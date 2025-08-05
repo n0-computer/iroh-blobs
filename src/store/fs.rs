@@ -223,8 +223,9 @@ impl entity_manager::Params for EmParams {
 
     async fn on_shutdown(
         state: entity_manager::ActiveEntityState<Self>,
-        _cause: entity_manager::ShutdownCause,
+        cause: entity_manager::ShutdownCause,
     ) {
+        trace!("persist {:?} due to {cause:?}", state.id);
         state.persist().await;
     }
 }
