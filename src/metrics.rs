@@ -4,6 +4,7 @@ use iroh_metrics::{Counter, MetricsGroup};
 
 /// Enum of metrics for the module
 #[allow(missing_docs)]
+#[allow(dead_code)]
 #[derive(Debug, Default, MetricsGroup)]
 #[metrics(name = "iroh-blobs")]
 pub struct Metrics {
