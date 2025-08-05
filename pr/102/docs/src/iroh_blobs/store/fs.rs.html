@@ -2102,10 +2102,7 @@
 <a href="#2101" id="2101">2101</a>
 <a href="#2102" id="2102">2102</a>
 <a href="#2103" id="2103">2103</a>
-<a href="#2104" id="2104">2104</a>
-<a href="#2105" id="2105">2105</a>
-<a href="#2106" id="2106">2106</a>
-<a href="#2107" id="2107">2107</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2104" id="2104">2104</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2328,10 +2325,7 @@
         state: entity_manager::ActiveEntityState&lt;<span class="self">Self</span>&gt;,
         cause: entity_manager::ShutdownCause,
     ) {
-        <span class="comment">// this isn't strictly necessary. Drop will run anyway as soon as the
-        // state is reset to it's default value. Doing it here means that we
-        // have exact control over where it happens.
-        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>handle) = state.state.<span class="number">0</span>.lock().<span class="kw">await</span>.take() {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>handle) = state.state.<span class="number">0</span>.lock().<span class="kw">await</span>.take() {
             <span class="macro">trace!</span>(<span class="string">"shutting down hash: {}, cause: {cause:?}"</span>, state.id);
             handle.persist(<span class="kw-2">&amp;</span>state);
         }
