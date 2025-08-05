@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["DownloadProgessItem","FiniteRequest","SplitStrategy","SwarmMsg"],"struct":["AddProviderRequest","DownloadProgress","DownloadRequest","Downloader","DownloaderService","Shuffled"],"trait":["ContentDiscovery","SupportedRequest"],"type":["DownloadMsg","DownloadOptions"]};
+window.SIDEBAR_ITEMS = {"enum":["DownloadProgessItem","FiniteRequest","SplitStrategy"],"struct":["AddProviderRequest","DownloadProgress","DownloadRequest","Downloader","Shuffled"],"trait":["ContentDiscovery","SupportedRequest"],"type":["DownloadMsg","DownloadOptions"]};

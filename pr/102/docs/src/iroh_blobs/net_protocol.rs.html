@@ -229,7 +229,7 @@
     /// just a convenience method to create a ticket from content and the address of this node.
     </span><span class="kw">pub async fn </span>ticket(<span class="kw-2">&amp;</span><span class="self">self</span>, content: <span class="kw">impl </span>Into&lt;HashAndFormat&gt;) -&gt; anyhow::Result&lt;BlobTicket&gt; {
         <span class="kw">let </span>content = content.into();
-        <span class="kw">let </span>addr = <span class="self">self</span>.inner.endpoint.node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>addr = <span class="self">self</span>.inner.endpoint.node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>ticket = BlobTicket::new(addr, content.hash, content.format);
         <span class="prelude-val">Ok</span>(ticket)
     }
