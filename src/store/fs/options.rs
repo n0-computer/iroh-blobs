@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-pub use super::gc::GcConfig;
+pub use super::gc::{GcConfig, ProtectCb, ProtectOutcome};
 use super::{meta::raw_outboard_size, temp_name};
 use crate::Hash;
 
