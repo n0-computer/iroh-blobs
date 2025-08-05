@@ -86,11 +86,7 @@ impl HashSpecific for CreateTagMsg {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StoreService;
-impl irpc::Service for StoreService {}
-
-#[rpc_requests(StoreService, message = Command, alias = "Msg")]
+#[rpc_requests(message = Command, alias = "Msg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]

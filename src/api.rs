@@ -12,11 +12,11 @@
 //!
 //! You can also [`connect`](Store::connect) to a remote store that is listening
 //! to rpc requests.
-use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
+use std::{io, net::SocketAddr, ops::Deref};
 
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
-use irpc::rpc::{listen, Handler};
+use irpc::rpc::{listen, RemoteService};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use proto::{Request, ShutdownRequest, SyncDbRequest};
@@ -33,7 +33,7 @@ pub mod tags;
 use crate::api::proto::WaitIdleRequest;
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
-pub(crate) type ApiClient = irpc::Client<proto::Command, proto::Request, proto::StoreService>;
+pub(crate) type ApiClient = irpc::Client<proto::Request>;
 
 #[common_fields({
     backtrace: Option<Backtrace>,
@@ -282,43 +282,8 @@ impl Store {
 
     /// Listen on a quinn endpoint for incoming rpc connections.
     pub async fn listen(self, endpoint: quinn::Endpoint) {
-        let local = self.client.local().unwrap().clone();
-        let handler: Handler<Request> = Arc::new(move |req, rx, tx| {
-            let local = local.clone();
-            Box::pin({
-                match req {
-                    Request::SetTag(msg) => local.send((msg, tx)),
-                    Request::CreateTag(msg) => local.send((msg, tx)),
-                    Request::DeleteTags(msg) => local.send((msg, tx)),
-                    Request::RenameTag(msg) => local.send((msg, tx)),
-                    Request::ListTags(msg) => local.send((msg, tx)),
-
-                    Request::ListTempTags(msg) => local.send((msg, tx)),
-                    Request::CreateTempTag(msg) => local.send((msg, tx)),
-
-                    Request::BlobStatus(msg) => local.send((msg, tx)),
-
-                    Request::ImportBytes(msg) => local.send((msg, tx)),
-                    Request::ImportByteStream(msg) => local.send((msg, tx, rx)),
-                    Request::ImportBao(msg) => local.send((msg, tx, rx)),
-                    Request::ImportPath(msg) => local.send((msg, tx)),
-                    Request::ListBlobs(msg) => local.send((msg, tx)),
-                    Request::DeleteBlobs(msg) => local.send((msg, tx)),
-                    Request::Batch(msg) => local.send((msg, tx, rx)),
-
-                    Request::ExportBao(msg) => local.send((msg, tx)),
-                    Request::ExportRanges(msg) => local.send((msg, tx)),
-                    Request::ExportPath(msg) => local.send((msg, tx)),
-
-                    Request::Observe(msg) => local.send((msg, tx)),
-
-                    Request::ClearProtected(msg) => local.send((msg, tx)),
-                    Request::SyncDb(msg) => local.send((msg, tx)),
-                    Request::Shutdown(msg) => local.send((msg, tx)),
-                    Request::WaitIdle(msg) => local.send((msg, tx)),
-                }
-            })
-        });
+        let local = self.client.as_local().unwrap().clone();
+        let handler = Request::remote_handler(local);
         listen::<Request>(endpoint, handler).await
     }
 
