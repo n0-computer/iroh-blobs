@@ -836,12 +836,7 @@
 <a href="#835" id="835">835</a>
 <a href="#836" id="836">836</a>
 <a href="#837" id="837">837</a>
-<a href="#838" id="838">838</a>
-<a href="#839" id="839">839</a>
-<a href="#840" id="840">840</a>
-<a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
+<a href="#838" id="838">838</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -872,15 +867,10 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>Downloader {
-    client: irpc::Client&lt;SwarmMsg, SwarmProtocol, DownloaderService&gt;,
+    client: irpc::Client&lt;SwarmProtocol&gt;,
 }
 
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>DownloaderService;
-
-<span class="kw">impl </span>irpc::Service <span class="kw">for </span>DownloaderService {}
-
-<span class="attr">#[rpc_requests(DownloaderService, message = SwarmMsg, alias = <span class="string">"Msg"</span>)]
+<span class="attr">#[rpc_requests(message = SwarmMsg, alias = <span class="string">"Msg"</span>)]
 #[derive(Debug, Serialize, Deserialize)]
 </span><span class="kw">enum </span>SwarmProtocol {
     <span class="attr">#[rpc(tx = mpsc::Sender&lt;DownloadProgessItem&gt;)]
@@ -1554,9 +1544,9 @@
         <span class="kw">let </span>(r3, store3, <span class="kw">_</span>) = node_test_setup_fs(testdir.path().join(<span class="string">"c"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>tt1 = store1.add_slice(<span class="string">"hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">let </span>tt2 = store2.add_slice(<span class="string">"hello world 2"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>node1_addr = r1.endpoint().node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node1_addr = r1.endpoint().node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>node1_id = node1_addr.node_id;
-        <span class="kw">let </span>node2_addr = r2.endpoint().node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node2_addr = r2.endpoint().node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>node2_id = node2_addr.node_id;
         <span class="kw">let </span>swarm = Downloader::new(<span class="kw-2">&amp;</span>store3, r3.endpoint());
         r3.endpoint().add_node_addr(node1_addr.clone())<span class="question-mark">?</span>;
@@ -1593,9 +1583,9 @@
                 format: <span class="kw">crate</span>::BlobFormat::HashSeq,
             })
             .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>node1_addr = r1.endpoint().node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node1_addr = r1.endpoint().node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>node1_id = node1_addr.node_id;
-        <span class="kw">let </span>node2_addr = r2.endpoint().node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node2_addr = r2.endpoint().node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>node2_id = node2_addr.node_id;
         <span class="kw">let </span>swarm = Downloader::new(<span class="kw-2">&amp;</span>store3, r3.endpoint());
         r3.endpoint().add_node_addr(node1_addr.clone())<span class="question-mark">?</span>;
@@ -1662,9 +1652,9 @@
                 format: <span class="kw">crate</span>::BlobFormat::HashSeq,
             })
             .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>node1_addr = r1.endpoint().node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node1_addr = r1.endpoint().node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>node1_id = node1_addr.node_id;
-        <span class="kw">let </span>node2_addr = r2.endpoint().node_addr().initialized().<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="kw">let </span>node2_addr = r2.endpoint().node_addr().initialized().<span class="kw">await</span>;
         <span class="kw">let </span>node2_id = node2_addr.node_id;
         <span class="kw">let </span>swarm = Downloader::new(<span class="kw-2">&amp;</span>store3, r3.endpoint());
         r3.endpoint().add_node_addr(node1_addr.clone())<span class="question-mark">?</span>;
