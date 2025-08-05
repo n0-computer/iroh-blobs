@@ -106,7 +106,7 @@ use crate::{
         ApiClient,
     },
     store::{
-        fs::util::entity_manager::{self, ActiveEntityState},
+        fs::util::entity_manager::{self, ActiveEntityState, ShutdownCause},
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         Hash,
     },
@@ -217,10 +217,17 @@ impl entity_manager::Params for EmParams {
 
     type EntityState = Slot;
 
-    async fn on_shutdown(
-        _state: entity_manager::ActiveEntityState<Self>,
-        _cause: entity_manager::ShutdownCause,
-    ) {
+    async fn on_shutdown(state: HashContext, cause: ShutdownCause) {
+        // this isn't strictly necessary. Drop will run anyway as soon as the
+        // state is reset to it's default value. Doing it here means that we
+        // have exact control over where it happens.
+        if let Some(handle) = state.state.0.lock().await.take() {
+            trace!(
+                "shutting down entity manager for hash: {}, cause: {cause:?}",
+                state.id
+            );
+            drop(handle);
+        }
     }
 }
 
