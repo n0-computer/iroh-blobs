@@ -99,7 +99,7 @@ impl BlobsProtocol {
     /// just a convenience method to create a ticket from content and the address of this node.
     pub async fn ticket(&self, content: impl Into<HashAndFormat>) -> anyhow::Result<BlobTicket> {
         let content = content.into();
-        let addr = self.inner.endpoint.node_addr().initialized().await?;
+        let addr = self.inner.endpoint.node_addr().initialized().await;
         let ticket = BlobTicket::new(addr, content.hash, content.format);
         Ok(ticket)
     }
