@@ -400,7 +400,7 @@ mod main_actor {
                 match e {
                     mpsc::error::TrySendError::Full(cmd) => {
                         let entity_actor::Command::Spawn(spawn) = cmd else {
-                            panic!()
+                            unreachable!()
                         };
                         warn!(
                             "Entity actor inbox is full, cannot send command to entity actor {:?}.",
@@ -412,7 +412,7 @@ mod main_actor {
                     }
                     mpsc::error::TrySendError::Closed(cmd) => {
                         let entity_actor::Command::Spawn(spawn) = cmd else {
-                            panic!()
+                            unreachable!()
                         };
                         error!(
                             "Entity actor inbox is closed, cannot send command to entity actor {:?}.",
