@@ -241,7 +241,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();
-    let addr = router.endpoint().node_addr().initialized().await?;
+    let addr = router.endpoint().node_addr().initialized().await;
     let ticket = NodeTicket::from(addr.clone());
     println!("Node address: {addr:?}");
     println!("ticket:\n{ticket}");
