@@ -633,8 +633,7 @@
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
 <a href="#634" id="634">634</a>
-<a href="#635" id="635">635</a>
-<a href="#636" id="636">636</a></pre></div><pre class="rust"><code><span class="doccomment">//! The entire logic for importing data from three different sources: bytes, byte stream, and file path.
+<a href="#635" id="635">635</a></pre></div><pre class="rust"><code><span class="doccomment">//! The entire logic for importing data from three different sources: bytes, byte stream, and file path.
 //!
 //! For bytes, the size is known in advance. But they might still have to be persisted to disk if they are too large.
 //! E.g. you add a 1GB bytes to the store, you still want this to end up on disk.
@@ -675,8 +674,7 @@
         blobs::{AddProgressItem, ImportMode},
         proto::{
             HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest, ImportByteStreamUpdate,
-            ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, Scope,
-            StoreService,
+            ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, Request, Scope,
         },
     },
     store::{
@@ -772,12 +770,12 @@
     }
 }
 
-<span class="kw">impl </span>Channels&lt;StoreService&gt; <span class="kw">for </span>ImportEntry {
+<span class="kw">impl </span>Channels&lt;Request&gt; <span class="kw">for </span>ImportEntry {
     <span class="kw">type </span>Tx = mpsc::Sender&lt;AddProgressItem&gt;;
     <span class="kw">type </span>Rx = NoReceiver;
 }
 
-<span class="kw">pub type </span>ImportEntryMsg = WithChannels&lt;ImportEntry, StoreService&gt;;
+<span class="kw">pub type </span>ImportEntryMsg = WithChannels&lt;ImportEntry, Request&gt;;
 
 <span class="kw">impl </span>HashSpecific <span class="kw">for </span>ImportEntryMsg {
     <span class="kw">fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Hash {

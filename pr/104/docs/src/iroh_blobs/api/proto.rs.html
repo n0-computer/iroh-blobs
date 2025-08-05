@@ -704,11 +704,7 @@
 <a href="#703" id="703">703</a>
 <a href="#704" id="704">704</a>
 <a href="#705" id="705">705</a>
-<a href="#706" id="706">706</a>
-<a href="#707" id="707">707</a>
-<a href="#708" id="708">708</a>
-<a href="#709" id="709">709</a>
-<a href="#710" id="710">710</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(feature = <span class="string">"hide-proto-docs"</span>, doc(hidden))]
+<a href="#706" id="706">706</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(feature = <span class="string">"hide-proto-docs"</span>, doc(hidden))]
 </span><span class="doccomment">//! The protocol that a store implementation needs to implement.
 //!
 //! A store needs to handle [`Request`]s. It is fine to just return an error for some
@@ -796,11 +792,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>StoreService;
-<span class="kw">impl </span>irpc::Service <span class="kw">for </span>StoreService {}
-
-<span class="attr">#[rpc_requests(StoreService, message = Command, alias = <span class="string">"Msg"</span>)]
+<span class="attr">#[rpc_requests(message = Command, alias = <span class="string">"Msg"</span>)]
 #[derive(Debug, Serialize, Deserialize)]
 </span><span class="kw">pub enum </span>Request {
     <span class="attr">#[rpc(tx = mpsc::Sender&lt;<span class="kw">super</span>::Result&lt;Hash&gt;&gt;)]
