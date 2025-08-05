@@ -1931,7 +1931,7 @@
                 <span class="kw">match </span>e {
                     mpsc::error::TrySendError::Full(cmd) =&gt; {
                         <span class="kw">let </span>entity_actor::Command::Spawn(spawn) = cmd <span class="kw">else </span>{
-                            <span class="macro">panic!</span>()
+                            <span class="macro">unreachable!</span>()
                         };
                         <span class="macro">warn!</span>(
                             <span class="string">"Entity actor inbox is full, cannot send command to entity actor {:?}."</span>,
@@ -1943,7 +1943,7 @@
                     }
                     mpsc::error::TrySendError::Closed(cmd) =&gt; {
                         <span class="kw">let </span>entity_actor::Command::Spawn(spawn) = cmd <span class="kw">else </span>{
-                            <span class="macro">panic!</span>()
+                            <span class="macro">unreachable!</span>()
                         };
                         <span class="macro">error!</span>(
                             <span class="string">"Entity actor inbox is closed, cannot send command to entity actor {:?}."</span>,
