@@ -330,10 +330,15 @@ impl Actor {
                 let blobs = self.state.data.keys().cloned().collect::<Vec<Hash>>();
                 self.spawn(async move {
                     for blob in blobs {
-                        if tx.send(Ok(blob)).await.is_err() {
+                        if tx
+                            .send(api::proto::ListBlobsItem::Item(blob))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
+                    tx.send(api::proto::ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {

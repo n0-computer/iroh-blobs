@@ -23,8 +23,8 @@ use crate::{
         blobs::BlobStatus,
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
+            ListRequest, ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
     },
@@ -887,7 +887,7 @@ pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
         Ok(()) => {}
         Err(e) => {
             error!("error listing blobs: {}", e);
-            tx.send(Err(e)).await.ok();
+            tx.send(ListBlobsItem::Error(e)).await.ok();
         }
     }
 }
@@ -895,12 +895,13 @@ pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
 async fn list_blobs_impl(
     snapshot: ReadOnlyTables,
     _cmd: ListRequest,
-    tx: &mut mpsc::Sender<api::Result<Hash>>,
+    tx: &mut mpsc::Sender<ListBlobsItem>,
 ) -> api::Result<()> {
     for item in snapshot.blobs.iter().map_err(api::Error::other)? {
         let (k, _) = item.map_err(api::Error::other)?;
         let k = k.value();
-        tx.send(Ok(k)).await.ok();
+        tx.send(ListBlobsItem::Item(k)).await.ok();
     }
+    tx.send(ListBlobsItem::Done).await.ok();
     Ok(())
 }

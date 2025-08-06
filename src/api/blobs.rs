@@ -56,7 +56,7 @@ use super::{
     ApiClient, RequestResult, Tags,
 };
 use crate::{
-    api::proto::{BatchRequest, ImportByteStreamUpdate},
+    api::proto::{BatchRequest, ImportByteStreamUpdate, ListBlobsItem},
     provider::StreamContext,
     store::IROH_BLOCK_SIZE,
     util::temp_tag::TempTag,
@@ -835,12 +835,12 @@ impl ImportBaoHandle {
 
 /// A progress handle for a blobs list operation.
 pub struct BlobsListProgress {
-    inner: future::Boxed<irpc::Result<mpsc::Receiver<super::Result<Hash>>>>,
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListBlobsItem>>>,
 }
 
 impl BlobsListProgress {
     fn new(
-        fut: impl Future<Output = irpc::Result<mpsc::Receiver<super::Result<Hash>>>> + Send + 'static,
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListBlobsItem>>> + Send + 'static,
     ) -> Self {
         Self {
             inner: Box::pin(fut),
@@ -848,10 +848,15 @@ impl BlobsListProgress {
     }
 
     pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
-        let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
+        let mut rx = self.inner.await?;
         let mut hashes = Vec::new();
-        while let Some(item) = rx.recv().await? {
-            hashes.push(item?);
+        loop {
+            match rx.recv().await? {
+                Some(ListBlobsItem::Item(hash)) => hashes.push(hash),
+                Some(ListBlobsItem::Error(cause)) => return Err(cause.into()),
+                Some(ListBlobsItem::Done) => break,
+                None => return Err(super::Error::other("unexpected end of stream").into()),
+            }
         }
         Ok(hashes)
     }
@@ -859,8 +864,24 @@ impl BlobsListProgress {
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = super::Result<Hash>>> {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
-            while let Ok(Some(item)) = rx.recv().await {
-                co.yield_(item).await;
+            loop {
+                match rx.recv().await {
+                    Ok(Some(ListBlobsItem::Item(hash))) => co.yield_(Ok(hash)).await,
+                    Ok(Some(ListBlobsItem::Error(cause))) => {
+                        co.yield_(Err(cause)).await;
+                        break;
+                    }
+                    Ok(Some(ListBlobsItem::Done)) => break,
+                    Ok(None) => {
+                        co.yield_(Err(super::Error::other("unexpected end of stream").into()))
+                            .await;
+                        break;
+                    }
+                    Err(cause) => {
+                        co.yield_(Err(cause.into())).await;
+                        break;
+                    }
+                }
             }
         }))
     }

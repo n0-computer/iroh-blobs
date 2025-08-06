@@ -89,7 +89,7 @@ impl HashSpecific for CreateTagMsg {
 #[rpc_requests(message = Command, alias = "Msg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]
+    #[rpc(tx = mpsc::Sender<ListBlobsItem>)]
     ListBlobs(ListRequest),
     #[rpc(tx = oneshot::Sender<Scope>, rx = mpsc::Receiver<BatchResponse>)]
     Batch(BatchRequest),
@@ -349,6 +349,13 @@ pub struct TagInfo {
     pub format: BlobFormat,
     /// Hash of the data
     pub hash: Hash,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListBlobsItem {
+    Item(Hash),
+    Done,
+    Error(super::Error),
 }
 
 impl From<TagInfo> for HashAndFormat {
