@@ -82,7 +82,7 @@ use bao_tree::{
     io::{
         mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
         outboard::PreOrderOutboard,
-        sync::ReadAt,
+        sync::{Outboard, ReadAt},
         BaoContentItem, Leaf,
     },
     BaoTree, ChunkNum, ChunkRanges,
@@ -104,10 +104,11 @@ use tracing::{error, instrument, trace};
 use crate::{
     api::{
         proto::{
-            self, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, Command,
-            CreateTempTagMsg, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, HashSpecific, ImportBaoMsg,
-            ImportBaoRequest, ObserveMsg, Scope,
+            self, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, BlobStatusMsg,
+            Command, CreateTagMsg, CreateTempTagMsg, DeleteBlobsMsg, DeleteTagsMsg, ExportBaoMsg,
+            ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem, ExportRangesMsg,
+            ExportRangesRequest, HashSpecific, ImportBaoMsg, ImportBaoRequest, ListBlobsMsg,
+            ListTagsMsg, ObserveMsg, RenameTagMsg, Scope, SetTagMsg, ShutdownMsg, SyncDbMsg,
         },
         ApiClient,
     },
@@ -163,13 +164,16 @@ fn temp_name() -> String {
     format!("{}.temp", hex::encode(new_uuid()))
 }
 
-#[derive(Debug)]
+#[derive(derive_more::Debug)]
 #[enum_conversions()]
 pub(crate) enum InternalCommand {
     Dump(meta::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
+    Spawn(#[debug(skip)] Spawn),
 }
+
+type Spawn = Box<dyn FnOnce() -> n0_future::future::Boxed<()> + Send + Sync + 'static>;
 
 #[derive(Debug)]
 pub(crate) struct ClearScope {
@@ -179,6 +183,7 @@ pub(crate) struct ClearScope {
 impl InternalCommand {
     pub fn parent_span(&self) -> tracing::Span {
         match self {
+            Self::Spawn(_) => tracing::Span::current(),
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
             Self::FinishImport(cmd) => cmd
@@ -373,30 +378,18 @@ impl SyncEntityApi for HashContext {
     /// Caution: this is a reader for the unvalidated data file. Reading this
     /// can produce data that does not match the hash.
     #[allow(refining_impl_trait_internal)]
-    fn data_reader(&self) -> DataReader {
+    fn data(&self) -> DataReader {
         DataReader(self.state.clone())
     }
 
-    /// An AsyncSliceReader for the outboard file.
-    ///
-    /// The outboard file is used to validate the data file. It is not guaranteed
-    /// to be complete.
-    #[allow(refining_impl_trait_internal)]
-    fn outboard_reader(&self) -> OutboardReader {
-        OutboardReader(self.state.clone())
-    }
-
-    /// The most precise known total size of the data file.
-    fn current_size(&self) -> io::Result<u64> {
-        match self.state.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.size()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
-            BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
+    fn outboard(&self) -> io::Result<impl bao_tree::io::sync::Outboard> {
+        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let outboard = OutboardReader(self.state.clone());
+        Ok(PreOrderOutboard {
+            root: blake3::Hash::from(*self.id()),
+            tree,
+            data: outboard,
+        })
     }
 
     /// The most precise known total size of the data file.
@@ -411,20 +404,48 @@ impl SyncEntityApi for HashContext {
             BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn observe(&self, cmd: ObserveMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        BaoFileStorageSubscriber::new(self.state.subscribe())
+            .forward(cmd.tx)
+            .await
+            .ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let res = match finish_import_impl(self, cmd.inner).await {
+            Ok(()) => {
+                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
+                // it will be cleaned up when either the process exits or scope ends
+                if cmd.tx.is_rpc() {
+                    trace!("leaking temp tag {}", tt.hash_and_format());
+                    tt.leak();
+                }
+                AddProgressItem::Done(tt)
+            }
+            Err(cause) => AddProgressItem::Error(cause),
+        };
+        cmd.tx.send(res).await.ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_path(&self, cmd: ExportPathMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let ExportPathMsg { inner, mut tx, .. } = cmd;
+        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
+            tx.send(cause.into()).await.ok();
+        }
+    }
 }
 
 impl HashContext {
-    /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id),
-            tree,
-            data: outboard,
-        })
-    }
-
     fn db(&self) -> &meta::Db {
         &self.global.db
     }
@@ -457,6 +478,19 @@ impl HashContext {
     /// Update the entry state in the database, and wait for completion.
     pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
         self.db().set(self.id, state).await
+    }
+
+    /// The most precise known total size of the data file.
+    fn current_size(&self) -> io::Result<u64> {
+        match self.state.borrow().deref() {
+            BaoFileStorage::Complete(mem) => Ok(mem.size()),
+            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
+            BaoFileStorage::Partial(file) => file.current_size(),
+            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        }
     }
 }
 
@@ -631,6 +665,9 @@ impl Actor {
                     (tt, cmd).spawn(&mut self.handles, &mut self.tasks).await;
                 }
             }
+            InternalCommand::Spawn(spawn) => {
+                self.spawn(spawn());
+            }
         }
     }
 
@@ -755,13 +792,13 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 
 impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.observe(self).await
+        EntityApi::observe(&ctx, self).await
     }
     async fn on_error(self, _arg: SpawnArg<HashContext>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.export_path(self).await
+        EntityApi::export_path(&ctx, self).await
     }
     async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
@@ -828,7 +865,7 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
     async fn handle(self, ctx: HashContext) {
         let (tt, cmd) = self;
-        ctx.finish_import(cmd, tt).await
+        EntityApi::finish_import(&ctx, cmd, tt).await
     }
     async fn on_error(self, arg: SpawnArg<HashContext>) {
         let err = match arg {
@@ -895,7 +932,7 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 }
 
 /// The minimal API you need to implement for an entity for a store to work.
-trait EntityApi: EntityState {
+trait EntityApi {
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -910,55 +947,70 @@ trait EntityApi: EntityState {
     async fn export_path(&self, cmd: ExportPathMsg);
 }
 
+#[derive(Debug)]
+#[enum_conversions()]
+pub enum GlobalCmd {
+    // tag related commands
+    ListTags(ListTagsMsg),
+    CreateTag(CreateTagMsg),
+    SetTag(SetTagMsg),
+    DeleteTags(DeleteTagsMsg),
+    RenameTag(RenameTagMsg),
+
+    // blob related commands
+    DeleteBlobs(DeleteBlobsMsg),
+    ListBlobs(ListBlobsMsg),
+    BlobStatus(BlobStatusMsg),
+
+    // global commands
+    SyncDb(SyncDbMsg),
+    Shutdown(ShutdownMsg),
+}
+
 /// A more opinionated API that can be used as a helper to save implementation
 /// effort when implementing the EntityApi trait.
-trait SyncEntityApi: EntityApi {
+trait SyncEntityApi: EntityState<Id = Hash> {
     /// Load the entry state from the database. This must make sure that it is
     /// not run concurrently, so if load is called multiple times, all but one
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
     async fn load(&self);
 
     /// Get a synchronous reader for the data file.
-    fn data_reader(&self) -> impl ReadBytesAt;
+    fn data(&self) -> impl ReadBytesAt;
 
-    /// Get a synchronous reader for the outboard file.
-    fn outboard_reader(&self) -> impl ReadAt;
-
-    /// Get the best known size of the data file.
-    fn current_size(&self) -> io::Result<u64>;
+    /// The outboard for the file.
+    fn outboard(&self) -> io::Result<impl bao_tree::io::sync::Outboard>;
 
     /// Get the bitfield of the entry.
     fn bitfield(&self) -> io::Result<Bitfield>;
 
     /// Write a batch of content items to the entry.
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+
+    /// Observe the entry for changes.
+    async fn observe(&self, cmd: ObserveMsg);
+
+    async fn export_path(&self, cmd: ExportPathMsg);
+    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
 }
 
 /// The high level entry point per entry.
-impl EntityApi for HashContext {
+impl<T: SyncEntityApi> EntityApi for T {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn import_bao(&self, cmd: ImportBaoMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ImportBaoMsg {
-            inner: ImportBaoRequest { size, .. },
-            rx,
-            tx,
-            ..
-        } = cmd;
-        let res = import_bao_impl(self, size, rx).await;
-        trace!("{res:?}");
-        tx.send(res).await.ok();
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn observe(&self, cmd: ObserveMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        BaoFileStorageSubscriber::new(self.state.subscribe())
-            .forward(cmd.tx)
-            .await
-            .ok();
+    fn import_bao(&self, cmd: ImportBaoMsg) -> impl Future<Output = ()> {
+        async move {
+            trace!("{cmd:?}");
+            self.load().await;
+            let ImportBaoMsg {
+                inner: ImportBaoRequest { size, .. },
+                rx,
+                tx,
+                ..
+            } = cmd;
+            let res = import_bao_impl(self, size, rx).await;
+            trace!("{res:?}");
+            tx.send(res).await.ok();
+        }
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -987,38 +1039,21 @@ impl EntityApi for HashContext {
         }
     }
 
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_path(&self, cmd: ExportPathMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ExportPathMsg { inner, mut tx, .. } = cmd;
-        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
-            tx.send(cause.into()).await.ok();
-        }
+    async fn observe(&self, cmd: ObserveMsg) {
+        SyncEntityApi::observe(self, cmd).await
     }
 
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let res = match finish_import_impl(self, cmd.inner).await {
-            Ok(()) => {
-                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-                // it will be cleaned up when either the process exits or scope ends
-                if cmd.tx.is_rpc() {
-                    trace!("leaking temp tag {}", tt.hash_and_format());
-                    tt.leak();
-                }
-                AddProgressItem::Done(tt)
-            }
-            Err(cause) => AddProgressItem::Error(cause),
-        };
-        cmd.tx.send(res).await.ok();
+    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag) {
+        SyncEntityApi::finish_import(self, cmd, tt).await;
+    }
+
+    async fn export_path(&self, cmd: ExportPathMsg) {
+        SyncEntityApi::export_path(self, cmd).await
     }
 }
 
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
-    if ctx.id == Hash::EMPTY {
+    if ctx.id() == &Hash::EMPTY {
         return Ok(()); // nothing to do for the empty hash
     }
     let ImportEntry {
@@ -1130,11 +1165,11 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 async fn import_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     size: NonZeroU64,
     mut rx: mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
+    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
@@ -1163,18 +1198,15 @@ async fn import_bao_impl(
 }
 
 async fn export_ranges_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
 ) -> io::Result<()> {
     let ExportRangesRequest { ranges, hash } = cmd;
-    trace!(
-        "exporting ranges: {hash} {ranges:?} size={}",
-        ctx.current_size()?
-    );
     let bitfield = ctx.bitfield()?;
-    let data = ctx.data_reader();
+    let data = ctx.data();
     let size = bitfield.size();
+    trace!("exporting ranges: {hash} {ranges:?} size={size}",);
     for range in ranges.iter() {
         let range = match range {
             RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
@@ -1204,19 +1236,19 @@ async fn export_ranges_impl(
 }
 
 async fn export_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
 ) -> io::Result<()> {
     let ExportBaoRequest { ranges, hash, .. } = cmd;
     let outboard = ctx.outboard()?;
-    let size = outboard.tree.size();
+    let size = outboard.tree().size();
     if size == 0 && cmd.hash != Hash::EMPTY {
         // we have no data whatsoever, so we stop here
         return Ok(());
     }
     trace!("exporting bao: {hash} {ranges:?} size={size}",);
-    let data = ctx.data_reader();
+    let data = ctx.data();
     let tx = BaoTreeSender::new(tx);
     traverse_ranges_validated(data, outboard, &ranges, tx).await?;
     Ok(())

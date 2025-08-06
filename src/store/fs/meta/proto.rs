@@ -11,7 +11,10 @@ use crate::{
         BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ProcessExitRequest, ShutdownMsg,
         SyncDbMsg,
     },
-    store::{fs::entry_state::EntryState, util::DD},
+    store::{
+        fs::{entry_state::EntryState, GlobalCmd},
+        util::DD,
+    },
     util::channel::oneshot,
     Hash,
 };
@@ -191,6 +194,25 @@ pub enum Command {
     ReadOnly(ReadOnlyCommand),
     ReadWrite(ReadWriteCommand),
     TopLevel(TopLevelCommand),
+}
+
+impl From<GlobalCmd> for Command {
+    fn from(cmd: GlobalCmd) -> Self {
+        match cmd {
+            GlobalCmd::SyncDb(cmd) => cmd.into(),
+            GlobalCmd::Shutdown(cmd) => cmd.into(),
+
+            GlobalCmd::ListTags(cmd) => cmd.into(),
+            GlobalCmd::SetTag(cmd) => cmd.into(),
+            GlobalCmd::DeleteTags(cmd) => cmd.into(),
+            GlobalCmd::RenameTag(cmd) => cmd.into(),
+            GlobalCmd::CreateTag(cmd) => cmd.into(),
+
+            GlobalCmd::BlobStatus(cmd) => cmd.into(),
+            GlobalCmd::DeleteBlobs(cmd) => cmd.into(),
+            GlobalCmd::ListBlobs(_cmd) => todo!(),
+        }
+    }
 }
 
 impl Command {
