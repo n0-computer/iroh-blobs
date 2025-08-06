@@ -1,11 +1,7 @@
 //! The metadata database
 #![allow(clippy::result_large_err)]
 use std::{
-    collections::HashSet,
-    io,
-    ops::{Bound, Deref, DerefMut},
-    path::PathBuf,
-    time::SystemTime,
+    collections::HashSet, io, ops::{Bound, Deref, DerefMut}, path::PathBuf, time::SystemTime
 };
 
 use bao_tree::BaoTree;
@@ -15,7 +11,7 @@ use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use redb::{Database, DatabaseError, ReadableTable};
 use snafu::{Backtrace, ResultExt, Snafu};
-use tokio::pin;
+use tokio::{pin, task::JoinSet};
 
 use crate::{
     api::{
@@ -463,6 +459,7 @@ pub struct Actor {
     ds: DeleteHandle,
     options: BatchOptions,
     protected: HashSet<Hash>,
+    tasks: JoinSet<()>,
 }
 
 impl Actor {
@@ -492,6 +489,7 @@ impl Actor {
             ds,
             options,
             protected: Default::default(),
+            tasks: JoinSet::new(),
         })
     }
 
@@ -741,8 +739,12 @@ impl Actor {
         let options = &self.options;
         let mut op = 0u64;
         let shutdown = loop {
+            let cmd = tokio::select! {
+                cmd = self.cmds.recv() => cmd,
+                _ = self.tasks.join_next(), if !self.tasks.is_empty() => continue,
+            };
             op += 1;
-            let Some(cmd) = self.cmds.recv().await else {
+            let Some(cmd) = cmd else {
                 break None;
             };
             match cmd {
