@@ -4,7 +4,6 @@ use std::{
     io,
     ops::Deref,
     path::Path,
-    sync::Arc,
 };
 
 use bao_tree::{
@@ -21,7 +20,7 @@ use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
 use tokio::sync::watch;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
@@ -31,7 +30,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, HashContext},
+        fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -143,7 +142,7 @@ impl PartialFileStorage {
         &self.bitfield
     }
 
-    fn sync_all(&self, bitfield_path: &Path) -> io::Result<()> {
+    pub(super) fn sync_all(&self, bitfield_path: &Path) -> io::Result<()> {
         self.data.sync_all()?;
         self.outboard.sync_all()?;
         self.sizes.sync_all()?;
@@ -236,7 +235,7 @@ impl PartialFileStorage {
         ))
     }
 
-    fn current_size(&self) -> io::Result<u64> {
+    pub(super) fn current_size(&self) -> io::Result<u64> {
         read_size(&self.sizes)
     }
 
@@ -286,8 +285,24 @@ fn read_size(size_file: &File) -> io::Result<u64> {
 }
 
 /// The storage for a bao file. This can be either in memory or on disk.
-#[derive(derive_more::From)]
+///
+/// The two initial states `Initial` and `Loading` are used to coordinate the
+/// loading of the entry from the metadata database. Once that is complete,
+/// you should never see these states again.
+///
+/// From the remaining states you can get into `Poisoned` if there is an
+/// IO error during an operation.
+///
+/// `Poisioned` is also used once the handle is persisted and no longer usable.
+#[derive(derive_more::From, Default)]
 pub(crate) enum BaoFileStorage {
+    /// Initial state, we don't know anything yet.
+    #[default]
+    Initial,
+    /// Currently loading the entry from the metadata.
+    Loading,
+    /// There is no info about this hash in the metadata db.
+    NonExisting,
     /// The entry is incomplete and in memory.
     ///
     /// Since it is incomplete, it must be writeable.
@@ -305,13 +320,8 @@ pub(crate) enum BaoFileStorage {
     ///
     /// Writing to this is a no-op, since it is already complete.
     Complete(CompleteStorage),
-    /// We will get into that state if there is an io error in the middle of an operation
-    ///
-    /// Also, when the handle is dropped we will poison the storage, so poisoned
-    /// can be seen when the handle is revived during the drop.
-    ///
-    /// BaoFileHandleWeak::upgrade() will return None if the storage is poisoned,
-    /// treat it as dead.
+    /// We will get into that state if there is an io error in the middle of an operation,
+    /// or after the handle is persisted and no longer usable.
     Poisoned,
 }
 
@@ -322,13 +332,10 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::Partial(x) => x.fmt(f),
             BaoFileStorage::Complete(x) => x.fmt(f),
             BaoFileStorage::Poisoned => f.debug_struct("Poisoned").finish(),
+            BaoFileStorage::Initial => f.debug_struct("Initial").finish(),
+            BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
+            BaoFileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
         }
-    }
-}
-
-impl Default for BaoFileStorage {
-    fn default() -> Self {
-        BaoFileStorage::Complete(Default::default())
     }
 }
 
@@ -387,22 +394,32 @@ impl PartialMemStorage {
 impl BaoFileStorage {
     pub fn bitfield(&self) -> Bitfield {
         match self {
-            BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
+            BaoFileStorage::Initial => {
+                panic!("initial storage should not be used")
+            }
+            BaoFileStorage::Loading => {
+                panic!("loading storage should not be used")
+            }
+            BaoFileStorage::NonExisting => Bitfield::empty(),
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
+            BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
             BaoFileStorage::Poisoned => {
                 panic!("poisoned storage should not be used")
             }
         }
     }
 
-    fn write_batch(
+    pub(super) fn write_batch(
         self,
         batch: &[BaoContentItem],
         bitfield: &Bitfield,
         ctx: &HashContext,
     ) -> io::Result<(Self, Option<EntryState<bytes::Bytes>>)> {
         Ok(match self {
+            BaoFileStorage::NonExisting => {
+                Self::new_partial_mem().write_batch(batch, bitfield, ctx)?
+            }
             BaoFileStorage::PartialMem(mut ms) => {
                 // check if we need to switch to file mode, otherwise write to memory
                 if max_offset(batch) <= ctx.global.options.inline.max_data_inlined {
@@ -465,7 +482,7 @@ impl BaoFileStorage {
                 // unless there is a bug, this would just write the exact same data
                 (self, None)
             }
-            BaoFileStorage::Poisoned => {
+            _ => {
                 // we are poisoned, so just ignore the write
                 (self, None)
             }
@@ -473,7 +490,7 @@ impl BaoFileStorage {
     }
 
     /// Create a new mutable mem storage.
-    pub fn partial_mem() -> Self {
+    pub fn new_partial_mem() -> Self {
         Self::PartialMem(Default::default())
     }
 
@@ -483,13 +500,14 @@ impl BaoFileStorage {
         match self {
             Self::Complete(_) => Ok(()),
             Self::PartialMem(_) => Ok(()),
+            Self::NonExisting => Ok(()),
             Self::Partial(file) => {
                 file.data.sync_all()?;
                 file.outboard.sync_all()?;
                 file.sizes.sync_all()?;
                 Ok(())
             }
-            Self::Poisoned => {
+            Self::Poisoned | Self::Initial | Self::Loading => {
                 // we are poisoned, so just ignore the sync
                 Ok(())
             }
@@ -501,42 +519,23 @@ impl BaoFileStorage {
     }
 }
 
-/// A cheaply cloneable handle to a bao file, including the hash and the configuration.
+/// A cheaply cloneable handle to a bao file.
 ///
 /// You must call [Self::persist] to write the bitfield to disk, if you want to persist
 /// the file handle, otherwise the bitfield will not be written to disk and will have
 /// to be reconstructed on next use.
-#[derive(Debug, Clone, derive_more::Deref)]
-pub(crate) struct BaoFileHandle(Arc<watch::Sender<BaoFileStorage>>);
+#[derive(Debug, Clone, Default, derive_more::Deref)]
+pub(crate) struct BaoFileHandle(pub(super) watch::Sender<BaoFileStorage>);
 
-impl BaoFileHandle {
-    pub(super) fn persist(&mut self, ctx: &HashContext) {
-        self.send_if_modified(|guard| {
-            let hash = &ctx.id;
-            if Arc::strong_count(&self.0) > 1 {
-                return false;
-            }
-            let BaoFileStorage::Partial(fs) = guard.take() else {
-                return false;
-            };
-            let path = ctx.global.options.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            false
-        });
+impl entity_manager::Reset for BaoFileHandle {
+    fn reset(&mut self) {
+        self.send_replace(BaoFileStorage::Initial);
     }
 }
 
 /// A reader for a bao file, reading just the data.
 #[derive(Debug)]
-pub struct DataReader(BaoFileHandle);
+pub struct DataReader(pub(super) BaoFileHandle);
 
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
@@ -546,13 +545,16 @@ impl ReadBytesAt for DataReader {
             BaoFileStorage::Partial(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Complete(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
         }
     }
 }
 
 /// A reader for the outboard part of a bao file.
 #[derive(Debug)]
-pub struct OutboardReader(BaoFileHandle);
+pub struct OutboardReader(pub(super) BaoFileHandle);
 
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
@@ -562,22 +564,51 @@ impl ReadAt for OutboardReader {
             BaoFileStorage::PartialMem(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Partial(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
         }
     }
 }
 
-impl BaoFileHandle {
-    #[allow(dead_code)]
-    pub fn id(&self) -> usize {
-        Arc::as_ptr(&self.0) as usize
-    }
-
-    /// Create a new bao file handle.
-    ///
-    /// This will create a new file handle with an empty memory storage.
-    pub fn new_partial_mem() -> Self {
-        let storage = BaoFileStorage::partial_mem();
-        Self(Arc::new(watch::Sender::new(storage)))
+impl BaoFileStorage {
+    pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext) -> io::Result<Self> {
+        let hash = &ctx.id;
+        let options = &ctx.global.options;
+        Ok(match state {
+            Some(EntryState::Complete {
+                data_location,
+                outboard_location,
+            }) => {
+                let data = match data_location {
+                    DataLocation::Inline(data) => MemOrFile::Mem(data),
+                    DataLocation::Owned(size) => {
+                        let path = options.path.data_path(hash);
+                        let file = std::fs::File::open(&path)?;
+                        MemOrFile::File(FixedSize::new(file, size))
+                    }
+                    DataLocation::External(paths, size) => {
+                        let Some(path) = paths.into_iter().next() else {
+                            return Err(io::Error::other("no external data path"));
+                        };
+                        let file = std::fs::File::open(&path)?;
+                        MemOrFile::File(FixedSize::new(file, size))
+                    }
+                };
+                let outboard = match outboard_location {
+                    OutboardLocation::NotNeeded => MemOrFile::empty(),
+                    OutboardLocation::Inline(data) => MemOrFile::Mem(data),
+                    OutboardLocation::Owned => {
+                        let path = options.path.outboard_path(hash);
+                        let file = std::fs::File::open(&path)?;
+                        MemOrFile::File(file)
+                    }
+                };
+                Self::new_complete(data, outboard)
+            }
+            Some(EntryState::Partial { .. }) => Self::new_partial_file(ctx).await?,
+            None => Self::NonExisting,
+        })
     }
 
     /// Create a new bao file handle with a partial file.
@@ -585,7 +616,7 @@ impl BaoFileHandle {
         let hash = &ctx.id;
         let options = ctx.global.options.clone();
         let storage = PartialFileStorage::load(hash, &options.path)?;
-        let storage = if storage.bitfield.is_complete() {
+        Ok(if storage.bitfield.is_complete() {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
             debug!("File was reconstructed as complete");
@@ -593,8 +624,7 @@ impl BaoFileHandle {
             storage.into()
         } else {
             storage.into()
-        };
-        Ok(Self(Arc::new(watch::Sender::new(storage))))
+        })
     }
 
     /// Create a new complete bao file handle.
@@ -602,10 +632,11 @@ impl BaoFileHandle {
         data: MemOrFile<Bytes, FixedSize<File>>,
         outboard: MemOrFile<Bytes, File>,
     ) -> Self {
-        let storage = CompleteStorage { data, outboard }.into();
-        Self(Arc::new(watch::Sender::new(storage)))
+        CompleteStorage { data, outboard }.into()
     }
+}
 
+impl BaoFileHandle {
     /// Complete the handle
     pub fn complete(
         &self,
@@ -613,101 +644,20 @@ impl BaoFileHandle {
         outboard: MemOrFile<Bytes, File>,
     ) {
         self.send_if_modified(|guard| {
-            let res = match guard {
-                BaoFileStorage::Complete(_) => None,
-                BaoFileStorage::PartialMem(entry) => Some(&mut entry.bitfield),
-                BaoFileStorage::Partial(entry) => Some(&mut entry.bitfield),
-                BaoFileStorage::Poisoned => None,
+            let needs_complete = match guard {
+                BaoFileStorage::NonExisting => true,
+                BaoFileStorage::Complete(_) => false,
+                BaoFileStorage::PartialMem(_) => true,
+                BaoFileStorage::Partial(_) => true,
+                _ => false,
             };
-            if let Some(bitfield) = res {
-                bitfield.update(&Bitfield::complete(data.size()));
+            if needs_complete {
                 *guard = BaoFileStorage::Complete(CompleteStorage { data, outboard });
                 true
             } else {
                 true
             }
         });
-    }
-
-    pub fn subscribe(&self) -> BaoFileStorageSubscriber {
-        BaoFileStorageSubscriber::new(self.0.subscribe())
-    }
-
-    /// True if the file is complete.
-    #[allow(dead_code)]
-    pub fn is_complete(&self) -> bool {
-        matches!(self.borrow().deref(), BaoFileStorage::Complete(_))
-    }
-
-    /// An AsyncSliceReader for the data file.
-    ///
-    /// Caution: this is a reader for the unvalidated data file. Reading this
-    /// can produce data that does not match the hash.
-    pub fn data_reader(&self) -> DataReader {
-        DataReader(self.clone())
-    }
-
-    /// An AsyncSliceReader for the outboard file.
-    ///
-    /// The outboard file is used to validate the data file. It is not guaranteed
-    /// to be complete.
-    pub fn outboard_reader(&self) -> OutboardReader {
-        OutboardReader(self.clone())
-    }
-
-    /// The most precise known total size of the data file.
-    pub fn current_size(&self) -> io::Result<u64> {
-        match self.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.size()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
-            BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
-        }
-    }
-
-    /// The most precise known total size of the data file.
-    pub fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
-            BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
-        }
-    }
-
-    /// The outboard for the file.
-    pub fn outboard(&self, hash: &Hash) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(*hash),
-            tree,
-            data: outboard,
-        })
-    }
-
-    /// Write a batch and notify the db
-    pub(super) async fn write_batch(
-        &self,
-        batch: &[BaoContentItem],
-        bitfield: &Bitfield,
-        ctx: &HashContext,
-    ) -> io::Result<()> {
-        trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
-        let mut res = Ok(None);
-        self.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, ctx) else {
-                res = Err(io::Error::other("write batch failed"));
-                return false;
-            };
-            res = Ok(update);
-            *state = state1;
-            true
-        });
-        if let Some(update) = res? {
-            ctx.global.db.update(ctx.id, update).await?;
-        }
-        Ok(())
     }
 }
 

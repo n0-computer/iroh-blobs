@@ -1658,9 +1658,8 @@ dependencies = [
 
 [[package]]
 name = "iroh"
-version = "0.91.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef05c956df0788a649d65c33fdbbb8fc4442d7716af3d67a1bd6d00a9ee56ead"
+version = "0.91.1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#e30c788f968265bd9d181e5ca92d02eb61ef3d0d"
 dependencies = [
  "aead",
  "backon",
@@ -1720,9 +1719,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.91.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f68b5c5e190d8965699b2fd583f301a7e6094a0b89bb4d6c5baa94761fd1b7a3"
+version = "0.91.1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#e30c788f968265bd9d181e5ca92d02eb61ef3d0d"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1883,9 +1881,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.91.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49596b5079817d0904fe4985307f532a4e23a33eb494bd680baaf2743f0c456b"
+version = "0.91.1"
+source = "git+https://github.com/n0-computer/iroh?branch=main#e30c788f968265bd9d181e5ca92d02eb61ef3d0d"
 dependencies = [
  "blake3",
  "bytes",

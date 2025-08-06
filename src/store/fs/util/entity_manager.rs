@@ -959,10 +959,11 @@ mod tests {
                 assert_eq!(global.data, values, "Data mismatch");
                 for id in values.keys() {
                     let log = global.log.get(id).unwrap();
-                    assert!(
-                        log.len() % 2 == 0,
-                        "Log must contain alternating wakeup and shutdown events"
-                    );
+                    if log.len() % 2 != 0 {
+                        panic!(
+                            "Log for entity {id} must contain an even number of events.\n{log:#?}"
+                        );
+                    }
                     for (i, (event, _)) in log.iter().enumerate() {
                         assert_eq!(
                             *event,

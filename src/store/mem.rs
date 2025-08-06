@@ -51,7 +51,7 @@ use crate::{
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
             ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
             ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg,
+            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -122,6 +122,7 @@ impl MemStore {
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
                 protected: Default::default(),
+                idle_waiters: Default::default(),
             }
             .run(),
         );
@@ -137,6 +138,8 @@ struct Actor {
     options: Arc<Options>,
     // temp tags
     temp_tags: TempTags,
+    // idle waiters
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     protected: HashSet<Hash>,
 }
 
@@ -161,6 +164,16 @@ impl Actor {
             }) => {
                 let entry = self.get_or_create_entry(hash);
                 self.spawn(import_bao(entry, size, data, tx));
+            }
+            Command::WaitIdle(WaitIdleMsg { tx, .. }) => {
+                trace!("wait idle");
+                if self.tasks.is_empty() {
+                    // we are currently idle
+                    tx.send(()).await.ok();
+                } else {
+                    // wait for idle state
+                    self.idle_waiters.push(tx);
+                }
             }
             Command::Observe(ObserveMsg {
                 inner: ObserveRequest { hash },
@@ -484,6 +497,12 @@ impl Actor {
                             self.temp_tags.end_scope(scope);
                         }
                         TaskResult::Unit(_) => {}
+                    }
+                    if self.tasks.is_empty() {
+                        // we are idle now
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
                     }
                 }
             }

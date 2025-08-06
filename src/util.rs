@@ -472,6 +472,7 @@ pub mod sink {
         }
     }
 
+    #[allow(dead_code)]
     pub struct IrpcSenderSink<T>(pub irpc::channel::mpsc::Sender<T>);
 
     impl<T> Sink<T> for IrpcSenderSink<T>
