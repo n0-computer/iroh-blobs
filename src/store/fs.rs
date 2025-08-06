@@ -94,7 +94,6 @@ use entry_state::{DataLocation, OutboardLocation};
 use gc::run_gc;
 use import::{ImportEntry, ImportSource};
 use irpc::channel::mpsc;
-use meta::list_blobs;
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
@@ -507,9 +506,7 @@ impl Actor {
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
-                if let Ok(snapshot) = self.db().snapshot(cmd.span.clone()).await {
-                    self.spawn(list_blobs(snapshot, cmd));
-                }
+                self.db().send(cmd.into()).await.ok();
             }
             Command::Batch(cmd) => {
                 trace!("{cmd:?}");
