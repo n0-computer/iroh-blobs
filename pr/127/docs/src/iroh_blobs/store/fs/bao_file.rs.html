@@ -735,7 +735,11 @@
 <a href="#734" id="734">734</a>
 <a href="#735" id="735">735</a>
 <a href="#736" id="736">736</a>
-<a href="#737" id="737">737</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::fmt;
 <span class="kw">use </span>std::{
     fs::{File, OpenOptions},
     io,
@@ -1256,7 +1260,11 @@
     }
 }
 
-<span class="doccomment">/// A cheaply cloneable handle to a bao file, including the hash and the configuration.
+<span class="doccomment">/// A cheaply cloneable handle to a bao file.
+///
+/// You must call [Self::persist] to write the bitfield to disk, if you want to persist
+/// the file handle, otherwise the bitfield will not be written to disk and will have
+/// to be reconstructed on next use.
 </span><span class="attr">#[derive(Debug, Clone, Default, derive_more::Deref)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BaoFileHandle(<span class="kw">pub</span>(<span class="kw">super</span>) watch::Sender&lt;BaoFileStorage&gt;);
 

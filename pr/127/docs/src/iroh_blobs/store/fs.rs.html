@@ -2272,7 +2272,33 @@
 <a href="#2271" id="2271">2271</a>
 <a href="#2272" id="2272">2272</a>
 <a href="#2273" id="2273">2273</a>
-<a href="#2274" id="2274">2274</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2274" id="2274">2274</a>
+<a href="#2275" id="2275">2275</a>
+<a href="#2276" id="2276">2276</a>
+<a href="#2277" id="2277">2277</a>
+<a href="#2278" id="2278">2278</a>
+<a href="#2279" id="2279">2279</a>
+<a href="#2280" id="2280">2280</a>
+<a href="#2281" id="2281">2281</a>
+<a href="#2282" id="2282">2282</a>
+<a href="#2283" id="2283">2283</a>
+<a href="#2284" id="2284">2284</a>
+<a href="#2285" id="2285">2285</a>
+<a href="#2286" id="2286">2286</a>
+<a href="#2287" id="2287">2287</a>
+<a href="#2288" id="2288">2288</a>
+<a href="#2289" id="2289">2289</a>
+<a href="#2290" id="2290">2290</a>
+<a href="#2291" id="2291">2291</a>
+<a href="#2292" id="2292">2292</a>
+<a href="#2293" id="2293">2293</a>
+<a href="#2294" id="2294">2294</a>
+<a href="#2295" id="2295">2295</a>
+<a href="#2296" id="2296">2296</a>
+<a href="#2297" id="2297">2297</a>
+<a href="#2298" id="2298">2298</a>
+<a href="#2299" id="2299">2299</a>
+<a href="#2300" id="2300">2300</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2356,7 +2382,7 @@
     io::{
         mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
         outboard::PreOrderOutboard,
-        sync::ReadAt,
+        sync::{Outboard, ReadAt},
         BaoContentItem, Leaf,
     },
     BaoTree, ChunkNum, ChunkRanges,
@@ -2378,10 +2404,11 @@
 <span class="kw">use crate</span>::{
     api::{
         proto::{
-            <span class="self">self</span>, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, Command,
-            CreateTempTagMsg, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, HashSpecific, ImportBaoMsg,
-            ImportBaoRequest, ObserveMsg, Scope,
+            <span class="self">self</span>, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, BlobStatusMsg,
+            Command, CreateTagMsg, CreateTempTagMsg, DeleteBlobsMsg, DeleteTagsMsg, ExportBaoMsg,
+            ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem, ExportRangesMsg,
+            ExportRangesRequest, HashSpecific, ImportBaoMsg, ImportBaoRequest, ListBlobsMsg,
+            ListTagsMsg, ObserveMsg, RenameTagMsg, Scope, SetTagMsg, ShutdownMsg, SyncDbMsg,
         },
         ApiClient,
     },
@@ -2391,7 +2418,7 @@
                 BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
                 OutboardReader,
             },
-            util::entity_manager,
+            util::entity_manager::{<span class="self">self</span>, EntityState},
         },
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         Hash, IROH_BLOCK_SIZE,
@@ -2437,13 +2464,16 @@
     <span class="macro">format!</span>(<span class="string">"{}.temp"</span>, hex::encode(new_uuid()))
 }
 
-<span class="attr">#[derive(Debug)]
+<span class="attr">#[derive(derive_more::Debug)]
 #[enum_conversions()]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>InternalCommand {
     Dump(meta::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
+    Spawn(<span class="attr">#[debug(skip)] </span>Spawn),
 }
+
+<span class="kw">type </span>Spawn = Box&lt;<span class="kw">dyn </span>FnOnce() -&gt; n0_future::future::Boxed&lt;()&gt; + Send + Sync + <span class="lifetime">'static</span>&gt;;
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>ClearScope {
@@ -2453,6 +2483,7 @@
 <span class="kw">impl </span>InternalCommand {
     <span class="kw">pub fn </span>parent_span(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; tracing::Span {
         <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Spawn(<span class="kw">_</span>) =&gt; tracing::Span::current(),
             <span class="self">Self</span>::Dump(<span class="kw">_</span>) =&gt; tracing::Span::current(),
             <span class="self">Self</span>::ClearScope(<span class="kw">_</span>) =&gt; tracing::Span::current(),
             <span class="self">Self</span>::FinishImport(cmd) =&gt; cmd
@@ -2485,12 +2516,12 @@
     }
 }
 
-<span class="kw">impl </span>entity_manager::Params <span class="kw">for </span>HashContext {
-    <span class="kw">type </span>EntityId = Hash;
+<span class="kw">impl </span>entity_manager::EntityState <span class="kw">for </span>HashContext {
+    <span class="kw">type </span>Id = Hash;
 
     <span class="kw">type </span>GlobalState = Arc&lt;TaskContext&gt;;
 
-    <span class="kw">fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::EntityId {
+    <span class="kw">fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Id {
         <span class="kw-2">&amp;</span><span class="self">self</span>.id
     }
 
@@ -2502,7 +2533,7 @@
         <span class="self">self</span>.state.sender_count() + <span class="self">self</span>.state.receiver_count()
     }
 
-    <span class="kw">fn </span>new(id: <span class="kw-2">&amp;</span><span class="self">Self</span>::EntityId, global: <span class="kw-2">&amp;</span><span class="self">Self</span>::GlobalState) -&gt; <span class="self">Self </span>{
+    <span class="kw">fn </span>new(id: <span class="kw-2">&amp;</span><span class="self">Self</span>::Id, global: <span class="kw-2">&amp;</span><span class="self">Self</span>::GlobalState) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             id: <span class="kw-2">*</span>id,
             global: global.clone(),
@@ -2510,7 +2541,7 @@
         }
     }
 
-    <span class="kw">fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: <span class="kw-2">&amp;</span><span class="self">Self</span>::EntityId, global: <span class="kw-2">&amp;</span><span class="self">Self</span>::GlobalState) {
+    <span class="kw">fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>, id: <span class="kw-2">&amp;</span><span class="self">Self</span>::Id, global: <span class="kw-2">&amp;</span><span class="self">Self</span>::GlobalState) {
         <span class="self">self</span>.id = <span class="kw-2">*</span>id;
         <span class="self">self</span>.global = global.clone();
         <span class="comment">// this is identical to self.state = BaoFileHandle::default(),
@@ -2518,8 +2549,25 @@
         </span><span class="self">self</span>.state.send_replace(BaoFileStorage::Initial);
     }
 
-    <span class="kw">async fn </span>on_shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>, _cause: entity_manager::ShutdownCause) {
-        <span class="self">self</span>.persist().<span class="kw">await</span>;
+    <span class="attr">#[instrument(skip_all, fields(hash = %<span class="self">self</span>.id.fmt_short()))]
+    </span><span class="kw">async fn </span>on_shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>, _cause: entity_manager::ShutdownCause) {
+        <span class="self">self</span>.state.send_if_modified(|guard| {
+            <span class="kw">let </span>hash = <span class="kw-2">&amp;</span><span class="self">self</span>.id;
+            <span class="kw">let </span>BaoFileStorage::Partial(fs) = guard.take() <span class="kw">else </span>{
+                <span class="kw">return </span><span class="bool-val">false</span>;
+            };
+            <span class="kw">let </span>path = <span class="self">self</span>.global.options.path.bitfield_path(hash);
+            <span class="macro">trace!</span>(<span class="string">"writing bitfield for hash {} to {}"</span>, hash, path.display());
+            <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = fs.sync_all(<span class="kw-2">&amp;</span>path) {
+                <span class="macro">error!</span>(
+                    <span class="string">"failed to write bitfield for {} at {}: {:?}"</span>,
+                    hash,
+                    path.display(),
+                    cause
+                );
+            }
+            <span class="bool-val">false
+        </span>});
     }
 }
 
@@ -2630,30 +2678,18 @@
     /// Caution: this is a reader for the unvalidated data file. Reading this
     /// can produce data that does not match the hash.
     </span><span class="attr">#[allow(refining_impl_trait_internal)]
-    </span><span class="kw">fn </span>data_reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DataReader {
+    </span><span class="kw">fn </span>data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DataReader {
         DataReader(<span class="self">self</span>.state.clone())
     }
 
-    <span class="doccomment">/// An AsyncSliceReader for the outboard file.
-    ///
-    /// The outboard file is used to validate the data file. It is not guaranteed
-    /// to be complete.
-    </span><span class="attr">#[allow(refining_impl_trait_internal)]
-    </span><span class="kw">fn </span>outboard_reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; OutboardReader {
-        OutboardReader(<span class="self">self</span>.state.clone())
-    }
-
-    <span class="doccomment">/// The most precise known total size of the data file.
-    </span><span class="kw">fn </span>current_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;u64&gt; {
-        <span class="kw">match </span><span class="self">self</span>.state.borrow().deref() {
-            BaoFileStorage::Complete(mem) =&gt; <span class="prelude-val">Ok</span>(mem.size()),
-            BaoFileStorage::PartialMem(mem) =&gt; <span class="prelude-val">Ok</span>(mem.current_size()),
-            BaoFileStorage::Partial(file) =&gt; file.current_size(),
-            BaoFileStorage::Poisoned =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"poisoned storage"</span>)),
-            BaoFileStorage::Initial =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"initial"</span>)),
-            BaoFileStorage::Loading =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"loading"</span>)),
-            BaoFileStorage::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
-        }
+    <span class="kw">fn </span>outboard(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;<span class="kw">impl </span>bao_tree::io::sync::Outboard&gt; {
+        <span class="kw">let </span>tree = BaoTree::new(<span class="self">self</span>.current_size()<span class="question-mark">?</span>, IROH_BLOCK_SIZE);
+        <span class="kw">let </span>outboard = OutboardReader(<span class="self">self</span>.state.clone());
+        <span class="prelude-val">Ok</span>(PreOrderOutboard {
+            root: blake3::Hash::from(<span class="kw-2">*</span><span class="self">self</span>.id()),
+            tree,
+            data: outboard,
+        })
     }
 
     <span class="doccomment">/// The most precise known total size of the data file.
@@ -2668,20 +2704,48 @@
             BaoFileStorage::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
         }
     }
+
+    <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    </span><span class="kw">async fn </span>observe(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ObserveMsg) {
+        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
+        <span class="self">self</span>.load().<span class="kw">await</span>;
+        BaoFileStorageSubscriber::new(<span class="self">self</span>.state.subscribe())
+            .forward(cmd.tx)
+            .<span class="kw">await
+            </span>.ok();
+    }
+
+    <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    </span><span class="kw">async fn </span>finish_import(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ImportEntryMsg, <span class="kw-2">mut </span>tt: TempTag) {
+        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
+        <span class="self">self</span>.load().<span class="kw">await</span>;
+        <span class="kw">let </span>res = <span class="kw">match </span>finish_import_impl(<span class="self">self</span>, cmd.inner).<span class="kw">await </span>{
+            <span class="prelude-val">Ok</span>(()) =&gt; {
+                <span class="comment">// for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
+                // it will be cleaned up when either the process exits or scope ends
+                </span><span class="kw">if </span>cmd.tx.is_rpc() {
+                    <span class="macro">trace!</span>(<span class="string">"leaking temp tag {}"</span>, tt.hash_and_format());
+                    tt.leak();
+                }
+                AddProgressItem::Done(tt)
+            }
+            <span class="prelude-val">Err</span>(cause) =&gt; AddProgressItem::Error(cause),
+        };
+        cmd.tx.send(res).<span class="kw">await</span>.ok();
+    }
+
+    <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    </span><span class="kw">async fn </span>export_path(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ExportPathMsg) {
+        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
+        <span class="self">self</span>.load().<span class="kw">await</span>;
+        <span class="kw">let </span>ExportPathMsg { inner, <span class="kw-2">mut </span>tx, .. } = cmd;
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = export_path_impl(<span class="self">self</span>, inner, <span class="kw-2">&amp;mut </span>tx).<span class="kw">await </span>{
+            tx.send(cause.into()).<span class="kw">await</span>.ok();
+        }
+    }
 }
 
 <span class="kw">impl </span>HashContext {
-    <span class="doccomment">/// The outboard for the file.
-    </span><span class="kw">pub fn </span>outboard(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;PreOrderOutboard&lt;OutboardReader&gt;&gt; {
-        <span class="kw">let </span>tree = BaoTree::new(<span class="self">self</span>.current_size()<span class="question-mark">?</span>, IROH_BLOCK_SIZE);
-        <span class="kw">let </span>outboard = <span class="self">self</span>.outboard_reader();
-        <span class="prelude-val">Ok</span>(PreOrderOutboard {
-            root: blake3::Hash::from(<span class="self">self</span>.id),
-            tree,
-            data: outboard,
-        })
-    }
-
     <span class="kw">fn </span>db(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>meta::Db {
         <span class="kw-2">&amp;</span><span class="self">self</span>.global.db
     }
@@ -2715,6 +2779,19 @@
     </span><span class="kw">pub async fn </span>set(<span class="kw-2">&amp;</span><span class="self">self</span>, state: EntryState&lt;Bytes&gt;) -&gt; io::Result&lt;()&gt; {
         <span class="self">self</span>.db().set(<span class="self">self</span>.id, state).<span class="kw">await
     </span>}
+
+    <span class="doccomment">/// The most precise known total size of the data file.
+    </span><span class="kw">fn </span>current_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;u64&gt; {
+        <span class="kw">match </span><span class="self">self</span>.state.borrow().deref() {
+            BaoFileStorage::Complete(mem) =&gt; <span class="prelude-val">Ok</span>(mem.size()),
+            BaoFileStorage::PartialMem(mem) =&gt; <span class="prelude-val">Ok</span>(mem.current_size()),
+            BaoFileStorage::Partial(file) =&gt; file.current_size(),
+            BaoFileStorage::Poisoned =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"poisoned storage"</span>)),
+            BaoFileStorage::Initial =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"initial"</span>)),
+            BaoFileStorage::Loading =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"loading"</span>)),
+            BaoFileStorage::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
+        }
+    }
 }
 
 <span class="kw">impl </span>Actor {
@@ -2888,6 +2965,9 @@
                     (tt, cmd).spawn(<span class="kw-2">&amp;mut </span><span class="self">self</span>.handles, <span class="kw-2">&amp;mut </span><span class="self">self</span>.tasks).<span class="kw">await</span>;
                 }
             }
+            InternalCommand::Spawn(spawn) =&gt; {
+                <span class="self">self</span>.spawn(spawn());
+            }
         }
     }
 
@@ -3012,13 +3092,13 @@
 
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>ObserveMsg {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
-        ctx.observe(<span class="self">self</span>).<span class="kw">await
+        EntityApi::observe(<span class="kw-2">&amp;</span>ctx, <span class="self">self</span>).<span class="kw">await
     </span>}
     <span class="kw">async fn </span>on_error(<span class="self">self</span>, _arg: SpawnArg&lt;HashContext&gt;) {}
 }
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>ExportPathMsg {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
-        ctx.export_path(<span class="self">self</span>).<span class="kw">await
+        EntityApi::export_path(<span class="kw-2">&amp;</span>ctx, <span class="self">self</span>).<span class="kw">await
     </span>}
     <span class="kw">async fn </span>on_error(<span class="self">self</span>, arg: SpawnArg&lt;HashContext&gt;) {
         <span class="kw">let </span>err = <span class="kw">match </span>arg {
@@ -3085,7 +3165,7 @@
 <span class="kw">impl </span>HashSpecificCommand <span class="kw">for </span>(TempTag, ImportEntryMsg) {
     <span class="kw">async fn </span>handle(<span class="self">self</span>, ctx: HashContext) {
         <span class="kw">let </span>(tt, cmd) = <span class="self">self</span>;
-        ctx.finish_import(cmd, tt).<span class="kw">await
+        EntityApi::finish_import(<span class="kw-2">&amp;</span>ctx, cmd, tt).<span class="kw">await
     </span>}
     <span class="kw">async fn </span>on_error(<span class="self">self</span>, arg: SpawnArg&lt;HashContext&gt;) {
         <span class="kw">let </span>err = <span class="kw">match </span>arg {
@@ -3165,59 +3245,72 @@
     </span><span class="kw">async fn </span>export_bao(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ExportBaoMsg);
     <span class="doccomment">/// Export the entry to a local file.
     </span><span class="kw">async fn </span>export_path(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ExportPathMsg);
-    <span class="doccomment">/// Persist the entry at the end of its lifecycle.
-    </span><span class="kw">async fn </span>persist(<span class="kw-2">&amp;</span><span class="self">self</span>);
+}
+
+<span class="attr">#[derive(Debug)]
+#[enum_conversions()]
+</span><span class="kw">pub enum </span>GlobalCmd {
+    <span class="comment">// tag related commands
+    </span>ListTags(ListTagsMsg),
+    CreateTag(CreateTagMsg),
+    SetTag(SetTagMsg),
+    DeleteTags(DeleteTagsMsg),
+    RenameTag(RenameTagMsg),
+
+    <span class="comment">// blob related commands
+    </span>DeleteBlobs(DeleteBlobsMsg),
+    ListBlobs(ListBlobsMsg),
+    BlobStatus(BlobStatusMsg),
+
+    <span class="comment">// global commands
+    </span>SyncDb(SyncDbMsg),
+    Shutdown(ShutdownMsg),
 }
 
 <span class="doccomment">/// A more opinionated API that can be used as a helper to save implementation
 /// effort when implementing the EntityApi trait.
-</span><span class="kw">trait </span>SyncEntityApi: EntityApi {
+</span><span class="kw">trait </span>SyncEntityApi: EntityState&lt;Id = Hash&gt; {
     <span class="doccomment">/// Load the entry state from the database. This must make sure that it is
     /// not run concurrently, so if load is called multiple times, all but one
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
     </span><span class="kw">async fn </span>load(<span class="kw-2">&amp;</span><span class="self">self</span>);
 
     <span class="doccomment">/// Get a synchronous reader for the data file.
-    </span><span class="kw">fn </span>data_reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ReadBytesAt;
+    </span><span class="kw">fn </span>data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ReadBytesAt;
 
-    <span class="doccomment">/// Get a synchronous reader for the outboard file.
-    </span><span class="kw">fn </span>outboard_reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>ReadAt;
-
-    <span class="doccomment">/// Get the best known size of the data file.
-    </span><span class="kw">fn </span>current_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;u64&gt;;
+    <span class="doccomment">/// The outboard for the file.
+    </span><span class="kw">fn </span>outboard(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;<span class="kw">impl </span>bao_tree::io::sync::Outboard&gt;;
 
     <span class="doccomment">/// Get the bitfield of the entry.
     </span><span class="kw">fn </span>bitfield(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; io::Result&lt;Bitfield&gt;;
 
     <span class="doccomment">/// Write a batch of content items to the entry.
     </span><span class="kw">async fn </span>write_batch(<span class="kw-2">&amp;</span><span class="self">self</span>, batch: <span class="kw-2">&amp;</span>[BaoContentItem], bitfield: <span class="kw-2">&amp;</span>Bitfield) -&gt; io::Result&lt;()&gt;;
+
+    <span class="doccomment">/// Observe the entry for changes.
+    </span><span class="kw">async fn </span>observe(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ObserveMsg);
+
+    <span class="kw">async fn </span>export_path(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ExportPathMsg);
+    <span class="kw">async fn </span>finish_import(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ImportEntryMsg, tt: TempTag);
 }
 
 <span class="doccomment">/// The high level entry point per entry.
-</span><span class="kw">impl </span>EntityApi <span class="kw">for </span>HashContext {
+</span><span class="kw">impl</span>&lt;T: SyncEntityApi&gt; EntityApi <span class="kw">for </span>T {
     <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    </span><span class="kw">async fn </span>import_bao(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ImportBaoMsg) {
-        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
-        <span class="self">self</span>.load().<span class="kw">await</span>;
-        <span class="kw">let </span>ImportBaoMsg {
-            inner: ImportBaoRequest { size, .. },
-            rx,
-            tx,
-            ..
-        } = cmd;
-        <span class="kw">let </span>res = import_bao_impl(<span class="self">self</span>, size, rx).<span class="kw">await</span>;
-        <span class="macro">trace!</span>(<span class="string">"{res:?}"</span>);
-        tx.send(res).<span class="kw">await</span>.ok();
-    }
-
-    <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    </span><span class="kw">async fn </span>observe(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ObserveMsg) {
-        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
-        <span class="self">self</span>.load().<span class="kw">await</span>;
-        BaoFileStorageSubscriber::new(<span class="self">self</span>.state.subscribe())
-            .forward(cmd.tx)
-            .<span class="kw">await
-            </span>.ok();
+    </span><span class="kw">fn </span>import_bao(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ImportBaoMsg) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; {
+        <span class="kw">async move </span>{
+            <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
+            <span class="self">self</span>.load().<span class="kw">await</span>;
+            <span class="kw">let </span>ImportBaoMsg {
+                inner: ImportBaoRequest { size, .. },
+                rx,
+                tx,
+                ..
+            } = cmd;
+            <span class="kw">let </span>res = import_bao_impl(<span class="self">self</span>, size, rx).<span class="kw">await</span>;
+            <span class="macro">trace!</span>(<span class="string">"{res:?}"</span>);
+            tx.send(res).<span class="kw">await</span>.ok();
+        }
     }
 
     <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -3246,59 +3339,21 @@
         }
     }
 
-    <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    </span><span class="kw">async fn </span>export_path(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ExportPathMsg) {
-        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
-        <span class="self">self</span>.load().<span class="kw">await</span>;
-        <span class="kw">let </span>ExportPathMsg { inner, <span class="kw-2">mut </span>tx, .. } = cmd;
-        <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = export_path_impl(<span class="self">self</span>, inner, <span class="kw-2">&amp;mut </span>tx).<span class="kw">await </span>{
-            tx.send(cause.into()).<span class="kw">await</span>.ok();
-        }
+    <span class="kw">async fn </span>observe(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ObserveMsg) {
+        SyncEntityApi::observe(<span class="self">self</span>, cmd).<span class="kw">await
+    </span>}
+
+    <span class="kw">async fn </span>finish_import(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ImportEntryMsg, tt: TempTag) {
+        SyncEntityApi::finish_import(<span class="self">self</span>, cmd, tt).<span class="kw">await</span>;
     }
 
-    <span class="attr">#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    </span><span class="kw">async fn </span>finish_import(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ImportEntryMsg, <span class="kw-2">mut </span>tt: TempTag) {
-        <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
-        <span class="self">self</span>.load().<span class="kw">await</span>;
-        <span class="kw">let </span>res = <span class="kw">match </span>finish_import_impl(<span class="self">self</span>, cmd.inner).<span class="kw">await </span>{
-            <span class="prelude-val">Ok</span>(()) =&gt; {
-                <span class="comment">// for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-                // it will be cleaned up when either the process exits or scope ends
-                </span><span class="kw">if </span>cmd.tx.is_rpc() {
-                    <span class="macro">trace!</span>(<span class="string">"leaking temp tag {}"</span>, tt.hash_and_format());
-                    tt.leak();
-                }
-                AddProgressItem::Done(tt)
-            }
-            <span class="prelude-val">Err</span>(cause) =&gt; AddProgressItem::Error(cause),
-        };
-        cmd.tx.send(res).<span class="kw">await</span>.ok();
-    }
-
-    <span class="attr">#[instrument(skip_all, fields(hash = %<span class="self">self</span>.id.fmt_short()))]
-    </span><span class="kw">async fn </span>persist(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-        <span class="self">self</span>.state.send_if_modified(|guard| {
-            <span class="kw">let </span>hash = <span class="kw-2">&amp;</span><span class="self">self</span>.id;
-            <span class="kw">let </span>BaoFileStorage::Partial(fs) = guard.take() <span class="kw">else </span>{
-                <span class="kw">return </span><span class="bool-val">false</span>;
-            };
-            <span class="kw">let </span>path = <span class="self">self</span>.global.options.path.bitfield_path(hash);
-            <span class="macro">trace!</span>(<span class="string">"writing bitfield for hash {} to {}"</span>, hash, path.display());
-            <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = fs.sync_all(<span class="kw-2">&amp;</span>path) {
-                <span class="macro">error!</span>(
-                    <span class="string">"failed to write bitfield for {} at {}: {:?}"</span>,
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            <span class="bool-val">false
-        </span>});
-    }
+    <span class="kw">async fn </span>export_path(<span class="kw-2">&amp;</span><span class="self">self</span>, cmd: ExportPathMsg) {
+        SyncEntityApi::export_path(<span class="self">self</span>, cmd).<span class="kw">await
+    </span>}
 }
 
 <span class="kw">async fn </span>finish_import_impl(ctx: <span class="kw-2">&amp;</span>HashContext, import_data: ImportEntry) -&gt; io::Result&lt;()&gt; {
-    <span class="kw">if </span>ctx.id == Hash::EMPTY {
+    <span class="kw">if </span>ctx.id() == <span class="kw-2">&amp;</span>Hash::EMPTY {
         <span class="kw">return </span><span class="prelude-val">Ok</span>(()); <span class="comment">// nothing to do for the empty hash
     </span>}
     <span class="kw">let </span>ImportEntry {
@@ -3410,11 +3465,11 @@
 }
 
 <span class="kw">async fn </span>import_bao_impl(
-    ctx: <span class="kw-2">&amp;</span>HashContext,
+    ctx: <span class="kw-2">&amp;</span><span class="kw">impl </span>SyncEntityApi,
     size: NonZeroU64,
     <span class="kw-2">mut </span>rx: mpsc::Receiver&lt;BaoContentItem&gt;,
 ) -&gt; api::Result&lt;()&gt; {
-    <span class="macro">trace!</span>(<span class="string">"importing bao: {} {} bytes"</span>, ctx.id.fmt_short(), size);
+    <span class="macro">trace!</span>(<span class="string">"importing bao: {} {} bytes"</span>, ctx.id().fmt_short(), size);
     <span class="kw">let </span><span class="kw-2">mut </span>batch = Vec::&lt;BaoContentItem&gt;::new();
     <span class="kw">let </span><span class="kw-2">mut </span>ranges = ChunkRanges::empty();
     <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = rx.recv().<span class="kw">await</span><span class="question-mark">? </span>{
@@ -3443,18 +3498,15 @@
 }
 
 <span class="kw">async fn </span>export_ranges_impl(
-    ctx: <span class="kw-2">&amp;</span>HashContext,
+    ctx: <span class="kw-2">&amp;</span><span class="kw">impl </span>SyncEntityApi,
     cmd: ExportRangesRequest,
     tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ExportRangesItem&gt;,
 ) -&gt; io::Result&lt;()&gt; {
     <span class="kw">let </span>ExportRangesRequest { ranges, hash } = cmd;
-    <span class="macro">trace!</span>(
-        <span class="string">"exporting ranges: {hash} {ranges:?} size={}"</span>,
-        ctx.current_size()<span class="question-mark">?
-    </span>);
     <span class="kw">let </span>bitfield = ctx.bitfield()<span class="question-mark">?</span>;
-    <span class="kw">let </span>data = ctx.data_reader();
+    <span class="kw">let </span>data = ctx.data();
     <span class="kw">let </span>size = bitfield.size();
+    <span class="macro">trace!</span>(<span class="string">"exporting ranges: {hash} {ranges:?} size={size}"</span>,);
     <span class="kw">for </span>range <span class="kw">in </span>ranges.iter() {
         <span class="kw">let </span>range = <span class="kw">match </span>range {
             RangeSetRange::Range(range) =&gt; size.min(<span class="kw-2">*</span>range.start)..size.min(<span class="kw-2">*</span>range.end),
@@ -3484,19 +3536,19 @@
 }
 
 <span class="kw">async fn </span>export_bao_impl(
-    ctx: <span class="kw-2">&amp;</span>HashContext,
+    ctx: <span class="kw-2">&amp;</span><span class="kw">impl </span>SyncEntityApi,
     cmd: ExportBaoRequest,
     tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;EncodedItem&gt;,
 ) -&gt; io::Result&lt;()&gt; {
     <span class="kw">let </span>ExportBaoRequest { ranges, hash, .. } = cmd;
     <span class="kw">let </span>outboard = ctx.outboard()<span class="question-mark">?</span>;
-    <span class="kw">let </span>size = outboard.tree.size();
+    <span class="kw">let </span>size = outboard.tree().size();
     <span class="kw">if </span>size == <span class="number">0 </span>&amp;&amp; cmd.hash != Hash::EMPTY {
         <span class="comment">// we have no data whatsoever, so we stop here
         </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
     <span class="macro">trace!</span>(<span class="string">"exporting bao: {hash} {ranges:?} size={size}"</span>,);
-    <span class="kw">let </span>data = ctx.data_reader();
+    <span class="kw">let </span>data = ctx.data();
     <span class="kw">let </span>tx = BaoTreeSender::new(tx);
     traverse_ranges_validated(data, outboard, <span class="kw-2">&amp;</span>ranges, tx).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(())
@@ -3631,7 +3683,7 @@
             .thread_name_fn(|| {
                 <span class="macro">format!</span>(
                     <span class="string">"iroh-blob-store-{}"</span>,
-                    THREAD_NR.fetch_add(<span class="number">1</span>, Ordering::SeqCst)
+                    THREAD_NR.fetch_add(<span class="number">1</span>, Ordering::Relaxed)
                 )
             })
             .enable_time()

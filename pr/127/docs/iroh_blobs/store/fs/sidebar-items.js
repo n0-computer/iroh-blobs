@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["options"],"struct":["FsStore"]};
+window.SIDEBAR_ITEMS = {"enum":["GlobalCmd"],"mod":["options"],"struct":["FsStore"]};
