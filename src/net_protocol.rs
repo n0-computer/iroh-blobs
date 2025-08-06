@@ -36,7 +36,7 @@
 //! # }
 //! ```
 
-use std::{fmt::Debug, future::Future, ops::Deref, sync::Arc};
+use std::{fmt::Debug, future::Future, ops::Deref, path::Path, sync::Arc};
 
 use iroh::{
     endpoint::Connection,
@@ -49,6 +49,7 @@ use tracing::error;
 use crate::{
     api::Store,
     provider::{Event, EventSender},
+    store::{fs::FsStore, mem::MemStore},
     ticket::BlobTicket,
     HashAndFormat,
 };
@@ -64,6 +65,32 @@ pub(crate) struct BlobsInner {
 #[derive(Debug, Clone)]
 pub struct BlobsProtocol {
     pub(crate) inner: Arc<BlobsInner>,
+}
+
+/// A builder for the blobs protocol handler.
+pub struct BlobsProtocolBuilder {
+    pub store: Store,
+    pub events: Option<mpsc::Sender<Event>>,
+}
+
+impl BlobsProtocolBuilder {
+    fn new(store: Store) -> Self {
+        Self {
+            store,
+            events: None,
+        }
+    }
+
+    /// Set provider events.
+    pub fn events(mut self, events: mpsc::Sender<Event>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    /// Build the blobs protocol handler.
+    pub fn build(self, endpoint: &Endpoint) -> BlobsProtocol {
+        BlobsProtocol::new(&self.store, endpoint.clone(), self.events)
+    }
 }
 
 impl Deref for BlobsProtocol {
@@ -83,6 +110,22 @@ impl BlobsProtocol {
                 events: EventSender::new(events),
             }),
         }
+    }
+
+    /// Create a new Blobs protocol handler builder, given a store.
+    pub fn builder(store: &Store) -> BlobsProtocolBuilder {
+        BlobsProtocolBuilder::new(store.clone())
+    }
+
+    /// Create a new memory-backed Blobs protocol handler.
+    pub fn memory() -> BlobsProtocolBuilder {
+        Self::builder(&MemStore::new())
+    }
+
+    /// Load a persistent Blobs protocol handler from a path.
+    pub async fn persistent(path: impl AsRef<Path>) -> anyhow::Result<BlobsProtocolBuilder> {
+        let store = FsStore::load(path).await?;
+        Ok(Self::builder(&store))
     }
 
     pub fn store(&self) -> &Store {
