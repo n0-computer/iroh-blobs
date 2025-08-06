@@ -30,7 +30,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
+        fs::{meta::raw_outboard_size, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -526,12 +526,6 @@ impl BaoFileStorage {
 /// to be reconstructed on next use.
 #[derive(Debug, Clone, Default, derive_more::Deref)]
 pub(crate) struct BaoFileHandle(pub(super) watch::Sender<BaoFileStorage>);
-
-impl entity_manager::Reset for BaoFileHandle {
-    fn reset(&mut self) {
-        self.send_replace(BaoFileStorage::Initial);
-    }
-}
 
 /// A reader for a bao file, reading just the data.
 #[derive(Debug)]
