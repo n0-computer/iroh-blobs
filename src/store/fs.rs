@@ -1333,7 +1333,7 @@ impl FsStore {
             .thread_name_fn(|| {
                 format!(
                     "iroh-blob-store-{}",
-                    THREAD_NR.fetch_add(1, Ordering::SeqCst)
+                    THREAD_NR.fetch_add(1, Ordering::Relaxed)
                 )
             })
             .enable_time()

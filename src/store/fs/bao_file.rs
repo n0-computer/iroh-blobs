@@ -531,10 +531,6 @@ impl entity_manager::Reset for BaoFileHandle {
     fn reset(&mut self) {
         self.send_replace(BaoFileStorage::Initial);
     }
-
-    fn ref_count(&self) -> usize {
-        self.0.receiver_count() + self.0.sender_count()
-    }
 }
 
 /// A reader for a bao file, reading just the data.
