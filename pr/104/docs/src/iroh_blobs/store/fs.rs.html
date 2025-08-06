@@ -3583,7 +3583,7 @@
             .thread_name_fn(|| {
                 <span class="macro">format!</span>(
                     <span class="string">"iroh-blob-store-{}"</span>,
-                    THREAD_NR.fetch_add(<span class="number">1</span>, Ordering::SeqCst)
+                    THREAD_NR.fetch_add(<span class="number">1</span>, Ordering::Relaxed)
                 )
             })
             .enable_time()
