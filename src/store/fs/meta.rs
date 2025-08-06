@@ -92,15 +92,6 @@ impl Db {
         Self { sender }
     }
 
-    pub async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(Snapshot { tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send snapshot"))?;
-        rx.await.map_err(|_| io::Error::other("receive snapshot"))
-    }
-
     pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sender
@@ -705,6 +696,7 @@ impl Actor {
 
     async fn handle_toplevel(
         db: &mut Database,
+        tasks: &mut JoinSet<()>,
         cmd: TopLevelCommand,
         op: TxnNum,
     ) -> ActorResult<Option<ShutdownMsg>> {
@@ -724,11 +716,11 @@ impl Actor {
                 // nothing to do here, since the database will be dropped
                 Some(cmd)
             }
-            TopLevelCommand::Snapshot(cmd) => {
+            TopLevelCommand::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
                 let txn = db.begin_read().context(TransactionSnafu)?;
                 let snapshot = ReadOnlyTables::new(&txn).context(TableSnafu)?;
-                cmd.tx.send(snapshot).ok();
+                tasks.spawn(list_blobs(snapshot, cmd));
                 None
             }
         })
@@ -750,7 +742,7 @@ impl Actor {
             match cmd {
                 Command::TopLevel(cmd) => {
                     let op = TxnNum::TopLevel(op);
-                    if let Some(shutdown) = Self::handle_toplevel(&mut db, cmd, op).await? {
+                    if let Some(shutdown) = Self::handle_toplevel(&mut db, &mut self.tasks, cmd, op).await? {
                         break Some(shutdown);
                     }
                 }

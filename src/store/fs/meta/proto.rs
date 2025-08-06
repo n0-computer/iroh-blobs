@@ -5,11 +5,10 @@ use bytes::Bytes;
 use nested_enum_utils::enum_conversions;
 use tracing::Span;
 
-use super::{ActorResult, ReadOnlyTables};
+use super::ActorResult;
 use crate::{
     api::proto::{
-        BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ProcessExitRequest, ShutdownMsg,
-        SyncDbMsg,
+        BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ListBlobsMsg, ProcessExitRequest, ShutdownMsg, SyncDbMsg
     },
     store::{
         fs::{entry_state::EntryState, GlobalCmd},
@@ -49,12 +48,6 @@ pub struct GetResult {
 #[derive(Debug)]
 pub struct Dump {
     pub tx: oneshot::Sender<anyhow::Result<()>>,
-    pub span: Span,
-}
-
-#[derive(Debug)]
-pub struct Snapshot {
-    pub(crate) tx: tokio::sync::oneshot::Sender<ReadOnlyTables>,
     pub span: Span,
 }
 
@@ -170,7 +163,7 @@ impl ReadWriteCommand {
 pub enum TopLevelCommand {
     SyncDb(SyncDbMsg),
     Shutdown(ShutdownMsg),
-    Snapshot(Snapshot),
+    ListBlobs(ListBlobsMsg),
 }
 
 impl TopLevelCommand {
@@ -184,7 +177,7 @@ impl TopLevelCommand {
         match self {
             Self::SyncDb(x) => x.parent_span_opt(),
             Self::Shutdown(x) => x.parent_span_opt(),
-            Self::Snapshot(x) => Some(&x.span),
+            Self::ListBlobs(x) => Some(&x.span),
         }
     }
 }
