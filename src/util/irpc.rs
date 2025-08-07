@@ -29,6 +29,7 @@ pub(crate) trait MpscSenderExt<T: IrpcStreamItem>: Sized {
     ///
     /// This will convert items and errors into the item enum type, and add
     /// a done marker if the stream ends without an error.
+    #[allow(dead_code)]
     async fn forward_stream(
         self,
         stream: impl Stream<Item = std::result::Result<T::Item, T::Error>>,
@@ -122,7 +123,7 @@ where
         while let Some(item) = stream.next().await {
             match item {
                 Ok(i) => items.extend(Some(i)),
-                Err(e) => return Err(E::from(e)),
+                Err(e) => return Err(e),
             }
         }
         Ok(items)

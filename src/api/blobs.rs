@@ -866,7 +866,7 @@ impl IrpcStreamItem for ListBlobsItem {
     fn into_result_opt(self) -> Option<Result<Hash, super::Error>> {
         match self {
             Self::Item(hash) => Some(Ok(hash)),
-            Self::Error(e) => Some(Err(e.into())),
+            Self::Error(e) => Some(Err(e)),
             Self::Done => None,
         }
     }
@@ -874,7 +874,7 @@ impl IrpcStreamItem for ListBlobsItem {
     fn from_result(item: std::result::Result<Hash, super::Error>) -> Self {
         match item {
             Ok(hash) => Self::Item(hash),
-            Err(e) => Self::Error(e.into()),
+            Err(e) => Self::Error(e),
         }
     }
 

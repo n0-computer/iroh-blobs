@@ -42,7 +42,7 @@ use crate::{
         ApiClient, TempTag,
     },
     store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
-    util::ChunkRangesExt,
+    util::{irpc::MpscSenderExt, ChunkRangesExt},
     Hash,
 };
 
@@ -196,7 +196,7 @@ impl Actor {
                 cmd.tx.send(status).await.ok();
             }
             Command::ListTags(cmd) => {
-                cmd.tx.send(proto::ListTagsItem::Done).await.ok();
+                cmd.tx.forward_iter(std::iter::empty()).await.ok();
             }
             Command::SetTag(cmd) => {
                 cmd.tx

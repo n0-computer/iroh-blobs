@@ -29,7 +29,6 @@ use bao_tree::{
     ChunkRanges,
 };
 use bytes::Bytes;
-use genawaiter::sync::Gen;
 use irpc::{
     channel::{mpsc, oneshot},
     rpc_requests,
@@ -398,7 +397,7 @@ impl IrpcStreamItem for ListTagsItem {
     fn from_result(item: std::result::Result<TagInfo, super::Error>) -> Self {
         match item {
             Ok(i) => Self::Item(i),
-            Err(e) => Self::Error(e.into()),
+            Err(e) => Self::Error(e),
         }
     }
 
@@ -431,41 +430,7 @@ impl ListTagsProgress {
     }
 
     pub fn stream(self) -> impl Stream<Item = super::Result<TagInfo>> {
-        Gen::new(|co| async move {
-            let mut rx = match self.inner.await {
-                Ok(rx) => rx,
-                Err(err) => {
-                    co.yield_(Err(super::Error::from(err))).await;
-                    return;
-                }
-            };
-            loop {
-                match rx.recv().await {
-                    Ok(Some(ListTagsItem::Item(item))) => {
-                        co.yield_(Ok(item)).await;
-                    }
-                    Ok(Some(ListTagsItem::Done)) => {
-                        break;
-                    }
-                    Ok(Some(ListTagsItem::Error(err))) => {
-                        co.yield_(Err(err.into())).await;
-                        break;
-                    }
-                    Ok(None) => {
-                        co.yield_(Err(super::Error::Io(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "stream ended",
-                        ))))
-                        .await;
-                        break;
-                    }
-                    Err(cause) => {
-                        co.yield_(Err(super::Error::from(cause))).await;
-                        break;
-                    }
-                }
-            }
-        })
+        self.inner.into_stream()
     }
 }
 
