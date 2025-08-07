@@ -59,10 +59,7 @@ use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate, ListBlobsItem},
     provider::StreamContext,
     store::IROH_BLOCK_SIZE,
-    util::{
-        irpc::{IrpcReceiverFutExt, IrpcStreamItem},
-        temp_tag::TempTag,
-    },
+    util::{irpc::IrpcReceiverFutExt, temp_tag::TempTag},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -859,29 +856,29 @@ impl BlobsListProgress {
     }
 }
 
-impl IrpcStreamItem for ListBlobsItem {
-    type Error = super::Error;
-    type Item = Hash;
+// impl IrpcStreamItem for ListBlobsItem {
+//     type Error = super::Error;
+//     type Item = Hash;
 
-    fn into_result_opt(self) -> Option<Result<Hash, super::Error>> {
-        match self {
-            Self::Item(hash) => Some(Ok(hash)),
-            Self::Error(e) => Some(Err(e)),
-            Self::Done => None,
-        }
-    }
+//     fn into_result_opt(self) -> Option<Result<Hash, super::Error>> {
+//         match self {
+//             Self::Item(hash) => Some(Ok(hash)),
+//             Self::Error(e) => Some(Err(e)),
+//             Self::Done => None,
+//         }
+//     }
 
-    fn from_result(item: std::result::Result<Hash, super::Error>) -> Self {
-        match item {
-            Ok(hash) => Self::Item(hash),
-            Err(e) => Self::Error(e),
-        }
-    }
+//     fn from_result(item: std::result::Result<Hash, super::Error>) -> Self {
+//         match item {
+//             Ok(hash) => Self::Item(hash),
+//             Err(e) => Self::Error(e),
+//         }
+//     }
 
-    fn done() -> Self {
-        Self::Done
-    }
-}
+//     fn done() -> Self {
+//         Self::Done
+//     }
+// }
 
 /// A progress handle for a bao export operation.
 ///

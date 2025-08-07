@@ -33,6 +33,7 @@ use bytes::Bytes;
 use irpc::{
     channel::{mpsc, oneshot},
     rpc_requests,
+    util::StreamItem,
 };
 use n0_future::{future, Stream};
 use range_collections::RangeSet2;
@@ -42,10 +43,7 @@ pub use bitfield::Bitfield;
 
 use crate::{
     store::util::Tag,
-    util::{
-        irpc::{IrpcReceiverFutExt, IrpcStreamItem},
-        temp_tag::TempTag,
-    },
+    util::{irpc::IrpcReceiverFutExt, temp_tag::TempTag},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -360,14 +358,14 @@ pub struct TagInfo {
     pub hash: Hash,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, StreamItem)]
 pub enum ListBlobsItem {
     Item(Hash),
     Error(super::Error),
     Done,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, StreamItem)]
 pub enum ListTagsItem {
     Item(TagInfo),
     Error(super::Error),
@@ -383,29 +381,29 @@ impl From<std::result::Result<TagInfo, super::Error>> for ListTagsItem {
     }
 }
 
-impl IrpcStreamItem for ListTagsItem {
-    type Error = super::Error;
-    type Item = TagInfo;
+// impl IrpcStreamItem for ListTagsItem {
+//     type Error = super::Error;
+//     type Item = TagInfo;
 
-    fn into_result_opt(self) -> Option<Result<TagInfo, super::Error>> {
-        match self {
-            ListTagsItem::Item(item) => Some(Ok(item)),
-            ListTagsItem::Done => None,
-            ListTagsItem::Error(err) => Some(Err(err)),
-        }
-    }
+//     fn into_result_opt(self) -> Option<Result<TagInfo, super::Error>> {
+//         match self {
+//             ListTagsItem::Item(item) => Some(Ok(item)),
+//             ListTagsItem::Done => None,
+//             ListTagsItem::Error(err) => Some(Err(err)),
+//         }
+//     }
 
-    fn from_result(item: std::result::Result<TagInfo, super::Error>) -> Self {
-        match item {
-            Ok(i) => Self::Item(i),
-            Err(e) => Self::Error(e),
-        }
-    }
+//     fn from_result(item: std::result::Result<TagInfo, super::Error>) -> Self {
+//         match item {
+//             Ok(i) => Self::Item(i),
+//             Err(e) => Self::Error(e),
+//         }
+//     }
 
-    fn done() -> Self {
-        Self::Done
-    }
-}
+//     fn done() -> Self {
+//         Self::Done
+//     }
+// }
 
 pub struct ListTempTagsProgress {
     inner: future::Boxed<irpc::Result<mpsc::Receiver<ListTempTagsItem>>>,
@@ -522,36 +520,36 @@ pub struct CreateTempTagRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListTempTagsRequest;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, StreamItem)]
 pub enum ListTempTagsItem {
     Item(HashAndFormat),
     Error(super::Error),
     Done,
 }
 
-impl IrpcStreamItem for ListTempTagsItem {
-    type Error = super::Error;
-    type Item = HashAndFormat;
+// impl IrpcStreamItem for ListTempTagsItem {
+//     type Error = super::Error;
+//     type Item = HashAndFormat;
 
-    fn into_result_opt(self) -> Option<Result<HashAndFormat, super::Error>> {
-        match self {
-            ListTempTagsItem::Item(item) => Some(Ok(item)),
-            ListTempTagsItem::Done => None,
-            ListTempTagsItem::Error(err) => Some(Err(err)),
-        }
-    }
+//     fn into_result_opt(self) -> Option<Result<HashAndFormat, super::Error>> {
+//         match self {
+//             ListTempTagsItem::Item(item) => Some(Ok(item)),
+//             ListTempTagsItem::Done => None,
+//             ListTempTagsItem::Error(err) => Some(Err(err)),
+//         }
+//     }
 
-    fn from_result(item: std::result::Result<HashAndFormat, super::Error>) -> Self {
-        match item {
-            Ok(i) => Self::Item(i),
-            Err(e) => Self::Error(e),
-        }
-    }
+//     fn from_result(item: std::result::Result<HashAndFormat, super::Error>) -> Self {
+//         match item {
+//             Ok(i) => Self::Item(i),
+//             Err(e) => Self::Error(e),
+//         }
+//     }
 
-    fn done() -> Self {
-        Self::Done
-    }
-}
+//     fn done() -> Self {
+//         Self::Done
+//     }
+// }
 
 /// Rename a tag atomically
 #[derive(Debug, Serialize, Deserialize)]

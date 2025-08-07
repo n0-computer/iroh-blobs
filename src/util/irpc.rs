@@ -2,29 +2,29 @@ use std::{future::Future, io};
 
 use irpc::{
     channel::{mpsc, RecvError},
-    RpcMessage,
+    util::StreamItem as IrpcStreamItem,
 };
 use n0_future::{stream, Stream, StreamExt};
 
-/// Trait for an enum that has three variants, item, error, and done.
-///
-/// This is very common for irpc stream items if you want to provide an explicit
-/// end of stream marker to make sure unsuccessful termination is not mistaken
-/// for successful end of stream.
-pub(crate) trait IrpcStreamItem: RpcMessage {
-    /// The error case of the item enum.
-    type Error;
-    /// The item case of the item enum.
-    type Item;
-    /// Converts the stream item into either None for end of stream, or a Result
-    /// containing the item or an error. Error is assumed as a termination, so
-    /// if you get error you won't get an additional end of stream marker.
-    fn into_result_opt(self) -> Option<Result<Self::Item, Self::Error>>;
-    /// Converts a result into the item enum.
-    fn from_result(item: std::result::Result<Self::Item, Self::Error>) -> Self;
-    /// Produces a done marker for the item enum.
-    fn done() -> Self;
-}
+// /// Trait for an enum that has three variants, item, error, and done.
+// ///
+// /// This is very common for irpc stream items if you want to provide an explicit
+// /// end of stream marker to make sure unsuccessful termination is not mistaken
+// /// for successful end of stream.
+// pub(crate) trait IrpcStreamItem: RpcMessage {
+//     /// The error case of the item enum.
+//     type Error;
+//     /// The item case of the item enum.
+//     type Item;
+//     /// Converts the stream item into either None for end of stream, or a Result
+//     /// containing the item or an error. Error is assumed as a termination, so
+//     /// if you get error you won't get an additional end of stream marker.
+//     fn into_result_opt(self) -> Option<Result<Self::Item, Self::Error>>;
+//     /// Converts a result into the item enum.
+//     fn from_result(item: std::result::Result<Self::Item, Self::Error>) -> Self;
+//     /// Produces a done marker for the item enum.
+//     fn done() -> Self;
+// }
 
 pub(crate) trait MpscSenderExt<T: IrpcStreamItem>: Sized {
     /// Forward a stream of items to the sender.
