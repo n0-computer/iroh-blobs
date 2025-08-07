@@ -61,6 +61,7 @@ use crate::{
         HashAndFormat, IROH_BLOCK_SIZE,
     },
     util::{
+        irpc::MpscSenderExt,
         temp_tag::{TagDrop, TempTagScope, TempTags},
         ChunkRangesExt,
     },
@@ -297,7 +298,7 @@ impl Actor {
                         format: value.format,
                     })
                     .map(Ok);
-                tx.send(tags.collect()).await.ok();
+                tx.forward_iter(tags).await.ok();
             }
             Command::SetTag(SetTagMsg {
                 inner: SetTagRequest { name: tag, value },
@@ -323,17 +324,22 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                cmd.tx.forward_iter(tts.into_iter().map(Ok)).await.ok();
             }
             Command::ListBlobs(cmd) => {
                 let ListBlobsMsg { tx, .. } = cmd;
                 let blobs = self.state.data.keys().cloned().collect::<Vec<Hash>>();
                 self.spawn(async move {
                     for blob in blobs {
-                        if tx.send(Ok(blob)).await.is_err() {
+                        if tx
+                            .send(api::proto::ListBlobsItem::Item(blob))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
+                    tx.send(api::proto::ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {

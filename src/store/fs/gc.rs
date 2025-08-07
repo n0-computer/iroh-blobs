@@ -48,17 +48,17 @@ pub(super) async fn gc_mark_task(
     }
     let mut roots = HashSet::new();
     trace!("traversing tags");
-    let mut tags = store.tags().list().await?;
+    let mut tags = store.tags().list().stream();
     while let Some(tag) = tags.next().await {
         let info = tag?;
         trace!("adding root {:?} {:?}", info.name, info.hash_and_format());
         roots.insert(info.hash_and_format());
     }
     trace!("traversing temp roots");
-    let mut tts = store.tags().list_temp_tags().await?;
+    let mut tts = store.tags().list_temp_tags().stream();
     while let Some(tt) = tts.next().await {
         trace!("adding temp root {:?}", tt);
-        roots.insert(tt);
+        roots.insert(tt?);
     }
     for HashAndFormat { hash, format } in roots {
         // we need to do this for all formats except raw
@@ -85,7 +85,7 @@ async fn gc_sweep_task(
     live: &HashSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> crate::api::Result<()> {
-    let mut blobs = store.blobs().list().stream().await?;
+    let mut blobs = store.blobs().list().stream();
     let mut count = 0;
     let mut batch = Vec::new();
     while let Some(hash) = blobs.next().await {

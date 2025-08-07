@@ -15,7 +15,7 @@ use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use redb::{Database, DatabaseError, ReadableTable};
 use snafu::{Backtrace, ResultExt, Snafu};
-use tokio::pin;
+use tokio::{pin, task::JoinSet};
 
 use crate::{
     api::{
@@ -23,8 +23,9 @@ use crate::{
         blobs::BlobStatus,
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
+            ListRequest, ListTagsItem, ListTagsRequest, RenameTagRequest, SetTagRequest,
+            ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
     },
@@ -94,15 +95,6 @@ pub struct Db {
 impl Db {
     pub fn new(sender: tokio::sync::mpsc::Sender<Command>) -> Self {
         Self { sender }
-    }
-
-    pub async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(Snapshot { tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send snapshot"))?;
-        rx.await.map_err(|_| io::Error::other("receive snapshot"))
     }
 
     pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
@@ -309,7 +301,6 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
     } = msg;
     let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    let mut res = Vec::new();
     for item in tables.tags().range((from, to)).context(StorageSnafu)? {
         match item {
             Ok((k, v)) => {
@@ -320,15 +311,20 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
                         hash: v.hash,
                         format: v.format,
                     };
-                    res.push(crate::api::Result::Ok(info));
+                    if tx.send(ListTagsItem::Item(info)).await.is_err() {
+                        return Ok(());
+                    }
                 }
             }
             Err(e) => {
-                res.push(Err(crate::api::Error::other(e)));
+                tx.send(ListTagsItem::Error(crate::api::Error::other(e)))
+                    .await
+                    .ok();
+                return Ok(());
             }
         }
     }
-    tx.send(res).await.ok();
+    tx.send(ListTagsItem::Done).await.ok();
     Ok(())
 }
 
@@ -463,6 +459,7 @@ pub struct Actor {
     ds: DeleteHandle,
     options: BatchOptions,
     protected: HashSet<Hash>,
+    tasks: JoinSet<()>,
 }
 
 impl Actor {
@@ -492,6 +489,7 @@ impl Actor {
             ds,
             options,
             protected: Default::default(),
+            tasks: JoinSet::new(),
         })
     }
 
@@ -707,6 +705,7 @@ impl Actor {
 
     async fn handle_toplevel(
         db: &mut Database,
+        tasks: &mut JoinSet<()>,
         cmd: TopLevelCommand,
         op: TxnNum,
     ) -> ActorResult<Option<ShutdownMsg>> {
@@ -726,11 +725,11 @@ impl Actor {
                 // nothing to do here, since the database will be dropped
                 Some(cmd)
             }
-            TopLevelCommand::Snapshot(cmd) => {
+            TopLevelCommand::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
                 let txn = db.begin_read().context(TransactionSnafu)?;
                 let snapshot = ReadOnlyTables::new(&txn).context(TableSnafu)?;
-                cmd.tx.send(snapshot).ok();
+                tasks.spawn(list_blobs(snapshot, cmd));
                 None
             }
         })
@@ -741,14 +740,20 @@ impl Actor {
         let options = &self.options;
         let mut op = 0u64;
         let shutdown = loop {
+            let cmd = tokio::select! {
+                cmd = self.cmds.recv() => cmd,
+                _ = self.tasks.join_next(), if !self.tasks.is_empty() => continue,
+            };
             op += 1;
-            let Some(cmd) = self.cmds.recv().await else {
+            let Some(cmd) = cmd else {
                 break None;
             };
             match cmd {
                 Command::TopLevel(cmd) => {
                     let op = TxnNum::TopLevel(op);
-                    if let Some(shutdown) = Self::handle_toplevel(&mut db, cmd, op).await? {
+                    if let Some(shutdown) =
+                        Self::handle_toplevel(&mut db, &mut self.tasks, cmd, op).await?
+                    {
                         break Some(shutdown);
                     }
                 }
@@ -887,7 +892,7 @@ pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
         Ok(()) => {}
         Err(e) => {
             error!("error listing blobs: {}", e);
-            tx.send(Err(e)).await.ok();
+            tx.send(ListBlobsItem::Error(e)).await.ok();
         }
     }
 }
@@ -895,12 +900,13 @@ pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
 async fn list_blobs_impl(
     snapshot: ReadOnlyTables,
     _cmd: ListRequest,
-    tx: &mut mpsc::Sender<api::Result<Hash>>,
+    tx: &mut mpsc::Sender<ListBlobsItem>,
 ) -> api::Result<()> {
     for item in snapshot.blobs.iter().map_err(api::Error::other)? {
         let (k, _) = item.map_err(api::Error::other)?;
         let k = k.value();
-        tx.send(Ok(k)).await.ok();
+        tx.send(ListBlobsItem::Item(k)).await.ok();
     }
+    tx.send(ListBlobsItem::Done).await.ok();
     Ok(())
 }

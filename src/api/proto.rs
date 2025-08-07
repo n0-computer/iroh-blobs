@@ -14,7 +14,9 @@
 //! The file system store is quite complex and optimized, so to get started take a look at
 //! the much simpler memory store.
 use std::{
+    collections::HashSet,
     fmt::{self, Debug},
+    future::{Future, IntoFuture},
     io,
     num::NonZeroU64,
     ops::{Bound, RangeBounds},
@@ -32,13 +34,20 @@ use irpc::{
     channel::{mpsc, oneshot},
     rpc_requests,
 };
-use n0_future::Stream;
+use n0_future::{future, Stream};
 use range_collections::RangeSet2;
 use serde::{Deserialize, Serialize};
 pub(crate) mod bitfield;
 pub use bitfield::Bitfield;
 
-use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
+use crate::{
+    store::util::Tag,
+    util::{
+        irpc::{IrpcReceiverFutExt, IrpcStreamItem},
+        temp_tag::TempTag,
+    },
+    BlobFormat, Hash, HashAndFormat,
+};
 
 pub(crate) trait HashSpecific {
     fn hash(&self) -> Hash;
@@ -89,7 +98,7 @@ impl HashSpecific for CreateTagMsg {
 #[rpc_requests(message = Command, alias = "Msg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]
+    #[rpc(tx = mpsc::Sender<ListBlobsItem>)]
     ListBlobs(ListRequest),
     #[rpc(tx = oneshot::Sender<Scope>, rx = mpsc::Receiver<BatchResponse>)]
     Batch(BatchRequest),
@@ -113,7 +122,7 @@ pub enum Request {
     ImportPath(ImportPathRequest),
     #[rpc(tx = mpsc::Sender<ExportProgressItem>)]
     ExportPath(ExportPathRequest),
-    #[rpc(tx = oneshot::Sender<Vec<super::Result<TagInfo>>>)]
+    #[rpc(tx = mpsc::Sender<ListTagsItem>)]
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
@@ -123,7 +132,7 @@ pub enum Request {
     RenameTag(RenameTagRequest),
     #[rpc(tx = oneshot::Sender<super::Result<Tag>>)]
     CreateTag(CreateTagRequest),
-    #[rpc(tx = oneshot::Sender<Vec<HashAndFormat>>)]
+    #[rpc(tx = mpsc::Sender<ListTempTagsItem>)]
     ListTempTags(ListTempTagsRequest),
     #[rpc(tx = oneshot::Sender<TempTag>)]
     CreateTempTag(CreateTempTagRequest),
@@ -351,6 +360,109 @@ pub struct TagInfo {
     pub hash: Hash,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListBlobsItem {
+    Item(Hash),
+    Error(super::Error),
+    Done,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTagsItem {
+    Item(TagInfo),
+    Error(super::Error),
+    Done,
+}
+
+impl From<std::result::Result<TagInfo, super::Error>> for ListTagsItem {
+    fn from(item: std::result::Result<TagInfo, super::Error>) -> Self {
+        match item {
+            Ok(item) => ListTagsItem::Item(item),
+            Err(err) => ListTagsItem::Error(err),
+        }
+    }
+}
+
+impl IrpcStreamItem for ListTagsItem {
+    type Error = super::Error;
+    type Item = TagInfo;
+
+    fn into_result_opt(self) -> Option<Result<TagInfo, super::Error>> {
+        match self {
+            ListTagsItem::Item(item) => Some(Ok(item)),
+            ListTagsItem::Done => None,
+            ListTagsItem::Error(err) => Some(Err(err)),
+        }
+    }
+
+    fn from_result(item: std::result::Result<TagInfo, super::Error>) -> Self {
+        match item {
+            Ok(i) => Self::Item(i),
+            Err(e) => Self::Error(e),
+        }
+    }
+
+    fn done() -> Self {
+        Self::Done
+    }
+}
+
+pub struct ListTempTagsProgress {
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListTempTagsItem>>>,
+}
+
+impl IntoFuture for ListTempTagsProgress {
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.inner.try_collect())
+    }
+
+    type IntoFuture = future::Boxed<Self::Output>;
+
+    type Output = super::Result<HashSet<HashAndFormat>>;
+}
+
+impl ListTempTagsProgress {
+    pub(super) fn new(
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListTempTagsItem>>> + Send + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::pin(fut),
+        }
+    }
+
+    pub fn stream(self) -> impl Stream<Item = super::Result<HashAndFormat>> {
+        self.inner.into_stream()
+    }
+}
+
+pub struct ListTagsProgress {
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListTagsItem>>>,
+}
+
+impl IntoFuture for ListTagsProgress {
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.inner.try_collect())
+    }
+
+    type IntoFuture = future::Boxed<Self::Output>;
+
+    type Output = super::Result<Vec<TagInfo>>;
+}
+
+impl ListTagsProgress {
+    pub(super) fn new(
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListTagsItem>>> + Send + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::pin(fut),
+        }
+    }
+
+    pub fn stream(self) -> impl Stream<Item = super::Result<TagInfo>> {
+        self.inner.into_stream()
+    }
+}
+
 impl From<TagInfo> for HashAndFormat {
     fn from(tag_info: TagInfo) -> Self {
         HashAndFormat {
@@ -409,6 +521,37 @@ pub struct CreateTempTagRequest {
 /// List all temp tags
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListTempTagsRequest;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTempTagsItem {
+    Item(HashAndFormat),
+    Error(super::Error),
+    Done,
+}
+
+impl IrpcStreamItem for ListTempTagsItem {
+    type Error = super::Error;
+    type Item = HashAndFormat;
+
+    fn into_result_opt(self) -> Option<Result<HashAndFormat, super::Error>> {
+        match self {
+            ListTempTagsItem::Item(item) => Some(Ok(item)),
+            ListTempTagsItem::Done => None,
+            ListTempTagsItem::Error(err) => Some(Err(err)),
+        }
+    }
+
+    fn from_result(item: std::result::Result<HashAndFormat, super::Error>) -> Self {
+        match item {
+            Ok(i) => Self::Item(i),
+            Err(e) => Self::Error(e),
+        }
+    }
+
+    fn done() -> Self {
+        Self::Done
+    }
+}
 
 /// Rename a tag atomically
 #[derive(Debug, Serialize, Deserialize)]

@@ -56,10 +56,13 @@ use super::{
     ApiClient, RequestResult, Tags,
 };
 use crate::{
-    api::proto::{BatchRequest, ImportByteStreamUpdate},
+    api::proto::{BatchRequest, ImportByteStreamUpdate, ListBlobsItem},
     provider::StreamContext,
     store::IROH_BLOCK_SIZE,
-    util::temp_tag::TempTag,
+    util::{
+        irpc::{IrpcReceiverFutExt, IrpcStreamItem},
+        temp_tag::TempTag,
+    },
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -835,34 +838,48 @@ impl ImportBaoHandle {
 
 /// A progress handle for a blobs list operation.
 pub struct BlobsListProgress {
-    inner: future::Boxed<irpc::Result<mpsc::Receiver<super::Result<Hash>>>>,
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListBlobsItem>>>,
 }
 
 impl BlobsListProgress {
     fn new(
-        fut: impl Future<Output = irpc::Result<mpsc::Receiver<super::Result<Hash>>>> + Send + 'static,
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListBlobsItem>>> + Send + 'static,
     ) -> Self {
         Self {
             inner: Box::pin(fut),
         }
     }
 
-    pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
-        let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
-        let mut hashes = Vec::new();
-        while let Some(item) = rx.recv().await? {
-            hashes.push(item?);
-        }
-        Ok(hashes)
+    pub async fn hashes(self) -> super::Result<Vec<Hash>> {
+        self.inner.try_collect().await
     }
 
-    pub async fn stream(self) -> irpc::Result<impl Stream<Item = super::Result<Hash>>> {
-        let mut rx = self.inner.await?;
-        Ok(Gen::new(|co| async move {
-            while let Ok(Some(item)) = rx.recv().await {
-                co.yield_(item).await;
-            }
-        }))
+    pub fn stream(self) -> impl Stream<Item = super::Result<Hash>> {
+        self.inner.into_stream()
+    }
+}
+
+impl IrpcStreamItem for ListBlobsItem {
+    type Error = super::Error;
+    type Item = Hash;
+
+    fn into_result_opt(self) -> Option<Result<Hash, super::Error>> {
+        match self {
+            Self::Item(hash) => Some(Ok(hash)),
+            Self::Error(e) => Some(Err(e)),
+            Self::Done => None,
+        }
+    }
+
+    fn from_result(item: std::result::Result<Hash, super::Error>) -> Self {
+        match item {
+            Ok(hash) => Self::Item(hash),
+            Err(e) => Self::Error(e),
+        }
+    }
+
+    fn done() -> Self {
+        Self::Done
     }
 }
 

@@ -3,7 +3,7 @@
 //! The main entry point is the [`Tags`] struct.
 use std::ops::RangeBounds;
 
-use n0_future::{Stream, StreamExt};
+use n0_future::StreamExt;
 use ref_cast::RefCast;
 use tracing::trace;
 
@@ -16,7 +16,10 @@ use super::{
     proto::{CreateTempTagRequest, Scope},
     ApiClient, Tag, TempTag,
 };
-use crate::{api::proto::ListTempTagsRequest, HashAndFormat};
+use crate::{
+    api::proto::{ListTagsProgress, ListTempTagsProgress, ListTempTagsRequest},
+    HashAndFormat,
+};
 
 /// The API for interacting with tags and temp tags.
 #[derive(Debug, Clone, ref_cast::RefCast)]
@@ -30,32 +33,25 @@ impl Tags {
         Self::ref_cast(sender)
     }
 
-    pub async fn list_temp_tags(&self) -> irpc::Result<impl Stream<Item = HashAndFormat>> {
+    pub fn list_temp_tags(&self) -> ListTempTagsProgress {
         let options = ListTempTagsRequest;
         trace!("{:?}", options);
-        let res = self.client.rpc(options).await?;
-        Ok(n0_future::stream::iter(res))
+        ListTempTagsProgress::new(self.client.server_streaming(options, 32))
     }
 
     /// List all tags with options.
     ///
     /// This is the most flexible way to list tags. All the other list methods are just convenience
     /// methods that call this one with the appropriate options.
-    pub async fn list_with_opts(
-        &self,
-        options: ListOptions,
-    ) -> irpc::Result<impl Stream<Item = super::Result<TagInfo>>> {
+    pub fn list_with_opts(&self, options: ListOptions) -> ListTagsProgress {
         trace!("{:?}", options);
-        let res = self.client.rpc(options).await?;
-        Ok(n0_future::stream::iter(res))
+        ListTagsProgress::new(self.client.server_streaming(options, 32))
     }
 
     /// Get the value of a single tag
     pub async fn get(&self, name: impl AsRef<[u8]>) -> super::RequestResult<Option<TagInfo>> {
-        let mut stream = self
-            .list_with_opts(ListOptions::single(name.as_ref()))
-            .await?;
-        Ok(stream.next().await.transpose()?)
+        let progress = self.list_with_opts(ListOptions::single(name.as_ref()));
+        Ok(progress.stream().next().await.transpose()?)
     }
 
     pub async fn set_with_opts(&self, options: SetOptions) -> super::RequestResult<()> {
@@ -77,34 +73,27 @@ impl Tags {
     }
 
     /// List a range of tags
-    pub async fn list_range<R, E>(
-        &self,
-        range: R,
-    ) -> irpc::Result<impl Stream<Item = super::Result<TagInfo>>>
+    pub fn list_range<R, E>(&self, range: R) -> ListTagsProgress
     where
         R: RangeBounds<E>,
         E: AsRef<[u8]>,
     {
-        self.list_with_opts(ListOptions::range(range)).await
+        self.list_with_opts(ListOptions::range(range))
     }
 
     /// Lists all tags with the given prefix.
-    pub async fn list_prefix(
-        &self,
-        prefix: impl AsRef<[u8]>,
-    ) -> irpc::Result<impl Stream<Item = super::Result<TagInfo>>> {
+    pub fn list_prefix(&self, prefix: impl AsRef<[u8]>) -> ListTagsProgress {
         self.list_with_opts(ListOptions::prefix(prefix.as_ref()))
-            .await
     }
 
     /// Lists all tags.
-    pub async fn list(&self) -> irpc::Result<impl Stream<Item = super::Result<TagInfo>>> {
-        self.list_with_opts(ListOptions::all()).await
+    pub fn list(&self) -> ListTagsProgress {
+        self.list_with_opts(ListOptions::all())
     }
 
     /// Lists all tags with a hash_seq format.
-    pub async fn list_hash_seq(&self) -> irpc::Result<impl Stream<Item = super::Result<TagInfo>>> {
-        self.list_with_opts(ListOptions::hash_seq()).await
+    pub fn list_hash_seq(&self) -> ListTagsProgress {
+        self.list_with_opts(ListOptions::hash_seq())
     }
 
     /// Deletes a tag.

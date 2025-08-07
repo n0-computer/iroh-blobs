@@ -36,13 +36,13 @@ use crate::{
         proto::{
             self, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
             ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
-            ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
-            ObserveRequest, WaitIdleMsg,
+            ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ListBlobsItem,
+            ObserveMsg, ObserveRequest, WaitIdleMsg,
         },
         ApiClient, TempTag,
     },
     store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
-    util::ChunkRangesExt,
+    util::{irpc::MpscSenderExt, ChunkRangesExt},
     Hash,
 };
 
@@ -178,8 +178,9 @@ impl Actor {
                 let hashes: Vec<Hash> = self.data.keys().cloned().collect();
                 self.tasks.spawn(async move {
                     for hash in hashes {
-                        cmd.tx.send(Ok(hash)).await.ok();
+                        cmd.tx.send(ListBlobsItem::Item(hash)).await.ok();
                     }
+                    cmd.tx.send(ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {
@@ -195,7 +196,7 @@ impl Actor {
                 cmd.tx.send(status).await.ok();
             }
             Command::ListTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.forward_iter(std::iter::empty()).await.ok();
             }
             Command::SetTag(cmd) => {
                 cmd.tx
@@ -204,7 +205,7 @@ impl Actor {
                     .ok();
             }
             Command::ListTempTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.forward_iter(std::iter::empty()).await.ok();
             }
             Command::SyncDb(cmd) => {
                 cmd.tx.send(Ok(())).await.ok();
