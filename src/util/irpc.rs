@@ -1,8 +1,10 @@
 use std::{future::Future, io};
 
-use genawaiter::sync::Gen;
-use irpc::{channel::mpsc, RpcMessage};
-use n0_future::{Stream, StreamExt};
+use irpc::{
+    channel::{mpsc, RecvError},
+    RpcMessage,
+};
+use n0_future::{stream, Stream, StreamExt};
 
 /// Trait for an enum that has three variants, item, error, and done.
 ///
@@ -135,38 +137,41 @@ where
         E: From<irpc::Error>,
         E: From<irpc::channel::RecvError>,
     {
-        Gen::new(move |co| async move {
-            let mut rx = match self.await {
-                Ok(rx) => rx,
-                Err(e) => {
-                    co.yield_(Err(E::from(e))).await;
-                    return;
-                }
-            };
-            loop {
-                match rx.recv().await {
-                    Ok(Some(item)) => match item.into_result_opt() {
-                        Some(Ok(i)) => co.yield_(Ok(i)).await,
-                        Some(Err(e)) => {
-                            co.yield_(Err(E::from(e))).await;
-                            break;
-                        }
-                        None => break,
-                    },
-                    Ok(None) => {
-                        co.yield_(Err(E::from(irpc::channel::RecvError::Io(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "unexpected end of stream",
-                        )))))
-                        .await;
-                        break;
-                    }
-                    Err(e) => {
-                        co.yield_(Err(E::from(e))).await;
-                        break;
-                    }
-                }
+        enum State<S, T> {
+            Init(S),
+            Receiving(mpsc::Receiver<T>),
+            Done,
+        }
+        fn eof() -> RecvError {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected end of stream").into()
+        }
+        async fn process_recv<S, T, E>(
+            mut rx: mpsc::Receiver<T>,
+        ) -> Option<(std::result::Result<T::Item, E>, State<S, T>)>
+        where
+            T: IrpcStreamItem,
+            E: From<T::Error>,
+            E: From<irpc::Error>,
+            E: From<RecvError>,
+        {
+            match rx.recv().await {
+                Ok(Some(item)) => match item.into_result_opt()? {
+                    Ok(i) => Some((Ok(i), State::Receiving(rx))),
+                    Err(e) => Some((Err(E::from(e)), State::Done)),
+                },
+                Ok(None) => Some((Err(E::from(eof())), State::Done)),
+                Err(e) => Some((Err(E::from(e)), State::Done)),
             }
-        })
+        }
+        Box::pin(stream::unfold(State::Init(self), |state| async move {
+            match state {
+                State::Init(fut) => match fut.await {
+                    Ok(rx) => process_recv(rx).await,
+                    Err(e) => Some((Err(E::from(e)), State::Done)),
+                },
+                State::Receiving(rx) => process_recv(rx).await,
+                State::Done => None,
+            }
+        }))
     }
 }
