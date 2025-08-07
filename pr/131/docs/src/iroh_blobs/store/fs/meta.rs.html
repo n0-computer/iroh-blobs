@@ -910,16 +910,7 @@
 <a href="#909" id="909">909</a>
 <a href="#910" id="910">910</a>
 <a href="#911" id="911">911</a>
-<a href="#912" id="912">912</a>
-<a href="#913" id="913">913</a>
-<a href="#914" id="914">914</a>
-<a href="#915" id="915">915</a>
-<a href="#916" id="916">916</a>
-<a href="#917" id="917">917</a>
-<a href="#918" id="918">918</a>
-<a href="#919" id="919">919</a>
-<a href="#920" id="920">920</a>
-<a href="#921" id="921">921</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
+<a href="#912" id="912">912</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
 </span><span class="attr">#![allow(clippy::result_large_err)]
 </span><span class="kw">use </span>std::{
     collections::HashSet,
@@ -1222,7 +1213,6 @@
     } = msg;
     <span class="kw">let </span>from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     <span class="kw">let </span>to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    <span class="kw">let </span><span class="kw-2">mut </span>res = Vec::new();
     <span class="kw">for </span>item <span class="kw">in </span>tables.tags().range((from, to)).context(StorageSnafu)<span class="question-mark">? </span>{
         <span class="kw">match </span>item {
             <span class="prelude-val">Ok</span>((k, v)) =&gt; {
@@ -1233,23 +1223,15 @@
                         hash: v.hash,
                         format: v.format,
                     };
-                    res.push(<span class="kw">crate</span>::api::Result::Ok(info));
+                    <span class="kw">if </span>tx.send(ListTagsItem::Item(info)).<span class="kw">await</span>.is_err() {
+                        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+                    }
                 }
             }
             <span class="prelude-val">Err</span>(e) =&gt; {
-                res.push(<span class="prelude-val">Err</span>(<span class="kw">crate</span>::api::Error::other(e)));
-            }
-        }
-    }
-    <span class="kw">for </span>item <span class="kw">in </span>res {
-        <span class="kw">match </span>item {
-            <span class="prelude-val">Ok</span>(tag_info) =&gt; {
-                <span class="kw">if </span>tx.send(ListTagsItem::Item(tag_info)).<span class="kw">await</span>.is_err() {
-                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-                }
-            }
-            <span class="prelude-val">Err</span>(err) =&gt; {
-                tx.send(ListTagsItem::Error(err)).<span class="kw">await</span>.ok();
+                tx.send(ListTagsItem::Error(<span class="kw">crate</span>::api::Error::other(e)))
+                    .<span class="kw">await
+                    </span>.ok();
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
             }
         }
