@@ -59,7 +59,10 @@ use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate, ListBlobsItem},
     provider::StreamContext,
     store::IROH_BLOCK_SIZE,
-    util::temp_tag::TempTag,
+    util::{
+        irpc::{IrpcReceiverFutExt, IrpcStreamItem},
+        temp_tag::TempTag,
+    },
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -847,43 +850,36 @@ impl BlobsListProgress {
         }
     }
 
-    pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
-        let mut rx = self.inner.await?;
-        let mut hashes = Vec::new();
-        loop {
-            match rx.recv().await? {
-                Some(ListBlobsItem::Item(hash)) => hashes.push(hash),
-                Some(ListBlobsItem::Error(cause)) => return Err(cause.into()),
-                Some(ListBlobsItem::Done) => break,
-                None => return Err(super::Error::other("unexpected end of stream").into()),
-            }
-        }
-        Ok(hashes)
+    pub async fn hashes(self) -> super::Result<Vec<Hash>> {
+        self.inner.try_collect().await
     }
 
-    pub async fn stream(self) -> irpc::Result<impl Stream<Item = super::Result<Hash>>> {
-        let mut rx = self.inner.await?;
-        Ok(Gen::new(|co| async move {
-            loop {
-                match rx.recv().await {
-                    Ok(Some(ListBlobsItem::Item(hash))) => co.yield_(Ok(hash)).await,
-                    Ok(Some(ListBlobsItem::Error(cause))) => {
-                        co.yield_(Err(cause)).await;
-                        break;
-                    }
-                    Ok(Some(ListBlobsItem::Done)) => break,
-                    Ok(None) => {
-                        co.yield_(Err(super::Error::other("unexpected end of stream").into()))
-                            .await;
-                        break;
-                    }
-                    Err(cause) => {
-                        co.yield_(Err(cause.into())).await;
-                        break;
-                    }
-                }
-            }
-        }))
+    pub fn stream(self) -> impl Stream<Item = super::Result<Hash>> {
+        self.inner.into_stream()
+    }
+}
+
+impl IrpcStreamItem for ListBlobsItem {
+    type Error = super::Error;
+    type Item = Hash;
+
+    fn into_result_opt(self) -> Option<Result<Hash, super::Error>> {
+        match self {
+            Self::Item(hash) => Some(Ok(hash)),
+            Self::Error(e) => Some(Err(e.into())),
+            Self::Done => None,
+        }
+    }
+
+    fn from_result(item: std::result::Result<Hash, super::Error>) -> Self {
+        match item {
+            Ok(hash) => Self::Item(hash),
+            Err(e) => Self::Error(e.into()),
+        }
+    }
+
+    fn done() -> Self {
+        Self::Done
     }
 }
 

@@ -196,7 +196,7 @@ impl Actor {
                 cmd.tx.send(status).await.ok();
             }
             Command::ListTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.send(proto::ListTagsItem::Done).await.ok();
             }
             Command::SetTag(cmd) => {
                 cmd.tx

@@ -48,7 +48,7 @@ pub(super) async fn gc_mark_task(
     }
     let mut roots = HashSet::new();
     trace!("traversing tags");
-    let mut tags = store.tags().list().await?;
+    let mut tags = store.tags().list().stream();
     while let Some(tag) = tags.next().await {
         let info = tag?;
         trace!("adding root {:?} {:?}", info.name, info.hash_and_format());
@@ -85,7 +85,7 @@ async fn gc_sweep_task(
     live: &HashSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> crate::api::Result<()> {
-    let mut blobs = store.blobs().list().stream().await?;
+    let mut blobs = store.blobs().list().stream();
     let mut count = 0;
     let mut batch = Vec::new();
     while let Some(hash) = blobs.next().await {

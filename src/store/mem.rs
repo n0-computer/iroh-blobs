@@ -61,6 +61,7 @@ use crate::{
         HashAndFormat, IROH_BLOCK_SIZE,
     },
     util::{
+        irpc::MpscSenderExt,
         temp_tag::{TagDrop, TempTagScope, TempTags},
         ChunkRangesExt,
     },
@@ -297,7 +298,7 @@ impl Actor {
                         format: value.format,
                     })
                     .map(Ok);
-                tx.send(tags.collect()).await.ok();
+                tx.forward_iter(tags).await.ok();
             }
             Command::SetTag(SetTagMsg {
                 inner: SetTagRequest { name: tag, value },

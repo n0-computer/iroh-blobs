@@ -5,20 +5,13 @@ use std::{
 
 use iroh_blobs::{
     api::{
-        self,
         tags::{TagInfo, Tags},
         Store,
     },
     store::{fs::FsStore, mem::MemStore},
     BlobFormat, Hash, HashAndFormat,
 };
-use n0_future::{Stream, StreamExt};
 use testresult::TestResult;
-
-async fn to_vec<T>(stream: impl Stream<Item = api::Result<T>>) -> api::Result<Vec<T>> {
-    let res = stream.collect::<Vec<_>>().await;
-    res.into_iter().collect::<api::Result<Vec<_>>>()
-}
 
 fn expected(tags: impl IntoIterator<Item = &'static str>) -> Vec<TagInfo> {
     tags.into_iter()
@@ -35,50 +28,40 @@ async fn set(tags: &Tags, names: impl IntoIterator<Item = &str>) -> TestResult<(
 
 async fn tags_smoke(tags: &Tags) -> TestResult<()> {
     set(tags, ["a", "b", "c", "d", "e"]).await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(res, expected(["a", "b", "c", "d", "e"]));
 
-    let stream = tags.list_range("b".."d").await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list_range("b".."d").await?;
     assert_eq!(res, expected(["b", "c"]));
 
-    let stream = tags.list_range("b"..).await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list_range("b"..).await?;
     assert_eq!(res, expected(["b", "c", "d", "e"]));
 
-    let stream = tags.list_range(.."d").await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list_range(.."d").await?;
     assert_eq!(res, expected(["a", "b", "c"]));
 
-    let stream = tags.list_range(..="d").await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list_range(..="d").await?;
     assert_eq!(res, expected(["a", "b", "c", "d"]));
 
     tags.delete_range("b"..).await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(res, expected(["a"]));
 
     tags.delete_range(..="a").await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(res, expected([]));
 
     set(tags, ["a", "aa", "aaa", "aab", "b"]).await?;
 
-    let stream = tags.list_prefix("aa").await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list_prefix("aa").await?;
     assert_eq!(res, expected(["aa", "aaa", "aab"]));
 
     tags.delete_prefix("aa").await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(res, expected(["a", "b"]));
 
     tags.delete_prefix("").await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(res, expected([]));
 
     set(tags, ["a", "b", "c"]).await?;
@@ -89,8 +72,7 @@ async fn tags_smoke(tags: &Tags) -> TestResult<()> {
     );
 
     tags.delete("b").await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(res, expected(["a", "c"]));
 
     assert_eq!(tags.get("b").await?, None);
@@ -100,8 +82,7 @@ async fn tags_smoke(tags: &Tags) -> TestResult<()> {
     tags.set("a", HashAndFormat::hash_seq(Hash::new("a")))
         .await?;
     tags.set("b", HashAndFormat::raw(Hash::new("b"))).await?;
-    let stream = tags.list_hash_seq().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list_hash_seq().await?;
     assert_eq!(
         res,
         vec![TagInfo {
@@ -114,8 +95,7 @@ async fn tags_smoke(tags: &Tags) -> TestResult<()> {
     tags.delete_all().await?;
     set(tags, ["c"]).await?;
     tags.rename("c", "f").await?;
-    let stream = tags.list().await?;
-    let res = to_vec(stream).await?;
+    let res = tags.list().await?;
     assert_eq!(
         res,
         vec![TagInfo {

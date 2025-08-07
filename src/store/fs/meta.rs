@@ -24,7 +24,8 @@ use crate::{
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
             CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
-            ListRequest, ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            ListRequest, ListTagsItem, ListTagsRequest, RenameTagRequest, SetTagRequest,
+            ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
     },
@@ -319,7 +320,20 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
             }
         }
     }
-    tx.send(res).await.ok();
+    for item in res {
+        match item {
+            Ok(tag_info) => {
+                if tx.send(ListTagsItem::Item(tag_info)).await.is_err() {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                tx.send(ListTagsItem::Error(err)).await.ok();
+                return Ok(());
+            }
+        }
+    }
+    tx.send(ListTagsItem::Done).await.ok();
     Ok(())
 }
 

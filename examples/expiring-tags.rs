@@ -73,7 +73,7 @@ async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> anyhow:
         // find tags to delete one by one and then delete them
         //
         // this allows us to print the tags before deleting them
-        let mut tags = blobs.tags().list().await?;
+        let mut tags = blobs.tags().list().stream();
         let mut to_delete = Vec::new();
         while let Some(tag) = tags.next().await {
             let tag = tag?.name;
@@ -102,7 +102,7 @@ async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> anyhow:
 
 async fn print_store_info(store: &Store) -> anyhow::Result<()> {
     let now = chrono::Utc::now();
-    let mut tags = store.tags().list().await?;
+    let mut tags = store.tags().list().stream();
     println!(
         "Current time: {}",
         now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -112,7 +112,7 @@ async fn print_store_info(store: &Store) -> anyhow::Result<()> {
         let tag = tag?;
         println!("  {tag:?}");
     }
-    let mut blobs = store.list().stream().await?;
+    let mut blobs = store.list().stream();
     println!("Blobs:");
     while let Some(item) = blobs.next().await {
         println!("  {}", item?);
