@@ -301,7 +301,6 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
     } = msg;
     let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    let mut res = Vec::new();
     for item in tables.tags().range((from, to)).context(StorageSnafu)? {
         match item {
             Ok((k, v)) => {
@@ -312,23 +311,15 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
                         hash: v.hash,
                         format: v.format,
                     };
-                    res.push(crate::api::Result::Ok(info));
+                    if tx.send(ListTagsItem::Item(info)).await.is_err() {
+                        return Ok(());
+                    }
                 }
             }
             Err(e) => {
-                res.push(Err(crate::api::Error::other(e)));
-            }
-        }
-    }
-    for item in res {
-        match item {
-            Ok(tag_info) => {
-                if tx.send(ListTagsItem::Item(tag_info)).await.is_err() {
-                    return Ok(());
-                }
-            }
-            Err(err) => {
-                tx.send(ListTagsItem::Error(err)).await.ok();
+                tx.send(ListTagsItem::Error(crate::api::Error::other(e)))
+                    .await
+                    .ok();
                 return Ok(());
             }
         }
