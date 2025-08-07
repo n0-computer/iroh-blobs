@@ -1429,7 +1429,7 @@
             Command::ListTempTags(cmd) =&gt; {
                 <span class="macro">trace!</span>(<span class="string">"{cmd:?}"</span>);
                 <span class="kw">let </span>tts = <span class="self">self</span>.temp_tags.list();
-                cmd.tx.send(tts).<span class="kw">await</span>.ok();
+                cmd.tx.forward_iter(tts.into_iter().map(<span class="prelude-val">Ok</span>)).<span class="kw">await</span>.ok();
             }
             Command::ListBlobs(cmd) =&gt; {
                 <span class="kw">let </span>ListBlobsMsg { tx, .. } = cmd;

@@ -520,10 +520,10 @@
         roots.insert(info.hash_and_format());
     }
     <span class="macro">trace!</span>(<span class="string">"traversing temp roots"</span>);
-    <span class="kw">let </span><span class="kw-2">mut </span>tts = store.tags().list_temp_tags().<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>tts = store.tags().list_temp_tags().stream();
     <span class="kw">while let </span><span class="prelude-val">Some</span>(tt) = tts.next().<span class="kw">await </span>{
         <span class="macro">trace!</span>(<span class="string">"adding temp root {:?}"</span>, tt);
-        roots.insert(tt);
+        roots.insert(tt<span class="question-mark">?</span>);
     }
     <span class="kw">for </span>HashAndFormat { hash, format } <span class="kw">in </span>roots {
         <span class="comment">// we need to do this for all formats except raw

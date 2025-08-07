@@ -179,13 +179,12 @@
 <a href="#178" id="178">178</a>
 <a href="#179" id="179">179</a>
 <a href="#180" id="180">180</a>
-<a href="#181" id="181">181</a>
-<a href="#182" id="182">182</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags API
+<a href="#181" id="181">181</a></pre></div><pre class="rust"><code><span class="doccomment">//! Tags API
 //!
 //! The main entry point is the [`Tags`] struct.
 </span><span class="kw">use </span>std::ops::RangeBounds;
 
-<span class="kw">use </span>n0_future::{Stream, StreamExt};
+<span class="kw">use </span>n0_future::StreamExt;
 <span class="kw">use </span>ref_cast::RefCast;
 <span class="kw">use </span>tracing::trace;
 
@@ -199,7 +198,7 @@
     ApiClient, Tag, TempTag,
 };
 <span class="kw">use crate</span>::{
-    api::proto::{ListTagsProgress, ListTempTagsRequest},
+    api::proto::{ListTagsProgress, ListTempTagsProgress, ListTempTagsRequest},
     HashAndFormat,
 };
 
@@ -215,11 +214,10 @@
         <span class="self">Self</span>::ref_cast(sender)
     }
 
-    <span class="kw">pub async fn </span>list_temp_tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; irpc::Result&lt;<span class="kw">impl </span>Stream&lt;Item = HashAndFormat&gt;&gt; {
+    <span class="kw">pub fn </span>list_temp_tags(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ListTempTagsProgress {
         <span class="kw">let </span>options = ListTempTagsRequest;
         <span class="macro">trace!</span>(<span class="string">"{:?}"</span>, options);
-        <span class="kw">let </span>res = <span class="self">self</span>.client.rpc(options).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(n0_future::stream::iter(res))
+        ListTempTagsProgress::new(<span class="self">self</span>.client.server_streaming(options, <span class="number">32</span>))
     }
 
     <span class="doccomment">/// List all tags with options.

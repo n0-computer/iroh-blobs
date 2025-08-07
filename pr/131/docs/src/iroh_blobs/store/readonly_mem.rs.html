@@ -613,7 +613,7 @@
                     </span>.ok();
             }
             Command::ListTempTags(cmd) =&gt; {
-                cmd.tx.send(Vec::new()).<span class="kw">await</span>.ok();
+                cmd.tx.forward_iter(std::iter::empty()).<span class="kw">await</span>.ok();
             }
             Command::SyncDb(cmd) =&gt; {
                 cmd.tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
