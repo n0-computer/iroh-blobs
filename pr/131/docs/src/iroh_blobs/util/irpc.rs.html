@@ -170,11 +170,18 @@
 <a href="#169" id="169">169</a>
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
-<a href="#172" id="172">172</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{future::Future, io};
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{future::Future, io};
 
-<span class="kw">use </span>genawaiter::sync::Gen;
-<span class="kw">use </span>irpc::{channel::mpsc, RpcMessage};
-<span class="kw">use </span>n0_future::{Stream, StreamExt};
+<span class="kw">use </span>irpc::{
+    channel::{mpsc, RecvError},
+    RpcMessage,
+};
+<span class="kw">use </span>n0_future::{stream, Stream, StreamExt};
 
 <span class="doccomment">/// Trait for an enum that has three variants, item, error, and done.
 ///
@@ -307,39 +314,42 @@
         E: From&lt;irpc::Error&gt;,
         E: From&lt;irpc::channel::RecvError&gt;,
     {
-        Gen::new(<span class="kw">move </span>|co| <span class="kw">async move </span>{
-            <span class="kw">let </span><span class="kw-2">mut </span>rx = <span class="kw">match </span><span class="self">self</span>.<span class="kw">await </span>{
-                <span class="prelude-val">Ok</span>(rx) =&gt; rx,
-                <span class="prelude-val">Err</span>(e) =&gt; {
-                    co.yield_(<span class="prelude-val">Err</span>(E::from(e))).<span class="kw">await</span>;
-                    <span class="kw">return</span>;
-                }
-            };
-            <span class="kw">loop </span>{
-                <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(item)) =&gt; <span class="kw">match </span>item.into_result_opt() {
-                        <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(i)) =&gt; co.yield_(<span class="prelude-val">Ok</span>(i)).<span class="kw">await</span>,
-                        <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e)) =&gt; {
-                            co.yield_(<span class="prelude-val">Err</span>(E::from(e))).<span class="kw">await</span>;
-                            <span class="kw">break</span>;
-                        }
-                        <span class="prelude-val">None </span>=&gt; <span class="kw">break</span>,
-                    },
-                    <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; {
-                        co.yield_(<span class="prelude-val">Err</span>(E::from(irpc::channel::RecvError::Io(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            <span class="string">"unexpected end of stream"</span>,
-                        )))))
-                        .<span class="kw">await</span>;
-                        <span class="kw">break</span>;
-                    }
-                    <span class="prelude-val">Err</span>(e) =&gt; {
-                        co.yield_(<span class="prelude-val">Err</span>(E::from(e))).<span class="kw">await</span>;
-                        <span class="kw">break</span>;
-                    }
-                }
+        <span class="kw">enum </span>State&lt;S, T&gt; {
+            Init(S),
+            Receiving(mpsc::Receiver&lt;T&gt;),
+            Done,
+        }
+        <span class="kw">fn </span>eof() -&gt; RecvError {
+            io::Error::new(io::ErrorKind::UnexpectedEof, <span class="string">"unexpected end of stream"</span>).into()
+        }
+        <span class="kw">async fn </span>process_recv&lt;S, T, E&gt;(
+            <span class="kw-2">mut </span>rx: mpsc::Receiver&lt;T&gt;,
+        ) -&gt; <span class="prelude-ty">Option</span>&lt;(std::result::Result&lt;T::Item, E&gt;, State&lt;S, T&gt;)&gt;
+        <span class="kw">where
+            </span>T: IrpcStreamItem,
+            E: From&lt;T::Error&gt;,
+            E: From&lt;irpc::Error&gt;,
+            E: From&lt;RecvError&gt;,
+        {
+            <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
+                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(item)) =&gt; <span class="kw">match </span>item.into_result_opt()<span class="question-mark">? </span>{
+                    <span class="prelude-val">Ok</span>(i) =&gt; <span class="prelude-val">Some</span>((<span class="prelude-val">Ok</span>(i), State::Receiving(rx))),
+                    <span class="prelude-val">Err</span>(e) =&gt; <span class="prelude-val">Some</span>((<span class="prelude-val">Err</span>(E::from(e)), State::Done)),
+                },
+                <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Some</span>((<span class="prelude-val">Err</span>(E::from(eof())), State::Done)),
+                <span class="prelude-val">Err</span>(e) =&gt; <span class="prelude-val">Some</span>((<span class="prelude-val">Err</span>(E::from(e)), State::Done)),
             }
-        })
+        }
+        Box::pin(stream::unfold(State::Init(<span class="self">self</span>), |state| <span class="kw">async move </span>{
+            <span class="kw">match </span>state {
+                State::Init(fut) =&gt; <span class="kw">match </span>fut.<span class="kw">await </span>{
+                    <span class="prelude-val">Ok</span>(rx) =&gt; process_recv(rx).<span class="kw">await</span>,
+                    <span class="prelude-val">Err</span>(e) =&gt; <span class="prelude-val">Some</span>((<span class="prelude-val">Err</span>(E::from(e)), State::Done)),
+                },
+                State::Receiving(rx) =&gt; process_recv(rx).<span class="kw">await</span>,
+                State::Done =&gt; <span class="prelude-val">None</span>,
+            }
+        }))
     }
 }
 </code></pre></div></section></main></body></html>
