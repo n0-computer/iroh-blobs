@@ -123,6 +123,7 @@ use crate::{
     },
     util::{
         channel::oneshot,
+        irpc::MpscSenderExt,
         temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
         ChunkRangesExt,
     },
@@ -520,7 +521,7 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                cmd.tx.forward_iter(tts.into_iter().map(Ok)).await.ok();
             }
             Command::ImportBytes(cmd) => {
                 trace!("{cmd:?}");
@@ -1417,13 +1418,13 @@ impl FsStore {
 #[cfg(test)]
 pub mod tests {
     use core::panic;
-    use std::collections::{HashMap, HashSet};
+    use std::{collections::HashMap, future::IntoFuture};
 
     use bao_tree::{
         io::{outboard::PreOrderMemOutboard, round_up_to_chunks_groups},
         ChunkRanges,
     };
-    use n0_future::{stream, Stream, StreamExt};
+    use n0_future::{stream, Stream};
     use testresult::TestResult;
     use walkdir::WalkDir;
 
@@ -1973,23 +1974,13 @@ pub mod tests {
         let batch = store.blobs().batch().await?;
         let tt1 = batch.temp_tag(Hash::new("foo")).await?;
         let tt2 = batch.add_slice("boo").await?;
-        let tts = store
-            .tags()
-            .list_temp_tags()
-            .await?
-            .collect::<HashSet<_>>()
-            .await;
+        let tts = store.tags().list_temp_tags().into_future().await?;
         assert!(tts.contains(tt1.hash_and_format()));
         assert!(tts.contains(tt2.hash_and_format()));
         drop(batch);
         store.sync_db().await?;
         store.wait_idle().await?;
-        let tts = store
-            .tags()
-            .list_temp_tags()
-            .await?
-            .collect::<HashSet<_>>()
-            .await;
+        let tts = store.tags().list_temp_tags().await?;
         // temp tag went out of scope, so it does not work anymore
         assert!(!tts.contains(tt1.hash_and_format()));
         assert!(!tts.contains(tt2.hash_and_format()));

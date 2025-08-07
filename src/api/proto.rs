@@ -14,6 +14,7 @@
 //! The file system store is quite complex and optimized, so to get started take a look at
 //! the much simpler memory store.
 use std::{
+    collections::HashSet,
     fmt::{self, Debug},
     future::{Future, IntoFuture},
     io,
@@ -131,7 +132,7 @@ pub enum Request {
     RenameTag(RenameTagRequest),
     #[rpc(tx = oneshot::Sender<super::Result<Tag>>)]
     CreateTag(CreateTagRequest),
-    #[rpc(tx = oneshot::Sender<Vec<HashAndFormat>>)]
+    #[rpc(tx = mpsc::Sender<ListTempTagsItem>)]
     ListTempTags(ListTempTagsRequest),
     #[rpc(tx = oneshot::Sender<TempTag>)]
     CreateTempTag(CreateTempTagRequest),
@@ -406,6 +407,34 @@ impl IrpcStreamItem for ListTagsItem {
     }
 }
 
+pub struct ListTempTagsProgress {
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListTempTagsItem>>>,
+}
+
+impl IntoFuture for ListTempTagsProgress {
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.inner.try_collect())
+    }
+
+    type IntoFuture = future::Boxed<Self::Output>;
+
+    type Output = super::Result<HashSet<HashAndFormat>>;
+}
+
+impl ListTempTagsProgress {
+    pub(super) fn new(
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListTempTagsItem>>> + Send + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::pin(fut),
+        }
+    }
+
+    pub fn stream(self) -> impl Stream<Item = super::Result<HashAndFormat>> {
+        self.inner.into_stream()
+    }
+}
+
 pub struct ListTagsProgress {
     inner: future::Boxed<irpc::Result<mpsc::Receiver<ListTagsItem>>>,
 }
@@ -492,6 +521,37 @@ pub struct CreateTempTagRequest {
 /// List all temp tags
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListTempTagsRequest;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTempTagsItem {
+    Item(HashAndFormat),
+    Error(super::Error),
+    Done,
+}
+
+impl IrpcStreamItem for ListTempTagsItem {
+    type Error = super::Error;
+    type Item = HashAndFormat;
+
+    fn into_result_opt(self) -> Option<Result<HashAndFormat, super::Error>> {
+        match self {
+            ListTempTagsItem::Item(item) => Some(Ok(item)),
+            ListTempTagsItem::Done => None,
+            ListTempTagsItem::Error(err) => Some(Err(err)),
+        }
+    }
+
+    fn from_result(item: std::result::Result<HashAndFormat, super::Error>) -> Self {
+        match item {
+            Ok(i) => Self::Item(i),
+            Err(e) => Self::Error(e),
+        }
+    }
+
+    fn done() -> Self {
+        Self::Done
+    }
+}
 
 /// Rename a tag atomically
 #[derive(Debug, Serialize, Deserialize)]

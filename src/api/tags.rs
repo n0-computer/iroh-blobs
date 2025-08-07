@@ -3,7 +3,7 @@
 //! The main entry point is the [`Tags`] struct.
 use std::ops::RangeBounds;
 
-use n0_future::{Stream, StreamExt};
+use n0_future::StreamExt;
 use ref_cast::RefCast;
 use tracing::trace;
 
@@ -17,7 +17,7 @@ use super::{
     ApiClient, Tag, TempTag,
 };
 use crate::{
-    api::proto::{ListTagsProgress, ListTempTagsRequest},
+    api::proto::{ListTagsProgress, ListTempTagsProgress, ListTempTagsRequest},
     HashAndFormat,
 };
 
@@ -33,11 +33,10 @@ impl Tags {
         Self::ref_cast(sender)
     }
 
-    pub async fn list_temp_tags(&self) -> irpc::Result<impl Stream<Item = HashAndFormat>> {
+    pub fn list_temp_tags(&self) -> ListTempTagsProgress {
         let options = ListTempTagsRequest;
         trace!("{:?}", options);
-        let res = self.client.rpc(options).await?;
-        Ok(n0_future::stream::iter(res))
+        ListTempTagsProgress::new(self.client.server_streaming(options, 32))
     }
 
     /// List all tags with options.

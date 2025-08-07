@@ -205,7 +205,7 @@ impl Actor {
                     .ok();
             }
             Command::ListTempTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.forward_iter(std::iter::empty()).await.ok();
             }
             Command::SyncDb(cmd) => {
                 cmd.tx.send(Ok(())).await.ok();
