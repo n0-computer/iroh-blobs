@@ -450,7 +450,7 @@
         ApiClient, TempTag,
     },
     store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
-    util::ChunkRangesExt,
+    util::{irpc::MpscSenderExt, ChunkRangesExt},
     Hash,
 };
 
@@ -604,7 +604,7 @@
                 cmd.tx.send(status).<span class="kw">await</span>.ok();
             }
             Command::ListTags(cmd) =&gt; {
-                cmd.tx.send(proto::ListTagsItem::Done).<span class="kw">await</span>.ok();
+                cmd.tx.forward_iter(std::iter::empty()).<span class="kw">await</span>.ok();
             }
             Command::SetTag(cmd) =&gt; {
                 cmd.tx

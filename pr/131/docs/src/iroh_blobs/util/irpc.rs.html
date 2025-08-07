@@ -169,7 +169,8 @@
 <a href="#168" id="168">168</a>
 <a href="#169" id="169">169</a>
 <a href="#170" id="170">170</a>
-<a href="#171" id="171">171</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{future::Future, io};
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{future::Future, io};
 
 <span class="kw">use </span>genawaiter::sync::Gen;
 <span class="kw">use </span>irpc::{channel::mpsc, RpcMessage};
@@ -200,6 +201,7 @@
     ///
     /// This will convert items and errors into the item enum type, and add
     /// a done marker if the stream ends without an error.
+    </span><span class="attr">#[allow(dead_code)]
     </span><span class="kw">async fn </span>forward_stream(
         <span class="self">self</span>,
         stream: <span class="kw">impl </span>Stream&lt;Item = std::result::Result&lt;T::Item, T::Error&gt;&gt;,
@@ -293,7 +295,7 @@
         <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{
             <span class="kw">match </span>item {
                 <span class="prelude-val">Ok</span>(i) =&gt; items.extend(<span class="prelude-val">Some</span>(i)),
-                <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(E::from(e)),
+                <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(e),
             }
         }
         <span class="prelude-val">Ok</span>(items)

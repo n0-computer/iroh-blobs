@@ -2066,7 +2066,7 @@
     <span class="kw">fn </span>into_result_opt(<span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="prelude-ty">Result</span>&lt;Hash, <span class="kw">super</span>::Error&gt;&gt; {
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Item(hash) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(hash)),
-            <span class="self">Self</span>::Error(e) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e.into())),
+            <span class="self">Self</span>::Error(e) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e)),
             <span class="self">Self</span>::Done =&gt; <span class="prelude-val">None</span>,
         }
     }
@@ -2074,7 +2074,7 @@
     <span class="kw">fn </span>from_result(item: std::result::Result&lt;Hash, <span class="kw">super</span>::Error&gt;) -&gt; <span class="self">Self </span>{
         <span class="kw">match </span>item {
             <span class="prelude-val">Ok</span>(hash) =&gt; <span class="self">Self</span>::Item(hash),
-            <span class="prelude-val">Err</span>(e) =&gt; <span class="self">Self</span>::Error(e.into()),
+            <span class="prelude-val">Err</span>(e) =&gt; <span class="self">Self</span>::Error(e),
         }
     }
 
