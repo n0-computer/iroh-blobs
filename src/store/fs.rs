@@ -1263,9 +1263,18 @@ async fn export_path_impl(
         }
         MemOrFile::File((source_path, size)) => match mode {
             ExportMode::Copy => {
-                let source = fs::File::open(&source_path)?;
-                let mut target = fs::File::create(&target)?;
-                copy_with_progress(&source, size, &mut target, tx).await?
+                tx.try_send(ExportProgressItem::CopyProgress(0))
+                    .await
+                    .map_err(|_e| io::Error::other(""))?;
+                let written = reflink_copy::reflink_or_copy(&source_path, &target)?;
+                if let Some(written) = written {
+                    if written != size {
+                        return Err(io::Error::other(format!(
+                            "wrote {written} bytes, expected {size}",
+                        ))
+                        .into());
+                    }
+                }
             }
             ExportMode::TryReference => {
                 match std::fs::rename(&source_path, &target) {
