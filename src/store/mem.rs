@@ -28,7 +28,7 @@ use bao_tree::{
     BaoTree, ChunkNum, ChunkRanges, TreeNode,
 };
 use bytes::Bytes;
-use irpc::channel::mpsc;
+use irpc::{channel::mpsc, util::MpscSenderExt};
 use n0_future::future::yield_now;
 use range_collections::range_set::RangeSetRange;
 use tokio::{
@@ -61,7 +61,6 @@ use crate::{
         HashAndFormat, IROH_BLOCK_SIZE,
     },
     util::{
-        irpc::MpscSenderExt,
         temp_tag::{TagDrop, TempTagScope, TempTags},
         ChunkRangesExt,
     },

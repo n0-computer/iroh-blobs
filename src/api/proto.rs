@@ -33,7 +33,7 @@ use bytes::Bytes;
 use irpc::{
     channel::{mpsc, oneshot},
     rpc_requests,
-    util::StreamItem,
+    util::{IrpcReceiverFutExt, StreamItem},
 };
 use n0_future::{future, Stream};
 use range_collections::RangeSet2;
@@ -41,11 +41,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod bitfield;
 pub use bitfield::Bitfield;
 
-use crate::{
-    store::util::Tag,
-    util::{irpc::IrpcReceiverFutExt, temp_tag::TempTag},
-    BlobFormat, Hash, HashAndFormat,
-};
+use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
 
 pub(crate) trait HashSpecific {
     fn hash(&self) -> Hash;

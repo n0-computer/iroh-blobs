@@ -22,7 +22,7 @@ use bao_tree::{
     BaoTree, ChunkRanges,
 };
 use bytes::Bytes;
-use irpc::channel::mpsc;
+use irpc::{channel::mpsc, util::MpscSenderExt};
 use n0_future::future::{self, yield_now};
 use range_collections::range_set::RangeSetRange;
 use ref_cast::RefCast;
@@ -42,7 +42,7 @@ use crate::{
         ApiClient, TempTag,
     },
     store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
-    util::{irpc::MpscSenderExt, ChunkRangesExt},
+    util::ChunkRangesExt,
     Hash,
 };
 

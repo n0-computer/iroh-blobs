@@ -24,7 +24,10 @@ use bao_tree::{
 use bytes::Bytes;
 use genawaiter::sync::Gen;
 use iroh_io::{AsyncStreamReader, TokioStreamReader};
-use irpc::channel::{mpsc, oneshot};
+use irpc::{
+    channel::{mpsc, oneshot},
+    util::IrpcReceiverFutExt,
+};
 use n0_future::{future, stream, Stream, StreamExt};
 use quinn::SendStream;
 use range_collections::{range_set::RangeSetRange, RangeSet2};
@@ -59,7 +62,7 @@ use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate, ListBlobsItem},
     provider::StreamContext,
     store::IROH_BLOCK_SIZE,
-    util::{irpc::IrpcReceiverFutExt, temp_tag::TempTag},
+    util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
 };
 

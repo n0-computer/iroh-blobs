@@ -93,7 +93,7 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use gc::run_gc;
 use import::{ImportEntry, ImportSource};
-use irpc::channel::mpsc;
+use irpc::{channel::mpsc, util::MpscSenderExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
@@ -123,7 +123,6 @@ use crate::{
     },
     util::{
         channel::oneshot,
-        irpc::MpscSenderExt,
         temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
         ChunkRangesExt,
     },
