@@ -19,7 +19,7 @@ use std::{
 };
 
 use iroh::{
-    endpoint::{ConnectError, Connection},
+    endpoint::ConnectError,
     Endpoint, NodeId,
 };
 use n0_future::{
@@ -110,8 +110,6 @@ pub enum ConnectionPoolError {
     /// The connection pool has been shut down
     Shutdown,
 }
-
-pub type PoolConnectResult = std::result::Result<Connection, PoolConnectError>;
 
 enum ActorMessage {
     RequestRef(RequestRef),

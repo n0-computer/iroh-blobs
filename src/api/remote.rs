@@ -662,6 +662,8 @@ impl Remote {
     ) -> GetResult<Stats> {
         let store = self.store();
         let root = request.hash;
+        // I am cloning the connection, but it's fine because the original connection or ConnectionRef stays alive
+        // for the duration of the operation.
         let start = crate::get::fsm::start(conn.clone(), request, Default::default());
         let connected = start.next().await?;
         trace!("Getting header");

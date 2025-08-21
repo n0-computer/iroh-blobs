@@ -4,23 +4,20 @@ use std::{
     fmt::Debug,
     future::{Future, IntoFuture},
     io,
-    ops::Deref,
     sync::Arc,
-    time::{Duration, SystemTime},
 };
 
 use anyhow::bail;
 use genawaiter::sync::Gen;
-use iroh::{endpoint::Connection, Endpoint, NodeId};
+use iroh::{Endpoint, NodeId};
 use irpc::{channel::mpsc, rpc_requests};
 use n0_future::{future, stream, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
-use tokio::{sync::Mutex, task::JoinSet};
-use tokio_util::time::FutureExt;
-use tracing::{info, instrument::Instrument, warn};
+use tokio::task::JoinSet;
+use tracing::instrument::Instrument;
 
-use super::{remote::GetConnection, Store};
+use super::Store;
 use crate::{
     protocol::{GetManyRequest, GetRequest},
     util::{
@@ -445,7 +442,7 @@ async fn execute_get(
                 request: request.clone(),
             })
             .await?;
-        let mut conn = pool.connect(provider);
+        let conn = pool.connect(provider);
         let local = remote.local_for_request(request.clone()).await?;
         if local.is_complete() {
             return Ok(());
