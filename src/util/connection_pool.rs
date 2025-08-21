@@ -4,10 +4,10 @@
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
 //!
 //! Access to connections is via the [`ConnectionPool::connect`] method, which
-//! gives you access to a connection if possible.
+//! gives you access to a connection via a [`ConnectionRef`] if possible.
 //!
-//! It is important that you use the connection only in the future passed to
-//! connect, and don't clone it out of the future.
+//! It is important that you keep the [`ConnectionRef`] alive while you are using
+//! the connection.
 use std::{
     collections::{HashMap, VecDeque},
     ops::Deref,
@@ -18,10 +18,7 @@ use std::{
     time::Duration,
 };
 
-use iroh::{
-    endpoint::ConnectError,
-    Endpoint, NodeId,
-};
+use iroh::{endpoint::ConnectError, Endpoint, NodeId};
 use n0_future::{
     future::{self},
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
