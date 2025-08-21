@@ -518,7 +518,7 @@ impl Remote {
             .connection()
             .await
             .map_err(|e| LocalFailureSnafu.into_error(e.into()))?;
-        let stats = self.execute_get_sink(conn, request, progress).await?;
+        let stats = self.execute_get_sink(&conn, request, progress).await?;
         Ok(stats)
     }
 
@@ -637,7 +637,7 @@ impl Remote {
             .with_map_err(io::Error::other);
         let this = self.clone();
         let fut = async move {
-            let res = this.execute_get_sink(conn, request, sink).await.into();
+            let res = this.execute_get_sink(&conn, request, sink).await.into();
             tx2.send(res).await.ok();
         };
         GetProgress {
@@ -656,13 +656,13 @@ impl Remote {
     /// This will return the stats of the download.
     pub(crate) async fn execute_get_sink(
         &self,
-        conn: Connection,
+        conn: &Connection,
         request: GetRequest,
         mut progress: impl Sink<u64, Error = io::Error>,
     ) -> GetResult<Stats> {
         let store = self.store();
         let root = request.hash;
-        let start = crate::get::fsm::start(conn, request, Default::default());
+        let start = crate::get::fsm::start(conn.clone(), request, Default::default());
         let connected = start.next().await?;
         trace!("Getting header");
         // read the header

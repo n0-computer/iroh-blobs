@@ -23,7 +23,10 @@ use tracing::{info, instrument::Instrument, warn};
 use super::{remote::GetConnection, Store};
 use crate::{
     protocol::{GetManyRequest, GetRequest},
-    util::sink::{Drain, IrpcSenderRefSink, Sink, TokioMpscSenderSink},
+    util::{
+        connection_pool::ConnectionPool,
+        sink::{Drain, IrpcSenderRefSink, Sink, TokioMpscSenderSink},
+    },
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -69,7 +72,7 @@ impl DownloaderActor {
     fn new(store: Store, endpoint: Endpoint) -> Self {
         Self {
             store,
-            pool: ConnectionPool::new(endpoint, crate::ALPN.to_vec()),
+            pool: ConnectionPool::new(endpoint, crate::ALPN, Default::default()),
             tasks: JoinSet::new(),
             running: HashSet::new(),
         }
@@ -414,90 +417,6 @@ async fn split_request<'a>(
     })
 }
 
-#[derive(Debug)]
-struct ConnectionPoolInner {
-    alpn: Vec<u8>,
-    endpoint: Endpoint,
-    connections: Mutex<HashMap<NodeId, Arc<Mutex<SlotState>>>>,
-    retry_delay: Duration,
-    connect_timeout: Duration,
-}
-
-#[derive(Debug, Clone)]
-struct ConnectionPool(Arc<ConnectionPoolInner>);
-
-#[derive(Debug, Default)]
-enum SlotState {
-    #[default]
-    Initial,
-    Connected(Connection),
-    AttemptFailed(SystemTime),
-    #[allow(dead_code)]
-    Evil(String),
-}
-
-impl ConnectionPool {
-    fn new(endpoint: Endpoint, alpn: Vec<u8>) -> Self {
-        Self(
-            ConnectionPoolInner {
-                endpoint,
-                alpn,
-                connections: Default::default(),
-                retry_delay: Duration::from_secs(5),
-                connect_timeout: Duration::from_secs(2),
-            }
-            .into(),
-        )
-    }
-
-    pub fn alpn(&self) -> &[u8] {
-        &self.0.alpn
-    }
-
-    pub fn endpoint(&self) -> &Endpoint {
-        &self.0.endpoint
-    }
-
-    pub fn retry_delay(&self) -> Duration {
-        self.0.retry_delay
-    }
-
-    fn dial(&self, id: NodeId) -> DialNode {
-        DialNode {
-            pool: self.clone(),
-            id,
-        }
-    }
-
-    #[allow(dead_code)]
-    async fn mark_evil(&self, id: NodeId, reason: String) {
-        let slot = self
-            .0
-            .connections
-            .lock()
-            .await
-            .entry(id)
-            .or_default()
-            .clone();
-        let mut t = slot.lock().await;
-        *t = SlotState::Evil(reason)
-    }
-
-    #[allow(dead_code)]
-    async fn mark_closed(&self, id: NodeId) {
-        let slot = self
-            .0
-            .connections
-            .lock()
-            .await
-            .entry(id)
-            .or_default()
-            .clone();
-        let mut t = slot.lock().await;
-        *t = SlotState::Initial
-    }
-}
-
 /// Execute a get request sequentially for multiple providers.
 ///
 /// It will try each provider in order
@@ -526,13 +445,13 @@ async fn execute_get(
                 request: request.clone(),
             })
             .await?;
-        let mut conn = pool.dial(provider);
+        let mut conn = pool.connect(provider);
         let local = remote.local_for_request(request.clone()).await?;
         if local.is_complete() {
             return Ok(());
         }
         let local_bytes = local.local_bytes();
-        let Ok(conn) = conn.connection().await else {
+        let Ok(conn) = conn.await else {
             progress
                 .send(DownloadProgessItem::ProviderFailed {
                     id: provider,
@@ -543,7 +462,7 @@ async fn execute_get(
         };
         match remote
             .execute_get_sink(
-                conn,
+                &conn,
                 local.missing(),
                 (&mut progress).with_map(move |x| DownloadProgessItem::Progress(x + local_bytes)),
             )
@@ -569,77 +488,6 @@ async fn execute_get(
         }
     }
     bail!("Unable to download {}", request.hash);
-}
-
-#[derive(Debug, Clone)]
-struct DialNode {
-    pool: ConnectionPool,
-    id: NodeId,
-}
-
-impl DialNode {
-    async fn connection_impl(&self) -> anyhow::Result<Connection> {
-        info!("Getting connection for node {}", self.id);
-        let slot = self
-            .pool
-            .0
-            .connections
-            .lock()
-            .await
-            .entry(self.id)
-            .or_default()
-            .clone();
-        info!("Dialing node {}", self.id);
-        let mut guard = slot.lock().await;
-        match guard.deref() {
-            SlotState::Connected(conn) => {
-                return Ok(conn.clone());
-            }
-            SlotState::AttemptFailed(time) => {
-                let elapsed = time.elapsed().unwrap_or_default();
-                if elapsed <= self.pool.retry_delay() {
-                    bail!(
-                        "Connection attempt failed {} seconds ago",
-                        elapsed.as_secs_f64()
-                    );
-                }
-            }
-            SlotState::Evil(reason) => {
-                bail!("Node is banned due to evil behavior: {reason}");
-            }
-            SlotState::Initial => {}
-        }
-        let res = self
-            .pool
-            .endpoint()
-            .connect(self.id, self.pool.alpn())
-            .timeout(self.pool.0.connect_timeout)
-            .await;
-        match res {
-            Ok(Ok(conn)) => {
-                info!("Connected to node {}", self.id);
-                *guard = SlotState::Connected(conn.clone());
-                Ok(conn)
-            }
-            Ok(Err(e)) => {
-                warn!("Failed to connect to node {}: {}", self.id, e);
-                *guard = SlotState::AttemptFailed(SystemTime::now());
-                Err(e.into())
-            }
-            Err(e) => {
-                warn!("Failed to connect to node {}: {}", self.id, e);
-                *guard = SlotState::AttemptFailed(SystemTime::now());
-                bail!("Failed to connect to node: {}", e);
-            }
-        }
-    }
-}
-
-impl GetConnection for DialNode {
-    fn connection(&mut self) -> impl Future<Output = Result<Connection, anyhow::Error>> + '_ {
-        let this = self.clone();
-        async move { this.connection_impl().await }
-    }
 }
 
 /// Trait for pluggable content discovery strategies.
