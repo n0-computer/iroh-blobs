@@ -458,19 +458,16 @@
 <a href="#457" id="457">457</a>
 <a href="#458" id="458">458</a>
 <a href="#459" id="459">459</a>
-<a href="#460" id="460">460</a>
-<a href="#461" id="461">461</a>
-<a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
+<a href="#460" id="460">460</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
 //!
 //! Entry point is [`ConnectionPool`]. You create a connection pool for a specific
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
 //!
 //! Access to connections is via the [`ConnectionPool::connect`] method, which
-//! gives you access to a connection if possible.
+//! gives you access to a connection via a [`ConnectionRef`] if possible.
 //!
-//! It is important that you use the connection only in the future passed to
-//! connect, and don't clone it out of the future.
+//! It is important that you keep the [`ConnectionRef`] alive while you are using
+//! the connection.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     ops::Deref,
@@ -481,10 +478,7 @@
     time::Duration,
 };
 
-<span class="kw">use </span>iroh::{
-    endpoint::ConnectError,
-    Endpoint, NodeId,
-};
+<span class="kw">use </span>iroh::{endpoint::ConnectError, Endpoint, NodeId};
 <span class="kw">use </span>n0_future::{
     future::{<span class="self">self</span>},
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
