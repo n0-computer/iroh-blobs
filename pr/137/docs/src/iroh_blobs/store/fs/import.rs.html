@@ -633,7 +633,9 @@
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
 <a href="#634" id="634">634</a>
-<a href="#635" id="635">635</a></pre></div><pre class="rust"><code><span class="doccomment">//! The entire logic for importing data from three different sources: bytes, byte stream, and file path.
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a></pre></div><pre class="rust"><code><span class="doccomment">//! The entire logic for importing data from three different sources: bytes, byte stream, and file path.
 //!
 //! For bytes, the size is known in advance. But they might still have to be persisted to disk if they are too large.
 //! E.g. you add a 1GB bytes to the store, you still want this to end up on disk.
@@ -678,6 +680,7 @@
         },
     },
     store::{
+        fs::reflink_or_copy_with_progress,
         util::{MemOrFile, DD},
         IROH_BLOCK_SIZE,
     },
@@ -1126,11 +1129,12 @@
         <span class="kw">let </span>temp_path = options.path.temp_file_name();
         <span class="comment">// todo: if reflink works, we don't need progress.
         // But if it does not, it might take a while and we won't get progress.
-        </span><span class="kw">if </span>reflink_copy::reflink_or_copy(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>temp_path)<span class="question-mark">?</span>.is_none() {
-            <span class="macro">trace!</span>(<span class="string">"reflinked {} to {}"</span>, path.display(), temp_path.display());
-        } <span class="kw">else </span>{
-            <span class="macro">trace!</span>(<span class="string">"copied {} to {}"</span>, path.display(), temp_path.display());
-        }
+        </span><span class="kw">let </span>res = reflink_or_copy_with_progress(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>temp_path, size, tx).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="macro">trace!</span>(
+            <span class="string">"imported {} to {}, {res:?}"</span>,
+            path.display(),
+            temp_path.display()
+        );
         <span class="comment">// copy from path to temp_path
         </span><span class="kw">let </span>file = OpenOptions::new().read(<span class="bool-val">true</span>).open(<span class="kw-2">&amp;</span>temp_path)<span class="question-mark">?</span>;
         tx.send(AddProgressItem::CopyDone)
