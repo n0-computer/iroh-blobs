@@ -93,7 +93,7 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use gc::run_gc;
 use import::{ImportEntry, ImportSource};
-use irpc::channel::mpsc;
+use irpc::{channel::mpsc, RpcMessage};
 use meta::list_blobs;
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
@@ -1263,9 +1263,12 @@ async fn export_path_impl(
         }
         MemOrFile::File((source_path, size)) => match mode {
             ExportMode::Copy => {
-                let source = fs::File::open(&source_path)?;
-                let mut target = fs::File::create(&target)?;
-                copy_with_progress(&source, size, &mut target, tx).await?
+                let res = reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
+                trace!(
+                    "exported {} to {}, {res:?}",
+                    source_path.display(),
+                    target.display()
+                );
             }
             ExportMode::TryReference => {
                 match std::fs::rename(&source_path, &target) {
@@ -1295,11 +1298,50 @@ async fn export_path_impl(
     Ok(())
 }
 
-async fn copy_with_progress(
+trait CopyProgress: RpcMessage {
+    fn from_offset(offset: u64) -> Self;
+}
+
+impl CopyProgress for ExportProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        ExportProgressItem::CopyProgress(offset)
+    }
+}
+
+impl CopyProgress for AddProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        AddProgressItem::CopyProgress(offset)
+    }
+}
+
+#[derive(Debug)]
+enum CopyResult {
+    Reflinked,
+    Copied,
+}
+
+async fn reflink_or_copy_with_progress(
+    from: impl AsRef<Path>,
+    to: impl AsRef<Path>,
+    size: u64,
+    tx: &mut mpsc::Sender<impl CopyProgress>,
+) -> io::Result<CopyResult> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+    if reflink_copy::reflink(from, to).is_ok() {
+        return Ok(CopyResult::Reflinked);
+    }
+    let source = fs::File::open(from)?;
+    let mut target = fs::File::create(to)?;
+    copy_with_progress(source, size, &mut target, tx).await?;
+    Ok(CopyResult::Copied)
+}
+
+async fn copy_with_progress<T: CopyProgress>(
     file: impl ReadAt,
     size: u64,
     target: &mut impl Write,
-    tx: &mut mpsc::Sender<ExportProgressItem>,
+    tx: &mut mpsc::Sender<T>,
 ) -> io::Result<()> {
     let mut offset = 0;
     let mut buf = vec![0u8; 1024 * 1024];
@@ -1308,7 +1350,7 @@ async fn copy_with_progress(
         let buf: &mut [u8] = &mut buf[..remaining];
         file.read_exact_at(offset, buf)?;
         target.write_all(buf)?;
-        tx.try_send(ExportProgressItem::CopyProgress(offset))
+        tx.try_send(T::from_offset(offset))
             .await
             .map_err(|_e| io::Error::other(""))?;
         yield_now().await;
