@@ -373,13 +373,18 @@
 //! a large existing system that has demonstrated performance issues.
 //!
 //! If in doubt, just use multiple requests and multiple connections.
-use std::io;
+use std::{
+    io,
+    ops::{Bound, RangeBounds},
+};
 
+use bao_tree::{io::round_up_to_chunks, ChunkNum};
 use builder::GetRequestBuilder;
 use derive_more::From;
 use iroh::endpoint::VarInt;
 use irpc::util::AsyncReadVarintExt;
 use postcard::experimental::max_size::MaxSize;
+use range_collections::{range_set::RangeSetEntry, RangeSet2};
 use serde::{Deserialize, Serialize};
 mod range_spec;
 pub use bao_tree::ChunkRanges;
@@ -387,7 +392,6 @@ pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 use snafu::{GenerateImplicitData, Snafu};
 use tokio::io::AsyncReadExt;
 
-pub use crate::util::ChunkRangesExt;
 use crate::{api::blobs::Bitfield, provider::CountingReader, BlobFormat, Hash, HashAndFormat};
 
 /// Maximum message size is limited to 100MiB for now.
@@ -714,6 +718,73 @@ impl TryFrom<VarInt> for Closed {
     }
 }
 
+pub trait ChunkRangesExt {
+    fn last_chunk() -> Self;
+    fn chunk(offset: u64) -> Self;
+    fn bytes(ranges: impl RangeBounds<u64>) -> Self;
+    fn chunks(ranges: impl RangeBounds<u64>) -> Self;
+    fn offset(offset: u64) -> Self;
+}
+
+impl ChunkRangesExt for ChunkRanges {
+    fn last_chunk() -> Self {
+        ChunkRanges::from(ChunkNum(u64::MAX)..)
+    }
+
+    /// Create a chunk range that contains a single chunk.
+    fn chunk(offset: u64) -> Self {
+        ChunkRanges::from(ChunkNum(offset)..ChunkNum(offset + 1))
+    }
+
+    /// Create a range of chunks that contains the given byte ranges.
+    /// The byte ranges are rounded up to the nearest chunk size.
+    fn bytes(ranges: impl RangeBounds<u64>) -> Self {
+        round_up_to_chunks(&bounds_from_range(ranges, |v| v))
+    }
+
+    /// Create a range of chunks from u64 chunk bounds.
+    ///
+    /// This is equivalent but more convenient than using the ChunkNum newtype.
+    fn chunks(ranges: impl RangeBounds<u64>) -> Self {
+        bounds_from_range(ranges, ChunkNum)
+    }
+
+    /// Create a chunk range that contains a single byte offset.
+    fn offset(offset: u64) -> Self {
+        Self::bytes(offset..offset + 1)
+    }
+}
+
+// todo: move to range_collections
+pub(crate) fn bounds_from_range<R, T, F>(range: R, f: F) -> RangeSet2<T>
+where
+    R: RangeBounds<u64>,
+    T: RangeSetEntry,
+    F: Fn(u64) -> T,
+{
+    let from = match range.start_bound() {
+        Bound::Included(start) => Some(*start),
+        Bound::Excluded(start) => {
+            let Some(start) = start.checked_add(1) else {
+                return RangeSet2::empty();
+            };
+            Some(start)
+        }
+        Bound::Unbounded => None,
+    };
+    let to = match range.end_bound() {
+        Bound::Included(end) => end.checked_add(1),
+        Bound::Excluded(end) => Some(*end),
+        Bound::Unbounded => None,
+    };
+    match (from, to) {
+        (Some(from), Some(to)) => RangeSet2::from(f(from)..f(to)),
+        (Some(from), None) => RangeSet2::from(f(from)..),
+        (None, Some(to)) => RangeSet2::from(..f(to)),
+        (None, None) => RangeSet2::all(),
+    }
+}
+
 pub mod builder {
     use std::collections::BTreeMap;
 
@@ -863,7 +934,7 @@ pub mod builder {
         use bao_tree::ChunkNum;
 
         use super::*;
-        use crate::{protocol::GetManyRequest, util::ChunkRangesExt};
+        use crate::protocol::{ChunkRangesExt, GetManyRequest};
 
         #[test]
         fn chunk_ranges_ext() {

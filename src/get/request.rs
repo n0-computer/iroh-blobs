@@ -27,8 +27,7 @@ use super::{fsm, GetError, GetResult, Stats};
 use crate::{
     get::error::{BadRequestSnafu, LocalFailureSnafu},
     hashseq::HashSeq,
-    protocol::{ChunkRangesSeq, GetRequest},
-    util::ChunkRangesExt,
+    protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
     Hash, HashAndFormat,
 };
 

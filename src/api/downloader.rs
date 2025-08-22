@@ -442,7 +442,7 @@ async fn execute_get(
                 request: request.clone(),
             })
             .await?;
-        let conn = pool.connect(provider);
+        let conn = pool.get_or_connect(provider);
         let local = remote.local_for_request(request.clone()).await?;
         if local.is_complete() {
             return Ok(());

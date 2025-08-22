@@ -111,6 +111,7 @@ use crate::{
         },
         ApiClient,
     },
+    protocol::ChunkRangesExt,
     store::{
         fs::{
             bao_file::{
@@ -125,7 +126,6 @@ use crate::{
     util::{
         channel::oneshot,
         temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
-        ChunkRangesExt,
     },
 };
 mod bao_file;

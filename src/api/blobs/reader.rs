@@ -221,6 +221,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        protocol::ChunkRangesExt,
         store::{
             fs::{
                 tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -228,7 +229,6 @@ mod tests {
             },
             mem::MemStore,
         },
-        util::ChunkRangesExt,
     };
 
     async fn reader_smoke(blobs: &Blobs) -> TestResult<()> {

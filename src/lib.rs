@@ -43,7 +43,7 @@ pub mod ticket;
 
 #[doc(hidden)]
 pub mod test;
-mod util;
+pub mod util;
 
 #[cfg(test)]
 mod tests;

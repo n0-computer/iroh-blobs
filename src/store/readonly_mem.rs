@@ -41,8 +41,8 @@ use crate::{
         },
         ApiClient, TempTag,
     },
+    protocol::ChunkRangesExt,
     store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
-    util::ChunkRangesExt,
     Hash,
 };
 

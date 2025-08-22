@@ -1067,7 +1067,7 @@ mod tests {
 
     use crate::{
         api::blobs::Blobs,
-        protocol::{ChunkRangesSeq, GetRequest},
+        protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
         store::{
             fs::{
                 tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -1076,7 +1076,6 @@ mod tests {
             mem::MemStore,
         },
         tests::{add_test_hash_seq, add_test_hash_seq_incomplete},
-        util::ChunkRangesExt,
     };
 
     #[tokio::test]

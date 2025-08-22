@@ -3,7 +3,7 @@
 //! Entry point is [`ConnectionPool`]. You create a connection pool for a specific
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
 //!
-//! Access to connections is via the [`ConnectionPool::connect`] method, which
+//! Access to connections is via the [`ConnectionPool::get_or_connect`] method, which
 //! gives you access to a connection via a [`ConnectionRef`] if possible.
 //!
 //! It is important that you keep the [`ConnectionRef`] alive while you are using
@@ -360,7 +360,7 @@ impl ConnectionPool {
     ///
     /// This is guaranteed to return after approximately [Options::connect_timeout]
     /// with either an error or a connection.
-    pub async fn connect(
+    pub async fn get_or_connect(
         &self,
         id: NodeId,
     ) -> std::result::Result<ConnectionRef, PoolConnectError> {
