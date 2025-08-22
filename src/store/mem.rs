@@ -56,14 +56,12 @@ use crate::{
         tags::TagInfo,
         ApiClient,
     },
+    protocol::ChunkRangesExt,
     store::{
         util::{SizeInfo, SparseMemFile, Tag},
         HashAndFormat, IROH_BLOCK_SIZE,
     },
-    util::{
-        temp_tag::{TagDrop, TempTagScope, TempTags},
-        ChunkRangesExt,
-    },
+    util::temp_tag::{TagDrop, TempTagScope, TempTags},
     BlobFormat, Hash,
 };
 
