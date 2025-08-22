@@ -77,13 +77,13 @@ pub(super) fn track_metrics(
     match res {
         Ok(stats) => {
             let crate::get::Stats {
-                bytes_written,
-                bytes_read: _,
+                bytes_written: _,
+                bytes_read,
                 elapsed,
             } = stats;
 
             metrics.downloads_success.inc();
-            metrics.download_bytes_total.inc_by(*bytes_written);
+            metrics.download_bytes_total.inc_by(*bytes_read);
             metrics
                 .download_time_total
                 .inc_by(elapsed.as_millis() as u64);
