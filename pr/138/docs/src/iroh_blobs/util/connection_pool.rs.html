@@ -463,7 +463,7 @@
 //! Entry point is [`ConnectionPool`]. You create a connection pool for a specific
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
 //!
-//! Access to connections is via the [`ConnectionPool::connect`] method, which
+//! Access to connections is via the [`ConnectionPool::get_or_connect`] method, which
 //! gives you access to a connection via a [`ConnectionRef`] if possible.
 //!
 //! It is important that you keep the [`ConnectionRef`] alive while you are using
@@ -820,7 +820,7 @@
     ///
     /// This is guaranteed to return after approximately [Options::connect_timeout]
     /// with either an error or a connection.
-    </span><span class="kw">pub async fn </span>connect(
+    </span><span class="kw">pub async fn </span>get_or_connect(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         id: NodeId,
     ) -&gt; std::result::Result&lt;ConnectionRef, PoolConnectError&gt; {

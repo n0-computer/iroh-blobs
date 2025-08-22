@@ -1125,7 +1125,7 @@
                 request: request.clone(),
             })
             .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="kw">let </span>conn = pool.connect(provider);
+        <span class="kw">let </span>conn = pool.get_or_connect(provider);
         <span class="kw">let </span>local = remote.local_for_request(request.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="kw">if </span>local.is_complete() {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(());

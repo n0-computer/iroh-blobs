@@ -341,8 +341,7 @@
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
 <a href="#342" id="342">342</a>
-<a href="#343" id="343">343</a>
-<a href="#344" id="344">344</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities to generate or execute complex get requests without persisting to a store.
+<a href="#343" id="343">343</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities to generate or execute complex get requests without persisting to a store.
 //!
 //! Any complex request can be executed with downloading to a store, using the
 //! [`crate::api::remote::Remote::execute_get`] method. But for some requests it
@@ -371,8 +370,7 @@
 <span class="kw">use crate</span>::{
     get::error::{BadRequestSnafu, LocalFailureSnafu},
     hashseq::HashSeq,
-    protocol::{ChunkRangesSeq, GetRequest},
-    util::ChunkRangesExt,
+    protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
     Hash, HashAndFormat,
 };
 

@@ -724,7 +724,7 @@
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>smallvec::{smallvec, SmallVec};
 
-<span class="kw">pub use </span><span class="kw">crate</span>::util::ChunkRangesExt;
+<span class="kw">use </span><span class="kw">crate</span>::protocol::ChunkRangesExt;
 
 <span class="kw">static </span>CHUNK_RANGES_EMPTY: OnceLock&lt;ChunkRanges&gt; = OnceLock::new();
 
@@ -1223,7 +1223,7 @@
     <span class="kw">use </span>proptest::prelude::<span class="kw-2">*</span>;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
-    <span class="kw">use </span><span class="kw">crate</span>::util::ChunkRangesExt;
+    <span class="kw">use </span><span class="kw">crate</span>::protocol::ChunkRangesExt;
 
     <span class="kw">fn </span>ranges(value_range: Range&lt;u64&gt;) -&gt; <span class="kw">impl </span>Strategy&lt;Value = ChunkRanges&gt; {
         prop::collection::vec((value_range.clone(), value_range), <span class="number">0</span>..<span class="number">16</span>).prop_map(|v| {

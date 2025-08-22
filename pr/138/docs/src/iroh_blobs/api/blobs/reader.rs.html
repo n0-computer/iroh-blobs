@@ -555,6 +555,7 @@
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
     <span class="kw">use crate</span>::{
+        protocol::ChunkRangesExt,
         store::{
             fs::{
                 tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -562,7 +563,6 @@
             },
             mem::MemStore,
         },
-        util::ChunkRangesExt,
     };
 
     <span class="kw">async fn </span>reader_smoke(blobs: <span class="kw-2">&amp;</span>Blobs) -&gt; TestResult&lt;()&gt; {

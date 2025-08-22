@@ -995,7 +995,78 @@
 <a href="#994" id="994">994</a>
 <a href="#995" id="995">995</a>
 <a href="#996" id="996">996</a>
-<a href="#997" id="997">997</a></pre></div><pre class="rust"><code><span class="doccomment">//! Protocol for transferring content-addressed blobs over [`iroh`] p2p QUIC connections.
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a>
+<a href="#1018" id="1018">1018</a>
+<a href="#1019" id="1019">1019</a>
+<a href="#1020" id="1020">1020</a>
+<a href="#1021" id="1021">1021</a>
+<a href="#1022" id="1022">1022</a>
+<a href="#1023" id="1023">1023</a>
+<a href="#1024" id="1024">1024</a>
+<a href="#1025" id="1025">1025</a>
+<a href="#1026" id="1026">1026</a>
+<a href="#1027" id="1027">1027</a>
+<a href="#1028" id="1028">1028</a>
+<a href="#1029" id="1029">1029</a>
+<a href="#1030" id="1030">1030</a>
+<a href="#1031" id="1031">1031</a>
+<a href="#1032" id="1032">1032</a>
+<a href="#1033" id="1033">1033</a>
+<a href="#1034" id="1034">1034</a>
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
+<a href="#1047" id="1047">1047</a>
+<a href="#1048" id="1048">1048</a>
+<a href="#1049" id="1049">1049</a>
+<a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a>
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a>
+<a href="#1066" id="1066">1066</a>
+<a href="#1067" id="1067">1067</a>
+<a href="#1068" id="1068">1068</a></pre></div><pre class="rust"><code><span class="doccomment">//! Protocol for transferring content-addressed blobs over [`iroh`] p2p QUIC connections.
 //!
 //! # Participants
 //!
@@ -1370,13 +1441,18 @@
 //! a large existing system that has demonstrated performance issues.
 //!
 //! If in doubt, just use multiple requests and multiple connections.
-</span><span class="kw">use </span>std::io;
+</span><span class="kw">use </span>std::{
+    io,
+    ops::{Bound, RangeBounds},
+};
 
+<span class="kw">use </span>bao_tree::{io::round_up_to_chunks, ChunkNum};
 <span class="kw">use </span>builder::GetRequestBuilder;
 <span class="kw">use </span>derive_more::From;
 <span class="kw">use </span>iroh::endpoint::VarInt;
 <span class="kw">use </span>irpc::util::AsyncReadVarintExt;
 <span class="kw">use </span>postcard::experimental::max_size::MaxSize;
+<span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">mod </span>range_spec;
 <span class="kw">pub use </span>bao_tree::ChunkRanges;
@@ -1384,7 +1460,6 @@
 <span class="kw">use </span>snafu::{GenerateImplicitData, Snafu};
 <span class="kw">use </span>tokio::io::AsyncReadExt;
 
-<span class="kw">pub use </span><span class="kw">crate</span>::util::ChunkRangesExt;
 <span class="kw">use crate</span>::{api::blobs::Bitfield, provider::CountingReader, BlobFormat, Hash, HashAndFormat};
 
 <span class="doccomment">/// Maximum message size is limited to 100MiB for now.
@@ -1711,6 +1786,73 @@
     }
 }
 
+<span class="kw">pub trait </span>ChunkRangesExt {
+    <span class="kw">fn </span>last_chunk() -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>chunk(offset: u64) -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>bytes(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>chunks(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self</span>;
+    <span class="kw">fn </span>offset(offset: u64) -&gt; <span class="self">Self</span>;
+}
+
+<span class="kw">impl </span>ChunkRangesExt <span class="kw">for </span>ChunkRanges {
+    <span class="kw">fn </span>last_chunk() -&gt; <span class="self">Self </span>{
+        ChunkRanges::from(ChunkNum(u64::MAX)..)
+    }
+
+    <span class="doccomment">/// Create a chunk range that contains a single chunk.
+    </span><span class="kw">fn </span>chunk(offset: u64) -&gt; <span class="self">Self </span>{
+        ChunkRanges::from(ChunkNum(offset)..ChunkNum(offset + <span class="number">1</span>))
+    }
+
+    <span class="doccomment">/// Create a range of chunks that contains the given byte ranges.
+    /// The byte ranges are rounded up to the nearest chunk size.
+    </span><span class="kw">fn </span>bytes(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self </span>{
+        round_up_to_chunks(<span class="kw-2">&amp;</span>bounds_from_range(ranges, |v| v))
+    }
+
+    <span class="doccomment">/// Create a range of chunks from u64 chunk bounds.
+    ///
+    /// This is equivalent but more convenient than using the ChunkNum newtype.
+    </span><span class="kw">fn </span>chunks(ranges: <span class="kw">impl </span>RangeBounds&lt;u64&gt;) -&gt; <span class="self">Self </span>{
+        bounds_from_range(ranges, ChunkNum)
+    }
+
+    <span class="doccomment">/// Create a chunk range that contains a single byte offset.
+    </span><span class="kw">fn </span>offset(offset: u64) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::bytes(offset..offset + <span class="number">1</span>)
+    }
+}
+
+<span class="comment">// todo: move to range_collections
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bounds_from_range&lt;R, T, F&gt;(range: R, f: F) -&gt; RangeSet2&lt;T&gt;
+<span class="kw">where
+    </span>R: RangeBounds&lt;u64&gt;,
+    T: RangeSetEntry,
+    F: Fn(u64) -&gt; T,
+{
+    <span class="kw">let </span>from = <span class="kw">match </span>range.start_bound() {
+        Bound::Included(start) =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>start),
+        Bound::Excluded(start) =&gt; {
+            <span class="kw">let </span><span class="prelude-val">Some</span>(start) = start.checked_add(<span class="number">1</span>) <span class="kw">else </span>{
+                <span class="kw">return </span>RangeSet2::empty();
+            };
+            <span class="prelude-val">Some</span>(start)
+        }
+        Bound::Unbounded =&gt; <span class="prelude-val">None</span>,
+    };
+    <span class="kw">let </span>to = <span class="kw">match </span>range.end_bound() {
+        Bound::Included(end) =&gt; end.checked_add(<span class="number">1</span>),
+        Bound::Excluded(end) =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>end),
+        Bound::Unbounded =&gt; <span class="prelude-val">None</span>,
+    };
+    <span class="kw">match </span>(from, to) {
+        (<span class="prelude-val">Some</span>(from), <span class="prelude-val">Some</span>(to)) =&gt; RangeSet2::from(f(from)..f(to)),
+        (<span class="prelude-val">Some</span>(from), <span class="prelude-val">None</span>) =&gt; RangeSet2::from(f(from)..),
+        (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(to)) =&gt; RangeSet2::from(..f(to)),
+        (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; RangeSet2::all(),
+    }
+}
+
 <span class="kw">pub mod </span>builder {
     <span class="kw">use </span>std::collections::BTreeMap;
 
@@ -1860,7 +2002,7 @@
         <span class="kw">use </span>bao_tree::ChunkNum;
 
         <span class="kw">use super</span>::<span class="kw-2">*</span>;
-        <span class="kw">use crate</span>::{protocol::GetManyRequest, util::ChunkRangesExt};
+        <span class="kw">use </span><span class="kw">crate</span>::protocol::{ChunkRangesExt, GetManyRequest};
 
         <span class="attr">#[test]
         </span><span class="kw">fn </span>chunk_ranges_ext() {

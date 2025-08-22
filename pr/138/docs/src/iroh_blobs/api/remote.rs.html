@@ -1313,8 +1313,7 @@
 <a href="#1312" id="1312">1312</a>
 <a href="#1313" id="1313">1313</a>
 <a href="#1314" id="1314">1314</a>
-<a href="#1315" id="1315">1315</a>
-<a href="#1316" id="1316">1316</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
+<a href="#1315" id="1315">1315</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
 //!
 //! The entry point is the [`Remote`] struct.
 </span><span class="kw">use </span>genawaiter::sync::{Co, Gen};
@@ -2383,7 +2382,7 @@
 
     <span class="kw">use crate</span>::{
         api::blobs::Blobs,
-        protocol::{ChunkRangesSeq, GetRequest},
+        protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
         store::{
             fs::{
                 tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -2392,7 +2391,6 @@
             mem::MemStore,
         },
         tests::{add_test_hash_seq, add_test_hash_seq_incomplete},
-        util::ChunkRangesExt,
     };
 
     <span class="attr">#[tokio::test]
