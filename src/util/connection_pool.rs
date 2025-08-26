@@ -29,7 +29,7 @@ use tokio::sync::{
     oneshot, Notify,
 };
 use tokio_util::time::FutureExt as TimeFutureExt;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 /// Configuration options for the connection pool
 #[derive(Debug, Clone, Copy)]
@@ -142,17 +142,26 @@ impl Context {
             .await
             .map_err(|_| PoolConnectError::Timeout)
             .and_then(|r| r.map_err(PoolConnectError::from));
-        if let Err(e) = &state {
-            debug!(%node_id, "Failed to connect {e:?}, requesting shutdown");
-            if context.owner.close(node_id).await.is_err() {
-                return;
+        let conn_close = match &state {
+            Ok(conn) => {
+                let conn = conn.clone();
+                MaybeFuture::Some(async move { conn.closed().await })
             }
-        }
+            Err(e) => {
+                debug!(%node_id, "Failed to connect {e:?}, requesting shutdown");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if context.owner.close(node_id).await.is_err() {
+                    return;
+                }
+                MaybeFuture::None
+            }
+        };
+
         let counter = ConnectionCounter::new();
         let idle_timer = MaybeFuture::default();
         let idle_stream = counter.clone().idle_stream();
 
-        tokio::pin!(idle_timer, idle_stream);
+        tokio::pin!(idle_timer, idle_stream, conn_close);
 
         loop {
             tokio::select! {
@@ -166,6 +175,7 @@ impl Context {
                             match &state {
                                 Ok(state) => {
                                     let res = ConnectionRef::new(state.clone(), counter.get_one());
+                                    info!(%node_id, "Handing out ConnectionRef {}", counter.current());
 
                                     // clear the idle timer
                                     idle_timer.as_mut().set_none();
@@ -177,10 +187,15 @@ impl Context {
                             }
                         }
                         None => {
-                            // Channel closed - finish remaining tasks and exit
+                            // Channel closed - exit
                             break;
                         }
                     }
+                }
+
+                _ = &mut conn_close => {
+                    // connection was closed by somebody, notify owner that we should be removed
+                    context.owner.close(node_id).await.ok();
                 }
 
                 _ = idle_stream.next() => {
@@ -415,6 +430,10 @@ impl ConnectionCounter {
                 notify: Notify::new(),
             }),
         }
+    }
+
+    fn current(&self) -> usize {
+        self.inner.count.load(Ordering::SeqCst)
     }
 
     /// Increase the connection count and return a guard for the new connection
