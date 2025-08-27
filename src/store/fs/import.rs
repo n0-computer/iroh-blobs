@@ -43,6 +43,7 @@ use crate::{
         },
     },
     store::{
+        fs::reflink_or_copy_with_progress,
         util::{MemOrFile, DD},
         IROH_BLOCK_SIZE,
     },
@@ -491,11 +492,12 @@ async fn import_path_impl(
         let temp_path = options.path.temp_file_name();
         // todo: if reflink works, we don't need progress.
         // But if it does not, it might take a while and we won't get progress.
-        if reflink_copy::reflink_or_copy(&path, &temp_path)?.is_none() {
-            trace!("reflinked {} to {}", path.display(), temp_path.display());
-        } else {
-            trace!("copied {} to {}", path.display(), temp_path.display());
-        }
+        let res = reflink_or_copy_with_progress(&path, &temp_path, size, tx).await?;
+        trace!(
+            "imported {} to {}, {res:?}",
+            path.display(),
+            temp_path.display()
+        );
         // copy from path to temp_path
         let file = OpenOptions::new().read(true).open(&temp_path)?;
         tx.send(AddProgressItem::CopyDone)
