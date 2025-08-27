@@ -1013,7 +1013,7 @@
             .timeout(context.options.connect_timeout)
             .<span class="kw">await
             </span>.map_err(|<span class="kw">_</span>| PoolConnectError::Timeout)
-            .and_then(|r| r.map_err(PoolConnectError::from));
+            .and_then(|r| r);
         <span class="kw">let </span>conn_close = <span class="kw">match </span><span class="kw-2">&amp;</span>state {
             <span class="prelude-val">Ok</span>(conn) =&gt; {
                 <span class="kw">let </span>conn = conn.clone();
@@ -1632,7 +1632,7 @@
         <span class="kw">let </span>msg = <span class="string">b"Hello, pool!"</span>.to_vec();
         <span class="kw">for </span>id <span class="kw">in </span><span class="kw-2">&amp;</span>ids {
             <span class="kw">let </span>res = client.echo(<span class="kw-2">*</span>id, msg.clone()).<span class="kw">await</span>;
-            <span class="macro">assert!</span>(<span class="macro">matches!</span>(res, <span class="prelude-val">Err</span>(PoolConnectError::Timeout { .. })));
+            <span class="macro">assert!</span>(<span class="macro">matches!</span>(res, <span class="prelude-val">Err</span>(PoolConnectError::Timeout)));
         }
         shutdown_routers(routers).<span class="kw">await</span>;
         <span class="prelude-val">Ok</span>(())
