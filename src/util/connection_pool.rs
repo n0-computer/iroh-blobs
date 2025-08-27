@@ -804,4 +804,30 @@ mod tests {
         shutdown_routers(routers).await;
         Ok(())
     }
+
+    /// Check that when a connection is closed, the pool will give you a new
+    /// connection next time you want one.
+    ///
+    /// This test fails if the connection watch is disabled.
+    #[tokio::test]
+    #[traced_test]
+    async fn watch_close() -> TestResult<()> {
+        let n = 1;
+        let (ids, routers, discovery) = echo_servers(n).await?;
+        let endpoint = iroh::Endpoint::builder()
+            .discovery(discovery)
+            .bind()
+            .await?;
+
+        let pool = ConnectionPool::new(endpoint, ECHO_ALPN, test_options());
+        let conn = pool.get_or_connect(ids[0]).await?;
+        let cid1 = conn.stable_id();
+        conn.close(0u32.into(), b"test");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let conn = pool.get_or_connect(ids[0]).await?;
+        let cid2 = conn.stable_id();
+        assert_ne!(cid1, cid2);
+        shutdown_routers(routers).await;
+        Ok(())
+    }
 }
