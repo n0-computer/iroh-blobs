@@ -831,8 +831,7 @@
 <a href="#830" id="830">830</a>
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
+<a href="#833" id="833">833</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
 //!
 //! Entry point is [`ConnectionPool`]. You create a connection pool for a specific
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
@@ -1365,7 +1364,6 @@
     <span class="kw">use </span>n0_snafu::ResultExt;
     <span class="kw">use </span>testresult::TestResult;
     <span class="kw">use </span>tracing::trace;
-    <span class="kw">use </span>tracing_test::traced_test;
 
     <span class="kw">use super</span>::{ConnectionPool, Options, PoolConnectError};
     <span class="kw">use </span><span class="kw">crate</span>::util::connection_pool::OnConnected;
@@ -1473,7 +1471,7 @@
     }
 
     <span class="attr">#[tokio::test]
-    #[traced_test]
+    </span><span class="comment">// #[traced_test]
     </span><span class="kw">async fn </span>connection_pool_errors() -&gt; TestResult&lt;()&gt; {
         <span class="comment">// set up static discovery for all addrs
         </span><span class="kw">let </span>discovery = StaticProvider::new();
@@ -1509,7 +1507,7 @@
     }
 
     <span class="attr">#[tokio::test]
-    #[traced_test]
+    </span><span class="comment">// #[traced_test]
     </span><span class="kw">async fn </span>connection_pool_smoke() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>n = <span class="number">32</span>;
         <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -1544,7 +1542,7 @@
     <span class="doccomment">/// Tests that idle connections are being reclaimed to make room if we hit the
     /// maximum connection limit.
     </span><span class="attr">#[tokio::test]
-    #[traced_test]
+    </span><span class="comment">// #[traced_test]
     </span><span class="kw">async fn </span>connection_pool_idle() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>n = <span class="number">32</span>;
         <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -1576,7 +1574,7 @@
     ///
     /// This is a basic smoke test that on_connected gets called at all.
     </span><span class="attr">#[tokio::test]
-    #[traced_test]
+    </span><span class="comment">// #[traced_test]
     </span><span class="kw">async fn </span>on_connected_error() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>n = <span class="number">1</span>;
         <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -1608,7 +1606,7 @@
     ///
     /// This checks that the pool timeout includes on_connected delay.
     </span><span class="attr">#[tokio::test]
-    #[traced_test]
+    </span><span class="comment">// #[traced_test]
     </span><span class="kw">async fn </span>on_connected_timeout() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>n = <span class="number">1</span>;
         <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -1645,7 +1643,7 @@
     ///
     /// This test fails if the connection watch is disabled.
     </span><span class="attr">#[tokio::test]
-    #[traced_test]
+    </span><span class="comment">// #[traced_test]
     </span><span class="kw">async fn </span>watch_close() -&gt; TestResult&lt;()&gt; {
         <span class="kw">let </span>n = <span class="number">1</span>;
         <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
