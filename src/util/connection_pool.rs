@@ -580,6 +580,7 @@ mod tests {
             .alpns(vec![ECHO_ALPN.to_vec()])
             .bind()
             .await?;
+        endpoint.home_relay().initialized().await;
         let addr = endpoint.node_addr().initialized().await;
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(ECHO_ALPN, Echo)
