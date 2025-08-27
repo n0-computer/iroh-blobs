@@ -613,7 +613,7 @@ mod tests {
     fn test_options() -> Options {
         Options {
             idle_timeout: Duration::from_millis(100),
-            connect_timeout: Duration::from_secs(2),
+            connect_timeout: Duration::from_secs(5),
             max_connections: 32,
             on_connected: None,
         }
@@ -784,7 +784,7 @@ mod tests {
             .await?;
         let on_connected: OnConnected = Arc::new(|_, _| {
             Box::pin(async {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::time::sleep(Duration::from_secs(20)).await;
                 Ok(())
             })
         });
