@@ -531,7 +531,6 @@ mod tests {
     use n0_snafu::ResultExt;
     use testresult::TestResult;
     use tracing::trace;
-    use tracing_test::traced_test;
 
     use super::{ConnectionPool, Options, PoolConnectError};
     use crate::util::connection_pool::OnConnected;
@@ -639,7 +638,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[traced_test]
+    // #[traced_test]
     async fn connection_pool_errors() -> TestResult<()> {
         // set up static discovery for all addrs
         let discovery = StaticProvider::new();
@@ -675,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[traced_test]
+    // #[traced_test]
     async fn connection_pool_smoke() -> TestResult<()> {
         let n = 32;
         let (ids, routers, discovery) = echo_servers(n).await?;
@@ -710,7 +709,7 @@ mod tests {
     /// Tests that idle connections are being reclaimed to make room if we hit the
     /// maximum connection limit.
     #[tokio::test]
-    #[traced_test]
+    // #[traced_test]
     async fn connection_pool_idle() -> TestResult<()> {
         let n = 32;
         let (ids, routers, discovery) = echo_servers(n).await?;
@@ -742,7 +741,7 @@ mod tests {
     ///
     /// This is a basic smoke test that on_connected gets called at all.
     #[tokio::test]
-    #[traced_test]
+    // #[traced_test]
     async fn on_connected_error() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
@@ -774,7 +773,7 @@ mod tests {
     ///
     /// This checks that the pool timeout includes on_connected delay.
     #[tokio::test]
-    #[traced_test]
+    // #[traced_test]
     async fn on_connected_timeout() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
@@ -811,7 +810,7 @@ mod tests {
     ///
     /// This test fails if the connection watch is disabled.
     #[tokio::test]
-    #[traced_test]
+    // #[traced_test]
     async fn watch_close() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
