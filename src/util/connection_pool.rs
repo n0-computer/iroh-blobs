@@ -51,7 +51,7 @@ pub struct Options {
     /// An example usage could be to wait for the connection to become direct before handing
     /// it out to the user.
     #[debug(skip)]
-    pub on_connect: Option<OnConnected>,
+    pub on_connected: Option<OnConnected>,
 }
 
 impl Default for Options {
@@ -60,7 +60,7 @@ impl Default for Options {
             idle_timeout: Duration::from_secs(5),
             connect_timeout: Duration::from_secs(1),
             max_connections: 1024,
-            on_connect: None,
+            on_connected: None,
         }
     }
 }
@@ -167,7 +167,7 @@ impl Context {
                 .connect(node_id, &context2.alpn)
                 .await
                 .map_err(PoolConnectError::from)?;
-            if let Some(on_connect) = &context2.options.on_connect {
+            if let Some(on_connect) = &context2.options.on_connected {
                 on_connect(&context2.endpoint, &conn)
                     .await
                     .map_err(PoolConnectError::from)?;
@@ -519,7 +519,7 @@ impl Drop for OneConnection {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, time::Duration};
+    use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
     use iroh::{
         discovery::static_provider::StaticProvider,
@@ -527,12 +527,14 @@ mod tests {
         protocol::{AcceptError, ProtocolHandler, Router},
         NodeAddr, NodeId, SecretKey, Watcher,
     };
-    use n0_future::{stream, BufferedStreamExt, StreamExt};
+    use n0_future::{io, stream, BufferedStreamExt, StreamExt};
     use n0_snafu::ResultExt;
     use testresult::TestResult;
     use tracing::trace;
+    use tracing_test::traced_test;
 
     use super::{ConnectionPool, Options, PoolConnectError};
+    use crate::util::connection_pool::OnConnected;
 
     const ECHO_ALPN: &[u8] = b"echo";
 
@@ -586,14 +588,25 @@ mod tests {
         Ok((addr, router))
     }
 
-    async fn echo_servers(n: usize) -> TestResult<Vec<(NodeAddr, Router)>> {
-        stream::iter(0..n)
+    async fn echo_servers(n: usize) -> TestResult<(Vec<NodeId>, Vec<Router>, StaticProvider)> {
+        let res = stream::iter(0..n)
             .map(|_| echo_server())
             .buffered_unordered(16)
             .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect()
+            .await;
+        let res: Vec<(NodeAddr, Router)> = res.into_iter().collect::<TestResult<Vec<_>>>()?;
+        let (addrs, routers): (Vec<_>, Vec<_>) = res.into_iter().unzip();
+        let ids = addrs.iter().map(|a| a.node_id).collect::<Vec<_>>();
+        let discovery = StaticProvider::from_node_info(addrs);
+        Ok((ids, routers, discovery))
+    }
+
+    async fn shutdown_routers(routers: Vec<Router>) {
+        stream::iter(routers)
+            .for_each_concurrent(16, |router| async move {
+                let _ = router.shutdown().await;
+            })
+            .await;
     }
 
     fn test_options() -> Options {
@@ -601,7 +614,7 @@ mod tests {
             idle_timeout: Duration::from_millis(100),
             connect_timeout: Duration::from_secs(2),
             max_connections: 32,
-            on_connect: None,
+            on_connected: None,
         }
     }
 
@@ -625,12 +638,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn connection_pool_errors() -> TestResult<()> {
-        let filter = tracing_subscriber::EnvFilter::from_default_env();
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .try_init()
-            .ok();
         // set up static discovery for all addrs
         let discovery = StaticProvider::new();
         let endpoint = iroh::Endpoint::builder()
@@ -665,20 +674,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn connection_pool_smoke() -> TestResult<()> {
-        let filter = tracing_subscriber::EnvFilter::from_default_env();
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .try_init()
-            .ok();
         let n = 32;
-        let nodes = echo_servers(n).await?;
-        let ids = nodes
-            .iter()
-            .map(|(addr, _)| addr.node_id)
-            .collect::<Vec<_>>();
-        // set up static discovery for all addrs
-        let discovery = StaticProvider::from_node_info(nodes.iter().map(|(addr, _)| addr.clone()));
+        let (ids, routers, discovery) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the node ids
         let endpoint = iroh::Endpoint::builder()
             .discovery(discovery.clone())
@@ -687,7 +686,7 @@ mod tests {
         let pool = ConnectionPool::new(endpoint.clone(), ECHO_ALPN, test_options());
         let client = EchoClient { pool };
         let mut connection_ids = BTreeMap::new();
-        let msg = b"Hello, world!".to_vec();
+        let msg = b"Hello, pool!".to_vec();
         for id in &ids {
             let (cid1, res) = client.echo(*id, msg.clone()).await??;
             assert_eq!(res, msg);
@@ -703,26 +702,17 @@ mod tests {
             assert_eq!(res, msg);
             assert_ne!(cid1, cid2);
         }
+        shutdown_routers(routers).await;
         Ok(())
     }
 
     /// Tests that idle connections are being reclaimed to make room if we hit the
     /// maximum connection limit.
     #[tokio::test]
+    #[traced_test]
     async fn connection_pool_idle() -> TestResult<()> {
-        let filter = tracing_subscriber::EnvFilter::from_default_env();
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .try_init()
-            .ok();
         let n = 32;
-        let nodes = echo_servers(n).await?;
-        let ids = nodes
-            .iter()
-            .map(|(addr, _)| addr.node_id)
-            .collect::<Vec<_>>();
-        // set up static discovery for all addrs
-        let discovery = StaticProvider::from_node_info(nodes.iter().map(|(addr, _)| addr.clone()));
+        let (ids, routers, discovery) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the node ids
         let endpoint = iroh::Endpoint::builder()
             .discovery(discovery.clone())
@@ -738,11 +728,80 @@ mod tests {
             },
         );
         let client = EchoClient { pool };
-        let msg = b"Hello, world!".to_vec();
+        let msg = b"Hello, pool!".to_vec();
         for id in &ids {
             let (_, res) = client.echo(*id, msg.clone()).await??;
             assert_eq!(res, msg);
         }
+        shutdown_routers(routers).await;
+        Ok(())
+    }
+
+    /// Uses an on_connected callback that just errors out every time.
+    ///
+    /// This is a basic smoke test that on_connected gets called at all.
+    #[tokio::test]
+    #[traced_test]
+    async fn on_connected_error() -> TestResult<()> {
+        let n = 1;
+        let (ids, routers, discovery) = echo_servers(n).await?;
+        let endpoint = iroh::Endpoint::builder()
+            .discovery(discovery)
+            .bind()
+            .await?;
+        let on_connected: OnConnected =
+            Arc::new(|_, _| Box::pin(async { Err(io::Error::other("on_connect failed")) }));
+        let pool = ConnectionPool::new(
+            endpoint,
+            ECHO_ALPN,
+            Options {
+                on_connected: Some(on_connected),
+                ..test_options()
+            },
+        );
+        let client = EchoClient { pool };
+        let msg = b"Hello, pool!".to_vec();
+        for id in &ids {
+            let res = client.echo(*id, msg.clone()).await;
+            assert!(matches!(res, Err(PoolConnectError::OnConnectError { .. })));
+        }
+        shutdown_routers(routers).await;
+        Ok(())
+    }
+
+    /// Uses an on_connected callback that delays for a long time.
+    ///
+    /// This checks that the pool timeout includes on_connected delay.
+    #[tokio::test]
+    #[traced_test]
+    async fn on_connected_timeout() -> TestResult<()> {
+        let n = 1;
+        let (ids, routers, discovery) = echo_servers(n).await?;
+        let endpoint = iroh::Endpoint::builder()
+            .discovery(discovery)
+            .bind()
+            .await?;
+        let on_connected: OnConnected = Arc::new(|_, _| {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                Ok(())
+            })
+        });
+        let pool = ConnectionPool::new(
+            endpoint,
+            ECHO_ALPN,
+            Options {
+                on_connected: Some(on_connected),
+                ..test_options()
+            },
+        );
+        let client = EchoClient { pool };
+        let msg = b"Hello, pool!".to_vec();
+        for id in &ids {
+            let res = client.echo(*id, msg.clone()).await;
+            assert!(matches!(res, Err(PoolConnectError::Timeout { .. })));
+        }
+        shutdown_routers(routers).await;
         Ok(())
     }
 }
