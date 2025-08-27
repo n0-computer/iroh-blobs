@@ -10,6 +10,7 @@
 //! the connection.
 use std::{
     collections::{HashMap, VecDeque},
+    io,
     ops::Deref,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -18,7 +19,10 @@ use std::{
     time::Duration,
 };
 
-use iroh::{endpoint::ConnectError, Endpoint, NodeId};
+use iroh::{
+    endpoint::{ConnectError, Connection},
+    Endpoint, NodeId,
+};
 use n0_future::{
     future::{self},
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
@@ -31,12 +35,23 @@ use tokio::sync::{
 use tokio_util::time::FutureExt as TimeFutureExt;
 use tracing::{debug, error, info, trace};
 
+pub type OnConnected =
+    Arc<dyn Fn(&Endpoint, &Connection) -> n0_future::future::Boxed<io::Result<()>> + Send + Sync>;
+
 /// Configuration options for the connection pool
-#[derive(Debug, Clone, Copy)]
+#[derive(derive_more::Debug, Clone)]
 pub struct Options {
+    /// How long to keep idle connections around.
     pub idle_timeout: Duration,
+    /// Timeout for connect. This includes the time spent in on_connect, if set.
     pub connect_timeout: Duration,
+    /// Maximum number of connections to hand out.
     pub max_connections: usize,
+    /// An optional callback that can be used to wait for the connection to enter some state.
+    /// An example usage could be to wait for the connection to become direct before handing
+    /// it out to the user.
+    #[debug(skip)]
+    pub on_connect: Option<OnConnected>,
 }
 
 impl Default for Options {
@@ -45,6 +60,7 @@ impl Default for Options {
             idle_timeout: Duration::from_secs(5),
             connect_timeout: Duration::from_secs(1),
             max_connections: 1024,
+            on_connect: None,
         }
     }
 }
@@ -88,11 +104,21 @@ pub enum PoolConnectError {
     TooManyConnections,
     /// Error during connect
     ConnectError { source: Arc<ConnectError> },
+    /// Error during on_connect callback
+    OnConnectError { source: Arc<io::Error> },
 }
 
 impl From<ConnectError> for PoolConnectError {
     fn from(e: ConnectError) -> Self {
         PoolConnectError::ConnectError {
+            source: Arc::new(e),
+        }
+    }
+}
+
+impl From<io::Error> for PoolConnectError {
+    fn from(e: io::Error) -> Self {
+        PoolConnectError::OnConnectError {
             source: Arc::new(e),
         }
     }
@@ -134,10 +160,23 @@ impl Context {
     ) {
         let context = self;
 
+        let context2 = context.clone();
+        let conn_fut = async move {
+            let conn = context2
+                .endpoint
+                .connect(node_id, &context2.alpn)
+                .await
+                .map_err(PoolConnectError::from)?;
+            if let Some(on_connect) = &context2.options.on_connect {
+                on_connect(&context2.endpoint, &conn)
+                    .await
+                    .map_err(PoolConnectError::from)?;
+            }
+            Result::<Connection, PoolConnectError>::Ok(conn)
+        };
+
         // Connect to the node
-        let state = context
-            .endpoint
-            .connect(node_id, &context.alpn)
+        let state = conn_fut
             .timeout(context.options.connect_timeout)
             .await
             .map_err(|_| PoolConnectError::Timeout)
