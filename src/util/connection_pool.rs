@@ -180,7 +180,7 @@ impl Context {
             .timeout(context.options.connect_timeout)
             .await
             .map_err(|_| PoolConnectError::Timeout)
-            .and_then(|r| r.map_err(PoolConnectError::from));
+            .and_then(|r| r);
         let conn_close = match &state {
             Ok(conn) => {
                 let conn = conn.clone();
@@ -799,7 +799,7 @@ mod tests {
         let msg = b"Hello, pool!".to_vec();
         for id in &ids {
             let res = client.echo(*id, msg.clone()).await;
-            assert!(matches!(res, Err(PoolConnectError::Timeout { .. })));
+            assert!(matches!(res, Err(PoolConnectError::Timeout)));
         }
         shutdown_routers(routers).await;
         Ok(())
