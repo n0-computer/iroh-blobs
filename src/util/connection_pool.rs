@@ -190,7 +190,6 @@ impl Context {
             }
             Err(e) => {
                 debug!(%node_id, "Failed to connect {e:?}, requesting shutdown");
-                tokio::time::sleep(Duration::from_secs(1)).await;
                 if context.owner.close(node_id).await.is_err() {
                     return;
                 }
