@@ -831,7 +831,9 @@
 <a href="#830" id="830">830</a>
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
 //!
 //! Entry point is [`ConnectionPool`]. You create a connection pool for a specific
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
@@ -993,19 +995,21 @@
     ) {
         <span class="kw">let </span>context = <span class="self">self</span>;
 
-        <span class="kw">let </span>context2 = context.clone();
-        <span class="kw">let </span>conn_fut = <span class="kw">async move </span>{
-            <span class="kw">let </span>conn = context2
-                .endpoint
-                .connect(node_id, <span class="kw-2">&amp;</span>context2.alpn)
-                .<span class="kw">await
-                </span>.map_err(PoolConnectError::from)<span class="question-mark">?</span>;
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(on_connect) = <span class="kw-2">&amp;</span>context2.options.on_connected {
-                on_connect(<span class="kw-2">&amp;</span>context2.endpoint, <span class="kw-2">&amp;</span>conn)
+        <span class="kw">let </span>conn_fut = {
+            <span class="kw">let </span>context = context.clone();
+            <span class="kw">async move </span>{
+                <span class="kw">let </span>conn = context
+                    .endpoint
+                    .connect(node_id, <span class="kw-2">&amp;</span>context.alpn)
                     .<span class="kw">await
                     </span>.map_err(PoolConnectError::from)<span class="question-mark">?</span>;
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(on_connect) = <span class="kw-2">&amp;</span>context.options.on_connected {
+                    on_connect(<span class="kw-2">&amp;</span>context.endpoint, <span class="kw-2">&amp;</span>conn)
+                        .<span class="kw">await
+                        </span>.map_err(PoolConnectError::from)<span class="question-mark">?</span>;
+                }
+                <span class="prelude-ty">Result</span>::&lt;Connection, PoolConnectError&gt;::Ok(conn)
             }
-            <span class="prelude-ty">Result</span>::&lt;Connection, PoolConnectError&gt;::Ok(conn)
         };
 
         <span class="comment">// Connect to the node
