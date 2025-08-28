@@ -160,19 +160,21 @@ impl Context {
     ) {
         let context = self;
 
-        let context2 = context.clone();
-        let conn_fut = async move {
-            let conn = context2
-                .endpoint
-                .connect(node_id, &context2.alpn)
-                .await
-                .map_err(PoolConnectError::from)?;
-            if let Some(on_connect) = &context2.options.on_connected {
-                on_connect(&context2.endpoint, &conn)
+        let conn_fut = {
+            let context = context.clone();
+            async move {
+                let conn = context
+                    .endpoint
+                    .connect(node_id, &context.alpn)
                     .await
                     .map_err(PoolConnectError::from)?;
+                if let Some(on_connect) = &context.options.on_connected {
+                    on_connect(&context.endpoint, &conn)
+                        .await
+                        .map_err(PoolConnectError::from)?;
+                }
+                Result::<Connection, PoolConnectError>::Ok(conn)
             }
-            Result::<Connection, PoolConnectError>::Ok(conn)
         };
 
         // Connect to the node
