@@ -832,8 +832,7 @@
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
 <a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a>
-<a href="#835" id="835">835</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
+<a href="#834" id="834">834</a></pre></div><pre class="rust"><code><span class="doccomment">//! A simple iroh connection pool
 //!
 //! Entry point is [`ConnectionPool`]. You create a connection pool for a specific
 //! ALPN and [`Options`]. Then the pool will manage connections for you.
@@ -1025,7 +1024,6 @@
             }
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="macro">debug!</span>(%node_id, <span class="string">"Failed to connect {e:?}, requesting shutdown"</span>);
-                tokio::time::sleep(Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
                 <span class="kw">if </span>context.owner.close(node_id).<span class="kw">await</span>.is_err() {
                     <span class="kw">return</span>;
                 }
