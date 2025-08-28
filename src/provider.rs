@@ -20,7 +20,7 @@ use iroh::{
 };
 use irpc::channel::oneshot;
 use n0_future::StreamExt;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{io::AsyncRead, select, sync::mpsc};
 use tracing::{debug, debug_span, error, warn, Instrument};
 
@@ -33,6 +33,7 @@ use crate::{
     },
     Hash,
 };
+mod event_proto;
 
 /// Provider progress events, to keep track of what the provider is doing.
 ///
@@ -129,7 +130,7 @@ pub enum Event {
 }
 
 /// Statistics about a successful or failed transfer.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransferStats {
     /// The number of bytes sent that are part of the payload.
     pub payload_bytes_sent: u64,

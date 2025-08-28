@@ -42,7 +42,7 @@ self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.91.1"
 reflink-copy = "0.1.24"
-irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false, path = "../irpc" }
 iroh-metrics = { version = "0.35" }
 
 [dev-dependencies]
