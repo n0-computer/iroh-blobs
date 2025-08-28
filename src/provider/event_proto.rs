@@ -236,6 +236,24 @@ impl Client {
             }
         })
     }
+
+    pub async fn transfer_completed(&self, f: impl Fn() -> TransferCompleted) -> ClientResult {
+        Ok(if let Some(client) = &self.inner {
+            match self.mask.transfer_complete {
+                EventMode2::Notify => client.notify(f()).await?,
+                EventMode2::None => {}
+            }
+        })
+    }
+
+    pub async fn transfer_aborted(&self, f: impl Fn() -> TransferAborted) -> ClientResult {
+        Ok(if let Some(client) = &self.inner {
+            match self.mask.transfer_aborted {
+                EventMode2::Notify => client.notify(f()).await?,
+                EventMode2::None => {}
+            }
+        })
+    }
 }
 
 #[rpc_requests(message = ProviderMessage)]
