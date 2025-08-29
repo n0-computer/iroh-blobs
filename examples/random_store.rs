@@ -6,7 +6,7 @@ use iroh::{SecretKey, Watcher};
 use iroh_base::ticket::NodeTicket;
 use iroh_blobs::{
     api::downloader::Shuffled,
-    provider::Event,
+    provider::{AbortReason, Event, EventMask, EventSender2, ProviderMessage},
     store::fs::FsStore,
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
@@ -104,78 +104,66 @@ pub fn dump_provider_events(
     allow_push: bool,
 ) -> (
     tokio::task::JoinHandle<()>,
-    mpsc::Sender<iroh_blobs::provider::Event>,
+    EventSender2,
 ) {
     let (tx, mut rx) = mpsc::channel(100);
     let dump_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
-                Event::ClientConnected {
-                    node_id,
-                    connection_id,
-                    permitted,
-                } => {
-                    permitted.send(true).await.ok();
-                    println!("Client connected: {node_id} {connection_id}");
+                ProviderMessage::ClientConnected(msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
                 }
-                Event::GetRequestReceived {
-                    connection_id,
-                    request_id,
-                    hash,
-                    ranges,
-                } => {
-                    println!(
-                        "Get request received: {connection_id} {request_id} {hash} {ranges:?}"
-                    );
+                ProviderMessage::ClientConnectedNotify(msg) => {
+                    println!("{:?}", msg.inner);
                 }
-                Event::TransferCompleted {
-                    connection_id,
-                    request_id,
-                    stats,
-                } => {
-                    println!("Transfer completed: {connection_id} {request_id} {stats:?}");
+                ProviderMessage::ConnectionClosed(msg) => {
+                    println!("{:?}", msg.inner);
                 }
-                Event::TransferAborted {
-                    connection_id,
-                    request_id,
-                    stats,
-                } => {
-                    println!("Transfer aborted: {connection_id} {request_id} {stats:?}");
+                ProviderMessage::GetRequestReceived(mut msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
+                    tokio::spawn(async move {
+                        while let Ok(update) = msg.rx.recv().await {
+                            info!("{update:?}");
+                        }
+                    });
                 }
-                Event::TransferProgress {
-                    connection_id,
-                    request_id,
-                    index,
-                    end_offset,
-                } => {
-                    info!("Transfer progress: {connection_id} {request_id} {index} {end_offset}");
+                ProviderMessage::GetRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
                 }
-                Event::PushRequestReceived {
-                    connection_id,
-                    request_id,
-                    hash,
-                    ranges,
-                    permitted,
-                } => {
-                    if allow_push {
-                        permitted.send(true).await.ok();
-                        println!(
-                            "Push request received: {connection_id} {request_id} {hash} {ranges:?}"
-                        );
+                ProviderMessage::GetManyRequestReceived(mut msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
+                    tokio::spawn(async move {
+                        while let Ok(update) = msg.rx.recv().await {
+                            info!("{update:?}");
+                        }
+                    });
+                }
+                ProviderMessage::GetManyRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                }
+                ProviderMessage::PushRequestReceived(msg) => {
+                    println!("{:?}", msg.inner);
+                    let res = if allow_push {
+                        Ok(())
                     } else {
-                        permitted.send(false).await.ok();
-                        println!(
-                            "Push request denied: {connection_id} {request_id} {hash} {ranges:?}"
-                        );
-                    }
+                        Err(AbortReason::Permission)
+                    };
+                    msg.tx.send(res).await.ok();
                 }
-                _ => {
-                    info!("Received event: {:?}", event);
+                ProviderMessage::PushRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                }
+                ProviderMessage::Throttle(msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
                 }
             }
         }
     });
-    (dump_task, tx)
+    (dump_task, EventSender2::new(tx, EventMask::ALL))
 }
 
 #[tokio::main]
@@ -237,7 +225,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         .bind()
         .await?;
     let (dump_task, events_tx) = dump_provider_events(args.allow_push);
-    let blobs = iroh_blobs::BlobsProtocol::new(&store, endpoint.clone(), Some(events_tx));
+    let blobs = iroh_blobs::BlobsProtocol::new(&store, endpoint.clone(), events_tx);
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();

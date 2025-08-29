@@ -7,7 +7,7 @@ use irpc::{
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::provider::{event_proto::irpc_ext::IrpcClientExt, TransferStats};
+use crate::{provider::{events::irpc_ext::IrpcClientExt, TransferStats}, Hash};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -136,7 +136,7 @@ impl EventMask {
 pub struct Notify<T>(T);
 
 #[derive(Debug, Default, Clone)]
-pub struct Client {
+pub struct EventSender {
     mask: EventMask,
     inner: Option<irpc::Client<ProviderProto>>,
 }
@@ -150,9 +150,10 @@ enum RequestUpdates {
     Active(mpsc::Sender<RequestUpdate>),
     /// Disabled request tracking, we just hold on to the sender so it drops
     /// once the request is completed or aborted.
-    Disabled(mpsc::Sender<RequestUpdate>),
+    Disabled(#[allow(dead_code)] mpsc::Sender<RequestUpdate>),
 }
 
+#[derive(Debug)]
 pub struct RequestTracker {
     updates: RequestUpdates,
     throttle: Option<(irpc::Client<ProviderProto>, u64, u64)>,
@@ -173,9 +174,9 @@ impl RequestTracker {
     };
 
     /// Transfer for index `index` started, size `size`
-    pub async fn transfer_started(&self, index: u64, size: u64) -> irpc::Result<()> {
+    pub async fn transfer_started(&self, index: u64, hash: &Hash, size: u64) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
-            tx.send(RequestUpdate::Started(TransferStarted { index, size }))
+            tx.send(RequestUpdate::Started(TransferStarted { index, hash: *hash, size }))
                 .await?;
         }
         Ok(())
@@ -200,7 +201,7 @@ impl RequestTracker {
 
     /// Transfer completed for the previously reported blob.
     pub async fn transfer_completed(
-        &mut self,
+        &self,
         f: impl Fn() -> Box<TransferStats>,
     ) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
@@ -212,7 +213,7 @@ impl RequestTracker {
 
     /// Transfer aborted for the previously reported blob.
     pub async fn transfer_aborted(
-        &mut self,
+        &self,
         f: impl Fn() -> Option<Box<TransferStats>>,
     ) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
@@ -227,12 +228,16 @@ impl RequestTracker {
 ///
 /// For most event types, the client can be configured to either send notifications or requests that
 /// can have a response.
-impl Client {
+impl EventSender {
     /// A client that does not send anything.
     pub const NONE: Self = Self {
         mask: EventMask::NONE,
         inner: None,
     };
+
+    pub fn new(client: tokio::sync::mpsc::Sender<ProviderMessage>, mask: EventMask) -> Self {
+        Self { mask, inner: Some(irpc::Client::from(client)) }
+    }
 
     /// A new client has been connected.
     pub async fn client_connected(&self, f: impl Fn() -> ClientConnected) -> ClientResult {
@@ -242,6 +247,13 @@ impl Client {
                 ConnectMode::Notify => client.notify(Notify(f())).await?,
                 ConnectMode::Request => client.rpc(f()).await??,
             }
+        })
+    }
+
+    /// A new client has been connected.
+    pub async fn connection_closed(&self, f: impl Fn() -> ConnectionClosed) -> ClientResult {
+        Ok(if let Some(client) = &self.inner {
+            client.notify(f()).await?;
         })
     }
 
@@ -371,8 +383,7 @@ pub enum ProviderProto {
 
     /// A client disconnected from the provider.
     #[rpc(tx = NoSender)]
-    #[wrap(ConnectionClosed)]
-    ConnectionClosed { connection_id: u64 },
+    ConnectionClosed(ConnectionClosed),
 
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     /// A new get request was received from the provider.
@@ -411,12 +422,17 @@ mod proto {
     use serde::{Deserialize, Serialize};
 
     use super::Request;
-    use crate::{protocol::ChunkRangesSeq, provider::TransferStats, Hash};
+    use crate::{protocol::{ChunkRangesSeq, GetRequest}, provider::TransferStats, Hash};
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ClientConnected {
         pub connection_id: u64,
         pub node_id: NodeId,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ConnectionClosed {
+        pub connection_id: u64,
     }
 
     /// A new get request was received from the provider.
@@ -426,10 +442,8 @@ mod proto {
         pub connection_id: u64,
         /// The request id. There is a new id for each request.
         pub request_id: u64,
-        /// The root hash of the request.
-        pub hash: Hash,
-        /// The exact query ranges of the request.
-        pub ranges: ChunkRangesSeq,
+        /// The request
+        pub request: GetRequest,
     }
 
     impl Request for GetRequestReceived {
@@ -492,6 +506,7 @@ mod proto {
     #[derive(Debug, Serialize, Deserialize)]
     pub struct TransferStarted {
         pub index: u64,
+        pub hash: Hash,
         pub size: u64,
     }
 
@@ -518,7 +533,7 @@ mod proto {
         Aborted(TransferAborted),
     }
 }
-use proto::*;
+pub use proto::*;
 
 mod irpc_ext {
     use std::future::Future;

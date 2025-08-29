@@ -48,7 +48,7 @@ use tracing::error;
 
 use crate::{
     api::Store,
-    provider::{Event, EventSender},
+    provider::{Event, EventSender2},
     ticket::BlobTicket,
     HashAndFormat,
 };
@@ -57,7 +57,7 @@ use crate::{
 pub(crate) struct BlobsInner {
     pub(crate) store: Store,
     pub(crate) endpoint: Endpoint,
-    pub(crate) events: EventSender,
+    pub(crate) events: EventSender2,
 }
 
 /// A protocol handler for the blobs protocol.
@@ -75,12 +75,12 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
-    pub fn new(store: &Store, endpoint: Endpoint, events: Option<mpsc::Sender<Event>>) -> Self {
+    pub fn new(store: &Store, endpoint: Endpoint, events: EventSender2) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
                 endpoint,
-                events: EventSender::new(events),
+                events,
             }),
         }
     }
