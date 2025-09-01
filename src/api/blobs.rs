@@ -57,7 +57,7 @@ use super::{
 };
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::{ReaderContext, WriterContext},
+    provider::WriterContext,
     store::IROH_BLOCK_SIZE,
     util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
@@ -1180,9 +1180,6 @@ impl WriteProgress for WriterContext {
     }
 
     async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64) {
-        self.tracker
-            .transfer_started(index, hash, size)
-            .await 
-            .ok();
+        self.tracker.transfer_started(index, hash, size).await.ok();
     }
 }

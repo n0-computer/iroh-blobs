@@ -43,15 +43,9 @@ use iroh::{
     protocol::{AcceptError, ProtocolHandler},
     Endpoint, Watcher,
 };
-use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::{
-    api::Store,
-    provider::{Event, EventSender2},
-    ticket::BlobTicket,
-    HashAndFormat,
-};
+use crate::{api::Store, provider::EventSender2, ticket::BlobTicket, HashAndFormat};
 
 #[derive(Debug)]
 pub(crate) struct BlobsInner {

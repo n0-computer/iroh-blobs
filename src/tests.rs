@@ -16,7 +16,10 @@ use crate::{
     hashseq::HashSeq,
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
-    provider::{events::{AbortReason, RequestUpdate}, Event, EventMask, EventSender2, ProviderMessage},
+    provider::{
+        events::{AbortReason, RequestUpdate},
+        EventMask, EventSender2, ProviderMessage,
+    },
     store::{
         fs::{
             tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -340,11 +343,7 @@ async fn two_nodes_get_many_mem() -> TestResult<()> {
 
 fn event_handler(
     allowed_nodes: impl IntoIterator<Item = NodeId>,
-) -> (
-    EventSender2,
-    watch::Receiver<usize>,
-    AbortOnDropHandle<()>,
-) {
+) -> (EventSender2, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
     let (events_tx, mut events_rx) = mpsc::channel::<ProviderMessage>(16);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
@@ -609,7 +608,8 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     let root_tt = store.add_bytes(hash_seq).await?;
     let root = root_tt.hash;
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-    let blobs = crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+    let blobs =
+        crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
@@ -640,7 +640,8 @@ async fn node_serve_blobs() -> TestResult<()> {
         tts.push(store.add_bytes(test_data(size)).await?);
     }
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-    let blobs = crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+    let blobs =
+        crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
@@ -682,7 +683,8 @@ async fn node_smoke(store: &Store) -> TestResult<()> {
     let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
     let hash = *tt.hash();
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-    let blobs = crate::net_protocol::BlobsProtocol::new(store, endpoint.clone(), EventSender2::NONE);
+    let blobs =
+        crate::net_protocol::BlobsProtocol::new(store, endpoint.clone(), EventSender2::NONE);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();

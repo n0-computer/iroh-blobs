@@ -18,23 +18,32 @@ use iroh::{
     endpoint::{self, RecvStream, SendStream},
     NodeId,
 };
-use irpc::{channel::oneshot};
+use irpc::channel::oneshot;
 use n0_future::StreamExt;
+use quinn::{ClosedStream, ReadToEndError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{io::AsyncRead, select, sync::mpsc};
 use tracing::{debug, debug_span, error, trace, warn, Instrument};
 
 use crate::{
-    api::{self, blobs::{Bitfield, WriteProgress}, Store}, hashseq::HashSeq, protocol::{
+    api::{
+        self,
+        blobs::{Bitfield, WriteProgress},
+        Store,
+    },
+    hashseq::HashSeq,
+    protocol::{
         ChunkRangesSeq, GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest,
         Request,
-    }, provider::events::{ClientConnected, ConnectionClosed, GetRequestReceived, RequestTracker}, Hash
+    },
+    provider::events::{
+        ClientConnected, ConnectionClosed, GetManyRequestReceived, GetRequestReceived,
+        PushRequestReceived, RequestTracker,
+    },
+    Hash,
 };
 pub(crate) mod events;
-pub use events::EventSender as EventSender2;
-pub use events::ProviderMessage;
-pub use events::EventMask;
-pub use events::AbortReason;
+pub use events::{AbortReason, EventMask, EventSender as EventSender2, ProviderMessage};
 
 /// Provider progress events, to keep track of what the provider is doing.
 ///
@@ -155,11 +164,69 @@ pub struct TransferStats {
 /// leave the rest of the stream for the caller to read.
 ///
 /// It is up to the caller do decide if there should be more data.
-pub async fn read_request(reader: &mut ProgressReader) -> Result<Request> {
-    let mut counting = CountingReader::new(&mut reader.inner);
+pub async fn read_request(context: &mut StreamData) -> Result<Request> {
+    let mut counting = CountingReader::new(&mut context.reader);
     let res = Request::read_async(&mut counting).await?;
-    reader.bytes_read += counting.read();
+    context.bytes_read += counting.read();
     Ok(res)
+}
+
+#[derive(Debug)]
+pub struct StreamData {
+    pub t0: Instant,
+    pub connection_id: u64,
+    pub request_id: u64,
+    pub reader: RecvStream,
+    pub writer: SendStream,
+    pub events: EventSender2,
+    pub bytes_read: u64,
+}
+
+impl StreamData {
+    /// We are done with reading. Return a ProgressWriter that contains the read stats and connection id
+    async fn into_writer(
+        mut self,
+        tracker: RequestTracker,
+    ) -> Result<ProgressWriter, ReadToEndError> {
+        let res = self.reader.read_to_end(0).await;
+        if let Err(e) = res {
+            tracker.transfer_aborted(|| None).await.ok();
+            return Err(e);
+        };
+        Ok(ProgressWriter::new(
+            self.writer,
+            WriterContext {
+                t0: self.t0,
+                connection_id: self.connection_id,
+                request_id: self.request_id,
+                bytes_read: self.bytes_read,
+                payload_bytes_written: 0,
+                other_bytes_written: 0,
+                tracker,
+            },
+        ))
+    }
+
+    async fn into_reader(
+        mut self,
+        tracker: RequestTracker,
+    ) -> Result<ProgressReader, ClosedStream> {
+        let res = self.writer.finish();
+        if let Err(e) = res {
+            tracker.transfer_aborted(|| None).await.ok();
+            return Err(e);
+        };
+        Ok(ProgressReader::new(
+            self.reader,
+            ReaderContext {
+                t0: self.t0,
+                connection_id: self.connection_id,
+                request_id: self.request_id,
+                bytes_read: self.bytes_read,
+                tracker,
+            },
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -172,6 +239,20 @@ pub struct ReaderContext {
     pub request_id: u64,
     /// The number of bytes read from the stream
     pub bytes_read: u64,
+    /// Progress tracking for the request
+    pub tracker: RequestTracker,
+}
+
+impl ReaderContext {
+    pub fn new(context: StreamData, tracker: RequestTracker) -> Self {
+        Self {
+            t0: context.t0,
+            connection_id: context.connection_id,
+            request_id: context.request_id,
+            bytes_read: context.bytes_read,
+            tracker,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -192,6 +273,20 @@ pub struct WriterContext {
     pub tracker: RequestTracker,
 }
 
+impl WriterContext {
+    pub fn new(context: &StreamData, tracker: RequestTracker) -> Self {
+        Self {
+            t0: context.t0,
+            connection_id: context.connection_id,
+            request_id: context.request_id,
+            bytes_read: context.bytes_read,
+            payload_bytes_written: 0,
+            other_bytes_written: 0,
+            tracker,
+        }
+    }
+}
+
 /// Wrapper for a [`quinn::SendStream`] with additional per request information.
 #[derive(Debug)]
 pub struct ProgressWriter {
@@ -201,34 +296,36 @@ pub struct ProgressWriter {
 }
 
 impl ProgressWriter {
-    fn new(inner: SendStream, context: ReaderContext, tracker: RequestTracker) -> Self {
-        Self { inner, context: WriterContext {
-            connection_id: context.connection_id,
-            request_id: context.request_id,
-            bytes_read: context.bytes_read,
-            t0: context.t0,
-            payload_bytes_written: 0,
-            other_bytes_written: 0,
-            tracker,
-        } }
+    fn new(inner: SendStream, context: WriterContext) -> Self {
+        Self { inner, context }
     }
 
     async fn transfer_aborted(&self) {
-        self.tracker.transfer_aborted(|| Some(Box::new(TransferStats {
-            payload_bytes_sent: self.payload_bytes_written,
-            other_bytes_sent: self.other_bytes_written,
-            bytes_read: self.bytes_read,
-            duration: self.context.t0.elapsed(),
-        }))).await.ok();
+        self.tracker
+            .transfer_aborted(|| {
+                Some(Box::new(TransferStats {
+                    payload_bytes_sent: self.payload_bytes_written,
+                    other_bytes_sent: self.other_bytes_written,
+                    bytes_read: self.bytes_read,
+                    duration: self.context.t0.elapsed(),
+                }))
+            })
+            .await
+            .ok();
     }
 
     async fn transfer_completed(&self) {
-        self.tracker.transfer_completed(|| Box::new(TransferStats {
-            payload_bytes_sent: self.payload_bytes_written,
-            other_bytes_sent: self.other_bytes_written,
-            bytes_read: self.bytes_read,
-            duration: self.context.t0.elapsed(),
-        })).await.ok();
+        self.tracker
+            .transfer_completed(|| {
+                Box::new(TransferStats {
+                    payload_bytes_sent: self.payload_bytes_written,
+                    other_bytes_sent: self.other_bytes_written,
+                    bytes_read: self.bytes_read,
+                    duration: self.context.t0.elapsed(),
+                })
+            })
+            .await
+            .ok();
     }
 }
 
@@ -259,7 +356,7 @@ pub async fn handle_connection(
             warn!("failed to get node id");
             return;
         };
-        if let Err(cause) =progress
+        if let Err(cause) = progress
             .client_connected(|| ClientConnected {
                 connection_id,
                 node_id,
@@ -275,95 +372,87 @@ pub async fn handle_connection(
             let request_id = reader.id().index();
             let span = debug_span!("stream", stream_id = %request_id);
             let store = store.clone();
-            let context = ReaderContext {
+            let context = StreamData {
                 t0: Instant::now(),
                 connection_id: connection_id,
                 request_id: request_id,
+                reader,
+                writer,
+                events: progress.clone(),
                 bytes_read: 0,
             };
-            let reader = ProgressReader {
-                inner: reader,
-                context,
-            };
-            tokio::spawn(
-                handle_stream(store, reader, writer, progress.clone())
-                .instrument(span),
-            );
+            tokio::spawn(handle_stream(store, context).instrument(span));
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })
-            .await.ok();
+            .await
+            .ok();
     }
     .instrument(span)
     .await
 }
 
-async fn handle_stream(
-    store: Store,
-    mut reader: ProgressReader,
-    writer: SendStream,
-    progress: EventSender2,
-) {
+async fn handle_stream(store: Store, mut context: StreamData) -> anyhow::Result<()> {
     // 1. Decode the request.
     debug!("reading request");
-    let request = match read_request(&mut reader).await {
-        Ok(request) => request,
-        Err(e) => {
-            // todo: event for read request failed
-            return;
-        }
-    };
+    let request = read_request(&mut context).await?;
 
     match request {
         Request::Get(request) => {
-            let tracker = match progress.get_request(|| GetRequestReceived {
-                connection_id: reader.context.connection_id,
-                request_id: reader.context.request_id,
-                request: request.clone(),
-            }).await {
-                Ok(tracker) => tracker,
-                Err(e) => {
-                    trace!("Request denied: {}", e);
-                    return;
-                }
-            };
-            // we expect no more bytes after the request, so if there are more bytes, it is an invalid request.
-            let res = reader.inner.read_to_end(0).await;
-            let mut writer = ProgressWriter::new(writer, reader.context, tracker);
-            if res.is_err() {
+            let tracker = context
+                .events
+                .get_request(|| GetRequestReceived {
+                    connection_id: context.connection_id,
+                    request_id: context.request_id,
+                    request: request.clone(),
+                })
+                .await?;
+            let mut writer = context.into_writer(tracker).await?;
+            if handle_get(store, request, &mut writer).await.is_ok() {
+                writer.transfer_completed().await;
+            } else {
                 writer.transfer_aborted().await;
-                return;
-            }
-            match handle_get(store, request, &mut writer).await {
-                Ok(()) => {
-                    writer.transfer_completed().await;
-                }
-                Err(_) => {
-                    writer.transfer_aborted().await;
-                }
             }
         }
         Request::GetMany(request) => {
-            todo!();
-            // // we expect no more bytes after the request, so if there are more bytes, it is an invalid request.
-            // reader.inner.read_to_end(0).await?;
-            // // move the context so we don't lose the bytes read
-            // writer.context = reader.context;
-            // handle_get_many(store, request, writer).await
+            let tracker = context
+                .events
+                .get_many_request(|| GetManyRequestReceived {
+                    connection_id: context.connection_id,
+                    request_id: context.request_id,
+                    request: request.clone(),
+                })
+                .await?;
+            let mut writer = context.into_writer(tracker).await?;
+            if handle_get_many(store, request, &mut writer).await.is_ok() {
+                writer.transfer_completed().await;
+            } else {
+                writer.transfer_aborted().await;
+            }
         }
         Request::Observe(request) => {
-            todo!();
-            // // we expect no more bytes after the request, so if there are more bytes, it is an invalid request.
-            // reader.inner.read_to_end(0).await?;
-            // handle_observe(store, request, writer).await
+            let mut writer = context.into_writer(RequestTracker::NONE).await?;
+            handle_observe(store, request, &mut writer).await.ok();
         }
         Request::Push(request) => {
-            todo!();
-            // writer.inner.finish()?;
-            // handle_push(store, request, reader).await
+            let tracker = context
+                .events
+                .push_request(|| PushRequestReceived {
+                    connection_id: context.connection_id,
+                    request_id: context.request_id,
+                    request: request.clone(),
+                })
+                .await?;
+            let mut reader = context.into_reader(tracker).await?;
+            if handle_push(store, request, &mut reader).await.is_ok() {
+                reader.transfer_completed().await;
+            } else {
+                reader.transfer_aborted().await;
+            }
         }
-        _ => {},
+        _ => {}
     }
+    Ok(())
 }
 
 /// Handle a single get request.
@@ -430,7 +519,7 @@ pub async fn handle_get_many(
 pub async fn handle_push(
     store: Store,
     request: PushRequest,
-    mut reader: ProgressReader,
+    reader: &mut ProgressReader,
 ) -> Result<()> {
     let hash = request.hash;
     debug!(%hash, "push received request");
@@ -614,6 +703,40 @@ impl EventSender {
 pub struct ProgressReader {
     inner: RecvStream,
     context: ReaderContext,
+}
+
+impl ProgressReader {
+    pub fn new(inner: RecvStream, context: ReaderContext) -> Self {
+        Self { inner, context }
+    }
+
+    async fn transfer_aborted(&self) {
+        self.tracker
+            .transfer_aborted(|| {
+                Some(Box::new(TransferStats {
+                    payload_bytes_sent: 0,
+                    other_bytes_sent: 0,
+                    bytes_read: self.bytes_read,
+                    duration: self.context.t0.elapsed(),
+                }))
+            })
+            .await
+            .ok();
+    }
+
+    async fn transfer_completed(&self) {
+        self.tracker
+            .transfer_completed(|| {
+                Box::new(TransferStats {
+                    payload_bytes_sent: 0,
+                    other_bytes_sent: 0,
+                    bytes_read: self.bytes_read,
+                    duration: self.context.t0.elapsed(),
+                })
+            })
+            .await
+            .ok();
+    }
 }
 
 impl Deref for ProgressReader {

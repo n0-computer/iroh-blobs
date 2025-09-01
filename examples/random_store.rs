@@ -6,7 +6,7 @@ use iroh::{SecretKey, Watcher};
 use iroh_base::ticket::NodeTicket;
 use iroh_blobs::{
     api::downloader::Shuffled,
-    provider::{AbortReason, Event, EventMask, EventSender2, ProviderMessage},
+    provider::{AbortReason, EventMask, EventSender2, ProviderMessage},
     store::fs::FsStore,
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
@@ -100,12 +100,7 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
     }
 }
 
-pub fn dump_provider_events(
-    allow_push: bool,
-) -> (
-    tokio::task::JoinHandle<()>,
-    EventSender2,
-) {
+pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, EventSender2) {
     let (tx, mut rx) = mpsc::channel(100);
     let dump_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
