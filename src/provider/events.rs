@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
+    protocol::{GetManyRequest, GetRequest, ObserveRequest, PushRequest},
     provider::{events::irpc_ext::IrpcClientExt, TransferStats},
     Hash,
 };
@@ -26,13 +27,25 @@ pub enum ConnectMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
+pub enum ObserveMode {
+    /// We don't get notification of connect events at all.
+    #[default]
+    None,
+    /// We get a notification for connect events.
+    Notify,
+    /// We get a request for connect events and can reject incoming connections.
+    Request,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
 pub enum RequestMode {
     /// We don't get request events at all.
     #[default]
     None,
-    /// We get a notification for each request.
+    /// We get a notification for each request, but no transfer events.
     Notify,
-    /// We get a request for each request, and can reject incoming requests.
+    /// We get a request for each request, and can reject incoming requests, but no transfer events.
     Request,
     /// We get a notification for each request as well as detailed transfer events.
     NotifyLog,
@@ -101,6 +114,7 @@ pub struct EventMask {
     get: RequestMode,
     get_many: RequestMode,
     push: RequestMode,
+    observe: ObserveMode,
     /// throttling is somewhat costly, so you can disable it completely
     throttle: ThrottleMode,
 }
@@ -113,6 +127,7 @@ impl EventMask {
         get_many: RequestMode::None,
         push: RequestMode::None,
         throttle: ThrottleMode::None,
+        observe: ObserveMode::None,
     };
 
     /// You get asked for every single thing that is going on and can intervene/throttle.
@@ -122,6 +137,7 @@ impl EventMask {
         get_many: RequestMode::RequestLog,
         push: RequestMode::RequestLog,
         throttle: ThrottleMode::Throttle,
+        observe: ObserveMode::Request,
     };
 
     /// You get notified for every single thing that is going on, but can't intervene.
@@ -131,6 +147,7 @@ impl EventMask {
         get_many: RequestMode::NotifyLog,
         push: RequestMode::NotifyLog,
         throttle: ThrottleMode::None,
+        observe: ObserveMode::Notify,
     };
 }
 
@@ -216,10 +233,7 @@ impl RequestTracker {
     }
 
     /// Transfer aborted for the previously reported blob.
-    pub async fn transfer_aborted(
-        &self,
-        f: impl Fn() -> Option<Box<TransferStats>>,
-    ) -> irpc::Result<()> {
+    pub async fn transfer_aborted(&self, f: impl Fn() -> Box<TransferStats>) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
             tx.send(RequestUpdate::Aborted(TransferAborted { stats: f() }))
                 .await?;
@@ -264,108 +278,82 @@ impl EventSender {
         })
     }
 
-    /// Start a get request. You will get back either an error if the request should not proceed, or a
-    /// [`RequestTracker`] that you can use to log progress for this particular request.
-    ///
-    /// Depending on the event sender config, the returned tracker might be a no-op.
-    pub async fn get_request(
-        &self,
-        f: impl FnOnce() -> GetRequestReceived,
-    ) -> Result<RequestTracker, ClientError> {
-        self.request(f).await
-    }
-
-    // Start a get_many request. You will get back either an error if the request should not proceed, or a
-    /// [`RequestTracker`] that you can use to log progress for this particular request.
-    ///
-    /// Depending on the event sender config, the returned tracker might be a no-op.
-    pub async fn get_many_request(
-        &self,
-        f: impl FnOnce() -> GetManyRequestReceived,
-    ) -> Result<RequestTracker, ClientError> {
-        self.request(f).await
-    }
-
-    // Start a push request. You will get back either an error if the request should not proceed, or a
-    /// [`RequestTracker`] that you can use to log progress for this particular request.
-    ///
-    /// Depending on the event sender config, the returned tracker might be a no-op.
-    pub async fn push_request(
-        &self,
-        f: impl FnOnce() -> PushRequestReceived,
-    ) -> Result<RequestTracker, ClientError> {
-        self.request(f).await
-    }
-
     /// Abstract request, to DRY the 3 to 4 request types.
     ///
     /// DRYing stuff with lots of bounds is no fun at all...
-    async fn request<Req>(&self, f: impl FnOnce() -> Req) -> Result<RequestTracker, ClientError>
+    pub(crate) async fn request<Req>(
+        &self,
+        f: impl FnOnce() -> Req,
+        connection_id: u64,
+        request_id: u64,
+    ) -> Result<RequestTracker, ClientError>
     where
-        Req: Request,
-        ProviderProto: From<Req>,
-        ProviderMessage: From<WithChannels<Req, ProviderProto>>,
-        Req: Channels<
+        ProviderProto: From<RequestReceived<Req>>,
+        ProviderMessage: From<WithChannels<RequestReceived<Req>, ProviderProto>>,
+        RequestReceived<Req>: Channels<
             ProviderProto,
             Tx = oneshot::Sender<EventResult>,
             Rx = mpsc::Receiver<RequestUpdate>,
         >,
-        ProviderProto: From<Notify<Req>>,
-        ProviderMessage: From<WithChannels<Notify<Req>, ProviderProto>>,
-        Notify<Req>: Channels<ProviderProto, Tx = NoSender, Rx = mpsc::Receiver<RequestUpdate>>,
+        ProviderProto: From<Notify<RequestReceived<Req>>>,
+        ProviderMessage: From<WithChannels<Notify<RequestReceived<Req>>, ProviderProto>>,
+        Notify<RequestReceived<Req>>:
+            Channels<ProviderProto, Tx = NoSender, Rx = mpsc::Receiver<RequestUpdate>>,
     {
-        Ok(self.into_tracker(if let Some(client) = &self.inner {
-            match self.mask.get {
-                RequestMode::None => {
-                    if self.mask.throttle == ThrottleMode::Throttle {
-                        // if throttling is enabled, we need to call f to get connection_id and request_id
-                        let msg = f();
-                        (RequestUpdates::None, msg.id())
-                    } else {
-                        (RequestUpdates::None, (0, 0))
+        Ok(self.into_tracker((
+            if let Some(client) = &self.inner {
+                match self.mask.get {
+                    RequestMode::None => RequestUpdates::None,
+                    RequestMode::Notify => {
+                        let msg = RequestReceived {
+                            request: f(),
+                            connection_id,
+                            request_id,
+                        };
+                        RequestUpdates::Disabled(client.notify_streaming(Notify(msg), 32).await?)
+                    }
+                    RequestMode::Request => {
+                        let msg = RequestReceived {
+                            request: f(),
+                            connection_id,
+                            request_id,
+                        };
+                        let (tx, rx) = client.client_streaming(msg, 32).await?;
+                        // bail out if the request is not allowed
+                        rx.await??;
+                        RequestUpdates::Disabled(tx)
+                    }
+                    RequestMode::NotifyLog => {
+                        let msg = RequestReceived {
+                            request: f(),
+                            connection_id,
+                            request_id,
+                        };
+                        RequestUpdates::Active(client.notify_streaming(Notify(msg), 32).await?)
+                    }
+                    RequestMode::RequestLog => {
+                        let msg = RequestReceived {
+                            request: f(),
+                            connection_id,
+                            request_id,
+                        };
+                        let (tx, rx) = client.client_streaming(msg, 32).await?;
+                        // bail out if the request is not allowed
+                        rx.await??;
+                        RequestUpdates::Active(tx)
                     }
                 }
-                RequestMode::Notify => {
-                    let msg = f();
-                    let id = msg.id();
-                    (
-                        RequestUpdates::Disabled(client.notify_streaming(Notify(msg), 32).await?),
-                        id,
-                    )
-                }
-                RequestMode::Request => {
-                    let msg = f();
-                    let id = msg.id();
-                    let (tx, rx) = client.client_streaming(msg, 32).await?;
-                    // bail out if the request is not allowed
-                    rx.await??;
-                    (RequestUpdates::Disabled(tx), id)
-                }
-                RequestMode::NotifyLog => {
-                    let msg = f();
-                    let id = msg.id();
-                    (
-                        RequestUpdates::Active(client.notify_streaming(Notify(msg), 32).await?),
-                        id,
-                    )
-                }
-                RequestMode::RequestLog => {
-                    let msg = f();
-                    let id = msg.id();
-                    let (tx, rx) = client.client_streaming(msg, 32).await?;
-                    // bail out if the request is not allowed
-                    rx.await??;
-                    (RequestUpdates::Active(tx), id)
-                }
-            }
-        } else {
-            (RequestUpdates::None, (0, 0))
-        }))
+            } else {
+                RequestUpdates::None
+            },
+            connection_id,
+            request_id,
+        )))
     }
 
     fn into_tracker(
         &self,
-        (updates, (connection_id, request_id)): (RequestUpdates, (u64, u64)),
+        (updates, connection_id, request_id): (RequestUpdates, u64, u64),
     ) -> RequestTracker {
         let throttle = match self.mask.throttle {
             ThrottleMode::None => None,
@@ -394,46 +382,45 @@ pub enum ProviderProto {
 
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     /// A new get request was received from the provider.
-    GetRequestReceived(GetRequestReceived),
+    GetRequestReceived(RequestReceived<GetRequest>),
 
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
     /// A new get request was received from the provider.
-    GetRequestReceivedNotify(Notify<GetRequestReceived>),
+    GetRequestReceivedNotify(Notify<RequestReceived<GetRequest>>),
 
     /// A new get request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
-    GetManyRequestReceived(GetManyRequestReceived),
+    GetManyRequestReceived(RequestReceived<GetManyRequest>),
 
     /// A new get request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
-    GetManyRequestReceivedNotify(Notify<GetManyRequestReceived>),
+    GetManyRequestReceivedNotify(Notify<RequestReceived<GetManyRequest>>),
 
     /// A new get request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
-    PushRequestReceived(PushRequestReceived),
+    PushRequestReceived(RequestReceived<PushRequest>),
 
     /// A new get request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
-    PushRequestReceivedNotify(Notify<PushRequestReceived>),
+    PushRequestReceivedNotify(Notify<RequestReceived<PushRequest>>),
+
+    /// A new get request was received from the provider.
+    #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
+    ObserveRequestReceived(RequestReceived<ObserveRequest>),
+
+    /// A new get request was received from the provider.
+    #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
+    ObserveRequestReceivedNotify(Notify<RequestReceived<ObserveRequest>>),
 
     #[rpc(tx = oneshot::Sender<EventResult>)]
     Throttle(Throttle),
-}
-
-trait Request {
-    fn id(&self) -> (u64, u64);
 }
 
 mod proto {
     use iroh::NodeId;
     use serde::{Deserialize, Serialize};
 
-    use super::Request;
-    use crate::{
-        protocol::{GetManyRequest, GetRequest, PushRequest},
-        provider::TransferStats,
-        Hash,
-    };
+    use crate::{provider::TransferStats, Hash};
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ClientConnected {
@@ -448,51 +435,13 @@ mod proto {
 
     /// A new get request was received from the provider.
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct GetRequestReceived {
+    pub struct RequestReceived<R> {
         /// The connection id. Multiple requests can be sent over the same connection.
         pub connection_id: u64,
         /// The request id. There is a new id for each request.
         pub request_id: u64,
         /// The request
-        pub request: GetRequest,
-    }
-
-    impl Request for GetRequestReceived {
-        fn id(&self) -> (u64, u64) {
-            (self.connection_id, self.request_id)
-        }
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub struct GetManyRequestReceived {
-        /// The connection id. Multiple requests can be sent over the same connection.
-        pub connection_id: u64,
-        /// The request id. There is a new id for each request.
-        pub request_id: u64,
-        /// The request
-        pub request: GetManyRequest,
-    }
-
-    impl Request for GetManyRequestReceived {
-        fn id(&self) -> (u64, u64) {
-            (self.connection_id, self.request_id)
-        }
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub struct PushRequestReceived {
-        /// The connection id. Multiple requests can be sent over the same connection.
-        pub connection_id: u64,
-        /// The request id. There is a new id for each request.
-        pub request_id: u64,
-        /// The request
-        pub request: PushRequest,
-    }
-
-    impl Request for PushRequestReceived {
-        fn id(&self) -> (u64, u64) {
-            (self.connection_id, self.request_id)
-        }
+        pub request: R,
     }
 
     /// Request to throttle sending for a specific request.
@@ -524,7 +473,7 @@ mod proto {
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct TransferAborted {
-        pub stats: Option<Box<TransferStats>>,
+        pub stats: Box<TransferStats>,
     }
 
     /// Stream of updates for a single request

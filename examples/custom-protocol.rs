@@ -48,7 +48,9 @@ use iroh::{
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, NodeId,
 };
-use iroh_blobs::{api::Store, provider::EventSender2, store::mem::MemStore, BlobsProtocol, Hash};
+use iroh_blobs::{
+    api::Store, provider::events::EventSender, store::mem::MemStore, BlobsProtocol, Hash,
+};
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};
 
@@ -100,7 +102,7 @@ async fn listen(text: Vec<String>) -> Result<()> {
         proto.insert_and_index(text).await?;
     }
     // Build the iroh-blobs protocol handler, which is used to download blobs.
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
 
     // create a router that handles both our custom protocol and the iroh-blobs protocol.
     let node = Router::builder(endpoint)

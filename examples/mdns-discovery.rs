@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
 use iroh::{
     discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
 };
-use iroh_blobs::{provider::EventSender2, store::mem::MemStore, BlobsProtocol, Hash};
+use iroh_blobs::{provider::events::EventSender, store::mem::MemStore, BlobsProtocol, Hash};
 
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};
@@ -68,7 +68,7 @@ async fn accept(path: &Path) -> Result<()> {
         .await?;
     let builder = Router::builder(endpoint.clone());
     let store = MemStore::new();
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn();
 

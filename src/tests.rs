@@ -16,10 +16,7 @@ use crate::{
     hashseq::HashSeq,
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
-    provider::{
-        events::{AbortReason, RequestUpdate},
-        EventMask, EventSender2, ProviderMessage,
-    },
+    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage, RequestUpdate},
     store::{
         fs::{
             tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -343,7 +340,7 @@ async fn two_nodes_get_many_mem() -> TestResult<()> {
 
 fn event_handler(
     allowed_nodes: impl IntoIterator<Item = NodeId>,
-) -> (EventSender2, watch::Receiver<usize>, AbortOnDropHandle<()>) {
+) -> (EventSender, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
     let (events_tx, mut events_rx) = mpsc::channel::<ProviderMessage>(16);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
@@ -373,7 +370,7 @@ fn event_handler(
             }
         }
     }));
-    (EventSender2::new(events_tx, EventMask::ALL), count_rx, task)
+    (EventSender::new(events_tx, EventMask::ALL), count_rx, task)
 }
 
 async fn two_nodes_push_blobs(
@@ -488,12 +485,12 @@ async fn check_presence(store: &Store, sizes: &[usize]) -> TestResult<()> {
 }
 
 pub async fn node_test_setup_fs(db_path: PathBuf) -> TestResult<(Router, FsStore, PathBuf)> {
-    node_test_setup_with_events_fs(db_path, EventSender2::NONE).await
+    node_test_setup_with_events_fs(db_path, EventSender::NONE).await
 }
 
 pub async fn node_test_setup_with_events_fs(
     db_path: PathBuf,
-    events: EventSender2,
+    events: EventSender,
 ) -> TestResult<(Router, FsStore, PathBuf)> {
     let store = crate::store::fs::FsStore::load(&db_path).await?;
     let ep = Endpoint::builder().bind().await?;
@@ -503,11 +500,11 @@ pub async fn node_test_setup_with_events_fs(
 }
 
 pub async fn node_test_setup_mem() -> TestResult<(Router, MemStore)> {
-    node_test_setup_with_events_mem(EventSender2::NONE).await
+    node_test_setup_with_events_mem(EventSender::NONE).await
 }
 
 pub async fn node_test_setup_with_events_mem(
-    events: EventSender2,
+    events: EventSender,
 ) -> TestResult<(Router, MemStore)> {
     let store = MemStore::new();
     let ep = Endpoint::builder().bind().await?;
@@ -609,7 +606,7 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     let root = root_tt.hash;
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
     let blobs =
-        crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+        crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
@@ -641,7 +638,7 @@ async fn node_serve_blobs() -> TestResult<()> {
     }
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
     let blobs =
-        crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+        crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
@@ -683,8 +680,7 @@ async fn node_smoke(store: &Store) -> TestResult<()> {
     let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
     let hash = *tt.hash();
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-    let blobs =
-        crate::net_protocol::BlobsProtocol::new(store, endpoint.clone(), EventSender2::NONE);
+    let blobs = crate::net_protocol::BlobsProtocol::new(store, endpoint.clone(), EventSender::NONE);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();

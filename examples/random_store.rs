@@ -6,11 +6,12 @@ use iroh::{SecretKey, Watcher};
 use iroh_base::ticket::NodeTicket;
 use iroh_blobs::{
     api::downloader::Shuffled,
-    provider::{AbortReason, EventMask, EventSender2, ProviderMessage},
+    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
     store::fs::FsStore,
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
 };
+use irpc::RpcMessage;
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::{signal::ctrl_c, sync::mpsc};
@@ -100,8 +101,15 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
     }
 }
 
-pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, EventSender2) {
+pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, EventSender) {
     let (tx, mut rx) = mpsc::channel(100);
+    fn dump_updates<T: RpcMessage>(mut rx: irpc::channel::mpsc::Receiver<T>) {
+        tokio::spawn(async move {
+            while let Ok(Some(update)) = rx.recv().await {
+                println!("{update:?}");
+            }
+        });
+    }
     let dump_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -115,29 +123,23 @@ pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, E
                 ProviderMessage::ConnectionClosed(msg) => {
                     println!("{:?}", msg.inner);
                 }
-                ProviderMessage::GetRequestReceived(mut msg) => {
+                ProviderMessage::GetRequestReceived(msg) => {
                     println!("{:?}", msg.inner);
                     msg.tx.send(Ok(())).await.ok();
-                    tokio::spawn(async move {
-                        while let Ok(update) = msg.rx.recv().await {
-                            info!("{update:?}");
-                        }
-                    });
+                    dump_updates(msg.rx);
                 }
                 ProviderMessage::GetRequestReceivedNotify(msg) => {
                     println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
                 }
-                ProviderMessage::GetManyRequestReceived(mut msg) => {
+                ProviderMessage::GetManyRequestReceived(msg) => {
                     println!("{:?}", msg.inner);
                     msg.tx.send(Ok(())).await.ok();
-                    tokio::spawn(async move {
-                        while let Ok(update) = msg.rx.recv().await {
-                            info!("{update:?}");
-                        }
-                    });
+                    dump_updates(msg.rx);
                 }
                 ProviderMessage::GetManyRequestReceivedNotify(msg) => {
                     println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
                 }
                 ProviderMessage::PushRequestReceived(msg) => {
                     println!("{:?}", msg.inner);
@@ -147,9 +149,25 @@ pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, E
                         Err(AbortReason::Permission)
                     };
                     msg.tx.send(res).await.ok();
+                    dump_updates(msg.rx);
                 }
                 ProviderMessage::PushRequestReceivedNotify(msg) => {
                     println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::ObserveRequestReceived(msg) => {
+                    println!("{:?}", msg.inner);
+                    let res = if allow_push {
+                        Ok(())
+                    } else {
+                        Err(AbortReason::Permission)
+                    };
+                    msg.tx.send(res).await.ok();
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::ObserveRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
                 }
                 ProviderMessage::Throttle(msg) => {
                     println!("{:?}", msg.inner);
@@ -158,7 +176,7 @@ pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, E
             }
         }
     });
-    (dump_task, EventSender2::new(tx, EventMask::ALL))
+    (dump_task, EventSender::new(tx, EventMask::ALL))
 }
 
 #[tokio::main]

@@ -34,7 +34,7 @@ Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 
 ```rust,no_run
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{store::mem::MemStore, BlobsProtocol};
+use iroh_blobs::{store::mem::MemStore, BlobsProtocol, provider::events::EventSender};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
 
     // build the router
     let router = Router::builder(endpoint)

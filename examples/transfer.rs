@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{provider::EventSender2, store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
+use iroh_blobs::{
+    provider::events::EventSender, store::mem::MemStore, ticket::BlobTicket, BlobsProtocol,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -12,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
     // We initialize an in-memory backing store for iroh-blobs
     let store = MemStore::new();
     // Then we initialize a struct that can accept blobs requests over iroh connections
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender2::NONE);
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
 
     // Grab all passed in arguments, the first one is the binary itself, so we skip it.
     let args: Vec<String> = std::env::args().skip(1).collect();

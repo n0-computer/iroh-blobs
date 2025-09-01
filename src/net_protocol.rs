@@ -7,7 +7,7 @@
 //! ```rust
 //! # async fn example() -> anyhow::Result<()> {
 //! use iroh::{protocol::Router, Endpoint};
-//! use iroh_blobs::{store, BlobsProtocol};
+//! use iroh_blobs::{provider::events::EventSender, store, BlobsProtocol};
 //!
 //! // create a store
 //! let store = store::fs::FsStore::load("blobs").await?;
@@ -19,7 +19,7 @@
 //! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 //!
 //! // create a blobs protocol handler
-//! let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+//! let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
 //!
 //! // create a router and add the blobs protocol handler
 //! let router = Router::builder(endpoint)
@@ -45,13 +45,13 @@ use iroh::{
 };
 use tracing::error;
 
-use crate::{api::Store, provider::EventSender2, ticket::BlobTicket, HashAndFormat};
+use crate::{api::Store, provider::events::EventSender, ticket::BlobTicket, HashAndFormat};
 
 #[derive(Debug)]
 pub(crate) struct BlobsInner {
     pub(crate) store: Store,
     pub(crate) endpoint: Endpoint,
-    pub(crate) events: EventSender2,
+    pub(crate) events: EventSender,
 }
 
 /// A protocol handler for the blobs protocol.
@@ -69,7 +69,7 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
-    pub fn new(store: &Store, endpoint: Endpoint, events: EventSender2) -> Self {
+    pub fn new(store: &Store, endpoint: Endpoint, events: EventSender) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
