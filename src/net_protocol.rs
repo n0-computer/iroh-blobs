@@ -7,7 +7,7 @@
 //! ```rust
 //! # async fn example() -> anyhow::Result<()> {
 //! use iroh::{protocol::Router, Endpoint};
-//! use iroh_blobs::{provider::events::EventSender, store, BlobsProtocol};
+//! use iroh_blobs::{store, BlobsProtocol};
 //!
 //! // create a store
 //! let store = store::fs::FsStore::load("blobs").await?;
@@ -19,7 +19,7 @@
 //! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 //!
 //! // create a blobs protocol handler
-//! let blobs = BlobsProtocol::new(&store, endpoint.clone(), EventSender::NONE);
+//! let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
 //!
 //! // create a router and add the blobs protocol handler
 //! let router = Router::builder(endpoint)
@@ -69,12 +69,12 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
-    pub fn new(store: &Store, endpoint: Endpoint, events: EventSender) -> Self {
+    pub fn new(store: &Store, endpoint: Endpoint, events: Option<EventSender>) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
                 endpoint,
-                events,
+                events: events.unwrap_or(EventSender::NONE),
             }),
         }
     }
