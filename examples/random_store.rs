@@ -176,7 +176,7 @@ pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, E
             }
         }
     });
-    (dump_task, EventSender::new(tx, EventMask::ALL))
+    (dump_task, EventSender::new(tx, EventMask::ALL_READONLY))
 }
 
 #[tokio::main]

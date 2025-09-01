@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Deref};
 
 use irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -143,12 +143,16 @@ impl EventMask {
         observe: ObserveMode::None,
     };
 
-    /// You get asked for every single thing that is going on and can intervene/throttle.
-    pub const ALL: Self = Self {
+    /// All event notifications for read-only requests are fully enabled.
+    ///
+    /// If you want to enable push requests, which can write to the local store, you
+    /// need to do it manually. Providing constants that have push enabled would
+    /// risk misuse.
+    pub const ALL_READONLY: Self = Self {
         connected: ConnectMode::Request,
         get: RequestMode::RequestLog,
         get_many: RequestMode::RequestLog,
-        push: RequestMode::RequestLog,
+        push: RequestMode::Disabled,
         throttle: ThrottleMode::Throttle,
         observe: ObserveMode::Request,
     };
@@ -157,6 +161,14 @@ impl EventMask {
 /// Newtype wrapper that wraps an event so that it is a distinct type for the notify variant.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notify<T>(T);
+
+impl<T> Deref for Notify<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct EventSender {
@@ -260,6 +272,80 @@ impl EventSender {
         Self {
             mask,
             inner: Some(irpc::Client::from(client)),
+        }
+    }
+
+    /// Log request events at trace level.
+    pub fn tracing(&self, mask: EventMask) -> Self {
+        use tracing::trace;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        n0_future::task::spawn(async move {
+            fn log_request_events(
+                mut rx: irpc::channel::mpsc::Receiver<RequestUpdate>,
+                connection_id: u64,
+                request_id: u64,
+            ) {
+                n0_future::task::spawn(async move {
+                    while let Ok(Some(update)) = rx.recv().await {
+                        trace!(%connection_id, %request_id, "{update:?}");
+                    }
+                });
+            }
+            while let Some(msg) = rx.recv().await {
+                match msg {
+                    ProviderMessage::ClientConnected(_) => todo!(),
+                    ProviderMessage::ClientConnectedNotify(msg) => {
+                        trace!("{:?}", msg.inner);
+                    }
+                    ProviderMessage::ConnectionClosed(msg) => {
+                        trace!("{:?}", msg.inner);
+                    }
+                    ProviderMessage::GetRequestReceived(msg) => {
+                        trace!("{:?}", msg.inner);
+                        msg.tx.send(Ok(())).await.ok();
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::GetRequestReceivedNotify(msg) => {
+                        trace!("{:?}", msg.inner);
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::GetManyRequestReceived(msg) => {
+                        trace!("{:?}", msg.inner);
+                        msg.tx.send(Ok(())).await.ok();
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::GetManyRequestReceivedNotify(msg) => {
+                        trace!("{:?}", msg.inner);
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::PushRequestReceived(msg) => {
+                        trace!("{:?}", msg.inner);
+                        msg.tx.send(Ok(())).await.ok();
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::PushRequestReceivedNotify(msg) => {
+                        trace!("{:?}", msg.inner);
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::ObserveRequestReceived(msg) => {
+                        trace!("{:?}", msg.inner);
+                        msg.tx.send(Ok(())).await.ok();
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::ObserveRequestReceivedNotify(msg) => {
+                        trace!("{:?}", msg.inner);
+                        log_request_events(msg.rx, msg.inner.connection_id, msg.inner.request_id);
+                    }
+                    ProviderMessage::Throttle(msg) => {
+                        trace!("{:?}", msg.inner);
+                        msg.tx.send(Ok(())).await.ok();
+                    }
+                }
+            }
+        });
+        Self {
+            mask,
+            inner: Some(irpc::Client::from(tx)),
         }
     }
 

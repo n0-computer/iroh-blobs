@@ -370,7 +370,16 @@ fn event_handler(
             }
         }
     }));
-    (EventSender::new(events_tx, EventMask::ALL), count_rx, task)
+    (
+        EventSender::new(
+            events_tx,
+            EventMask {
+                ..EventMask::ALL_READONLY
+            },
+        ),
+        count_rx,
+        task,
+    )
 }
 
 async fn two_nodes_push_blobs(
