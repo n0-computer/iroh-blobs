@@ -6,9 +6,6 @@
 use std::{
     fmt::Debug,
     io,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    task::Poll,
     time::{Duration, Instant},
 };
 
@@ -18,7 +15,7 @@ use iroh::endpoint::{self, RecvStream, SendStream};
 use n0_future::StreamExt;
 use quinn::{ClosedStream, ConnectionError, ReadToEndError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tokio::{io::AsyncRead, select};
+use tokio::select;
 use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
@@ -53,23 +50,9 @@ pub struct TransferStats {
     pub duration: Duration,
 }
 
-/// Read the request from the getter.
-///
-/// Will fail if there is an error while reading, or if no valid request is sent.
-///
-/// This will read exactly the number of bytes needed for the request, and
-/// leave the rest of the stream for the caller to read.
-///
-/// It is up to the caller do decide if there should be more data.
-pub async fn read_request(context: &mut StreamData) -> Result<Request> {
-    let mut counting = CountingReader::new(&mut context.reader);
-    let res = Request::read_async(&mut counting).await?;
-    context.other_bytes_read += counting.read();
-    Ok(res)
-}
-
+/// A pair of [`SendStream`] and [`RecvStream`] with additional context data.
 #[derive(Debug)]
-pub struct StreamData {
+pub struct StreamPair {
     t0: Instant,
     connection_id: u64,
     request_id: u64,
@@ -79,7 +62,7 @@ pub struct StreamData {
     events: EventSender,
 }
 
-impl StreamData {
+impl StreamPair {
     pub async fn accept(
         conn: &endpoint::Connection,
         events: &EventSender,
@@ -96,8 +79,22 @@ impl StreamData {
         })
     }
 
+    /// Read the request.
+    ///
+    /// Will fail if there is an error while reading, or if no valid request is sent.
+    ///
+    /// This will read exactly the number of bytes needed for the request, and
+    /// leave the rest of the stream for the caller to read.
+    ///
+    /// It is up to the caller do decide if there should be more data.
+    pub async fn read_request(&mut self) -> Result<Request> {
+        let (res, size) = Request::read_async(&mut self.reader).await?;
+        self.other_bytes_read += size as u64;
+        Ok(res)
+    }
+
     /// We are done with reading. Return a ProgressWriter that contains the read stats and connection id
-    async fn into_writer(
+    pub async fn into_writer(
         mut self,
         tracker: RequestTracker,
     ) -> Result<ProgressWriter, ReadToEndError> {
@@ -113,8 +110,6 @@ impl StreamData {
             self.writer,
             WriterContext {
                 t0: self.t0,
-                connection_id: self.connection_id,
-                request_id: self.request_id,
                 other_bytes_read: self.other_bytes_read,
                 payload_bytes_written: 0,
                 other_bytes_written: 0,
@@ -123,7 +118,7 @@ impl StreamData {
         ))
     }
 
-    async fn into_reader(
+    pub async fn into_reader(
         mut self,
         tracker: RequestTracker,
     ) -> Result<ProgressReader, ClosedStream> {
@@ -135,19 +130,17 @@ impl StreamData {
                 .ok();
             return Err(e);
         };
-        Ok(ProgressReader::new(
-            self.reader,
-            ReaderContext {
+        Ok(ProgressReader {
+            inner: self.reader,
+            context: ReaderContext {
                 t0: self.t0,
-                connection_id: self.connection_id,
-                request_id: self.request_id,
                 other_bytes_read: self.other_bytes_read,
                 tracker,
             },
-        ))
+        })
     }
 
-    async fn get_request(
+    pub async fn get_request(
         &self,
         f: impl FnOnce() -> GetRequest,
     ) -> Result<RequestTracker, ClientError> {
@@ -156,7 +149,7 @@ impl StreamData {
             .await
     }
 
-    async fn get_many_request(
+    pub async fn get_many_request(
         &self,
         f: impl FnOnce() -> GetManyRequest,
     ) -> Result<RequestTracker, ClientError> {
@@ -165,7 +158,7 @@ impl StreamData {
             .await
     }
 
-    async fn push_request(
+    pub async fn push_request(
         &self,
         f: impl FnOnce() -> PushRequest,
     ) -> Result<RequestTracker, ClientError> {
@@ -174,7 +167,7 @@ impl StreamData {
             .await
     }
 
-    async fn observe_request(
+    pub async fn observe_request(
         &self,
         f: impl FnOnce() -> ObserveRequest,
     ) -> Result<RequestTracker, ClientError> {
@@ -194,31 +187,17 @@ impl StreamData {
 }
 
 #[derive(Debug)]
-pub struct ReaderContext {
+struct ReaderContext {
     /// The start time of the transfer
-    pub t0: Instant,
-    /// The connection ID from the connection
-    pub connection_id: u64,
-    /// The request ID from the recv stream
-    pub request_id: u64,
+    t0: Instant,
     /// The number of bytes read from the stream
-    pub other_bytes_read: u64,
+    other_bytes_read: u64,
     /// Progress tracking for the request
-    pub tracker: RequestTracker,
+    tracker: RequestTracker,
 }
 
 impl ReaderContext {
-    pub fn new(context: StreamData, tracker: RequestTracker) -> Self {
-        Self {
-            t0: context.t0,
-            connection_id: context.connection_id,
-            request_id: context.request_id,
-            other_bytes_read: context.other_bytes_read,
-            tracker,
-        }
-    }
-
-    pub fn stats(&self) -> TransferStats {
+    fn stats(&self) -> TransferStats {
         TransferStats {
             payload_bytes_sent: 0,
             other_bytes_sent: 0,
@@ -229,43 +208,43 @@ impl ReaderContext {
 }
 
 #[derive(Debug)]
-pub struct WriterContext {
+pub(crate) struct WriterContext {
     /// The start time of the transfer
-    pub t0: Instant,
-    /// The connection ID from the connection
-    pub connection_id: u64,
-    /// The request ID from the recv stream
-    pub request_id: u64,
+    t0: Instant,
     /// The number of bytes read from the stream
-    pub other_bytes_read: u64,
+    other_bytes_read: u64,
     /// The number of payload bytes written to the stream
-    pub payload_bytes_written: u64,
+    payload_bytes_written: u64,
     /// The number of bytes written that are not part of the payload
-    pub other_bytes_written: u64,
+    other_bytes_written: u64,
     /// Way to report progress
-    pub tracker: RequestTracker,
+    tracker: RequestTracker,
 }
 
 impl WriterContext {
-    pub fn new(context: &StreamData, tracker: RequestTracker) -> Self {
-        Self {
-            t0: context.t0,
-            connection_id: context.connection_id,
-            request_id: context.request_id,
-            other_bytes_read: context.other_bytes_read,
-            payload_bytes_written: 0,
-            other_bytes_written: 0,
-            tracker,
-        }
-    }
-
-    pub fn stats(&self) -> TransferStats {
+    fn stats(&self) -> TransferStats {
         TransferStats {
             payload_bytes_sent: self.payload_bytes_written,
             other_bytes_sent: self.other_bytes_written,
             other_bytes_read: self.other_bytes_read,
             duration: self.t0.elapsed(),
         }
+    }
+}
+
+impl WriteProgress for WriterContext {
+    async fn notify_payload_write(&mut self, _index: u64, offset: u64, len: usize) {
+        let end_offset = offset + len as u64;
+        self.payload_bytes_written += len as u64;
+        self.tracker.transfer_progress(end_offset).await.ok();
+    }
+
+    fn log_other_write(&mut self, len: usize) {
+        self.other_bytes_written += len as u64;
+    }
+
+    async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64) {
+        self.tracker.transfer_started(index, hash, size).await.ok();
     }
 }
 
@@ -283,31 +262,19 @@ impl ProgressWriter {
     }
 
     async fn transfer_aborted(&self) {
-        self.tracker
-            .transfer_aborted(|| Box::new(self.stats()))
+        self.context
+            .tracker
+            .transfer_aborted(|| Box::new(self.context.stats()))
             .await
             .ok();
     }
 
     async fn transfer_completed(&self) {
-        self.tracker
-            .transfer_completed(|| Box::new(self.stats()))
+        self.context
+            .tracker
+            .transfer_completed(|| Box::new(self.context.stats()))
             .await
             .ok();
-    }
-}
-
-impl Deref for ProgressWriter {
-    type Target = WriterContext;
-
-    fn deref(&self) -> &Self::Target {
-        &self.context
-    }
-}
-
-impl DerefMut for ProgressWriter {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.context
     }
 }
 
@@ -334,7 +301,7 @@ pub async fn handle_connection(
             debug!("client not authorized to connect: {cause}");
             return;
         }
-        while let Ok(context) = StreamData::accept(&connection, &progress).await {
+        while let Ok(context) = StreamPair::accept(&connection, &progress).await {
             let span = debug_span!("stream", stream_id = %context.request_id);
             let store = store.clone();
             tokio::spawn(handle_stream(store, context).instrument(span));
@@ -348,10 +315,10 @@ pub async fn handle_connection(
     .await
 }
 
-async fn handle_stream(store: Store, mut context: StreamData) -> anyhow::Result<()> {
+async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<()> {
     // 1. Decode the request.
     debug!("reading request");
-    let request = read_request(&mut context).await?;
+    let request = context.read_request().await?;
 
     match request {
         Request::Get(request) => {
@@ -553,79 +520,41 @@ pub struct ProgressReader {
 }
 
 impl ProgressReader {
-    pub fn new(inner: RecvStream, context: ReaderContext) -> Self {
-        Self { inner, context }
-    }
-
     async fn transfer_aborted(&self) {
-        self.tracker
-            .transfer_aborted(|| Box::new(self.stats()))
+        self.context
+            .tracker
+            .transfer_aborted(|| Box::new(self.context.stats()))
             .await
             .ok();
     }
 
     async fn transfer_completed(&self) {
-        self.tracker
-            .transfer_completed(|| Box::new(self.stats()))
+        self.context
+            .tracker
+            .transfer_completed(|| Box::new(self.context.stats()))
             .await
             .ok();
     }
 }
 
-impl Deref for ProgressReader {
-    type Target = ReaderContext;
-
-    fn deref(&self) -> &Self::Target {
-        &self.context
-    }
+pub(crate) trait RecvStreamExt {
+    async fn read_to_end_as<T: DeserializeOwned>(
+        &mut self,
+        max_size: usize,
+    ) -> io::Result<(T, usize)>;
 }
 
-impl DerefMut for ProgressReader {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.context
-    }
-}
-
-pub struct CountingReader<R> {
-    pub inner: R,
-    pub read: u64,
-}
-
-impl<R> CountingReader<R> {
-    pub fn new(inner: R) -> Self {
-        Self { inner, read: 0 }
-    }
-
-    pub fn read(&self) -> u64 {
-        self.read
-    }
-}
-
-impl CountingReader<&mut iroh::endpoint::RecvStream> {
-    pub async fn read_to_end_as<T: DeserializeOwned>(&mut self, max_size: usize) -> io::Result<T> {
+impl RecvStreamExt for RecvStream {
+    async fn read_to_end_as<T: DeserializeOwned>(
+        &mut self,
+        max_size: usize,
+    ) -> io::Result<(T, usize)> {
         let data = self
-            .inner
             .read_to_end(max_size)
             .await
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let value = postcard::from_bytes(&data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.read += data.len() as u64;
-        Ok(value)
-    }
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for CountingReader<R> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_read(cx, buf);
-        if let Poll::Ready(Ok(())) = result {
-            this.read += buf.filled().len() as u64;
-        }
-        result
+        Ok((value, data.len()))
     }
 }

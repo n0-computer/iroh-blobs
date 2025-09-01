@@ -485,7 +485,7 @@ async fn check_presence(store: &Store, sizes: &[usize]) -> TestResult<()> {
 }
 
 pub async fn node_test_setup_fs(db_path: PathBuf) -> TestResult<(Router, FsStore, PathBuf)> {
-    node_test_setup_with_events_fs(db_path, EventSender::NONE).await
+    node_test_setup_with_events_fs(db_path, EventSender::DEFAULT).await
 }
 
 pub async fn node_test_setup_with_events_fs(
@@ -500,7 +500,7 @@ pub async fn node_test_setup_with_events_fs(
 }
 
 pub async fn node_test_setup_mem() -> TestResult<(Router, MemStore)> {
-    node_test_setup_with_events_mem(EventSender::NONE).await
+    node_test_setup_with_events_mem(EventSender::DEFAULT).await
 }
 
 pub async fn node_test_setup_with_events_mem(

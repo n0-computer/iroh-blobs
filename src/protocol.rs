@@ -392,7 +392,7 @@ pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 use snafu::{GenerateImplicitData, Snafu};
 use tokio::io::AsyncReadExt;
 
-use crate::{api::blobs::Bitfield, provider::CountingReader, BlobFormat, Hash, HashAndFormat};
+use crate::{api::blobs::Bitfield, provider::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
 /// Maximum message size is limited to 100MiB for now.
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
@@ -441,9 +441,7 @@ pub enum RequestType {
 }
 
 impl Request {
-    pub async fn read_async(
-        reader: &mut CountingReader<&mut iroh::endpoint::RecvStream>,
-    ) -> io::Result<Self> {
+    pub async fn read_async(reader: &mut iroh::endpoint::RecvStream) -> io::Result<(Self, usize)> {
         let request_type = reader.read_u8().await?;
         let request_type: RequestType = postcard::from_bytes(std::slice::from_ref(&request_type))
             .map_err(|_| {
@@ -453,22 +451,31 @@ impl Request {
             )
         })?;
         Ok(match request_type {
-            RequestType::Get => reader
-                .read_to_end_as::<GetRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
-            RequestType::GetMany => reader
-                .read_to_end_as::<GetManyRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
-            RequestType::Observe => reader
-                .read_to_end_as::<ObserveRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
-            RequestType::Push => reader
-                .read_length_prefixed::<PushRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
+            RequestType::Get => {
+                let (r, size) = reader
+                    .read_to_end_as::<GetRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                (r.into(), size)
+            }
+            RequestType::GetMany => {
+                let (r, size) = reader
+                    .read_to_end_as::<GetManyRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                (r.into(), size)
+            }
+            RequestType::Observe => {
+                let (r, size) = reader
+                    .read_to_end_as::<ObserveRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                (r.into(), size)
+            }
+            RequestType::Push => {
+                let r = reader
+                    .read_length_prefixed::<PushRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                let size = postcard::experimental::serialized_size(&r).unwrap();
+                (r.into(), size)
+            }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,

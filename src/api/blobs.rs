@@ -57,7 +57,6 @@ use super::{
 };
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::WriterContext,
     store::IROH_BLOCK_SIZE,
     util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
@@ -1166,20 +1165,4 @@ pub(crate) trait WriteProgress {
 
     /// Notify the progress writer that a transfer has started.
     async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64);
-}
-
-impl WriteProgress for WriterContext {
-    async fn notify_payload_write(&mut self, _index: u64, offset: u64, len: usize) {
-        let end_offset = offset + len as u64;
-        self.payload_bytes_written += len as u64;
-        self.tracker.transfer_progress(end_offset).await.ok();
-    }
-
-    fn log_other_write(&mut self, len: usize) {
-        self.other_bytes_written += len as u64;
-    }
-
-    async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64) {
-        self.tracker.transfer_started(index, hash, size).await.ok();
-    }
 }

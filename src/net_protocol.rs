@@ -74,7 +74,7 @@ impl BlobsProtocol {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
                 endpoint,
-                events: events.unwrap_or(EventSender::NONE),
+                events: events.unwrap_or(EventSender::DEFAULT),
             }),
         }
     }

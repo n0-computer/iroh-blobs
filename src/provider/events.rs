@@ -52,6 +52,8 @@ pub enum RequestMode {
     /// We get a request for each request, and can reject incoming requests.
     /// We also get detailed transfer events.
     RequestLog,
+    /// This request type is completely disabled. All requests will be rejected.
+    Disabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -108,24 +110,35 @@ impl From<irpc::channel::SendError> for ClientError {
 pub type EventResult = Result<(), AbortReason>;
 pub type ClientResult = Result<(), ClientError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventMask {
-    connected: ConnectMode,
-    get: RequestMode,
-    get_many: RequestMode,
-    push: RequestMode,
-    observe: ObserveMode,
+    /// Connection event mask
+    pub connected: ConnectMode,
+    /// Get request event mask
+    pub get: RequestMode,
+    /// Get many request event mask
+    pub get_many: RequestMode,
+    /// Push request event mask
+    pub push: RequestMode,
+    /// Observe request event mask
+    pub observe: ObserveMode,
     /// throttling is somewhat costly, so you can disable it completely
-    throttle: ThrottleMode,
+    pub throttle: ThrottleMode,
+}
+
+impl Default for EventMask {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 impl EventMask {
-    /// Everything is disabled. You won't get any events, but there is also no runtime cost.
-    pub const NONE: Self = Self {
+    /// All event notifications are fully disabled. Push requests are disabled by default.
+    pub const DEFAULT: Self = Self {
         connected: ConnectMode::None,
         get: RequestMode::None,
         get_many: RequestMode::None,
-        push: RequestMode::None,
+        push: RequestMode::Disabled,
         throttle: ThrottleMode::None,
         observe: ObserveMode::None,
     };
@@ -138,16 +151,6 @@ impl EventMask {
         push: RequestMode::RequestLog,
         throttle: ThrottleMode::Throttle,
         observe: ObserveMode::Request,
-    };
-
-    /// You get notified for every single thing that is going on, but can't intervene.
-    pub const NOTIFY_ALL: Self = Self {
-        connected: ConnectMode::Notify,
-        get: RequestMode::NotifyLog,
-        get_many: RequestMode::NotifyLog,
-        push: RequestMode::NotifyLog,
-        throttle: ThrottleMode::None,
-        observe: ObserveMode::Notify,
     };
 }
 
@@ -248,8 +251,8 @@ impl RequestTracker {
 /// can have a response.
 impl EventSender {
     /// A client that does not send anything.
-    pub const NONE: Self = Self {
-        mask: EventMask::NONE,
+    pub const DEFAULT: Self = Self {
+        mask: EventMask::DEFAULT,
         inner: None,
     };
 
@@ -262,20 +265,22 @@ impl EventSender {
 
     /// A new client has been connected.
     pub async fn client_connected(&self, f: impl Fn() -> ClientConnected) -> ClientResult {
-        Ok(if let Some(client) = &self.inner {
+        if let Some(client) = &self.inner {
             match self.mask.connected {
                 ConnectMode::None => {}
                 ConnectMode::Notify => client.notify(Notify(f())).await?,
                 ConnectMode::Request => client.rpc(f()).await??,
             }
-        })
+        };
+        Ok(())
     }
 
     /// A new client has been connected.
     pub async fn connection_closed(&self, f: impl Fn() -> ConnectionClosed) -> ClientResult {
-        Ok(if let Some(client) = &self.inner {
+        if let Some(client) = &self.inner {
             client.notify(f()).await?;
-        })
+        };
+        Ok(())
     }
 
     /// Abstract request, to DRY the 3 to 4 request types.
@@ -300,58 +305,61 @@ impl EventSender {
         Notify<RequestReceived<Req>>:
             Channels<ProviderProto, Tx = NoSender, Rx = mpsc::Receiver<RequestUpdate>>,
     {
-        Ok(self.into_tracker((
-            if let Some(client) = &self.inner {
-                match self.mask.get {
-                    RequestMode::None => RequestUpdates::None,
-                    RequestMode::Notify => {
-                        let msg = RequestReceived {
-                            request: f(),
-                            connection_id,
-                            request_id,
-                        };
-                        RequestUpdates::Disabled(client.notify_streaming(Notify(msg), 32).await?)
-                    }
-                    RequestMode::Request => {
-                        let msg = RequestReceived {
-                            request: f(),
-                            connection_id,
-                            request_id,
-                        };
-                        let (tx, rx) = client.client_streaming(msg, 32).await?;
-                        // bail out if the request is not allowed
-                        rx.await??;
-                        RequestUpdates::Disabled(tx)
-                    }
-                    RequestMode::NotifyLog => {
-                        let msg = RequestReceived {
-                            request: f(),
-                            connection_id,
-                            request_id,
-                        };
-                        RequestUpdates::Active(client.notify_streaming(Notify(msg), 32).await?)
-                    }
-                    RequestMode::RequestLog => {
-                        let msg = RequestReceived {
-                            request: f(),
-                            connection_id,
-                            request_id,
-                        };
-                        let (tx, rx) = client.client_streaming(msg, 32).await?;
-                        // bail out if the request is not allowed
-                        rx.await??;
-                        RequestUpdates::Active(tx)
-                    }
+        let client = self.inner.as_ref();
+        Ok(self.create_tracker((
+            match self.mask.get {
+                RequestMode::None => RequestUpdates::None,
+                RequestMode::Notify if client.is_some() => {
+                    let msg = RequestReceived {
+                        request: f(),
+                        connection_id,
+                        request_id,
+                    };
+                    RequestUpdates::Disabled(
+                        client.unwrap().notify_streaming(Notify(msg), 32).await?,
+                    )
                 }
-            } else {
-                RequestUpdates::None
+                RequestMode::Request if client.is_some() => {
+                    let msg = RequestReceived {
+                        request: f(),
+                        connection_id,
+                        request_id,
+                    };
+                    let (tx, rx) = client.unwrap().client_streaming(msg, 32).await?;
+                    // bail out if the request is not allowed
+                    rx.await??;
+                    RequestUpdates::Disabled(tx)
+                }
+                RequestMode::NotifyLog if client.is_some() => {
+                    let msg = RequestReceived {
+                        request: f(),
+                        connection_id,
+                        request_id,
+                    };
+                    RequestUpdates::Active(client.unwrap().notify_streaming(Notify(msg), 32).await?)
+                }
+                RequestMode::RequestLog if client.is_some() => {
+                    let msg = RequestReceived {
+                        request: f(),
+                        connection_id,
+                        request_id,
+                    };
+                    let (tx, rx) = client.unwrap().client_streaming(msg, 32).await?;
+                    // bail out if the request is not allowed
+                    rx.await??;
+                    RequestUpdates::Active(tx)
+                }
+                RequestMode::Disabled => {
+                    return Err(ClientError::Permission);
+                }
+                _ => RequestUpdates::None,
             },
             connection_id,
             request_id,
         )))
     }
 
-    fn into_tracker(
+    fn create_tracker(
         &self,
         (updates, connection_id, request_id): (RequestUpdates, u64, u64),
     ) -> RequestTracker {
@@ -372,6 +380,7 @@ pub enum ProviderProto {
     /// A new client connected to the provider.
     #[rpc(tx = oneshot::Sender<EventResult>)]
     ClientConnected(ClientConnected),
+
     /// A new client connected to the provider. Notify variant.
     #[rpc(tx = NoSender)]
     ClientConnectedNotify(Notify<ClientConnected>),
