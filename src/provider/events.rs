@@ -232,7 +232,7 @@ impl RequestTracker {
                 .rpc(Throttle {
                     connection_id: *connection_id,
                     request_id: *request_id,
-                    size: len as u64,
+                    size: len,
                 })
                 .await??;
         }

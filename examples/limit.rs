@@ -64,19 +64,16 @@ fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            match msg {
-                ProviderMessage::ClientConnected(msg) => {
-                    let node_id = msg.node_id;
-                    let res = if allowed_nodes.contains(&node_id) {
-                        println!("Client connected: {node_id}");
-                        Ok(())
-                    } else {
-                        println!("Client rejected: {node_id}");
-                        Err(AbortReason::Permission)
-                    };
-                    msg.tx.send(res).await.ok();
-                }
-                _ => {}
+            if let ProviderMessage::ClientConnected(msg) = msg {
+                let node_id = msg.node_id;
+                let res = if allowed_nodes.contains(&node_id) {
+                    println!("Client connected: {node_id}");
+                    Ok(())
+                } else {
+                    println!("Client rejected: {node_id}");
+                    Err(AbortReason::Permission)
+                };
+                msg.tx.send(res).await.ok();
             }
         }
     });
@@ -93,21 +90,18 @@ fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            match msg {
-                ProviderMessage::GetRequestReceived(msg) => {
-                    let res = if !msg.request.ranges.is_blob() {
-                        println!("HashSeq request not allowed");
-                        Err(AbortReason::Permission)
-                    } else if !allowed_hashes.contains(&msg.request.hash) {
-                        println!("Request for hash {} not allowed", msg.request.hash);
-                        Err(AbortReason::Permission)
-                    } else {
-                        println!("Request for hash {} allowed", msg.request.hash);
-                        Ok(())
-                    };
-                    msg.tx.send(res).await.ok();
-                }
-                _ => {}
+            if let ProviderMessage::GetRequestReceived(msg) = msg {
+                let res = if !msg.request.ranges.is_blob() {
+                    println!("HashSeq request not allowed");
+                    Err(AbortReason::Permission)
+                } else if !allowed_hashes.contains(&msg.request.hash) {
+                    println!("Request for hash {} not allowed", msg.request.hash);
+                    Err(AbortReason::Permission)
+                } else {
+                    println!("Request for hash {} allowed", msg.request.hash);
+                    Ok(())
+                };
+                msg.tx.send(res).await.ok();
             }
         }
     });
@@ -124,18 +118,15 @@ fn throttle(delay_ms: u64) -> EventSender {
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            match msg {
-                ProviderMessage::Throttle(msg) => {
-                    n0_future::task::spawn(async move {
-                        println!(
-                            "Throttling {} {}, {}ms",
-                            msg.connection_id, msg.request_id, delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        msg.tx.send(Ok(())).await.ok();
-                    });
-                }
-                _ => {}
+            if let ProviderMessage::Throttle(msg) = msg {
+                n0_future::task::spawn(async move {
+                    println!(
+                        "Throttling {} {}, {}ms",
+                        msg.connection_id, msg.request_id, delay_ms
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    msg.tx.send(Ok(())).await.ok();
+                });
             }
         }
     });
@@ -153,40 +144,36 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
     n0_future::task::spawn(async move {
         let requests = Arc::new(AtomicUsize::new(0));
         while let Some(msg) = rx.recv().await {
-            match msg {
-                ProviderMessage::GetRequestReceived(mut msg) => {
-                    let connection_id = msg.connection_id;
-                    let request_id = msg.request_id;
-                    let res = requests.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                        if n >= max_connections {
-                            None
-                        } else {
-                            Some(n + 1)
-                        }
-                    });
-                    match res {
-                        Ok(n) => {
-                            println!("Accepting request {n}, id ({connection_id},{request_id})");
-                            msg.tx.send(Ok(())).await.ok();
-                        }
-                        Err(_) => {
-                            println!(
-                                "Connection limit of {} exceeded, rejecting request",
-                                max_connections
-                            );
-                            msg.tx.send(Err(AbortReason::RateLimited)).await.ok();
-                            continue;
-                        }
+            if let ProviderMessage::GetRequestReceived(mut msg) = msg {
+                let connection_id = msg.connection_id;
+                let request_id = msg.request_id;
+                let res = requests.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    if n >= max_connections {
+                        None
+                    } else {
+                        Some(n + 1)
                     }
-                    let requests = requests.clone();
-                    n0_future::task::spawn(async move {
-                        // just drain the per request events
-                        while let Ok(Some(_)) = msg.rx.recv().await {}
-                        println!("Stopping request, id ({connection_id},{request_id})");
-                        requests.fetch_sub(1, Ordering::SeqCst);
-                    });
+                });
+                match res {
+                    Ok(n) => {
+                        println!("Accepting request {n}, id ({connection_id},{request_id})");
+                        msg.tx.send(Ok(())).await.ok();
+                    }
+                    Err(_) => {
+                        println!(
+                            "Connection limit of {max_connections} exceeded, rejecting request"
+                        );
+                        msg.tx.send(Err(AbortReason::RateLimited)).await.ok();
+                        continue;
+                    }
                 }
-                _ => {}
+                let requests = requests.clone();
+                n0_future::task::spawn(async move {
+                    // just drain the per request events
+                    while let Ok(Some(_)) = msg.rx.recv().await {}
+                    println!("Stopping request, id ({connection_id},{request_id})");
+                    requests.fetch_sub(1, Ordering::SeqCst);
+                });
             }
         }
     });
@@ -218,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
                 .bytes_and_stats()
                 .await?;
             println!("Downloaded {} bytes", data.len());
-            println!("Stats: {:?}", stats);
+            println!("Stats: {stats:?}");
         }
         Args::ByNodeId {
             paths,
