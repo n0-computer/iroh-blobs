@@ -1,5 +1,13 @@
 /// Example how to limit blob requests by hash and node id, and to add
-/// restrictions on limited content.
+/// throttling or limiting the maximum number of connections.
+///
+/// Limiting is done via a fn that returns an EventSender and internally
+/// makes liberal use of spawn to spawn background tasks.
+///
+/// This is fine, since the tasks will terminate as soon as the [BlobsProtocol]
+/// instance holding the [EventSender] will be dropped. But for production
+/// grade code you might nevertheless put the tasks into a [tokio::task::JoinSet] or
+/// [n0_future::FuturesUnordered].
 mod common;
 use std::{
     collections::{HashMap, HashSet},
@@ -31,33 +39,37 @@ use crate::common::get_or_generate_secret_key;
 pub enum Args {
     /// Limit requests by node id
     ByNodeId {
-        /// Path for files to add
+        /// Path for files to add.
         paths: Vec<PathBuf>,
         #[clap(long("allow"))]
         /// Nodes that are allowed to download content.
         allowed_nodes: Vec<NodeId>,
+        /// Number of secrets to generate for allowed node ids.
         #[clap(long, default_value_t = 1)]
         secrets: usize,
     },
     /// Limit requests by hash, only first hash is allowed
     ByHash {
-        /// Path for files to add
+        /// Path for files to add.
         paths: Vec<PathBuf>,
     },
     /// Throttle requests
     Throttle {
-        /// Path for files to add
+        /// Path for files to add.
         paths: Vec<PathBuf>,
+        /// Delay in milliseconds after sending a chunk group of 16 KiB.
         #[clap(long, default_value = "100")]
         delay_ms: u64,
     },
     /// Limit maximum number of connections.
     MaxConnections {
-        /// Path for files to add
+        /// Path for files to add.
         paths: Vec<PathBuf>,
+        /// Maximum number of concurrent get requests.
         #[clap(long, default_value = "1")]
         max_connections: usize,
     },
+    /// Get a blob. Just for completeness sake.
     Get {
         /// Ticket for the blob to download
         ticket: BlobTicket,
@@ -84,6 +96,8 @@ fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
     EventSender::new(
         tx,
         EventMask {
+            // We want a request for each incoming connection so we can accept
+            // or reject them. We don't need any other events.
             connected: ConnectMode::Request,
             ..EventMask::DEFAULT
         },
@@ -112,6 +126,9 @@ fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
     EventSender::new(
         tx,
         EventMask {
+            // We want to get a request for each get request that we can answer
+            // with OK or not OK depending on the hash. We do not want detailed
+            // events once it has been decided to handle a request.
             get: RequestMode::Request,
             ..EventMask::DEFAULT
         },
@@ -128,6 +145,8 @@ fn throttle(delay_ms: u64) -> EventSender {
                         "Throttling {} {}, {}ms",
                         msg.connection_id, msg.request_id, delay_ms
                     );
+                    // we could compute the delay from the size of the data to have a fixed rate.
+                    // but the size is almost always 16 KiB (16 chunks).
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     msg.tx.send(Ok(())).await.ok();
                 });
@@ -137,6 +156,8 @@ fn throttle(delay_ms: u64) -> EventSender {
     EventSender::new(
         tx,
         EventMask {
+            // We want to get requests for each sent user data blob, so we can add a delay.
+            // Other than that, we don't need any events.
             throttle: ThrottleMode::Throttle,
             ..EventMask::DEFAULT
         },
@@ -206,6 +227,10 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
     EventSender::new(
         tx,
         EventMask {
+            // For each get request, we want to get a request so we can decide
+            // based on the current connection count if we want to accept or reject.
+            // We also want detailed logging of events for the get request, so we can
+            // detect when the request is finished one way or another.
             get: RequestMode::RequestLog,
             ..EventMask::DEFAULT
         },
