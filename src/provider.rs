@@ -234,9 +234,10 @@ impl WriterContext {
 
 impl WriteProgress for WriterContext {
     async fn notify_payload_write(&mut self, _index: u64, offset: u64, len: usize) {
-        let end_offset = offset + len as u64;
-        self.payload_bytes_written += len as u64;
-        self.tracker.transfer_progress(end_offset).await.ok();
+        let len = len as u64;
+        let end_offset = offset + len;
+        self.payload_bytes_written += len;
+        self.tracker.transfer_progress(len, end_offset).await.ok();
     }
 
     fn log_other_write(&mut self, len: usize) {

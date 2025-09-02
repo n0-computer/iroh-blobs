@@ -222,7 +222,7 @@ impl RequestTracker {
     }
 
     /// Transfer progress for the previously reported blob, end_offset is the new end offset in bytes.
-    pub async fn transfer_progress(&mut self, end_offset: u64) -> ClientResult {
+    pub async fn transfer_progress(&mut self, len: u64, end_offset: u64) -> ClientResult {
         if let RequestUpdates::Active(tx) = &mut self.updates {
             tx.try_send(RequestUpdate::Progress(TransferProgress { end_offset }))
                 .await?;
@@ -232,6 +232,7 @@ impl RequestTracker {
                 .rpc(Throttle {
                     connection_id: *connection_id,
                     request_id: *request_id,
+                    size: len as u64,
                 })
                 .await??;
         }
@@ -546,6 +547,8 @@ mod proto {
         pub connection_id: u64,
         /// The request id. There is a new id for each request.
         pub request_id: u64,
+        /// Size of the chunk to be throttled. This will usually be 16 KiB.
+        pub size: u64,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
