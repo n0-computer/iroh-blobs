@@ -640,7 +640,10 @@
 <a href="#639" id="639">639</a>
 <a href="#640" id="640">640</a>
 <a href="#641" id="641">641</a>
-<a href="#642" id="642">642</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
 
 <span class="kw">use </span>irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -864,7 +867,7 @@
     }
 
     <span class="doccomment">/// Transfer progress for the previously reported blob, end_offset is the new end offset in bytes.
-    </span><span class="kw">pub async fn </span>transfer_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, end_offset: u64) -&gt; ClientResult {
+    </span><span class="kw">pub async fn </span>transfer_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: u64, end_offset: u64) -&gt; ClientResult {
         <span class="kw">if let </span>RequestUpdates::Active(tx) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.updates {
             tx.try_send(RequestUpdate::Progress(TransferProgress { end_offset }))
                 .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -874,6 +877,7 @@
                 .rpc(Throttle {
                     connection_id: <span class="kw-2">*</span>connection_id,
                     request_id: <span class="kw-2">*</span>request_id,
+                    size: len,
                 })
                 .<span class="kw">await</span><span class="question-mark">??</span>;
         }
@@ -1188,6 +1192,8 @@
         </span><span class="kw">pub </span>connection_id: u64,
         <span class="doccomment">/// The request id. There is a new id for each request.
         </span><span class="kw">pub </span>request_id: u64,
+        <span class="doccomment">/// Size of the chunk to be throttled. This will usually be 16 KiB.
+        </span><span class="kw">pub </span>size: u64,
     }
 
     <span class="attr">#[derive(Debug, Serialize, Deserialize)]
