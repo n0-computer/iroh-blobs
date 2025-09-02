@@ -29,6 +29,7 @@ use crate::common::get_or_generate_secret_key;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub enum Args {
+    /// Limit requests by node id
     ByNodeId {
         /// Path for files to add
         paths: Vec<PathBuf>,
@@ -38,16 +39,19 @@ pub enum Args {
         #[clap(long, default_value_t = 1)]
         secrets: usize,
     },
+    /// Limit requests by hash, only first hash is allowed
     ByHash {
         /// Path for files to add
         paths: Vec<PathBuf>,
     },
+    /// Throttle requests
     Throttle {
         /// Path for files to add
         paths: Vec<PathBuf>,
         #[clap(long, default_value = "100")]
         delay_ms: u64,
     },
+    /// Limit maximum number of connections.
     MaxConnections {
         /// Path for files to add
         paths: Vec<PathBuf>,
@@ -140,20 +144,39 @@ fn throttle(delay_ms: u64) -> EventSender {
 }
 
 fn limit_max_connections(max_connections: usize) -> EventSender {
+    #[derive(Default, Debug, Clone)]
+    struct ConnectionCounter(Arc<(AtomicUsize, usize)>);
+
+    impl ConnectionCounter {
+        fn new(max: usize) -> Self {
+            Self(Arc::new((Default::default(), max)))
+        }
+
+        fn inc(&self) -> Result<usize, usize> {
+            let (c, max) = &*self.0;
+            c.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                if n >= *max {
+                    None
+                } else {
+                    Some(n + 1)
+                }
+            })
+        }
+
+        fn dec(&self) {
+            let (c, _) = &*self.0;
+            c.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     n0_future::task::spawn(async move {
-        let requests = Arc::new(AtomicUsize::new(0));
+        let requests = ConnectionCounter::new(max_connections);
         while let Some(msg) = rx.recv().await {
             if let ProviderMessage::GetRequestReceived(mut msg) = msg {
                 let connection_id = msg.connection_id;
                 let request_id = msg.request_id;
-                let res = requests.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                    if n >= max_connections {
-                        None
-                    } else {
-                        Some(n + 1)
-                    }
-                });
+                let res = requests.inc();
                 match res {
                     Ok(n) => {
                         println!("Accepting request {n}, id ({connection_id},{request_id})");
@@ -170,9 +193,12 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
                 let requests = requests.clone();
                 n0_future::task::spawn(async move {
                     // just drain the per request events
+                    //
+                    // Note that we have requested updates for the request, now we also need to process them
+                    // otherwise the request will be aborted!
                     while let Ok(Some(_)) = msg.rx.recv().await {}
                     println!("Stopping request, id ({connection_id},{request_id})");
-                    requests.fetch_sub(1, Ordering::SeqCst);
+                    requests.dec();
                 });
             }
         }
