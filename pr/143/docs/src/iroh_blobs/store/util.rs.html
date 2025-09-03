@@ -387,7 +387,9 @@
 <a href="#386" id="386">386</a>
 <a href="#387" id="387">387</a>
 <a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Borrow,
     fmt,
     fs::{File, OpenOptions},
@@ -401,10 +403,12 @@
 <span class="kw">use </span>bytes::Bytes;
 <span class="kw">use </span>derive_more::{From, Into};
 
-<span class="kw">mod </span>mem_or_file;
+<span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+</span><span class="kw">mod </span>mem_or_file;
+<span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+</span><span class="kw">pub use </span>mem_or_file::{FixedSize, MemOrFile};
 <span class="kw">mod </span>sparse_mem_file;
 <span class="kw">use </span>irpc::channel::mpsc;
-<span class="kw">pub use </span>mem_or_file::{FixedSize, MemOrFile};
 <span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSetRef};
 <span class="kw">use </span>ref_cast::RefCast;
 <span class="kw">use </span>serde::{de::DeserializeOwned, Deserialize, Serialize};

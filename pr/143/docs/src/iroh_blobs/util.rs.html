@@ -490,7 +490,8 @@
 <a href="#489" id="489">489</a>
 <a href="#490" id="490">490</a>
 <a href="#491" id="491">491</a>
-<a href="#492" id="492">492</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>channel;
 <span class="kw">pub mod </span>connection_pool;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>temp_tag;
@@ -821,6 +822,7 @@
     }
 
     <span class="attr">#[cfg(test)]
+    #[cfg(feature = <span class="string">"fs-store"</span>)]
     </span><span class="kw">mod </span>tests {
         <span class="kw">use </span>bao_tree::{
             blake3,
