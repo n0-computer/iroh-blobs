@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="iroh-blobs"><title>iroh_blobs - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-dbdb5eec.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0-nightly (d10a6823f 2024-11-29)" data-channel="nightly" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../static.files/storage-59e33391.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../iroh_blobs/index.html">iroh_<wbr>blobs</a><span class="version">0.93.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#iroh-blobs" title="iroh-blobs">iroh-blobs</a><ul><li><a href="#concepts" title="Concepts">Concepts</a></li><li><a href="#getting-started" title="Getting started">Getting started</a></li><li><a href="#examples" title="Examples">Examples</a></li></ul></li><li><a href="#license" title="License">License</a><ul><li><a href="#contribution" title="Contribution">Contribution</a></li></ul></li><li><a href="#module-docs" title="Module docs">Module docs</a></li></ul><h3><a href="#reexports">Crate Items</a></h3><ul class="block"><li><a href="#reexports" title="Re-exports">Re-exports</a></li><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>iroh_blobs</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/iroh_blobs/lib.rs.html#1-52">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="iroh-blobs"><a class="doc-anchor" href="#iroh-blobs">§</a>iroh-blobs</h2>
+<p><strong>NOTE: this version of iroh-blobs is not yet considered production quality. For now, if you need production quality, use iroh-blobs 0.35</strong></p>
+<p>This crate provides blob and blob sequence transfer support for iroh. It implements a simple request-response protocol based on BLAKE3 verified streaming.</p>
+<p>A request describes data in terms of BLAKE3 hashes and byte ranges. It is possible to request blobs or ranges of blobs, as well as entire sequences of blobs in one request.</p>
+<p>The requester opens a QUIC stream to the provider and sends the request. The provider answers with the requested data, encoded as <a href="https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf">BLAKE3</a> verified streams, on the same QUIC stream.</p>
+<p>This crate is used together with <a href="https://crates.io/crates/iroh">iroh</a>. Connection establishment is left up to the user or higher level APIs.</p>
+<h3 id="concepts"><a class="doc-anchor" href="#concepts">§</a>Concepts</h3>
+<ul>
+<li>
+<p><strong>Blob:</strong> a sequence of bytes of arbitrary size, without any metadata.</p>
+</li>
+<li>
+<p><strong>Link:</strong> a 32 byte BLAKE3 hash of a blob.</p>
+</li>
+<li>
+<p><strong>HashSeq:</strong> a blob that contains a sequence of links. Its size is a multiple of 32.</p>
+</li>
+<li>
+<p><strong>Provider:</strong> The side that provides data and answers requests. Providers wait for incoming requests from Requests.</p>
+</li>
+<li>
+<p><strong>Requester:</strong> The side that asks for data. It is initiating requests to one or many providers.</p>
+</li>
+</ul>
+<p>A node can be a provider and a requester at the same time.</p>
+<h3 id="getting-started"><a class="doc-anchor" href="#getting-started">§</a>Getting started</h3>
+<p>The <code>iroh-blobs</code> protocol was designed to be used in conjunction with <code>iroh</code>. <a href="https://docs.rs/iroh">Iroh</a> is a networking library for making direct connections, these connections are what power the data transfers in <code>iroh-blobs</code>.</p>
+<p>Iroh provides a <a href="https://docs.rs/iroh/latest/iroh/protocol/struct.Router.html"><code>Router</code></a> that takes an <a href="https://docs.rs/iroh/latest/iroh/endpoint/struct.Endpoint.html"><code>Endpoint</code></a> and any protocols needed for the application. Similar to a router in webserver library, it runs a loop accepting incoming connections and routes them to the specific protocol handler, based on <code>ALPN</code>.</p>
+<p>Here is a basic example of how to set up <code>iroh-blobs</code> with <code>iroh</code>:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iroh::{protocol::Router, Endpoint};
+<span class="kw">use </span>iroh_blobs::{store::mem::MemStore, BlobsProtocol};
+
+<span class="attr">#[tokio::main]
+</span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
+    <span class="comment">// create an iroh endpoint that includes the standard discovery mechanisms
+    // we've built at number0
+    </span><span class="kw">let </span>endpoint = Endpoint::builder().discovery_n0().bind().<span class="kw">await</span><span class="question-mark">?</span>;
+
+    <span class="comment">// create a protocol handler using an in-memory blob store.
+    </span><span class="kw">let </span>store = MemStore::new();
+    <span class="kw">let </span>blobs = BlobsProtocol::new(<span class="kw-2">&amp;</span>store, endpoint.clone(), <span class="prelude-val">None</span>);
+
+    <span class="comment">// build the router
+    </span><span class="kw">let </span>router = Router::builder(endpoint)
+        .accept(iroh_blobs::ALPN, blobs.clone())
+        .spawn();
+
+    <span class="kw">let </span>tag = blobs.add_slice(<span class="string">b"Hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="macro">println!</span>(<span class="string">"We are now serving {}"</span>, blobs.ticket(tag).<span class="kw">await</span><span class="question-mark">?</span>);
+
+    <span class="comment">// wait for control-c
+    </span>tokio::signal::ctrl_c().<span class="kw">await</span>;
+
+    <span class="comment">// clean shutdown of router and store
+    </span>router.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div>
+<h3 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h3>
+<p>Examples that use <code>iroh-blobs</code> can be found in <a href="https://github.com/n0-computer/iroh-blobs/tree/main/examples">this repo</a>.</p>
+<h2 id="license"><a class="doc-anchor" href="#license">§</a>License</h2>
+<p>This project is licensed under either of</p>
+<ul>
+<li>Apache License, Version 2.0, (<a href="LICENSE-APACHE">LICENSE-APACHE</a> or
+<a href="http://www.apache.org/licenses/LICENSE-2.0">http://www.apache.org/licenses/LICENSE-2.0</a>)</li>
+<li>MIT license (<a href="LICENSE-MIT">LICENSE-MIT</a> or
+<a href="http://opensource.org/licenses/MIT">http://opensource.org/licenses/MIT</a>)</li>
+</ul>
+<p>at your option.</p>
+<h4 id="contribution"><a class="doc-anchor" href="#contribution">§</a>Contribution</h4>
+<p>Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.</p>
+<h2 id="module-docs"><a class="doc-anchor" href="#module-docs">§</a>Module docs</h2>
+<p>The crate is designed to be used from the <a href="https://docs.rs/iroh">iroh</a> crate.</p>
+<p>It implements a <a href="protocol/index.html" title="mod iroh_blobs::protocol">protocol</a> for streaming content-addressed data transfer using
+<a href="https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf">BLAKE3</a> verified streaming.</p>
+<p>It also provides a <a href="store/index.html" title="mod iroh_blobs::store">store</a> module for storage of blobs and outboards,
+as well as a <a href="store/fs/index.html" title="mod iroh_blobs::store::fs">persistent</a> and a <a href="store/mem/index.html" title="mod iroh_blobs::store::mem">memory</a>
+store implementation.</p>
+<p>To implement a server, the <a href="provider/index.html" title="mod iroh_blobs::provider">provider</a> module provides helpers for handling
+connections and individual requests given a store.</p>
+<p>To perform get requests, the <a href="get/index.html" title="mod iroh_blobs::get">get</a> module provides utilities to perform
+requests and store the result in a store, as well as a low level state
+machine for executing requests.</p>
+<p>The client API is available in the <a href="api/index.html" title="mod iroh_blobs::api">api</a> module. You can get a client
+either from one of the <a href="store/index.html" title="mod iroh_blobs::store">store</a> implementations, or from the <a href="struct.BlobsProtocol.html" title="struct iroh_blobs::BlobsProtocol">BlobsProtocol</a>
+via a</p>
+<p>The <a href="api/downloader/index.html" title="mod iroh_blobs::api::downloader">downloader</a> module provides a component to download blobs from
+multiple sources and store them in a store.</p>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name" id="reexport.ALPN"><code>pub use protocol::<a class="constant" href="protocol/constant.ALPN.html" title="constant iroh_blobs::protocol::ALPN">ALPN</a>;</code></div></li></ul><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="mod" href="api/index.html" title="mod iroh_blobs::api">api</a></div><div class="desc docblock-short">The user facing API of the store.</div></li><li><div class="item-name"><a class="mod" href="format/index.html" title="mod iroh_blobs::format">format</a></div><div class="desc docblock-short">Defines data formats for HashSeq.</div></li><li><div class="item-name"><a class="mod" href="get/index.html" title="mod iroh_blobs::get">get</a></div><div class="desc docblock-short">The low level client side API</div></li><li><div class="item-name"><a class="mod" href="hashseq/index.html" title="mod iroh_blobs::hashseq">hashseq</a></div><div class="desc docblock-short">Helpers for blobs that contain a sequence of hashes.</div></li><li><div class="item-name"><a class="mod" href="protocol/index.html" title="mod iroh_blobs::protocol">protocol</a></div><div class="desc docblock-short">Protocol for transferring content-addressed blobs over [<code>iroh</code>] p2p QUIC connections.</div></li><li><div class="item-name"><a class="mod" href="provider/index.html" title="mod iroh_blobs::provider">provider</a></div><div class="desc docblock-short">The low level server side API</div></li><li><div class="item-name"><a class="mod" href="store/index.html" title="mod iroh_blobs::store">store</a></div><div class="desc docblock-short">Store implementations</div></li><li><div class="item-name"><a class="mod" href="ticket/index.html" title="mod iroh_blobs::ticket">ticket</a></div><div class="desc docblock-short">Tickets for blobs.</div></li><li><div class="item-name"><a class="mod" href="util/index.html" title="mod iroh_blobs::util">util</a></div><div class="desc docblock-short">Utilities</div></li></ul><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.BlobsProtocol.html" title="struct iroh_blobs::BlobsProtocol">Blobs<wbr>Protocol</a></div><div class="desc docblock-short">A protocol handler for the blobs protocol.</div></li><li><div class="item-name"><a class="struct" href="struct.Hash.html" title="struct iroh_blobs::Hash">Hash</a></div><div class="desc docblock-short">Hash type used throughout.</div></li><li><div class="item-name"><a class="struct" href="struct.HashAndFormat.html" title="struct iroh_blobs::HashAndFormat">Hash<wbr>AndFormat</a></div><div class="desc docblock-short">A hash and format pair</div></li></ul><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="enum" href="enum.BlobFormat.html" title="enum iroh_blobs::BlobFormat">Blob<wbr>Format</a></div><div class="desc docblock-short">A format identifier</div></li></ul></section></div></main></body></html>
