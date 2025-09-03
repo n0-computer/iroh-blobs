@@ -18,9 +18,10 @@ use std::{
     },
 };
 
+use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
-use iroh::{NodeId, SecretKey, Watcher};
+use iroh::{protocol::Router, NodeAddr, NodeId, SecretKey, Watcher};
 use iroh_blobs::{
     provider::events::{
         AbortReason, ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode,
@@ -28,7 +29,7 @@ use iroh_blobs::{
     },
     store::mem::MemStore,
     ticket::BlobTicket,
-    BlobsProtocol, Hash,
+    BlobFormat, BlobsProtocol, Hash,
 };
 use rand::thread_rng;
 
@@ -77,7 +78,13 @@ pub enum Args {
 }
 
 fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let mask = EventMask {
+        // We want a request for each incoming connection so we can accept
+        // or reject them. We don't need any other events.
+        connected: ConnectMode::Request,
+        ..EventMask::DEFAULT
+    };
+    let (tx, mut rx) = EventSender::channel(32, mask);
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let ProviderMessage::ClientConnected(msg) = msg {
@@ -93,19 +100,18 @@ fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
             }
         }
     });
-    EventSender::new(
-        tx,
-        EventMask {
-            // We want a request for each incoming connection so we can accept
-            // or reject them. We don't need any other events.
-            connected: ConnectMode::Request,
-            ..EventMask::DEFAULT
-        },
-    )
+    tx
 }
 
 fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let mask = EventMask {
+        // We want to get a request for each get request that we can answer
+        // with OK or not OK depending on the hash. We do not want detailed
+        // events once it has been decided to handle a request.
+        get: RequestMode::Request,
+        ..EventMask::DEFAULT
+    };
+    let (tx, mut rx) = EventSender::channel(32, mask);
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let ProviderMessage::GetRequestReceived(msg) = msg {
@@ -123,20 +129,17 @@ fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
             }
         }
     });
-    EventSender::new(
-        tx,
-        EventMask {
-            // We want to get a request for each get request that we can answer
-            // with OK or not OK depending on the hash. We do not want detailed
-            // events once it has been decided to handle a request.
-            get: RequestMode::Request,
-            ..EventMask::DEFAULT
-        },
-    )
+    tx
 }
 
 fn throttle(delay_ms: u64) -> EventSender {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let mask = EventMask {
+        // We want to get requests for each sent user data blob, so we can add a delay.
+        // Other than that, we don't need any events.
+        throttle: ThrottleMode::Throttle,
+        ..EventMask::DEFAULT
+    };
+    let (tx, mut rx) = EventSender::channel(32, mask);
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let ProviderMessage::Throttle(msg) = msg {
@@ -153,15 +156,7 @@ fn throttle(delay_ms: u64) -> EventSender {
             }
         }
     });
-    EventSender::new(
-        tx,
-        EventMask {
-            // We want to get requests for each sent user data blob, so we can add a delay.
-            // Other than that, we don't need any events.
-            throttle: ThrottleMode::Throttle,
-            ..EventMask::DEFAULT
-        },
-    )
+    tx
 }
 
 fn limit_max_connections(max_connections: usize) -> EventSender {
@@ -190,7 +185,15 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
         }
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let mask = EventMask {
+        // For each get request, we want to get a request so we can decide
+        // based on the current connection count if we want to accept or reject.
+        // We also want detailed logging of events for the get request, so we can
+        // detect when the request is finished one way or another.
+        get: RequestMode::RequestLog,
+        ..EventMask::DEFAULT
+    };
+    let (tx, mut rx) = EventSender::channel(32, mask);
     n0_future::task::spawn(async move {
         let requests = ConnectionCounter::new(max_connections);
         while let Some(msg) = rx.recv().await {
@@ -224,21 +227,11 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
             }
         }
     });
-    EventSender::new(
-        tx,
-        EventMask {
-            // For each get request, we want to get a request so we can decide
-            // based on the current connection count if we want to accept or reject.
-            // We also want detailed logging of events for the get request, so we can
-            // detect when the request is finished one way or another.
-            get: RequestMode::RequestLog,
-            ..EventMask::DEFAULT
-        },
-    )
+    tx
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
     match args {
@@ -274,35 +267,28 @@ async fn main() -> anyhow::Result<()> {
                     println!("IROH_SECRET={}", hex::encode(secret.to_bytes()));
                 }
             }
-            let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
+
             let store = MemStore::new();
-            let mut hashes = HashMap::new();
-            for path in paths {
-                let tag = store.add_path(&path).await?;
-                hashes.insert(path, tag.hash);
-            }
-            let _ = endpoint.home_relay().initialized().await;
-            let addr = endpoint.node_addr().initialized().await;
+            let hashes = add_paths(&store, paths).await?;
             let events = limit_by_node_id(allowed_nodes.clone());
-            let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(events));
-            let router = iroh::protocol::Router::builder(endpoint)
-                .accept(iroh_blobs::ALPN, blobs)
-                .spawn();
+            let (router, addr) = setup(MemStore::new(), events).await?;
+
+            for (path, hash) in hashes {
+                let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
+                println!("{}: {ticket}", path.display());
+            }
+            println!();
             println!("Node id: {}\n", router.endpoint().node_id());
             for id in &allowed_nodes {
                 println!("Allowed node: {id}");
             }
-            println!();
-            for (path, hash) in &hashes {
-                let ticket = BlobTicket::new(addr.clone(), *hash, iroh_blobs::BlobFormat::Raw);
-                println!("{}: {ticket}", path.display());
-            }
+
             tokio::signal::ctrl_c().await?;
             router.shutdown().await?;
         }
         Args::ByHash { paths } => {
-            let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
             let store = MemStore::new();
+
             let mut hashes = HashMap::new();
             let mut allowed_hashes = HashSet::new();
             for (i, path) in paths.into_iter().enumerate() {
@@ -312,15 +298,12 @@ async fn main() -> anyhow::Result<()> {
                     allowed_hashes.insert(tag.hash);
                 }
             }
-            let _ = endpoint.home_relay().initialized().await;
-            let addr = endpoint.node_addr().initialized().await;
-            let events = limit_by_hash(allowed_hashes.clone());
-            let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(events));
-            let router = iroh::protocol::Router::builder(endpoint)
-                .accept(iroh_blobs::ALPN, blobs)
-                .spawn();
+
+            let events = limit_by_hash(allowed_hashes);
+            let (router, addr) = setup(MemStore::new(), events).await?;
+
             for (i, (path, hash)) in hashes.iter().enumerate() {
-                let ticket = BlobTicket::new(addr.clone(), *hash, iroh_blobs::BlobFormat::Raw);
+                let ticket = BlobTicket::new(addr.clone(), *hash, BlobFormat::Raw);
                 let permitted = if i == 0 { "" } else { "limited" };
                 println!("{}: {ticket} ({permitted})", path.display());
             }
@@ -328,22 +311,12 @@ async fn main() -> anyhow::Result<()> {
             router.shutdown().await?;
         }
         Args::Throttle { paths, delay_ms } => {
-            let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
             let store = MemStore::new();
-            let mut hashes = HashMap::new();
-            for path in paths {
-                let tag = store.add_path(&path).await?;
-                hashes.insert(path, tag.hash);
-            }
-            let _ = endpoint.home_relay().initialized().await;
-            let addr = endpoint.node_addr().initialized().await;
+            let hashes = add_paths(&store, paths).await?;
             let events = throttle(delay_ms);
-            let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(events));
-            let router = iroh::protocol::Router::builder(endpoint)
-                .accept(iroh_blobs::ALPN, blobs)
-                .spawn();
+            let (router, addr) = setup(MemStore::new(), events).await?;
             for (path, hash) in hashes {
-                let ticket = BlobTicket::new(addr.clone(), hash, iroh_blobs::BlobFormat::Raw);
+                let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
                 println!("{}: {ticket}", path.display());
             }
             tokio::signal::ctrl_c().await?;
@@ -353,22 +326,12 @@ async fn main() -> anyhow::Result<()> {
             paths,
             max_connections,
         } => {
-            let endpoint = iroh::Endpoint::builder().discovery_n0().bind().await?;
             let store = MemStore::new();
-            let mut hashes = HashMap::new();
-            for path in paths {
-                let tag = store.add_path(&path).await?;
-                hashes.insert(path, tag.hash);
-            }
-            let _ = endpoint.home_relay().initialized().await;
-            let addr = endpoint.node_addr().initialized().await;
+            let hashes = add_paths(&store, paths).await?;
             let events = limit_max_connections(max_connections);
-            let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(events));
-            let router = iroh::protocol::Router::builder(endpoint)
-                .accept(iroh_blobs::ALPN, blobs)
-                .spawn();
+            let (router, addr) = setup(MemStore::new(), events).await?;
             for (path, hash) in hashes {
-                let ticket = BlobTicket::new(addr.clone(), hash, iroh_blobs::BlobFormat::Raw);
+                let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
                 println!("{}: {ticket}", path.display());
             }
             tokio::signal::ctrl_c().await?;
@@ -376,4 +339,29 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+async fn add_paths(store: &MemStore, paths: Vec<PathBuf>) -> Result<HashMap<PathBuf, Hash>> {
+    let mut hashes = HashMap::new();
+    for path in paths {
+        let tag = store.add_path(&path).await?;
+        hashes.insert(path, tag.hash);
+    }
+    Ok(hashes)
+}
+
+async fn setup(store: MemStore, events: EventSender) -> Result<(Router, NodeAddr)> {
+    let secret = get_or_generate_secret_key()?;
+    let endpoint = iroh::Endpoint::builder()
+        .discovery_n0()
+        .secret_key(secret)
+        .bind()
+        .await?;
+    let _ = endpoint.home_relay().initialized().await;
+    let addr = endpoint.node_addr().initialized().await;
+    let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(events));
+    let router = Router::builder(endpoint)
+        .accept(iroh_blobs::ALPN, blobs)
+        .spawn();
+    Ok((router, addr))
 }

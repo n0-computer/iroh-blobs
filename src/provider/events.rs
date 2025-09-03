@@ -276,6 +276,14 @@ impl EventSender {
         }
     }
 
+    pub fn channel(
+        capacity: usize,
+        mask: EventMask,
+    ) -> (Self, tokio::sync::mpsc::Receiver<ProviderMessage>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(capacity);
+        (Self::new(tx, mask), rx)
+    }
+
     /// Log request events at trace level.
     pub fn tracing(&self, mask: EventMask) -> Self {
         use tracing::trace;
