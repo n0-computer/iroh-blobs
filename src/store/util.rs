@@ -12,10 +12,12 @@ use bao_tree::{blake3, io::mixed::EncodedItem};
 use bytes::Bytes;
 use derive_more::{From, Into};
 
+#[cfg(feature = "fs-store")]
 mod mem_or_file;
+#[cfg(feature = "fs-store")]
+pub use mem_or_file::{FixedSize, MemOrFile};
 mod sparse_mem_file;
 use irpc::channel::mpsc;
-pub use mem_or_file::{FixedSize, MemOrFile};
 use range_collections::{range_set::RangeSetEntry, RangeSetRef};
 use ref_cast::RefCast;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
