@@ -324,7 +324,16 @@
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
-<a href="#326" id="326">326</a></pre></div><pre class="rust"><code><span class="doccomment">//! The user facing API of the store.
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a></pre></div><pre class="rust"><code><span class="doccomment">//! The user facing API of the store.
 //!
 //! This API is both for interacting with an in-process store and for interacting
 //! with a remote store via rpc calls.
@@ -356,7 +365,7 @@
 <span class="kw">pub mod </span>proto;
 <span class="kw">pub mod </span>remote;
 <span class="kw">pub mod </span>tags;
-<span class="kw">use </span><span class="kw">crate</span>::api::proto::WaitIdleRequest;
+<span class="kw">use crate</span>::{api::proto::WaitIdleRequest, provider::events::ProgressError};
 <span class="kw">pub use crate</span>::{store::util::Tag, util::temp_tag::TempTag};
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">type </span>ApiClient = irpc::Client&lt;proto::Request&gt;;
@@ -423,6 +432,8 @@
     </span>ExportBaoIo { source: io::Error },
     <span class="attr">#[snafu(display(<span class="string">"encode error: {source}"</span>))]
     </span>ExportBaoInner { source: bao_tree::io::EncodeError },
+    <span class="attr">#[snafu(display(<span class="string">"client error: {source}"</span>))]
+    </span>ClientError { source: ProgressError },
 }
 
 <span class="kw">impl </span>From&lt;ExportBaoError&gt; <span class="kw">for </span>Error {
@@ -433,6 +444,7 @@
             ExportBaoError::Request { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
             ExportBaoError::ExportBaoIo { source, .. } =&gt; <span class="self">Self</span>::Io(source),
             ExportBaoError::ExportBaoInner { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
+            ExportBaoError::ClientError { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
         }
     }
 }
@@ -475,6 +487,12 @@
 <span class="kw">impl </span>From&lt;bao_tree::io::EncodeError&gt; <span class="kw">for </span>ExportBaoError {
     <span class="kw">fn </span>from(value: bao_tree::io::EncodeError) -&gt; <span class="self">Self </span>{
         ExportBaoInnerSnafu.into_error(value)
+    }
+}
+
+<span class="kw">impl </span>From&lt;ProgressError&gt; <span class="kw">for </span>ExportBaoError {
+    <span class="kw">fn </span>from(value: ProgressError) -&gt; <span class="self">Self </span>{
+        ClientSnafu.into_error(value)
     }
 }
 

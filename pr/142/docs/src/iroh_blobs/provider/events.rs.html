@@ -672,7 +672,17 @@
 <a href="#671" id="671">671</a>
 <a href="#672" id="672">672</a>
 <a href="#673" id="673">673</a>
-<a href="#674" id="674">674</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, io, ops::Deref};
 
 <span class="kw">use </span>irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -750,60 +760,70 @@
 }
 
 <span class="attr">#[derive(Debug, Snafu)]
-</span><span class="kw">pub enum </span>ClientError {
-    RateLimited,
+</span><span class="kw">pub enum </span>ProgressError {
+    Limit,
     Permission,
     <span class="attr">#[snafu(transparent)]
-    </span>Irpc {
+    </span>Internal {
         source: irpc::Error,
     },
 }
 
-<span class="kw">impl </span>ClientError {
+<span class="kw">impl </span>From&lt;ProgressError&gt; <span class="kw">for </span>io::Error {
+    <span class="kw">fn </span>from(value: ProgressError) -&gt; <span class="self">Self </span>{
+        <span class="kw">match </span>value {
+            ProgressError::Limit =&gt; io::ErrorKind::QuotaExceeded.into(),
+            ProgressError::Permission =&gt; io::ErrorKind::PermissionDenied.into(),
+            ProgressError::Internal { source } =&gt; source.into(),
+        }
+    }
+}
+
+<span class="kw">impl </span>ProgressError {
     <span class="kw">pub fn </span>code(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; quinn::VarInt {
         <span class="kw">match </span><span class="self">self </span>{
-            ClientError::RateLimited =&gt; ERR_LIMIT,
-            ClientError::Permission =&gt; ERR_PERMISSION,
-            ClientError::Irpc { .. } =&gt; ERR_INTERNAL,
+            ProgressError::Limit =&gt; ERR_LIMIT,
+            ProgressError::Permission =&gt; ERR_PERMISSION,
+            ProgressError::Internal { .. } =&gt; ERR_INTERNAL,
         }
     }
 
     <span class="kw">pub fn </span>reason(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[u8] {
         <span class="kw">match </span><span class="self">self </span>{
-            ClientError::RateLimited =&gt; <span class="string">b"limit"</span>,
-            ClientError::Permission =&gt; <span class="string">b"permission"</span>,
-            ClientError::Irpc { .. } =&gt; <span class="string">b"internal"</span>,
+            ProgressError::Limit =&gt; <span class="string">b"limit"</span>,
+            ProgressError::Permission =&gt; <span class="string">b"permission"</span>,
+            ProgressError::Internal { .. } =&gt; <span class="string">b"internal"</span>,
         }
     }
 }
 
-<span class="kw">impl </span>From&lt;AbortReason&gt; <span class="kw">for </span>ClientError {
+<span class="kw">impl </span>From&lt;AbortReason&gt; <span class="kw">for </span>ProgressError {
     <span class="kw">fn </span>from(value: AbortReason) -&gt; <span class="self">Self </span>{
         <span class="kw">match </span>value {
-            AbortReason::RateLimited =&gt; ClientError::RateLimited,
-            AbortReason::Permission =&gt; ClientError::Permission,
+            AbortReason::RateLimited =&gt; ProgressError::Limit,
+            AbortReason::Permission =&gt; ProgressError::Permission,
         }
     }
 }
 
-<span class="kw">impl </span>From&lt;irpc::channel::RecvError&gt; <span class="kw">for </span>ClientError {
+<span class="kw">impl </span>From&lt;irpc::channel::RecvError&gt; <span class="kw">for </span>ProgressError {
     <span class="kw">fn </span>from(value: irpc::channel::RecvError) -&gt; <span class="self">Self </span>{
-        ClientError::Irpc {
+        ProgressError::Internal {
             source: value.into(),
         }
     }
 }
 
-<span class="kw">impl </span>From&lt;irpc::channel::SendError&gt; <span class="kw">for </span>ClientError {
+<span class="kw">impl </span>From&lt;irpc::channel::SendError&gt; <span class="kw">for </span>ProgressError {
     <span class="kw">fn </span>from(value: irpc::channel::SendError) -&gt; <span class="self">Self </span>{
-        ClientError::Irpc {
+        ProgressError::Internal {
             source: value.into(),
         }
     }
 }
 
 <span class="kw">pub type </span>EventResult = <span class="prelude-ty">Result</span>&lt;(), AbortReason&gt;;
-<span class="kw">pub type </span>ClientResult = <span class="prelude-ty">Result</span>&lt;(), ClientError&gt;;
+<span class="kw">pub type </span>ClientResult = <span class="prelude-ty">Result</span>&lt;(), ProgressError&gt;;
 
 <span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 </span><span class="kw">pub struct </span>EventMask {
@@ -1081,7 +1101,7 @@
         f: <span class="kw">impl </span>FnOnce() -&gt; Req,
         connection_id: u64,
         request_id: u64,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;RequestTracker, ClientError&gt;
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;RequestTracker, ProgressError&gt;
     <span class="kw">where
         </span>ProviderProto: From&lt;RequestReceived&lt;Req&gt;&gt;,
         ProviderMessage: From&lt;WithChannels&lt;RequestReceived&lt;Req&gt;, ProviderProto&gt;&gt;,
@@ -1140,7 +1160,7 @@
                     RequestUpdates::Active(tx)
                 }
                 RequestMode::Disabled =&gt; {
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(ClientError::Permission);
+                    <span class="kw">return </span><span class="prelude-val">Err</span>(ProgressError::Permission);
                 }
                 <span class="kw">_ </span>=&gt; RequestUpdates::None,
             },

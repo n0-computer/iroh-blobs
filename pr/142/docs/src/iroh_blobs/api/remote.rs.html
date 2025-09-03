@@ -1313,7 +1313,9 @@
 <a href="#1312" id="1312">1312</a>
 <a href="#1313" id="1313">1313</a>
 <a href="#1314" id="1314">1314</a>
-<a href="#1315" id="1315">1315</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
+<a href="#1315" id="1315">1315</a>
+<a href="#1316" id="1316">1316</a>
+<a href="#1317" id="1317">1317</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
 //!
 //! The entry point is the [`Remote`] struct.
 </span><span class="kw">use </span>genawaiter::sync::{Co, Gen};
@@ -1333,6 +1335,7 @@
         GetManyRequest, ObserveItem, ObserveRequest, PushRequest, Request, RequestType,
         MAX_MESSAGE_SIZE,
     },
+    provider::events::{ClientResult, ProgressError},
     util::sink::{Sink, TokioMpscSenderSink},
 };
 
@@ -1793,9 +1796,7 @@
         <span class="kw">let </span>content = content.into();
         <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(<span class="number">64</span>);
         <span class="kw">let </span>tx2 = tx.clone();
-        <span class="kw">let </span>sink = TokioMpscSenderSink(tx)
-            .with_map(GetProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        <span class="kw">let </span>sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         <span class="kw">let </span>this = <span class="self">self</span>.clone();
         <span class="kw">let </span>fut = <span class="kw">async move </span>{
             <span class="kw">let </span>res = this.fetch_sink(conn, content, sink).<span class="kw">await</span>.into();
@@ -1818,7 +1819,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         <span class="kw-2">mut </span>conn: <span class="kw">impl </span>GetConnection,
         content: <span class="kw">impl </span>Into&lt;HashAndFormat&gt;,
-        progress: <span class="kw">impl </span>Sink&lt;u64, Error = io::Error&gt;,
+        progress: <span class="kw">impl </span>Sink&lt;u64, Error = irpc::channel::SendError&gt;,
     ) -&gt; GetResult&lt;Stats&gt; {
         <span class="kw">let </span>content = content.into();
         <span class="kw">let </span>local = <span class="self">self
@@ -1871,9 +1872,7 @@
     <span class="kw">pub fn </span>execute_push(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connection, request: PushRequest) -&gt; PushProgress {
         <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(<span class="number">64</span>);
         <span class="kw">let </span>tx2 = tx.clone();
-        <span class="kw">let </span>sink = TokioMpscSenderSink(tx)
-            .with_map(PushProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        <span class="kw">let </span>sink = TokioMpscSenderSink(tx).with_map(PushProgressItem::Progress);
         <span class="kw">let </span>this = <span class="self">self</span>.clone();
         <span class="kw">let </span>fut = <span class="kw">async move </span>{
             <span class="kw">let </span>res = this.execute_push_sink(conn, request, sink).<span class="kw">await</span>.into();
@@ -1892,7 +1891,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         conn: Connection,
         request: PushRequest,
-        progress: <span class="kw">impl </span>Sink&lt;u64, Error = io::Error&gt;,
+        progress: <span class="kw">impl </span>Sink&lt;u64, Error = irpc::channel::SendError&gt;,
     ) -&gt; anyhow::Result&lt;Stats&gt; {
         <span class="kw">let </span>hash = request.hash;
         <span class="macro">debug!</span>(%hash, <span class="string">"pushing"</span>);
@@ -1947,9 +1946,7 @@
     <span class="kw">pub fn </span>execute_get_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connection, request: GetRequest) -&gt; GetProgress {
         <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(<span class="number">64</span>);
         <span class="kw">let </span>tx2 = tx.clone();
-        <span class="kw">let </span>sink = TokioMpscSenderSink(tx)
-            .with_map(GetProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        <span class="kw">let </span>sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         <span class="kw">let </span>this = <span class="self">self</span>.clone();
         <span class="kw">let </span>fut = <span class="kw">async move </span>{
             <span class="kw">let </span>res = this.execute_get_sink(<span class="kw-2">&amp;</span>conn, request, sink).<span class="kw">await</span>.into();
@@ -1973,7 +1970,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         conn: <span class="kw-2">&amp;</span>Connection,
         request: GetRequest,
-        <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;u64, Error = io::Error&gt;,
+        <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;u64, Error = irpc::channel::SendError&gt;,
     ) -&gt; GetResult&lt;Stats&gt; {
         <span class="kw">let </span>store = <span class="self">self</span>.store();
         <span class="kw">let </span>root = request.hash;
@@ -2036,9 +2033,7 @@
     <span class="kw">pub fn </span>execute_get_many(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connection, request: GetManyRequest) -&gt; GetProgress {
         <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(<span class="number">64</span>);
         <span class="kw">let </span>tx2 = tx.clone();
-        <span class="kw">let </span>sink = TokioMpscSenderSink(tx)
-            .with_map(GetProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        <span class="kw">let </span>sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         <span class="kw">let </span>this = <span class="self">self</span>.clone();
         <span class="kw">let </span>fut = <span class="kw">async move </span>{
             <span class="kw">let </span>res = this.execute_get_many_sink(conn, request, sink).<span class="kw">await</span>.into();
@@ -2062,7 +2057,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         conn: Connection,
         request: GetManyRequest,
-        <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;u64, Error = io::Error&gt;,
+        <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;u64, Error = irpc::channel::SendError&gt;,
     ) -&gt; GetResult&lt;Stats&gt; {
         <span class="kw">let </span>store = <span class="self">self</span>.store();
         <span class="kw">let </span>hash_seq = request.hashes.iter().copied().collect::&lt;HashSeq&gt;();
@@ -2199,7 +2194,7 @@
     header: AtBlobHeader,
     hash: Hash,
     store: <span class="kw-2">&amp;</span>Store,
-    <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;u64, Error = io::Error&gt;,
+    <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;u64, Error = irpc::channel::SendError&gt;,
 ) -&gt; GetResult&lt;AtEndBlob&gt; {
     <span class="kw">let </span>(<span class="kw-2">mut </span>content, size) = header.next().<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="kw">let </span><span class="prelude-val">Some</span>(size) = NonZeroU64::new(size) <span class="kw">else </span>{
@@ -2363,11 +2358,20 @@
 
 <span class="kw">impl</span>&lt;S&gt; WriteProgress <span class="kw">for </span>StreamContext&lt;S&gt;
 <span class="kw">where
-    </span>S: Sink&lt;u64, Error = io::Error&gt;,
+    </span>S: Sink&lt;u64, Error = irpc::channel::SendError&gt;,
 {
-    <span class="kw">async fn </span>notify_payload_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _index: u64, _offset: u64, len: usize) {
+    <span class="kw">async fn </span>notify_payload_write(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        _index: u64,
+        _offset: u64,
+        len: usize,
+    ) -&gt; ClientResult {
         <span class="self">self</span>.payload_bytes_sent += len <span class="kw">as </span>u64;
-        <span class="self">self</span>.sender.send(<span class="self">self</span>.payload_bytes_sent).<span class="kw">await</span>.ok();
+        <span class="self">self</span>.sender
+            .send(<span class="self">self</span>.payload_bytes_sent)
+            .<span class="kw">await
+            </span>.map_err(|e| ProgressError::Internal { source: e.into() })<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">fn </span>log_other_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _len: usize) {}

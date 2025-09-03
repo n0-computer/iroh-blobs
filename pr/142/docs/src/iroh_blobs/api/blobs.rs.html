@@ -1166,7 +1166,10 @@
 <a href="#1165" id="1165">1165</a>
 <a href="#1166" id="1166">1166</a>
 <a href="#1167" id="1167">1167</a>
-<a href="#1168" id="1168">1168</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
+<a href="#1168" id="1168">1168</a>
+<a href="#1169" id="1169">1169</a>
+<a href="#1170" id="1170">1170</a>
+<a href="#1171" id="1171">1171</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
 //!
 //! This API is for local interactions with the blob store, such as importing
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
@@ -1225,6 +1228,7 @@
 };
 <span class="kw">use crate</span>::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
+    provider::events::ClientResult,
     store::IROH_BLOCK_SIZE,
     util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
@@ -2280,7 +2284,9 @@
                         .write_chunk(leaf.data)
                         .<span class="kw">await
                         </span>.map_err(io::Error::from)<span class="question-mark">?</span>;
-                    progress.notify_payload_write(index, leaf.offset, len).<span class="kw">await</span>;
+                    progress
+                        .notify_payload_write(index, leaf.offset, len)
+                        .<span class="kw">await</span><span class="question-mark">?</span>;
                 }
                 EncodedItem::Done =&gt; <span class="kw">break</span>,
                 EncodedItem::Error(cause) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(cause.into()),
@@ -2326,7 +2332,7 @@
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>WriteProgress {
     <span class="doccomment">/// Notify the progress writer that a payload write has happened.
-    </span><span class="kw">async fn </span>notify_payload_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, index: u64, offset: u64, len: usize);
+    </span><span class="kw">async fn </span>notify_payload_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, index: u64, offset: u64, len: usize) -&gt; ClientResult;
 
     <span class="doccomment">/// Log a write of some other data.
     </span><span class="kw">fn </span>log_other_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize);

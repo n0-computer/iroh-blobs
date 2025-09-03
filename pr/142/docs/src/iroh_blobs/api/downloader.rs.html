@@ -680,13 +680,11 @@
 <a href="#679" id="679">679</a>
 <a href="#680" id="680">680</a>
 <a href="#681" id="681">681</a>
-<a href="#682" id="682">682</a>
-<a href="#683" id="683">683</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
+<a href="#682" id="682">682</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     future::{Future, IntoFuture},
-    io,
     sync::Arc,
 };
 
@@ -796,7 +794,7 @@
         SplitStrategy::Split =&gt; handle_download_split_impl(store, pool, request, tx).<span class="kw">await</span><span class="question-mark">?</span>,
         SplitStrategy::None =&gt; <span class="kw">match </span>request.request {
             FiniteRequest::Get(get) =&gt; {
-                <span class="kw">let </span>sink = IrpcSenderRefSink(tx).with_map_err(io::Error::other);
+                <span class="kw">let </span>sink = IrpcSenderRefSink(tx);
                 execute_get(<span class="kw-2">&amp;</span>pool, Arc::new(get), <span class="kw-2">&amp;</span>request.providers, <span class="kw-2">&amp;</span>store, sink).<span class="kw">await</span><span class="question-mark">?</span>;
             }
             FiniteRequest::GetMany(<span class="kw">_</span>) =&gt; {
@@ -827,7 +825,7 @@
                 <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel::&lt;(usize, DownloadProgessItem)&gt;(<span class="number">16</span>);
                 progress_tx.send(rx).<span class="kw">await</span>.ok();
                 <span class="kw">let </span>sink = TokioMpscSenderSink(tx)
-                    .with_map_err(io::Error::other)
+                    .with_map_err(|<span class="kw">_</span>| irpc::channel::SendError::ReceiverClosed)
                     .with_map(<span class="kw">move </span>|x| (id, x));
                 <span class="kw">let </span>res = execute_get(<span class="kw-2">&amp;</span>pool, Arc::new(request), <span class="kw-2">&amp;</span>providers, <span class="kw-2">&amp;</span>store, sink).<span class="kw">await</span>;
                 (hash, res)
@@ -1058,7 +1056,7 @@
     providers: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>ContentDiscovery&gt;,
     pool: <span class="kw-2">&amp;</span>ConnectionPool,
     store: <span class="kw-2">&amp;</span>Store,
-    progress: <span class="kw">impl </span>Sink&lt;DownloadProgessItem, Error = io::Error&gt;,
+    progress: <span class="kw">impl </span>Sink&lt;DownloadProgessItem, Error = irpc::channel::SendError&gt;,
 ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = GetRequest&gt; + Send + <span class="lifetime">'a</span>&gt;&gt; {
     <span class="prelude-val">Ok</span>(<span class="kw">match </span>request {
         FiniteRequest::Get(req) =&gt; {
@@ -1114,7 +1112,7 @@
     request: Arc&lt;GetRequest&gt;,
     providers: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>ContentDiscovery&gt;,
     store: <span class="kw-2">&amp;</span>Store,
-    <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;DownloadProgessItem, Error = io::Error&gt;,
+    <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;DownloadProgessItem, Error = irpc::channel::SendError&gt;,
 ) -&gt; anyhow::Result&lt;()&gt; {
     <span class="kw">let </span>remote = store.remote();
     <span class="kw">let </span><span class="kw-2">mut </span>providers = providers.find_providers(request.content());

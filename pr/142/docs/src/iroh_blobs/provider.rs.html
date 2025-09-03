@@ -615,7 +615,7 @@
     },
     hashseq::HashSeq,
     protocol::{GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request},
-    provider::events::{ClientConnected, ConnectionClosed, RequestTracker},
+    provider::events::{ClientConnected, ClientResult, ConnectionClosed, RequestTracker},
     Hash,
 };
 <span class="kw">pub mod </span>events;
@@ -854,12 +854,12 @@
 }
 
 <span class="kw">impl </span>WriteProgress <span class="kw">for </span>WriterContext {
-    <span class="kw">async fn </span>notify_payload_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _index: u64, offset: u64, len: usize) {
+    <span class="kw">async fn </span>notify_payload_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _index: u64, offset: u64, len: usize) -&gt; ClientResult {
         <span class="kw">let </span>len = len <span class="kw">as </span>u64;
         <span class="kw">let </span>end_offset = offset + len;
         <span class="self">self</span>.payload_bytes_written += len;
-        <span class="self">self</span>.tracker.transfer_progress(len, end_offset).<span class="kw">await</span>.ok();
-    }
+        <span class="self">self</span>.tracker.transfer_progress(len, end_offset).<span class="kw">await
+    </span>}
 
     <span class="kw">fn </span>log_other_write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) {
         <span class="self">self</span>.other_bytes_written += len <span class="kw">as </span>u64;
