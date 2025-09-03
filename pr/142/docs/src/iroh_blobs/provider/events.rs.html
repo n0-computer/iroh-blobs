@@ -651,7 +651,28 @@
 <a href="#650" id="650">650</a>
 <a href="#651" id="651">651</a>
 <a href="#652" id="652">652</a>
-<a href="#653" id="653">653</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
 
 <span class="kw">use </span>irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -661,7 +682,10 @@
 <span class="kw">use </span>snafu::Snafu;
 
 <span class="kw">use crate</span>::{
-    protocol::{GetManyRequest, GetRequest, ObserveRequest, PushRequest},
+    protocol::{
+        GetManyRequest, GetRequest, ObserveRequest, PushRequest, ERR_INTERNAL, ERR_LIMIT,
+        ERR_PERMISSION,
+    },
     provider::{events::irpc_ext::IrpcClientExt, TransferStats},
     Hash,
 };
@@ -733,6 +757,24 @@
     </span>Irpc {
         source: irpc::Error,
     },
+}
+
+<span class="kw">impl </span>ClientError {
+    <span class="kw">pub fn </span>code(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; quinn::VarInt {
+        <span class="kw">match </span><span class="self">self </span>{
+            ClientError::RateLimited =&gt; ERR_LIMIT.into(),
+            ClientError::Permission =&gt; ERR_PERMISSION.into(),
+            ClientError::Irpc { .. } =&gt; ERR_INTERNAL.into(),
+        }
+    }
+
+    <span class="kw">pub fn </span>reason(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[u8] {
+        <span class="kw">match </span><span class="self">self </span>{
+            ClientError::RateLimited =&gt; <span class="string">b"limit"</span>,
+            ClientError::Permission =&gt; <span class="string">b"permission"</span>,
+            ClientError::Irpc { .. } =&gt; <span class="string">b"internal"</span>,
+        }
+    }
 }
 
 <span class="kw">impl </span>From&lt;AbortReason&gt; <span class="kw">for </span>ClientError {
@@ -864,11 +906,14 @@
     <span class="doccomment">/// Transfer for index `index` started, size `size`
     </span><span class="kw">pub async fn </span>transfer_started(<span class="kw-2">&amp;</span><span class="self">self</span>, index: u64, hash: <span class="kw-2">&amp;</span>Hash, size: u64) -&gt; irpc::Result&lt;()&gt; {
         <span class="kw">if let </span>RequestUpdates::Active(tx) = <span class="kw-2">&amp;</span><span class="self">self</span>.updates {
-            tx.send(RequestUpdate::Started(TransferStarted {
-                index,
-                hash: <span class="kw-2">*</span>hash,
-                size,
-            }))
+            tx.send(
+                TransferStarted {
+                    index,
+                    hash: <span class="kw-2">*</span>hash,
+                    size,
+                }
+                .into(),
+            )
             .<span class="kw">await</span><span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(())
@@ -877,8 +922,7 @@
     <span class="doccomment">/// Transfer progress for the previously reported blob, end_offset is the new end offset in bytes.
     </span><span class="kw">pub async fn </span>transfer_progress(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: u64, end_offset: u64) -&gt; ClientResult {
         <span class="kw">if let </span>RequestUpdates::Active(tx) = <span class="kw-2">&amp;mut </span><span class="self">self</span>.updates {
-            tx.try_send(RequestUpdate::Progress(TransferProgress { end_offset }))
-                .<span class="kw">await</span><span class="question-mark">?</span>;
+            tx.try_send(TransferProgress { end_offset }.into()).<span class="kw">await</span><span class="question-mark">?</span>;
         }
         <span class="kw">if let </span><span class="prelude-val">Some</span>((throttle, connection_id, request_id)) = <span class="kw-2">&amp;</span><span class="self">self</span>.throttle {
             throttle
@@ -895,8 +939,7 @@
     <span class="doccomment">/// Transfer completed for the previously reported blob.
     </span><span class="kw">pub async fn </span>transfer_completed(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw">impl </span>Fn() -&gt; Box&lt;TransferStats&gt;) -&gt; irpc::Result&lt;()&gt; {
         <span class="kw">if let </span>RequestUpdates::Active(tx) = <span class="kw-2">&amp;</span><span class="self">self</span>.updates {
-            tx.send(RequestUpdate::Completed(TransferCompleted { stats: f() }))
-                .<span class="kw">await</span><span class="question-mark">?</span>;
+            tx.send(TransferCompleted { stats: f() }.into()).<span class="kw">await</span><span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(())
     }
@@ -904,8 +947,7 @@
     <span class="doccomment">/// Transfer aborted for the previously reported blob.
     </span><span class="kw">pub async fn </span>transfer_aborted(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw">impl </span>Fn() -&gt; Box&lt;TransferStats&gt;) -&gt; irpc::Result&lt;()&gt; {
         <span class="kw">if let </span>RequestUpdates::Active(tx) = <span class="kw-2">&amp;</span><span class="self">self</span>.updates {
-            tx.send(RequestUpdate::Aborted(TransferAborted { stats: f() }))
-                .<span class="kw">await</span><span class="question-mark">?</span>;
+            tx.send(TransferAborted { stats: f() }.into()).<span class="kw">await</span><span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(())
     }
@@ -1236,7 +1278,7 @@
     }
 
     <span class="doccomment">/// Stream of updates for a single request
-    </span><span class="attr">#[derive(Debug, Serialize, Deserialize)]
+    </span><span class="attr">#[derive(Debug, Serialize, Deserialize, derive_more::From)]
     </span><span class="kw">pub enum </span>RequestUpdate {
         <span class="doccomment">/// Start of transfer for a blob, mandatory event
         </span>Started(TransferStarted),

@@ -1073,7 +1073,14 @@
 <a href="#1072" id="1072">1072</a>
 <a href="#1073" id="1073">1073</a>
 <a href="#1074" id="1074">1074</a>
-<a href="#1075" id="1075">1075</a></pre></div><pre class="rust"><code><span class="doccomment">//! Protocol for transferring content-addressed blobs over [`iroh`] p2p QUIC connections.
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a>
+<a href="#1078" id="1078">1078</a>
+<a href="#1079" id="1079">1079</a>
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a>
+<a href="#1082" id="1082">1082</a></pre></div><pre class="rust"><code><span class="doccomment">//! Protocol for transferring content-addressed blobs over [`iroh`] p2p QUIC connections.
 //!
 //! # Participants
 //!
@@ -1471,6 +1478,13 @@
 
 <span class="doccomment">/// Maximum message size is limited to 100MiB for now.
 </span><span class="kw">pub const </span>MAX_MESSAGE_SIZE: usize = <span class="number">1024 </span>* <span class="number">1024</span>;
+
+<span class="doccomment">/// Error code for a permission error
+</span><span class="kw">pub const </span>ERR_PERMISSION: VarInt = VarInt::from_u32(<span class="number">1u32</span>);
+<span class="doccomment">/// Error code for when a request is aborted due to a rate limit
+</span><span class="kw">pub const </span>ERR_LIMIT: VarInt = VarInt::from_u32(<span class="number">2u32</span>);
+<span class="doccomment">/// Error code for when a request is aborted due to internal error
+</span><span class="kw">pub const </span>ERR_INTERNAL: VarInt = VarInt::from_u32(<span class="number">3u32</span>);
 
 <span class="doccomment">/// The ALPN used with quic for the iroh blobs protocol.
 </span><span class="kw">pub const </span>ALPN: <span class="kw-2">&amp;</span>[u8] = <span class="string">b"/iroh-bytes/4"</span>;
