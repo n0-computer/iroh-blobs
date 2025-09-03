@@ -1181,7 +1181,11 @@
 <a href="#1180" id="1180">1180</a>
 <a href="#1181" id="1181">1181</a>
 <a href="#1182" id="1182">1182</a>
-<a href="#1183" id="1183">1183</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
+<a href="#1183" id="1183">1183</a>
+<a href="#1184" id="1184">1184</a>
+<a href="#1185" id="1185">1185</a>
+<a href="#1186" id="1186">1186</a>
+<a href="#1187" id="1187">1187</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
 //!
 //! This API is for local interactions with the blob store, such as importing
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
@@ -1327,6 +1331,8 @@
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
+
+    </span><span class="attr">#[allow(dead_code)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: DeleteOptions) -&gt; RequestResult&lt;()&gt; {
         <span class="macro">trace!</span>(<span class="string">"{options:?}"</span>);
         <span class="self">self</span>.client.rpc(options).<span class="kw">await</span><span class="question-mark">??</span>;
@@ -1334,6 +1340,7 @@
     }
 
     <span class="doccomment">/// See [`Self::delete_with_opts`].
+    </span><span class="attr">#[allow(dead_code)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         hashes: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>Into&lt;Hash&gt;&gt;,
@@ -1693,7 +1700,8 @@
         }
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>clear_protected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RequestResult&lt;()&gt; {
+    <span class="attr">#[allow(dead_code)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>clear_protected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RequestResult&lt;()&gt; {
         <span class="kw">let </span>msg = ClearProtectedRequest;
         <span class="self">self</span>.client.rpc(msg).<span class="kw">await</span><span class="question-mark">??</span>;
         <span class="prelude-val">Ok</span>(())

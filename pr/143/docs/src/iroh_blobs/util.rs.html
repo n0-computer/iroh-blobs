@@ -707,7 +707,8 @@
     }
 }
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>outboard_with_progress {
+<span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>outboard_with_progress {
     <span class="kw">use </span>std::io::{<span class="self">self</span>, BufReader, Read};
 
     <span class="kw">use </span>bao_tree::{
@@ -822,7 +823,6 @@
     }
 
     <span class="attr">#[cfg(test)]
-    #[cfg(feature = <span class="string">"fs-store"</span>)]
     </span><span class="kw">mod </span>tests {
         <span class="kw">use </span>bao_tree::{
             blake3,

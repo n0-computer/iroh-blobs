@@ -323,7 +323,8 @@
 <a href="#322" id="322">322</a>
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
-<a href="#325" id="325">325</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{cmp::Ordering, num::NonZeroU64};
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{cmp::Ordering, num::NonZeroU64};
 
 <span class="kw">use </span>bao_tree::{ChunkNum, ChunkRanges};
 <span class="kw">use </span>range_collections::range_set::RangeSetRange;
@@ -395,7 +396,8 @@
 }
 
 <span class="kw">impl </span>Bitfield {
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new_unchecked(ranges: ChunkRanges, size: u64) -&gt; <span class="self">Self </span>{
+    <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new_unchecked(ranges: ChunkRanges, size: u64) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ ranges, size }
     }
 
