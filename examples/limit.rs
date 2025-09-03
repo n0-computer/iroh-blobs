@@ -271,7 +271,7 @@ async fn main() -> Result<()> {
             let store = MemStore::new();
             let hashes = add_paths(&store, paths).await?;
             let events = limit_by_node_id(allowed_nodes.clone());
-            let (router, addr) = setup(MemStore::new(), events).await?;
+            let (router, addr) = setup(store, events).await?;
 
             for (path, hash) in hashes {
                 let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
@@ -299,12 +299,16 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let events = limit_by_hash(allowed_hashes);
-            let (router, addr) = setup(MemStore::new(), events).await?;
+            let events = limit_by_hash(allowed_hashes.clone());
+            let (router, addr) = setup(store, events).await?;
 
-            for (i, (path, hash)) in hashes.iter().enumerate() {
+            for (path, hash) in hashes.iter() {
                 let ticket = BlobTicket::new(addr.clone(), *hash, BlobFormat::Raw);
-                let permitted = if i == 0 { "" } else { "limited" };
+                let permitted = if allowed_hashes.contains(hash) {
+                    "allowed"
+                } else {
+                    "forbidden"
+                };
                 println!("{}: {ticket} ({permitted})", path.display());
             }
             tokio::signal::ctrl_c().await?;
@@ -314,7 +318,7 @@ async fn main() -> Result<()> {
             let store = MemStore::new();
             let hashes = add_paths(&store, paths).await?;
             let events = throttle(delay_ms);
-            let (router, addr) = setup(MemStore::new(), events).await?;
+            let (router, addr) = setup(store, events).await?;
             for (path, hash) in hashes {
                 let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
                 println!("{}: {ticket}", path.display());
@@ -329,7 +333,7 @@ async fn main() -> Result<()> {
             let store = MemStore::new();
             let hashes = add_paths(&store, paths).await?;
             let events = limit_max_connections(max_connections);
-            let (router, addr) = setup(MemStore::new(), events).await?;
+            let (router, addr) = setup(store, events).await?;
             for (path, hash) in hashes {
                 let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
                 println!("{}: {ticket}", path.display());
