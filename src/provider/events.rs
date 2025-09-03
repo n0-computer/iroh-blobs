@@ -1,4 +1,4 @@
-use std::{fmt::Debug, ops::Deref};
+use std::{fmt::Debug, io, ops::Deref};
 
 use irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -76,60 +76,70 @@ pub enum AbortReason {
 }
 
 #[derive(Debug, Snafu)]
-pub enum ClientError {
-    RateLimited,
+pub enum ProgressError {
+    Limit,
     Permission,
     #[snafu(transparent)]
-    Irpc {
+    Internal {
         source: irpc::Error,
     },
 }
 
-impl ClientError {
+impl From<ProgressError> for io::Error {
+    fn from(value: ProgressError) -> Self {
+        match value {
+            ProgressError::Limit => io::ErrorKind::QuotaExceeded.into(),
+            ProgressError::Permission => io::ErrorKind::PermissionDenied.into(),
+            ProgressError::Internal { source } => source.into(),
+        }
+    }
+}
+
+impl ProgressError {
     pub fn code(&self) -> quinn::VarInt {
         match self {
-            ClientError::RateLimited => ERR_LIMIT,
-            ClientError::Permission => ERR_PERMISSION,
-            ClientError::Irpc { .. } => ERR_INTERNAL,
+            ProgressError::Limit => ERR_LIMIT,
+            ProgressError::Permission => ERR_PERMISSION,
+            ProgressError::Internal { .. } => ERR_INTERNAL,
         }
     }
 
     pub fn reason(&self) -> &'static [u8] {
         match self {
-            ClientError::RateLimited => b"limit",
-            ClientError::Permission => b"permission",
-            ClientError::Irpc { .. } => b"internal",
+            ProgressError::Limit => b"limit",
+            ProgressError::Permission => b"permission",
+            ProgressError::Internal { .. } => b"internal",
         }
     }
 }
 
-impl From<AbortReason> for ClientError {
+impl From<AbortReason> for ProgressError {
     fn from(value: AbortReason) -> Self {
         match value {
-            AbortReason::RateLimited => ClientError::RateLimited,
-            AbortReason::Permission => ClientError::Permission,
+            AbortReason::RateLimited => ProgressError::Limit,
+            AbortReason::Permission => ProgressError::Permission,
         }
     }
 }
 
-impl From<irpc::channel::RecvError> for ClientError {
+impl From<irpc::channel::RecvError> for ProgressError {
     fn from(value: irpc::channel::RecvError) -> Self {
-        ClientError::Irpc {
+        ProgressError::Internal {
             source: value.into(),
         }
     }
 }
 
-impl From<irpc::channel::SendError> for ClientError {
+impl From<irpc::channel::SendError> for ProgressError {
     fn from(value: irpc::channel::SendError) -> Self {
-        ClientError::Irpc {
+        ProgressError::Internal {
             source: value.into(),
         }
     }
 }
 
 pub type EventResult = Result<(), AbortReason>;
-pub type ClientResult = Result<(), ClientError>;
+pub type ClientResult = Result<(), ProgressError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventMask {
@@ -407,7 +417,7 @@ impl EventSender {
         f: impl FnOnce() -> Req,
         connection_id: u64,
         request_id: u64,
-    ) -> Result<RequestTracker, ClientError>
+    ) -> Result<RequestTracker, ProgressError>
     where
         ProviderProto: From<RequestReceived<Req>>,
         ProviderMessage: From<WithChannels<RequestReceived<Req>, ProviderProto>>,
@@ -466,7 +476,7 @@ impl EventSender {
                     RequestUpdates::Active(tx)
                 }
                 RequestMode::Disabled => {
-                    return Err(ClientError::Permission);
+                    return Err(ProgressError::Permission);
                 }
                 _ => RequestUpdates::None,
             },

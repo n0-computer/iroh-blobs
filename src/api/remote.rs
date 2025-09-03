@@ -18,6 +18,7 @@ use crate::{
         GetManyRequest, ObserveItem, ObserveRequest, PushRequest, Request, RequestType,
         MAX_MESSAGE_SIZE,
     },
+    provider::events::{ClientResult, ProgressError},
     util::sink::{Sink, TokioMpscSenderSink},
 };
 
@@ -478,9 +479,7 @@ impl Remote {
         let content = content.into();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
-        let sink = TokioMpscSenderSink(tx)
-            .with_map(GetProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        let sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         let this = self.clone();
         let fut = async move {
             let res = this.fetch_sink(conn, content, sink).await.into();
@@ -503,7 +502,7 @@ impl Remote {
         &self,
         mut conn: impl GetConnection,
         content: impl Into<HashAndFormat>,
-        progress: impl Sink<u64, Error = io::Error>,
+        progress: impl Sink<u64, Error = irpc::channel::SendError>,
     ) -> GetResult<Stats> {
         let content = content.into();
         let local = self
@@ -556,9 +555,7 @@ impl Remote {
     pub fn execute_push(&self, conn: Connection, request: PushRequest) -> PushProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
-        let sink = TokioMpscSenderSink(tx)
-            .with_map(PushProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        let sink = TokioMpscSenderSink(tx).with_map(PushProgressItem::Progress);
         let this = self.clone();
         let fut = async move {
             let res = this.execute_push_sink(conn, request, sink).await.into();
@@ -577,7 +574,7 @@ impl Remote {
         &self,
         conn: Connection,
         request: PushRequest,
-        progress: impl Sink<u64, Error = io::Error>,
+        progress: impl Sink<u64, Error = irpc::channel::SendError>,
     ) -> anyhow::Result<Stats> {
         let hash = request.hash;
         debug!(%hash, "pushing");
@@ -632,9 +629,7 @@ impl Remote {
     pub fn execute_get_with_opts(&self, conn: Connection, request: GetRequest) -> GetProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
-        let sink = TokioMpscSenderSink(tx)
-            .with_map(GetProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        let sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         let this = self.clone();
         let fut = async move {
             let res = this.execute_get_sink(&conn, request, sink).await.into();
@@ -658,7 +653,7 @@ impl Remote {
         &self,
         conn: &Connection,
         request: GetRequest,
-        mut progress: impl Sink<u64, Error = io::Error>,
+        mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
     ) -> GetResult<Stats> {
         let store = self.store();
         let root = request.hash;
@@ -721,9 +716,7 @@ impl Remote {
     pub fn execute_get_many(&self, conn: Connection, request: GetManyRequest) -> GetProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
-        let sink = TokioMpscSenderSink(tx)
-            .with_map(GetProgressItem::Progress)
-            .with_map_err(io::Error::other);
+        let sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         let this = self.clone();
         let fut = async move {
             let res = this.execute_get_many_sink(conn, request, sink).await.into();
@@ -747,7 +740,7 @@ impl Remote {
         &self,
         conn: Connection,
         request: GetManyRequest,
-        mut progress: impl Sink<u64, Error = io::Error>,
+        mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
     ) -> GetResult<Stats> {
         let store = self.store();
         let hash_seq = request.hashes.iter().copied().collect::<HashSeq>();
@@ -884,7 +877,7 @@ async fn get_blob_ranges_impl(
     header: AtBlobHeader,
     hash: Hash,
     store: &Store,
-    mut progress: impl Sink<u64, Error = io::Error>,
+    mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
 ) -> GetResult<AtEndBlob> {
     let (mut content, size) = header.next().await?;
     let Some(size) = NonZeroU64::new(size) else {
@@ -1048,11 +1041,20 @@ struct StreamContext<S> {
 
 impl<S> WriteProgress for StreamContext<S>
 where
-    S: Sink<u64, Error = io::Error>,
+    S: Sink<u64, Error = irpc::channel::SendError>,
 {
-    async fn notify_payload_write(&mut self, _index: u64, _offset: u64, len: usize) {
+    async fn notify_payload_write(
+        &mut self,
+        _index: u64,
+        _offset: u64,
+        len: usize,
+    ) -> ClientResult {
         self.payload_bytes_sent += len as u64;
-        self.sender.send(self.payload_bytes_sent).await.ok();
+        self.sender
+            .send(self.payload_bytes_sent)
+            .await
+            .map_err(|e| ProgressError::Internal { source: e.into() })?;
+        Ok(())
     }
 
     fn log_other_write(&mut self, _len: usize) {}

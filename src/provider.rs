@@ -25,7 +25,7 @@ use crate::{
     },
     hashseq::HashSeq,
     protocol::{GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request},
-    provider::events::{ClientConnected, ConnectionClosed, RequestTracker},
+    provider::events::{ClientConnected, ClientResult, ConnectionClosed, RequestTracker},
     Hash,
 };
 pub mod events;
@@ -264,11 +264,11 @@ impl WriterContext {
 }
 
 impl WriteProgress for WriterContext {
-    async fn notify_payload_write(&mut self, _index: u64, offset: u64, len: usize) {
+    async fn notify_payload_write(&mut self, _index: u64, offset: u64, len: usize) -> ClientResult {
         let len = len as u64;
         let end_offset = offset + len;
         self.payload_bytes_written += len;
-        self.tracker.transfer_progress(len, end_offset).await.ok();
+        self.tracker.transfer_progress(len, end_offset).await
     }
 
     fn log_other_write(&mut self, len: usize) {
