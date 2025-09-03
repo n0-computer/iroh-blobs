@@ -138,6 +138,7 @@ pub(crate) fn get_limited_slice(bytes: &Bytes, offset: u64, len: usize) -> Bytes
     bytes.slice(limited_range(offset, len, bytes.len()))
 }
 
+#[cfg(feature = "fs-store")]
 mod redb_support {
     use bytes::Bytes;
     use redb::{Key as RedbKey, Value as RedbValue};

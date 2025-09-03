@@ -46,6 +46,7 @@ pub mod test;
 pub mod util;
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests;
 
 pub use protocol::ALPN;

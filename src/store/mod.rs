@@ -5,6 +5,7 @@
 //! for when you want to efficiently share more than the available memory and
 //! have access to a writeable filesystem.
 use bao_tree::BlockSize;
+#[cfg(feature = "fs-store")]
 pub mod fs;
 pub mod mem;
 pub mod readonly_mem;
