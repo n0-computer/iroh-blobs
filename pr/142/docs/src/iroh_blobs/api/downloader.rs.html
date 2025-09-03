@@ -678,8 +678,7 @@
 <a href="#677" id="677">677</a>
 <a href="#678" id="678">678</a>
 <a href="#679" id="679">679</a>
-<a href="#680" id="680">680</a>
-<a href="#681" id="681">681</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
+<a href="#680" id="680">680</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -823,8 +822,7 @@
                 <span class="kw">let </span>hash = request.hash;
                 <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel::&lt;(usize, DownloadProgessItem)&gt;(<span class="number">16</span>);
                 progress_tx.send(rx).<span class="kw">await</span>.ok();
-                <span class="kw">let </span>sink = TokioMpscSenderSink(tx)
-                    .with_map(<span class="kw">move </span>|x| (id, x));
+                <span class="kw">let </span>sink = TokioMpscSenderSink(tx).with_map(<span class="kw">move </span>|x| (id, x));
                 <span class="kw">let </span>res = execute_get(<span class="kw-2">&amp;</span>pool, Arc::new(request), <span class="kw-2">&amp;</span>providers, <span class="kw-2">&amp;</span>store, sink).<span class="kw">await</span>;
                 (hash, res)
             }
