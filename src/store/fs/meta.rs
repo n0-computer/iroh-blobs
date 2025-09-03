@@ -26,9 +26,8 @@ use crate::{
             CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
             ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
-        tags::TagInfo,
-    },
-    util::channel::oneshot,
+        tags::TagInfo, Tag,
+    }, util::channel::oneshot, Hash
 };
 mod proto;
 pub use proto::*;
@@ -43,7 +42,7 @@ use super::{
     util::PeekableReceiver,
     BaoFilePart,
 };
-use crate::store::{util::Tag, Hash, IROH_BLOCK_SIZE};
+use crate::store::IROH_BLOCK_SIZE;
 
 /// Error type for message handler functions of the redb actor.
 ///

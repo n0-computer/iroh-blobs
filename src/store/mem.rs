@@ -59,8 +59,9 @@ use crate::{
     protocol::ChunkRangesExt,
     store::{
         util::{SizeInfo, SparseMemFile, Tag},
-        HashAndFormat, IROH_BLOCK_SIZE,
+        IROH_BLOCK_SIZE,
     },
+    HashAndFormat,
     util::temp_tag::{TagDrop, TempTagScope, TempTags},
     BlobFormat, Hash,
 };
