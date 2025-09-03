@@ -36,7 +36,7 @@
 //! # }
 //! ```
 
-use std::{fmt::Debug, future::Future, ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use iroh::{
     endpoint::Connection,
@@ -100,25 +100,16 @@ impl BlobsProtocol {
 }
 
 impl ProtocolHandler for BlobsProtocol {
-    fn accept(
-        &self,
-        conn: Connection,
-    ) -> impl Future<Output = std::result::Result<(), AcceptError>> + Send {
+    async fn accept(&self, conn: Connection) -> std::result::Result<(), AcceptError> {
         let store = self.store().clone();
         let events = self.inner.events.clone();
-
-        Box::pin(async move {
-            crate::provider::handle_connection(conn, store, events).await;
-            Ok(())
-        })
+        crate::provider::handle_connection(conn, store, events).await;
+        Ok(())
     }
 
-    fn shutdown(&self) -> impl Future<Output = ()> + Send {
-        let store = self.store().clone();
-        Box::pin(async move {
-            if let Err(cause) = store.shutdown().await {
-                error!("error shutting down store: {:?}", cause);
-            }
-        })
+    async fn shutdown(&self) {
+        if let Err(cause) = self.store().shutdown().await {
+            error!("error shutting down store: {:?}", cause);
+        }
     }
 }
