@@ -113,16 +113,7 @@
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
 <a href="#114" id="114">114</a>
-<a href="#115" id="115">115</a>
-<a href="#116" id="116">116</a>
-<a href="#117" id="117">117</a>
-<a href="#118" id="118">118</a>
-<a href="#119" id="119">119</a>
-<a href="#120" id="120">120</a>
-<a href="#121" id="121">121</a>
-<a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a>
-<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an [`iroh`] [`ProtocolHandler`].
+<a href="#115" id="115">115</a></pre></div><pre class="rust"><code><span class="doccomment">//! Adaptation of `iroh-blobs` as an [`iroh`] [`ProtocolHandler`].
 //!
 //! This is the easiest way to share data from a [`crate::api::Store`] over iroh connections.
 //!
@@ -160,7 +151,7 @@
 //! # }
 //! ```
 
-</span><span class="kw">use </span>std::{fmt::Debug, future::Future, ops::Deref, sync::Arc};
+</span><span class="kw">use </span>std::{fmt::Debug, ops::Deref, sync::Arc};
 
 <span class="kw">use </span>iroh::{
     endpoint::Connection,
@@ -224,26 +215,17 @@
 }
 
 <span class="kw">impl </span>ProtocolHandler <span class="kw">for </span>BlobsProtocol {
-    <span class="kw">fn </span>accept(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        conn: Connection,
-    ) -&gt; <span class="kw">impl </span>Future&lt;Output = std::result::Result&lt;(), AcceptError&gt;&gt; + Send {
+    <span class="kw">async fn </span>accept(<span class="kw-2">&amp;</span><span class="self">self</span>, conn: Connection) -&gt; std::result::Result&lt;(), AcceptError&gt; {
         <span class="kw">let </span>store = <span class="self">self</span>.store().clone();
         <span class="kw">let </span>events = <span class="self">self</span>.inner.events.clone();
-
-        Box::pin(<span class="kw">async move </span>{
-            <span class="kw">crate</span>::provider::handle_connection(conn, store, events).<span class="kw">await</span>;
-            <span class="prelude-val">Ok</span>(())
-        })
+        <span class="kw">crate</span>::provider::handle_connection(conn, store, events).<span class="kw">await</span>;
+        <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">fn </span>shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = ()&gt; + Send {
-        <span class="kw">let </span>store = <span class="self">self</span>.store().clone();
-        Box::pin(<span class="kw">async move </span>{
-            <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = store.shutdown().<span class="kw">await </span>{
-                <span class="macro">error!</span>(<span class="string">"error shutting down store: {:?}"</span>, cause);
-            }
-        })
+    <span class="kw">async fn </span>shutdown(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = <span class="self">self</span>.store().shutdown().<span class="kw">await </span>{
+            <span class="macro">error!</span>(<span class="string">"error shutting down store: {:?}"</span>, cause);
+        }
     }
 }
 </code></pre></div></section></main></body></html>
