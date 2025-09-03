@@ -762,9 +762,9 @@
 <span class="kw">impl </span>ClientError {
     <span class="kw">pub fn </span>code(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; quinn::VarInt {
         <span class="kw">match </span><span class="self">self </span>{
-            ClientError::RateLimited =&gt; ERR_LIMIT.into(),
-            ClientError::Permission =&gt; ERR_PERMISSION.into(),
-            ClientError::Irpc { .. } =&gt; ERR_INTERNAL.into(),
+            ClientError::RateLimited =&gt; ERR_LIMIT,
+            ClientError::Permission =&gt; ERR_PERMISSION,
+            ClientError::Irpc { .. } =&gt; ERR_INTERNAL,
         }
     }
 
