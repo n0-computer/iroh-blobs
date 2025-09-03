@@ -1095,8 +1095,7 @@
 <a href="#1094" id="1094">1094</a>
 <a href="#1095" id="1095">1095</a>
 <a href="#1096" id="1096">1096</a>
-<a href="#1097" id="1097">1097</a>
-<a href="#1098" id="1098">1098</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1097" id="1097">1097</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1159,9 +1158,8 @@
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
-    HashAndFormat,
     util::temp_tag::{TagDrop, TempTagScope, TempTags},
-    BlobFormat, Hash,
+    BlobFormat, Hash, HashAndFormat,
 };
 
 <span class="attr">#[derive(Debug, Default)]

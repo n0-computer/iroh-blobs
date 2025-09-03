@@ -99,13 +99,11 @@
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a>
-<a href="#102" id="102">102</a></pre></div><pre class="rust"><code><span class="doccomment">//! Table definitions and accessors for the redb database.
+<a href="#101" id="101">101</a></pre></div><pre class="rust"><code><span class="doccomment">//! Table definitions and accessors for the redb database.
 </span><span class="kw">use </span>redb::{ReadableTable, TableDefinition, TableError};
 
 <span class="kw">use </span><span class="kw">super</span>::EntryState;
-<span class="kw">use </span><span class="kw">crate</span>::store::{fs::delete_set::FileTransaction};
-<span class="kw">use crate</span>::{Hash, HashAndFormat, api::Tag};
+<span class="kw">use crate</span>::{api::Tag, store::fs::delete_set::FileTransaction, Hash, HashAndFormat};
 
 <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">const </span>BLOBS_TABLE: TableDefinition&lt;Hash, EntryState&gt; = TableDefinition::new(<span class="string">"blobs-0"</span>);
 

@@ -2291,7 +2291,9 @@
 <a href="#2290" id="2290">2290</a>
 <a href="#2291" id="2291">2291</a>
 <a href="#2292" id="2292">2292</a>
-<a href="#2293" id="2293">2293</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2293" id="2293">2293</a>
+<a href="#2294" id="2294">2294</a>
+<a href="#2295" id="2295">2295</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2436,11 +2438,13 @@
 <span class="kw">use </span>tracing::Instrument;
 <span class="kw">mod </span>gc;
 
-<span class="kw">use </span><span class="kw">crate</span>::HashAndFormat;
-<span class="kw">use </span><span class="kw">crate</span>::api::{
-    <span class="self">self</span>,
-    blobs::{AddProgressItem, ExportMode, ExportProgressItem},
-    Store,
+<span class="kw">use crate</span>::{
+    api::{
+        <span class="self">self</span>,
+        blobs::{AddProgressItem, ExportMode, ExportProgressItem},
+        Store,
+    },
+    HashAndFormat,
 };
 
 <span class="doccomment">/// Create a 16 byte unique ID.

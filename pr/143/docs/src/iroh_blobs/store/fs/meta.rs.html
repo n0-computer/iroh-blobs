@@ -903,7 +903,10 @@
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
-<a href="#905" id="905">905</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a></pre></div><pre class="rust"><code><span class="doccomment">//! The metadata database
 </span><span class="attr">#![allow(clippy::result_large_err)]
 </span><span class="kw">use </span>std::{
     collections::HashSet,
@@ -931,8 +934,11 @@
             CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
             ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
-        tags::TagInfo, Tag,
-    }, util::channel::oneshot, Hash
+        tags::TagInfo,
+        Tag,
+    },
+    util::channel::oneshot,
+    Hash,
 };
 <span class="kw">mod </span>proto;
 <span class="kw">pub use </span>proto::<span class="kw-2">*</span>;

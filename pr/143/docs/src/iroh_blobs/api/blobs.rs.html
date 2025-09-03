@@ -1184,8 +1184,7 @@
 <a href="#1183" id="1183">1183</a>
 <a href="#1184" id="1184">1184</a>
 <a href="#1185" id="1185">1185</a>
-<a href="#1186" id="1186">1186</a>
-<a href="#1187" id="1187">1187</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
+<a href="#1186" id="1186">1186</a></pre></div><pre class="rust"><code><span class="doccomment">//! API to interact with a local blob store
 //!
 //! This API is for local interactions with the blob store, such as importing
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
@@ -1331,7 +1330,6 @@
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
-
     </span><span class="attr">#[allow(dead_code)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: DeleteOptions) -&gt; RequestResult&lt;()&gt; {
         <span class="macro">trace!</span>(<span class="string">"{options:?}"</span>);
