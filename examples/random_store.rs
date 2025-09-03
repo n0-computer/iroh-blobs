@@ -14,7 +14,7 @@ use iroh_blobs::{
 use irpc::RpcMessage;
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use tokio::{signal::ctrl_c, sync::mpsc};
+use tokio::signal::ctrl_c;
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -102,7 +102,7 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
 }
 
 pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, EventSender) {
-    let (tx, mut rx) = mpsc::channel(100);
+    let (tx, mut rx) = EventSender::channel(100, EventMask::ALL_READONLY);
     fn dump_updates<T: RpcMessage>(mut rx: irpc::channel::mpsc::Receiver<T>) {
         tokio::spawn(async move {
             while let Ok(Some(update)) = rx.recv().await {
@@ -176,7 +176,7 @@ pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, E
             }
         }
     });
-    (dump_task, EventSender::new(tx, EventMask::ALL_READONLY))
+    (dump_task, tx)
 }
 
 #[tokio::main]

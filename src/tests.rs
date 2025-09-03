@@ -342,7 +342,7 @@ fn event_handler(
     allowed_nodes: impl IntoIterator<Item = NodeId>,
 ) -> (EventSender, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
-    let (events_tx, mut events_rx) = mpsc::channel::<ProviderMessage>(16);
+    let (events_tx, mut events_rx) = EventSender::channel(16, EventMask::ALL_READONLY);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
     let task = AbortOnDropHandle::new(tokio::task::spawn(async move {
         while let Some(event) = events_rx.recv().await {
@@ -370,16 +370,7 @@ fn event_handler(
             }
         }
     }));
-    (
-        EventSender::new(
-            events_tx,
-            EventMask {
-                ..EventMask::ALL_READONLY
-            },
-        ),
-        count_rx,
-        task,
-    )
+    (events_tx, count_rx, task)
 }
 
 async fn two_nodes_push_blobs(
