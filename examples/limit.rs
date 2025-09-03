@@ -234,14 +234,14 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
 async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
+    let secret = get_or_generate_secret_key()?;
+    let endpoint = iroh::Endpoint::builder()
+        .secret_key(secret)
+        .discovery_n0()
+        .bind()
+        .await?;
     match args {
         Args::Get { ticket } => {
-            let secret = get_or_generate_secret_key()?;
-            let endpoint = iroh::Endpoint::builder()
-                .secret_key(secret)
-                .discovery_n0()
-                .bind()
-                .await?;
             let connection = endpoint
                 .connect(ticket.node_addr().clone(), iroh_blobs::ALPN)
                 .await?;

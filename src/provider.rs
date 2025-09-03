@@ -20,13 +20,12 @@ use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
     api::{
-        self,
         blobs::{Bitfield, WriteProgress},
-        Store,
+        ExportBaoResult, Store,
     },
     hashseq::HashSeq,
     protocol::{GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request},
-    provider::events::{ClientConnected, ClientError, ConnectionClosed, RequestTracker},
+    provider::events::{ClientConnected, ConnectionClosed, RequestTracker},
     Hash,
 };
 pub mod events;
@@ -94,7 +93,7 @@ impl StreamPair {
     }
 
     /// We are done with reading. Return a ProgressWriter that contains the read stats and connection id
-    pub async fn into_writer(
+    async fn into_writer(
         mut self,
         tracker: RequestTracker,
     ) -> Result<ProgressWriter, ReadToEndError> {
@@ -118,7 +117,7 @@ impl StreamPair {
         ))
     }
 
-    pub async fn into_reader(
+    async fn into_reader(
         mut self,
         tracker: RequestTracker,
     ) -> Result<ProgressReader, ClosedStream> {
@@ -141,39 +140,71 @@ impl StreamPair {
     }
 
     pub async fn get_request(
-        &self,
+        mut self,
         f: impl FnOnce() -> GetRequest,
-    ) -> Result<RequestTracker, ClientError> {
-        self.events
+    ) -> anyhow::Result<ProgressWriter> {
+        let res = self
+            .events
             .request(f, self.connection_id, self.request_id)
-            .await
+            .await;
+        match res {
+            Err(e) => {
+                self.writer.reset(e.code()).ok();
+                Err(e.into())
+            }
+            Ok(tracker) => Ok(self.into_writer(tracker).await?),
+        }
     }
 
     pub async fn get_many_request(
-        &self,
+        mut self,
         f: impl FnOnce() -> GetManyRequest,
-    ) -> Result<RequestTracker, ClientError> {
-        self.events
+    ) -> anyhow::Result<ProgressWriter> {
+        let res = self
+            .events
             .request(f, self.connection_id, self.request_id)
-            .await
+            .await;
+        match res {
+            Err(e) => {
+                self.writer.reset(e.code()).ok();
+                Err(e.into())
+            }
+            Ok(tracker) => Ok(self.into_writer(tracker).await?),
+        }
     }
 
     pub async fn push_request(
-        &self,
+        mut self,
         f: impl FnOnce() -> PushRequest,
-    ) -> Result<RequestTracker, ClientError> {
-        self.events
+    ) -> anyhow::Result<ProgressReader> {
+        let res = self
+            .events
             .request(f, self.connection_id, self.request_id)
-            .await
+            .await;
+        match res {
+            Err(e) => {
+                self.writer.reset(e.code()).ok();
+                Err(e.into())
+            }
+            Ok(tracker) => Ok(self.into_reader(tracker).await?),
+        }
     }
 
     pub async fn observe_request(
-        &self,
+        mut self,
         f: impl FnOnce() -> ObserveRequest,
-    ) -> Result<RequestTracker, ClientError> {
-        self.events
+    ) -> anyhow::Result<ProgressWriter> {
+        let res = self
+            .events
             .request(f, self.connection_id, self.request_id)
-            .await
+            .await;
+        match res {
+            Err(e) => {
+                self.writer.reset(e.code()).ok();
+                Err(e.into())
+            }
+            Ok(tracker) => Ok(self.into_writer(tracker).await?),
+        }
     }
 
     fn stats(&self) -> TransferStats {
@@ -299,7 +330,8 @@ pub async fn handle_connection(
             })
             .await
         {
-            debug!("client not authorized to connect: {cause}");
+            connection.close(cause.code(), cause.reason());
+            debug!("closing connection: {cause}");
             return;
         }
         while let Ok(context) = StreamPair::accept(&connection, &progress).await {
@@ -323,17 +355,16 @@ async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<
 
     match request {
         Request::Get(request) => {
-            let tracker = context.get_request(|| request.clone()).await?;
-            let mut writer = context.into_writer(tracker).await?;
-            if handle_get(store, request, &mut writer).await.is_ok() {
+            let mut writer = context.get_request(|| request.clone()).await?;
+            let res = handle_get(store, request, &mut writer).await;
+            if res.is_ok() {
                 writer.transfer_completed().await;
             } else {
                 writer.transfer_aborted().await;
             }
         }
         Request::GetMany(request) => {
-            let tracker = context.get_many_request(|| request.clone()).await?;
-            let mut writer = context.into_writer(tracker).await?;
+            let mut writer = context.get_many_request(|| request.clone()).await?;
             if handle_get_many(store, request, &mut writer).await.is_ok() {
                 writer.transfer_completed().await;
             } else {
@@ -341,8 +372,7 @@ async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<
             }
         }
         Request::Observe(request) => {
-            let tracker = context.observe_request(|| request.clone()).await?;
-            let mut writer = context.into_writer(tracker).await?;
+            let mut writer = context.observe_request(|| request.clone()).await?;
             if handle_observe(store, request, &mut writer).await.is_ok() {
                 writer.transfer_completed().await;
             } else {
@@ -350,8 +380,7 @@ async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<
             }
         }
         Request::Push(request) => {
-            let tracker = context.push_request(|| request.clone()).await?;
-            let mut reader = context.into_reader(tracker).await?;
+            let mut reader = context.push_request(|| request.clone()).await?;
             if handle_push(store, request, &mut reader).await.is_ok() {
                 reader.transfer_completed().await;
             } else {
@@ -464,11 +493,11 @@ pub(crate) async fn send_blob(
     hash: Hash,
     ranges: ChunkRanges,
     writer: &mut ProgressWriter,
-) -> api::Result<()> {
-    Ok(store
+) -> ExportBaoResult<()> {
+    store
         .export_bao(hash, ranges)
         .write_quinn_with_progress(&mut writer.inner, &mut writer.context, &hash, index)
-        .await?)
+        .await
 }
 
 /// Handle a single push request.

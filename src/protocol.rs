@@ -397,6 +397,13 @@ use crate::{api::blobs::Bitfield, provider::RecvStreamExt, BlobFormat, Hash, Has
 /// Maximum message size is limited to 100MiB for now.
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
+/// Error code for a permission error
+pub const ERR_PERMISSION: VarInt = VarInt::from_u32(1u32);
+/// Error code for when a request is aborted due to a rate limit
+pub const ERR_LIMIT: VarInt = VarInt::from_u32(2u32);
+/// Error code for when a request is aborted due to internal error
+pub const ERR_INTERNAL: VarInt = VarInt::from_u32(3u32);
+
 /// The ALPN used with quic for the iroh blobs protocol.
 pub const ALPN: &[u8] = b"/iroh-bytes/4";
 

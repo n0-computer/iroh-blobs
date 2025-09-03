@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
-    protocol::{GetManyRequest, GetRequest, ObserveRequest, PushRequest},
+    protocol::{
+        GetManyRequest, GetRequest, ObserveRequest, PushRequest, ERR_INTERNAL, ERR_LIMIT,
+        ERR_PERMISSION,
+    },
     provider::{events::irpc_ext::IrpcClientExt, TransferStats},
     Hash,
 };
@@ -80,6 +83,24 @@ pub enum ClientError {
     Irpc {
         source: irpc::Error,
     },
+}
+
+impl ClientError {
+    pub fn code(&self) -> quinn::VarInt {
+        match self {
+            ClientError::RateLimited => ERR_LIMIT,
+            ClientError::Permission => ERR_PERMISSION,
+            ClientError::Irpc { .. } => ERR_INTERNAL,
+        }
+    }
+
+    pub fn reason(&self) -> &'static [u8] {
+        match self {
+            ClientError::RateLimited => b"limit",
+            ClientError::Permission => b"permission",
+            ClientError::Irpc { .. } => b"internal",
+        }
+    }
 }
 
 impl From<AbortReason> for ClientError {
@@ -211,11 +232,14 @@ impl RequestTracker {
     /// Transfer for index `index` started, size `size`
     pub async fn transfer_started(&self, index: u64, hash: &Hash, size: u64) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
-            tx.send(RequestUpdate::Started(TransferStarted {
-                index,
-                hash: *hash,
-                size,
-            }))
+            tx.send(
+                TransferStarted {
+                    index,
+                    hash: *hash,
+                    size,
+                }
+                .into(),
+            )
             .await?;
         }
         Ok(())
@@ -224,8 +248,7 @@ impl RequestTracker {
     /// Transfer progress for the previously reported blob, end_offset is the new end offset in bytes.
     pub async fn transfer_progress(&mut self, len: u64, end_offset: u64) -> ClientResult {
         if let RequestUpdates::Active(tx) = &mut self.updates {
-            tx.try_send(RequestUpdate::Progress(TransferProgress { end_offset }))
-                .await?;
+            tx.try_send(TransferProgress { end_offset }.into()).await?;
         }
         if let Some((throttle, connection_id, request_id)) = &self.throttle {
             throttle
@@ -242,8 +265,7 @@ impl RequestTracker {
     /// Transfer completed for the previously reported blob.
     pub async fn transfer_completed(&self, f: impl Fn() -> Box<TransferStats>) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
-            tx.send(RequestUpdate::Completed(TransferCompleted { stats: f() }))
-                .await?;
+            tx.send(TransferCompleted { stats: f() }.into()).await?;
         }
         Ok(())
     }
@@ -251,8 +273,7 @@ impl RequestTracker {
     /// Transfer aborted for the previously reported blob.
     pub async fn transfer_aborted(&self, f: impl Fn() -> Box<TransferStats>) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
-            tx.send(RequestUpdate::Aborted(TransferAborted { stats: f() }))
-                .await?;
+            tx.send(TransferAborted { stats: f() }.into()).await?;
         }
         Ok(())
     }
@@ -583,7 +604,7 @@ mod proto {
     }
 
     /// Stream of updates for a single request
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, derive_more::From)]
     pub enum RequestUpdate {
         /// Start of transfer for a blob, mandatory event
         Started(TransferStarted),
