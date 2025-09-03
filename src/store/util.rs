@@ -154,7 +154,10 @@ impl<T: RangeSetEntry + Clone> RangeSetExt<T> for RangeSetRef<T> {
 #[cfg(feature = "fs-store")]
 mod fs {
     use std::{
-        fmt, fs::{File, OpenOptions}, io::{self, Read, Write}, path::Path
+        fmt,
+        fs::{File, OpenOptions},
+        io::{self, Read, Write},
+        path::Path,
     };
 
     use arrayvec::ArrayString;

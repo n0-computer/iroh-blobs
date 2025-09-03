@@ -143,11 +143,13 @@ use options::Options;
 use tracing::Instrument;
 mod gc;
 
-use crate::HashAndFormat;
-use crate::api::{
-    self,
-    blobs::{AddProgressItem, ExportMode, ExportProgressItem},
-    Store,
+use crate::{
+    api::{
+        self,
+        blobs::{AddProgressItem, ExportMode, ExportProgressItem},
+        Store,
+    },
+    HashAndFormat,
 };
 
 /// Create a 16 byte unique ID.

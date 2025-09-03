@@ -61,9 +61,8 @@ use crate::{
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
-    HashAndFormat,
     util::temp_tag::{TagDrop, TempTagScope, TempTags},
-    BlobFormat, Hash,
+    BlobFormat, Hash, HashAndFormat,
 };
 
 #[derive(Debug, Default)]

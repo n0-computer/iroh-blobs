@@ -26,8 +26,11 @@ use crate::{
             CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
             ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
-        tags::TagInfo, Tag,
-    }, util::channel::oneshot, Hash
+        tags::TagInfo,
+        Tag,
+    },
+    util::channel::oneshot,
+    Hash,
 };
 mod proto;
 pub use proto::*;

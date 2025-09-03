@@ -144,7 +144,6 @@ impl Blobs {
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
-
     #[allow(dead_code)]
     pub(crate) async fn delete_with_opts(&self, options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
