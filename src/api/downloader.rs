@@ -142,9 +142,7 @@ async fn handle_download_split_impl(
                 let hash = request.hash;
                 let (tx, rx) = tokio::sync::mpsc::channel::<(usize, DownloadProgessItem)>(16);
                 progress_tx.send(rx).await.ok();
-                let sink = TokioMpscSenderSink(tx)
-                    .with_map_err(|_| irpc::channel::SendError::ReceiverClosed)
-                    .with_map(move |x| (id, x));
+                let sink = TokioMpscSenderSink(tx).with_map(move |x| (id, x));
                 let res = execute_get(&pool, Arc::new(request), &providers, &store, sink).await;
                 (hash, res)
             }
