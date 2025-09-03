@@ -643,7 +643,15 @@
 <a href="#642" id="642">642</a>
 <a href="#643" id="643">643</a>
 <a href="#644" id="644">644</a>
-<a href="#645" id="645">645</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, ops::Deref};
 
 <span class="kw">use </span>irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -919,6 +927,14 @@
             mask,
             inner: <span class="prelude-val">Some</span>(irpc::Client::from(client)),
         }
+    }
+
+    <span class="kw">pub fn </span>channel(
+        capacity: usize,
+        mask: EventMask,
+    ) -&gt; (<span class="self">Self</span>, tokio::sync::mpsc::Receiver&lt;ProviderMessage&gt;) {
+        <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(capacity);
+        (<span class="self">Self</span>::new(tx, mask), rx)
     }
 
     <span class="doccomment">/// Log request events at trace level.
