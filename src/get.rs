@@ -17,7 +17,6 @@
 //!
 //! [iroh]: https://docs.rs/iroh
 use std::{
-    error::Error,
     fmt::{self, Debug},
     time::{Duration, Instant},
 };
@@ -25,8 +24,8 @@ use std::{
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
-use iroh::endpoint::{self, RecvStream, SendStream};
-use iroh_io::TokioStreamReader;
+use iroh::endpoint::{RecvStream, SendStream};
+use iroh_io::{TokioStreamReader, TokioStreamWriter};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use serde::{Deserialize, Serialize};
@@ -37,10 +36,11 @@ use crate::{protocol::ChunkRangesSeq, store::IROH_BLOCK_SIZE, Hash};
 
 mod error;
 pub mod request;
-pub(crate) use error::{BadRequestSnafu, LocalFailureSnafu};
+pub(crate) use error::get_error;
 pub use error::{GetError, GetResult};
 
-type WrappedRecvStream = TokioStreamReader<RecvStream>;
+type DefaultReader = TokioStreamReader<RecvStream>;
+type DefaultWriter = TokioStreamWriter<SendStream>;
 
 /// Stats about the transfer.
 #[derive(
@@ -96,11 +96,11 @@ pub mod fsm {
     };
     use derive_more::From;
     use iroh::endpoint::Connection;
-    use iroh_io::{AsyncSliceWriter, AsyncStreamReader, TokioStreamReader};
+    use iroh_io::{AsyncSliceWriter, AsyncStreamReader, AsyncStreamWriter, TokioStreamReader};
 
     use super::*;
     use crate::{
-        get::error::BadRequestSnafu,
+        get::get_error::BadRequestSnafu,
         protocol::{
             GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
         },
@@ -130,16 +130,22 @@ pub mod fsm {
         counters: RequestCounters,
     ) -> std::result::Result<Result<AtStartChild, AtClosing>, GetError> {
         let start = Instant::now();
-        let (mut writer, reader) = connection.open_bi().await?;
+        let (writer, reader) = connection
+            .open_bi()
+            .await
+            .map_err(|e| OpenSnafu.into_error(e.into()))?;
+        let reader = TokioStreamReader::new(reader);
+        let mut writer = TokioStreamWriter(writer);
         let request = Request::GetMany(request);
         let request_bytes = postcard::to_stdvec(&request)
             .map_err(|source| BadRequestSnafu.into_error(source.into()))?;
-        writer.write_all(&request_bytes).await?;
-        writer.finish()?;
+        writer
+            .write_bytes(request_bytes.into())
+            .await
+            .context(connected_next_error::WriteSnafu)?;
         let Request::GetMany(request) = request else {
             unreachable!();
         };
-        let reader = TokioStreamReader::new(reader);
         let mut ranges_iter = RangesIter::new(request.ranges.clone());
         let first_item = ranges_iter.next();
         let misc = Box::new(Misc {
@@ -214,10 +220,15 @@ pub mod fsm {
         }
 
         /// Initiate a new bidi stream to use for the get response
-        pub async fn next(self) -> Result<AtConnected, endpoint::ConnectionError> {
+        pub async fn next(self) -> Result<AtConnected, InitialNextError> {
             let start = Instant::now();
-            let (writer, reader) = self.connection.open_bi().await?;
+            let (writer, reader) = self
+                .connection
+                .open_bi()
+                .await
+                .map_err(|e| OpenSnafu.into_error(e.into()))?;
             let reader = TokioStreamReader::new(reader);
+            let writer = TokioStreamWriter(writer);
             Ok(AtConnected {
                 start,
                 reader,
@@ -226,27 +237,6 @@ pub mod fsm {
                 counters: self.counters,
             })
         }
-    }
-
-    /// State of the get response machine after the handshake has been sent
-    #[derive(Debug)]
-    pub struct AtConnected {
-        start: Instant,
-        reader: WrappedRecvStream,
-        writer: SendStream,
-        request: GetRequest,
-        counters: RequestCounters,
-    }
-
-    /// Possible next states after the handshake has been sent
-    #[derive(Debug, From)]
-    pub enum ConnectedNext {
-        /// First response is either a collection or a single blob
-        StartRoot(AtStartRoot),
-        /// First response is a child
-        StartChild(AtStartChild),
-        /// Request is empty
-        Closing(AtClosing),
     }
 
     /// Error that you can get from [`AtConnected::next`]
@@ -258,6 +248,44 @@ pub mod fsm {
     #[allow(missing_docs)]
     #[derive(Debug, Snafu)]
     #[non_exhaustive]
+    pub enum InitialNextError {
+        Open { source: io::Error },
+    }
+
+    /// State of the get response machine after the handshake has been sent
+    #[derive(Debug)]
+    pub struct AtConnected<
+        R: AsyncStreamReader = DefaultReader,
+        W: AsyncStreamWriter = DefaultWriter,
+    > {
+        start: Instant,
+        reader: R,
+        writer: W,
+        request: GetRequest,
+        counters: RequestCounters,
+    }
+
+    /// Possible next states after the handshake has been sent
+    #[derive(Debug, From)]
+    pub enum ConnectedNext<R: AsyncStreamReader> {
+        /// First response is either a collection or a single blob
+        StartRoot(AtStartRoot<R>),
+        /// First response is a child
+        StartChild(AtStartChild<R>),
+        /// Request is empty
+        Closing(AtClosing<R>),
+    }
+
+    /// Error that you can get from [`AtConnected::next`]
+    #[common_fields({
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: SpanTrace,
+    })]
+    #[allow(missing_docs)]
+    #[derive(Debug, Snafu)]
+    #[snafu(module)]
+    #[non_exhaustive]
     pub enum ConnectedNextError {
         /// Error when serializing the request
         #[snafu(display("postcard ser: {source}"))]
@@ -267,23 +295,17 @@ pub mod fsm {
         RequestTooBig {},
         /// Error when writing the request to the [`SendStream`].
         #[snafu(display("write: {source}"))]
-        Write { source: quinn::WriteError },
-        /// Quic connection is closed.
-        #[snafu(display("closed"))]
-        Closed { source: quinn::ClosedStream },
-        /// A generic io error
-        #[snafu(transparent)]
-        Io { source: io::Error },
+        Write { source: io::Error },
     }
 
-    impl AtConnected {
+    impl<R: AsyncStreamReader> AtConnected<R> {
         /// Send the request and move to the next state
         ///
         /// The next state will be either `StartRoot` or `StartChild` depending on whether
         /// the request requests part of the collection or not.
         ///
         /// If the request is empty, this can also move directly to `Finished`.
-        pub async fn next(self) -> Result<ConnectedNext, ConnectedNextError> {
+        pub async fn next(self) -> Result<ConnectedNext<R>, ConnectedNextError> {
             let Self {
                 start,
                 reader,
@@ -295,23 +317,28 @@ pub mod fsm {
             counters.other_bytes_written += {
                 debug!("sending request");
                 let wrapped = Request::Get(request);
-                let request_bytes = postcard::to_stdvec(&wrapped).context(PostcardSerSnafu)?;
+                let request_bytes = postcard::to_stdvec(&wrapped)
+                    .context(connected_next_error::PostcardSerSnafu)?;
                 let Request::Get(x) = wrapped else {
                     unreachable!();
                 };
                 request = x;
 
                 if request_bytes.len() > MAX_MESSAGE_SIZE {
-                    return Err(RequestTooBigSnafu.build());
+                    return Err(connected_next_error::RequestTooBigSnafu.build());
                 }
 
                 // write the request itself
-                writer.write_all(&request_bytes).await.context(WriteSnafu)?;
-                request_bytes.len() as u64
+                let len = request_bytes.len() as u64;
+                writer
+                    .write_bytes(request_bytes.into())
+                    .await
+                    .context(connected_next_error::WriteSnafu)?;
+                len
             };
 
             // 2. Finish writing before expecting a response
-            writer.finish().context(ClosedSnafu)?;
+            drop(writer);
 
             let hash = request.hash;
             let ranges_iter = RangesIter::new(request.ranges);
@@ -348,23 +375,23 @@ pub mod fsm {
 
     /// State of the get response when we start reading a collection
     #[derive(Debug)]
-    pub struct AtStartRoot {
+    pub struct AtStartRoot<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
         ranges: ChunkRanges,
-        reader: TokioStreamReader<RecvStream>,
+        reader: R,
         misc: Box<Misc>,
         hash: Hash,
     }
 
     /// State of the get response when we start reading a child
     #[derive(Debug)]
-    pub struct AtStartChild {
+    pub struct AtStartChild<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
         ranges: ChunkRanges,
-        reader: TokioStreamReader<RecvStream>,
+        reader: R,
         misc: Box<Misc>,
         offset: u64,
     }
 
-    impl AtStartChild {
+    impl<R: AsyncStreamReader> AtStartChild<R> {
         /// The offset of the child we are currently reading
         ///
         /// This must be used to determine the hash needed to call next.
@@ -382,7 +409,7 @@ pub mod fsm {
         /// Go into the next state, reading the header
         ///
         /// This requires passing in the hash of the child for validation
-        pub fn next(self, hash: Hash) -> AtBlobHeader {
+        pub fn next(self, hash: Hash) -> AtBlobHeader<R> {
             AtBlobHeader {
                 reader: self.reader,
                 ranges: self.ranges,
@@ -396,12 +423,12 @@ pub mod fsm {
         /// This is used if you know that there are no more children from having
         /// read the collection, or when you want to stop reading the response
         /// early.
-        pub fn finish(self) -> AtClosing {
+        pub fn finish(self) -> AtClosing<R> {
             AtClosing::new(self.misc, self.reader, false)
         }
     }
 
-    impl AtStartRoot {
+    impl<R: AsyncStreamReader> AtStartRoot<R> {
         /// The ranges we have requested for the child
         pub fn ranges(&self) -> &ChunkRanges {
             &self.ranges
@@ -415,7 +442,7 @@ pub mod fsm {
         /// Go into the next state, reading the header
         ///
         /// For the collection we already know the hash, since it was part of the request
-        pub fn next(self) -> AtBlobHeader {
+        pub fn next(self) -> AtBlobHeader<R> {
             AtBlobHeader {
                 reader: self.reader,
                 ranges: self.ranges,
@@ -425,16 +452,16 @@ pub mod fsm {
         }
 
         /// Finish the get response without reading further
-        pub fn finish(self) -> AtClosing {
+        pub fn finish(self) -> AtClosing<R> {
             AtClosing::new(self.misc, self.reader, false)
         }
     }
 
     /// State before reading a size header
     #[derive(Debug)]
-    pub struct AtBlobHeader {
+    pub struct AtBlobHeader<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
         ranges: ChunkRanges,
-        reader: TokioStreamReader<RecvStream>,
+        reader: R,
         misc: Box<Misc>,
         hash: Hash,
     }
@@ -447,18 +474,16 @@ pub mod fsm {
     })]
     #[non_exhaustive]
     #[derive(Debug, Snafu)]
+    #[snafu(module)]
     pub enum AtBlobHeaderNextError {
         /// Eof when reading the size header
         ///
         /// This indicates that the provider does not have the requested data.
         #[snafu(display("not found"))]
         NotFound {},
-        /// Quinn read error when reading the size header
-        #[snafu(display("read: {source}"))]
-        EndpointRead { source: endpoint::ReadError },
         /// Generic io error
         #[snafu(display("io: {source}"))]
-        Io { source: io::Error },
+        Read { source: io::Error },
     }
 
     impl From<AtBlobHeaderNextError> for io::Error {
@@ -467,25 +492,19 @@ pub mod fsm {
                 AtBlobHeaderNextError::NotFound { .. } => {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
-                AtBlobHeaderNextError::EndpointRead { source, .. } => source.into(),
-                AtBlobHeaderNextError::Io { source, .. } => source,
+                AtBlobHeaderNextError::Read { source, .. } => source,
             }
         }
     }
 
-    impl AtBlobHeader {
+    impl<R: AsyncStreamReader> AtBlobHeader<R> {
         /// Read the size header, returning it and going into the `Content` state.
-        pub async fn next(mut self) -> Result<(AtBlobContent, u64), AtBlobHeaderNextError> {
+        pub async fn next(mut self) -> Result<(AtBlobContent<R>, u64), AtBlobHeaderNextError> {
             let size = self.reader.read::<8>().await.map_err(|cause| {
                 if cause.kind() == io::ErrorKind::UnexpectedEof {
-                    NotFoundSnafu.build()
-                } else if let Some(e) = cause
-                    .get_ref()
-                    .and_then(|x| x.downcast_ref::<endpoint::ReadError>())
-                {
-                    EndpointReadSnafu.into_error(e.clone())
+                    at_blob_header_next_error::NotFoundSnafu.build()
                 } else {
-                    IoSnafu.into_error(cause)
+                    at_blob_header_next_error::ReadSnafu.into_error(cause)
                 }
             })?;
             self.misc.other_bytes_read += 8;
@@ -506,7 +525,7 @@ pub mod fsm {
         }
 
         /// Drain the response and throw away the result
-        pub async fn drain(self) -> result::Result<AtEndBlob, DecodeError> {
+        pub async fn drain(self) -> result::Result<AtEndBlob<R>, DecodeError> {
             let (content, _size) = self.next().await?;
             content.drain().await
         }
@@ -517,7 +536,7 @@ pub mod fsm {
         /// concatenate the ranges that were requested.
         pub async fn concatenate_into_vec(
             self,
-        ) -> result::Result<(AtEndBlob, Vec<u8>), DecodeError> {
+        ) -> result::Result<(AtEndBlob<R>, Vec<u8>), DecodeError> {
             let (content, _size) = self.next().await?;
             content.concatenate_into_vec().await
         }
@@ -526,7 +545,7 @@ pub mod fsm {
         pub async fn write_all<D: AsyncSliceWriter>(
             self,
             data: D,
-        ) -> result::Result<AtEndBlob, DecodeError> {
+        ) -> result::Result<AtEndBlob<R>, DecodeError> {
             let (content, _size) = self.next().await?;
             let res = content.write_all(data).await?;
             Ok(res)
@@ -540,7 +559,7 @@ pub mod fsm {
             self,
             outboard: Option<O>,
             data: D,
-        ) -> result::Result<AtEndBlob, DecodeError>
+        ) -> result::Result<AtEndBlob<R>, DecodeError>
         where
             D: AsyncSliceWriter,
             O: OutboardMut,
@@ -568,8 +587,8 @@ pub mod fsm {
 
     /// State while we are reading content
     #[derive(Debug)]
-    pub struct AtBlobContent {
-        stream: ResponseDecoder<WrappedRecvStream>,
+    pub struct AtBlobContent<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+        stream: ResponseDecoder<R>,
         misc: Box<Misc>,
     }
 
@@ -603,6 +622,7 @@ pub mod fsm {
     })]
     #[non_exhaustive]
     #[derive(Debug, Snafu)]
+    #[snafu(module)]
     pub enum DecodeError {
         /// A chunk was not found or invalid, so the provider stopped sending data
         #[snafu(display("not found"))]
@@ -621,24 +641,25 @@ pub mod fsm {
         LeafHashMismatch { num: ChunkNum },
         /// Error when reading from the stream
         #[snafu(display("read: {source}"))]
-        Read { source: endpoint::ReadError },
+        Read { source: io::Error },
         /// A generic io error
         #[snafu(display("io: {source}"))]
-        DecodeIo { source: io::Error },
+        Write { source: io::Error },
     }
 
     impl DecodeError {
         pub(crate) fn leaf_hash_mismatch(num: ChunkNum) -> Self {
-            LeafHashMismatchSnafu { num }.build()
+            decode_error::LeafHashMismatchSnafu { num }.build()
         }
     }
 
     impl From<AtBlobHeaderNextError> for DecodeError {
         fn from(cause: AtBlobHeaderNextError) -> Self {
             match cause {
-                AtBlobHeaderNextError::NotFound { .. } => ChunkNotFoundSnafu.build(),
-                AtBlobHeaderNextError::EndpointRead { source, .. } => ReadSnafu.into_error(source),
-                AtBlobHeaderNextError::Io { source, .. } => DecodeIoSnafu.into_error(source),
+                AtBlobHeaderNextError::NotFound { .. } => decode_error::ChunkNotFoundSnafu.build(),
+                AtBlobHeaderNextError::Read { source, .. } => {
+                    decode_error::ReadSnafu.into_error(source)
+                }
             }
         }
     }
@@ -653,15 +674,9 @@ pub mod fsm {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
                 DecodeError::Read { source, .. } => source.into(),
-                DecodeError::DecodeIo { source, .. } => source,
+                DecodeError::Write { source, .. } => source,
                 _ => io::Error::other(cause),
             }
-        }
-    }
-
-    impl From<io::Error> for DecodeError {
-        fn from(value: io::Error) -> Self {
-            DecodeIoSnafu.into_error(value)
         }
     }
 
@@ -669,42 +684,39 @@ pub mod fsm {
         fn from(value: bao_tree::io::DecodeError) -> Self {
             match value {
                 bao_tree::io::DecodeError::ParentNotFound(x) => {
-                    ParentNotFoundSnafu { node: x }.build()
+                    decode_error::ParentNotFoundSnafu { node: x }.build()
                 }
-                bao_tree::io::DecodeError::LeafNotFound(x) => LeafNotFoundSnafu { num: x }.build(),
+                bao_tree::io::DecodeError::LeafNotFound(x) => {
+                    decode_error::LeafNotFoundSnafu { num: x }.build()
+                }
                 bao_tree::io::DecodeError::ParentHashMismatch(node) => {
-                    ParentHashMismatchSnafu { node }.build()
+                    decode_error::ParentHashMismatchSnafu { node }.build()
                 }
                 bao_tree::io::DecodeError::LeafHashMismatch(chunk) => {
-                    LeafHashMismatchSnafu { num: chunk }.build()
+                    decode_error::LeafHashMismatchSnafu { num: chunk }.build()
                 }
-                bao_tree::io::DecodeError::Io(cause) => {
-                    if let Some(inner) = cause.get_ref() {
-                        if let Some(e) = inner.downcast_ref::<endpoint::ReadError>() {
-                            ReadSnafu.into_error(e.clone())
-                        } else {
-                            DecodeIoSnafu.into_error(cause)
-                        }
-                    } else {
-                        DecodeIoSnafu.into_error(cause)
-                    }
-                }
+                bao_tree::io::DecodeError::Io(cause) => decode_error::ReadSnafu.into_error(cause),
             }
         }
     }
 
     /// The next state after reading a content item
     #[derive(Debug, From)]
-    pub enum BlobContentNext {
+    pub enum BlobContentNext<R: AsyncStreamReader> {
         /// We expect more content
-        More((AtBlobContent, result::Result<BaoContentItem, DecodeError>)),
+        More(
+            (
+                AtBlobContent<R>,
+                result::Result<BaoContentItem, DecodeError>,
+            ),
+        ),
         /// We are done with this blob
-        Done(AtEndBlob),
+        Done(AtEndBlob<R>),
     }
 
-    impl AtBlobContent {
+    impl<R: AsyncStreamReader> AtBlobContent<R> {
         /// Read the next item, either content, an error, or the end of the blob
-        pub async fn next(self) -> BlobContentNext {
+        pub async fn next(self) -> BlobContentNext<R> {
             match self.stream.next().await {
                 ResponseDecoderNext::More((stream, res)) => {
                     let mut next = Self { stream, ..self };
@@ -751,7 +763,7 @@ pub mod fsm {
         }
 
         /// Drain the response and throw away the result
-        pub async fn drain(self) -> result::Result<AtEndBlob, DecodeError> {
+        pub async fn drain(self) -> result::Result<AtEndBlob<R>, DecodeError> {
             let mut content = self;
             loop {
                 match content.next().await {
@@ -769,7 +781,7 @@ pub mod fsm {
         /// Concatenate the entire response into a vec
         pub async fn concatenate_into_vec(
             self,
-        ) -> result::Result<(AtEndBlob, Vec<u8>), DecodeError> {
+        ) -> result::Result<(AtEndBlob<R>, Vec<u8>), DecodeError> {
             let mut res = Vec::with_capacity(1024);
             let mut curr = self;
             let done = loop {
@@ -797,7 +809,7 @@ pub mod fsm {
             self,
             mut outboard: Option<O>,
             mut data: D,
-        ) -> result::Result<AtEndBlob, DecodeError>
+        ) -> result::Result<AtEndBlob<R>, DecodeError>
         where
             D: AsyncSliceWriter,
             O: OutboardMut,
@@ -810,11 +822,16 @@ pub mod fsm {
                         match item? {
                             BaoContentItem::Parent(parent) => {
                                 if let Some(outboard) = outboard.as_mut() {
-                                    outboard.save(parent.node, &parent.pair).await?;
+                                    outboard
+                                        .save(parent.node, &parent.pair)
+                                        .await
+                                        .map_err(|e| decode_error::WriteSnafu.into_error(e))?;
                                 }
                             }
                             BaoContentItem::Leaf(leaf) => {
-                                data.write_bytes_at(leaf.offset, leaf.data).await?;
+                                data.write_bytes_at(leaf.offset, leaf.data)
+                                    .await
+                                    .map_err(|e| decode_error::WriteSnafu.into_error(e))?;
                             }
                         }
                     }
@@ -826,7 +843,7 @@ pub mod fsm {
         }
 
         /// Write the entire blob to a slice writer.
-        pub async fn write_all<D>(self, mut data: D) -> result::Result<AtEndBlob, DecodeError>
+        pub async fn write_all<D>(self, mut data: D) -> result::Result<AtEndBlob<R>, DecodeError>
         where
             D: AsyncSliceWriter,
         {
@@ -838,7 +855,9 @@ pub mod fsm {
                         match item? {
                             BaoContentItem::Parent(_) => {}
                             BaoContentItem::Leaf(leaf) => {
-                                data.write_bytes_at(leaf.offset, leaf.data).await?;
+                                data.write_bytes_at(leaf.offset, leaf.data)
+                                    .await
+                                    .map_err(|e| decode_error::WriteSnafu.into_error(e))?;
                             }
                         }
                     }
@@ -850,30 +869,30 @@ pub mod fsm {
         }
 
         /// Immediately finish the get response without reading further
-        pub fn finish(self) -> AtClosing {
+        pub fn finish(self) -> AtClosing<R> {
             AtClosing::new(self.misc, self.stream.finish(), false)
         }
     }
 
     /// State after we have read all the content for a blob
     #[derive(Debug)]
-    pub struct AtEndBlob {
-        stream: WrappedRecvStream,
+    pub struct AtEndBlob<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+        stream: R,
         misc: Box<Misc>,
     }
 
     /// The next state after the end of a blob
     #[derive(Debug, From)]
-    pub enum EndBlobNext {
+    pub enum EndBlobNext<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
         /// Response is expected to have more children
-        MoreChildren(AtStartChild),
+        MoreChildren(AtStartChild<R>),
         /// No more children expected
-        Closing(AtClosing),
+        Closing(AtClosing<R>),
     }
 
-    impl AtEndBlob {
+    impl<R: AsyncStreamReader> AtEndBlob<R> {
         /// Read the next child, or finish
-        pub fn next(mut self) -> EndBlobNext {
+        pub fn next(mut self) -> EndBlobNext<R> {
             if let Some((offset, ranges)) = self.misc.ranges_iter.next() {
                 AtStartChild {
                     reader: self.stream,
@@ -890,14 +909,14 @@ pub mod fsm {
 
     /// State when finishing the get response
     #[derive(Debug)]
-    pub struct AtClosing {
+    pub struct AtClosing<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
         misc: Box<Misc>,
-        reader: WrappedRecvStream,
+        reader: R,
         check_extra_data: bool,
     }
 
-    impl AtClosing {
-        fn new(misc: Box<Misc>, reader: WrappedRecvStream, check_extra_data: bool) -> Self {
+    impl<R: AsyncStreamReader> AtClosing<R> {
+        fn new(misc: Box<Misc>, reader: R, check_extra_data: bool) -> Self {
             Self {
                 misc,
                 reader,
@@ -906,23 +925,35 @@ pub mod fsm {
         }
 
         /// Finish the get response, returning statistics
-        pub async fn next(self) -> result::Result<Stats, endpoint::ReadError> {
+        pub async fn next(self) -> result::Result<Stats, AtClosingNextError> {
             // Shut down the stream
-            let reader = self.reader;
-            let mut reader = reader.into_inner();
+            let mut reader = self.reader;
             if self.check_extra_data {
-                if let Some(chunk) = reader.read_chunk(8, false).await? {
-                    reader.stop(0u8.into()).ok();
-                    error!("Received unexpected data from the provider: {chunk:?}");
+                let rest = reader.read_bytes(1).await?;
+                if !rest.is_empty() {
+                    error!("Unexpected extra data at the end of the stream");
                 }
-            } else {
-                reader.stop(0u8.into()).ok();
             }
             Ok(Stats {
                 counters: self.misc.counters,
                 elapsed: self.misc.start.elapsed(),
             })
         }
+    }
+
+    /// Error that you can get from [`AtBlobHeader::next`]
+    #[common_fields({
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: SpanTrace,
+    })]
+    #[non_exhaustive]
+    #[derive(Debug, Snafu)]
+    #[snafu(module)]
+    pub enum AtClosingNextError {
+        /// Generic io error
+        #[snafu(transparent)]
+        Read { source: io::Error },
     }
 
     #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
@@ -948,73 +979,5 @@ pub mod fsm {
         counters: RequestCounters,
         /// iterator over the ranges of the collection and the children
         ranges_iter: RangesIter,
-    }
-}
-
-/// Error when processing a response
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
-#[allow(missing_docs)]
-#[non_exhaustive]
-#[derive(Debug, Snafu)]
-pub enum GetResponseError {
-    /// Error when opening a stream
-    #[snafu(display("connection: {source}"))]
-    Connection { source: endpoint::ConnectionError },
-    /// Error when writing the handshake or request to the stream
-    #[snafu(display("write: {source}"))]
-    Write { source: endpoint::WriteError },
-    /// Error when reading from the stream
-    #[snafu(display("read: {source}"))]
-    Read { source: endpoint::ReadError },
-    /// Error when decoding, e.g. hash mismatch
-    #[snafu(display("decode: {source}"))]
-    Decode { source: bao_tree::io::DecodeError },
-    /// A generic error
-    #[snafu(display("generic: {source}"))]
-    Generic { source: anyhow::Error },
-}
-
-impl From<postcard::Error> for GetResponseError {
-    fn from(cause: postcard::Error) -> Self {
-        GenericSnafu.into_error(cause.into())
-    }
-}
-
-impl From<bao_tree::io::DecodeError> for GetResponseError {
-    fn from(cause: bao_tree::io::DecodeError) -> Self {
-        match cause {
-            bao_tree::io::DecodeError::Io(cause) => {
-                // try to downcast to specific quinn errors
-                if let Some(source) = cause.source() {
-                    if let Some(error) = source.downcast_ref::<endpoint::ConnectionError>() {
-                        return ConnectionSnafu.into_error(error.clone());
-                    }
-                    if let Some(error) = source.downcast_ref::<endpoint::ReadError>() {
-                        return ReadSnafu.into_error(error.clone());
-                    }
-                    if let Some(error) = source.downcast_ref::<endpoint::WriteError>() {
-                        return WriteSnafu.into_error(error.clone());
-                    }
-                }
-                GenericSnafu.into_error(cause.into())
-            }
-            _ => DecodeSnafu.into_error(cause),
-        }
-    }
-}
-
-impl From<anyhow::Error> for GetResponseError {
-    fn from(cause: anyhow::Error) -> Self {
-        GenericSnafu.into_error(cause)
-    }
-}
-
-impl From<GetResponseError> for std::io::Error {
-    fn from(cause: GetResponseError) -> Self {
-        Self::other(cause)
     }
 }

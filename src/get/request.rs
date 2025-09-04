@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 
 use super::{fsm, GetError, GetResult, Stats};
 use crate::{
-    get::error::{BadRequestSnafu, LocalFailureSnafu},
+    get::get_error::{BadRequestSnafu, LocalFailureSnafu},
     hashseq::HashSeq,
     protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
     Hash, HashAndFormat,

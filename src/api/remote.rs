@@ -8,12 +8,16 @@ use n0_future::{io, Stream, StreamExt};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use ref_cast::RefCast;
-use snafu::{Backtrace, IntoError, Snafu};
+use snafu::{Backtrace, IntoError, ResultExt, Snafu};
 
 use super::blobs::{Bitfield, ExportBaoOptions};
 use crate::{
     api::{blobs::WriteProgress, ApiClient},
-    get::{fsm::DecodeError, BadRequestSnafu, GetError, GetResult, LocalFailureSnafu, Stats},
+    get::{
+        fsm::DecodeError,
+        get_error::{BadRequestSnafu, LocalFailureSnafu},
+        GetError, GetResult, Stats,
+    },
     protocol::{
         GetManyRequest, ObserveItem, ObserveRequest, PushRequest, Request, RequestType,
         MAX_MESSAGE_SIZE,
@@ -508,7 +512,7 @@ impl Remote {
         let local = self
             .local(content)
             .await
-            .map_err(|e| LocalFailureSnafu.into_error(e.into()))?;
+            .map_err(|e: anyhow::Error| LocalFailureSnafu.into_error(e.into()))?;
         if local.is_complete() {
             return Ok(Default::default());
         }
@@ -685,7 +689,7 @@ impl Remote {
                         .await
                         .map_err(|e| LocalFailureSnafu.into_error(e.into()))?,
                 )
-                .map_err(|source| BadRequestSnafu.into_error(source.into()))?;
+                .context(BadRequestSnafu)?;
                 // let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), root);
                 loop {
                     let at_start_child = match next_child {
