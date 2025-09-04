@@ -759,7 +759,6 @@ impl Remote {
                         Err(at_closing) => break at_closing,
                     };
                     let offset = at_start_child.offset();
-                    println!("offset {offset}");
                     let Some(hash) = hash_seq.get(offset as usize) else {
                         break at_start_child.finish();
                     };

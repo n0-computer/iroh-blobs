@@ -556,6 +556,7 @@ async fn two_nodes_hash_seq(
 }
 
 #[tokio::test]
+
 async fn two_nodes_hash_seq_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
@@ -578,9 +579,7 @@ async fn two_nodes_hash_seq_progress() -> TestResult<()> {
     let root = add_test_hash_seq(&store1, sizes).await?;
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
     let mut stream = store2.remote().fetch(conn, root).stream();
-    while let Some(item) = stream.next().await {
-        println!("{item:?}");
-    }
+    while let Some(_) = stream.next().await {}
     check_presence(&store2, &sizes).await?;
     Ok(())
 }
@@ -648,9 +647,7 @@ async fn node_serve_blobs() -> TestResult<()> {
         let expected = test_data(size);
         let hash = Hash::new(&expected);
         let mut stream = get::request::get_blob(conn.clone(), hash);
-        while let Some(item) = stream.next().await {
-            println!("{item:?}");
-        }
+        while let Some(_) = stream.next().await {}
         let actual = get::request::get_blob(conn.clone(), hash).await?;
         assert_eq!(actual.len(), expected.len(), "size: {size}");
     }

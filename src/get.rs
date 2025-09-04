@@ -18,18 +18,20 @@
 //! [iroh]: https://docs.rs/iroh
 use std::{
     fmt::{self, Debug},
+    io,
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
-use iroh::endpoint::{RecvStream, SendStream};
-use iroh_io::{TokioStreamReader, TokioStreamWriter};
+use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
+use quinn::ReadExactError;
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, IntoError, ResultExt, Snafu};
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
 
 use crate::{protocol::ChunkRangesSeq, store::IROH_BLOCK_SIZE, Hash};
@@ -39,8 +41,49 @@ pub mod request;
 pub(crate) use error::get_error;
 pub use error::{GetError, GetResult};
 
-type DefaultReader = TokioStreamReader<RecvStream>;
-type DefaultWriter = TokioStreamWriter<SendStream>;
+pub struct IrohStreamWriter(iroh::endpoint::SendStream);
+
+impl AsyncStreamWriter for IrohStreamWriter {
+    async fn write(&mut self, data: &[u8]) -> io::Result<()> {
+        Ok(self.0.write_all(data).await?)
+    }
+
+    async fn write_bytes(&mut self, data: bytes::Bytes) -> io::Result<()> {
+        Ok(self.0.write_chunk(data).await?)
+    }
+
+    async fn sync(&mut self) -> io::Result<()> {
+        Ok(self.0.flush().await?)
+    }
+}
+
+pub struct IrohStreamReader(iroh::endpoint::RecvStream);
+
+impl AsyncStreamReader for IrohStreamReader {
+    async fn read<const N: usize>(&mut self) -> io::Result<[u8; N]> {
+        let mut buf = [0u8; N];
+        match self.0.read_exact(&mut buf).await {
+            Ok(()) => Ok(buf),
+            Err(ReadExactError::ReadError(e)) => Err(e.into()),
+            Err(ReadExactError::FinishedEarly(_)) => Err(io::ErrorKind::UnexpectedEof.into()),
+        }
+    }
+
+    async fn read_bytes(&mut self, len: usize) -> io::Result<bytes::Bytes> {
+        let mut buf = vec![0u8; len];
+        match self.0.read_exact(&mut buf).await {
+            Ok(()) => Ok(buf.into()),
+            Err(ReadExactError::ReadError(e)) => Err(e.into()),
+            Err(ReadExactError::FinishedEarly(n)) => {
+                buf.truncate(n);
+                Ok(buf.into())
+            }
+        }
+    }
+}
+
+type DefaultReader = IrohStreamReader;
+type DefaultWriter = IrohStreamWriter;
 
 /// Stats about the transfer.
 #[derive(
@@ -96,7 +139,7 @@ pub mod fsm {
     };
     use derive_more::From;
     use iroh::endpoint::Connection;
-    use iroh_io::{AsyncSliceWriter, AsyncStreamReader, AsyncStreamWriter, TokioStreamReader};
+    use iroh_io::{AsyncSliceWriter, AsyncStreamReader, AsyncStreamWriter};
 
     use super::*;
     use crate::{
@@ -134,8 +177,8 @@ pub mod fsm {
             .open_bi()
             .await
             .map_err(|e| OpenSnafu.into_error(e.into()))?;
-        let reader = TokioStreamReader::new(reader);
-        let mut writer = TokioStreamWriter(writer);
+        let reader = IrohStreamReader(reader);
+        let mut writer = IrohStreamWriter(writer);
         let request = Request::GetMany(request);
         let request_bytes = postcard::to_stdvec(&request)
             .map_err(|source| BadRequestSnafu.into_error(source.into()))?;
@@ -227,8 +270,8 @@ pub mod fsm {
                 .open_bi()
                 .await
                 .map_err(|e| OpenSnafu.into_error(e.into()))?;
-            let reader = TokioStreamReader::new(reader);
-            let writer = TokioStreamWriter(writer);
+            let reader = IrohStreamReader(reader);
+            let writer = IrohStreamWriter(writer);
             Ok(AtConnected {
                 start,
                 reader,
@@ -375,7 +418,7 @@ pub mod fsm {
 
     /// State of the get response when we start reading a collection
     #[derive(Debug)]
-    pub struct AtStartRoot<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub struct AtStartRoot<R: AsyncStreamReader = DefaultReader> {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,
@@ -384,7 +427,7 @@ pub mod fsm {
 
     /// State of the get response when we start reading a child
     #[derive(Debug)]
-    pub struct AtStartChild<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub struct AtStartChild<R: AsyncStreamReader = DefaultReader> {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,
@@ -459,7 +502,7 @@ pub mod fsm {
 
     /// State before reading a size header
     #[derive(Debug)]
-    pub struct AtBlobHeader<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub struct AtBlobHeader<R: AsyncStreamReader = DefaultReader> {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,
@@ -587,7 +630,7 @@ pub mod fsm {
 
     /// State while we are reading content
     #[derive(Debug)]
-    pub struct AtBlobContent<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub struct AtBlobContent<R: AsyncStreamReader = DefaultReader> {
         stream: ResponseDecoder<R>,
         misc: Box<Misc>,
     }
@@ -683,17 +726,17 @@ pub mod fsm {
     impl From<bao_tree::io::DecodeError> for DecodeError {
         fn from(value: bao_tree::io::DecodeError) -> Self {
             match value {
-                bao_tree::io::DecodeError::ParentNotFound(x) => {
-                    decode_error::ParentNotFoundSnafu { node: x }.build()
+                bao_tree::io::DecodeError::ParentNotFound(node) => {
+                    decode_error::ParentNotFoundSnafu { node }.build()
                 }
-                bao_tree::io::DecodeError::LeafNotFound(x) => {
-                    decode_error::LeafNotFoundSnafu { num: x }.build()
+                bao_tree::io::DecodeError::LeafNotFound(num) => {
+                    decode_error::LeafNotFoundSnafu { num }.build()
                 }
                 bao_tree::io::DecodeError::ParentHashMismatch(node) => {
                     decode_error::ParentHashMismatchSnafu { node }.build()
                 }
-                bao_tree::io::DecodeError::LeafHashMismatch(chunk) => {
-                    decode_error::LeafHashMismatchSnafu { num: chunk }.build()
+                bao_tree::io::DecodeError::LeafHashMismatch(num) => {
+                    decode_error::LeafHashMismatchSnafu { num }.build()
                 }
                 bao_tree::io::DecodeError::Io(cause) => decode_error::ReadSnafu.into_error(cause),
             }
@@ -876,14 +919,14 @@ pub mod fsm {
 
     /// State after we have read all the content for a blob
     #[derive(Debug)]
-    pub struct AtEndBlob<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub struct AtEndBlob<R: AsyncStreamReader = DefaultReader> {
         stream: R,
         misc: Box<Misc>,
     }
 
     /// The next state after the end of a blob
     #[derive(Debug, From)]
-    pub enum EndBlobNext<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub enum EndBlobNext<R: AsyncStreamReader = DefaultReader> {
         /// Response is expected to have more children
         MoreChildren(AtStartChild<R>),
         /// No more children expected
@@ -909,7 +952,7 @@ pub mod fsm {
 
     /// State when finishing the get response
     #[derive(Debug)]
-    pub struct AtClosing<R: AsyncStreamReader = TokioStreamReader<RecvStream>> {
+    pub struct AtClosing<R: AsyncStreamReader = DefaultReader> {
         misc: Box<Misc>,
         reader: R,
         check_extra_data: bool,
