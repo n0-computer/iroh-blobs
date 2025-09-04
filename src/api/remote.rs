@@ -16,7 +16,7 @@ use crate::{
     get::{
         fsm::DecodeError,
         get_error::{BadRequestSnafu, LocalFailureSnafu},
-        GetError, GetResult, Stats,
+        GetError, GetResult, IrohStreamWriter, Stats,
     },
     protocol::{
         GetManyRequest, ObserveItem, ObserveRequest, PushRequest, Request, RequestType,
@@ -594,15 +594,16 @@ impl Remote {
         let mut request_ranges = request.ranges.iter_infinite();
         let root = request.hash;
         let root_ranges = request_ranges.next().expect("infinite iterator");
+        let mut send = IrohStreamWriter(send);
         if !root_ranges.is_empty() {
             self.store()
                 .export_bao(root, root_ranges.clone())
-                .write_quinn_with_progress(&mut send, &mut context, &root, 0)
+                .write_with_progress(&mut send, &mut context, &root, 0)
                 .await?;
         }
         if request.ranges.is_blob() {
             // we are done
-            send.finish()?;
+            send.0.finish()?;
             return Ok(Default::default());
         }
         let hash_seq = self.store().get_bytes(root).await?;
@@ -613,16 +614,11 @@ impl Remote {
             if !child_ranges.is_empty() {
                 self.store()
                     .export_bao(child_hash, child_ranges.clone())
-                    .write_quinn_with_progress(
-                        &mut send,
-                        &mut context,
-                        &child_hash,
-                        (child + 1) as u64,
-                    )
+                    .write_with_progress(&mut send, &mut context, &child_hash, (child + 1) as u64)
                     .await?;
             }
         }
-        send.finish()?;
+        send.0.finish()?;
         Ok(Default::default())
     }
 

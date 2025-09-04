@@ -41,7 +41,7 @@ pub mod request;
 pub(crate) use error::get_error;
 pub use error::{GetError, GetResult};
 
-pub struct IrohStreamWriter(iroh::endpoint::SendStream);
+pub struct IrohStreamWriter(pub iroh::endpoint::SendStream);
 
 impl AsyncStreamWriter for IrohStreamWriter {
     async fn write(&mut self, data: &[u8]) -> io::Result<()> {
@@ -57,7 +57,7 @@ impl AsyncStreamWriter for IrohStreamWriter {
     }
 }
 
-pub struct IrohStreamReader(iroh::endpoint::RecvStream);
+pub struct IrohStreamReader(pub iroh::endpoint::RecvStream);
 
 impl AsyncStreamReader for IrohStreamReader {
     async fn read<const N: usize>(&mut self) -> io::Result<[u8; N]> {

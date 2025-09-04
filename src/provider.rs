@@ -12,6 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 use bao_tree::ChunkRanges;
 use iroh::endpoint::{self, RecvStream, SendStream};
+use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_future::StreamExt;
 use quinn::{ClosedStream, ConnectionError, ReadToEndError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -23,6 +24,7 @@ use crate::{
         blobs::{Bitfield, WriteProgress},
         ExportBaoResult, Store,
     },
+    get::{IrohStreamReader, IrohStreamWriter},
     hashseq::HashSeq,
     protocol::{GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request},
     provider::events::{ClientConnected, ClientResult, ConnectionClosed, RequestTracker},
@@ -30,6 +32,9 @@ use crate::{
 };
 pub mod events;
 use events::EventSender;
+
+type DefaultWriter = IrohStreamWriter;
+type DefaultReader = IrohStreamReader;
 
 /// Statistics about a successful or failed transfer.
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,7 +111,7 @@ impl StreamPair {
             return Err(e);
         };
         Ok(ProgressWriter::new(
-            self.writer,
+            IrohStreamWriter(self.writer),
             WriterContext {
                 t0: self.t0,
                 other_bytes_read: self.other_bytes_read,
@@ -130,7 +135,7 @@ impl StreamPair {
             return Err(e);
         };
         Ok(ProgressReader {
-            inner: self.reader,
+            inner: IrohStreamReader(self.reader),
             context: ReaderContext {
                 t0: self.t0,
                 other_bytes_read: self.other_bytes_read,
@@ -282,14 +287,14 @@ impl WriteProgress for WriterContext {
 
 /// Wrapper for a [`quinn::SendStream`] with additional per request information.
 #[derive(Debug)]
-pub struct ProgressWriter {
+pub struct ProgressWriter<W: AsyncStreamWriter = DefaultWriter> {
     /// The quinn::SendStream to write to
-    pub inner: SendStream,
+    pub inner: W,
     pub(crate) context: WriterContext,
 }
 
-impl ProgressWriter {
-    fn new(inner: SendStream, context: WriterContext) -> Self {
+impl<W: AsyncStreamWriter> ProgressWriter<W> {
+    fn new(inner: W, context: WriterContext) -> Self {
         Self { inner, context }
     }
 
@@ -465,7 +470,7 @@ pub async fn handle_push(
     if !root_ranges.is_empty() {
         // todo: send progress from import_bao_quinn or rename to import_bao_quinn_with_progress
         store
-            .import_bao_quinn(hash, root_ranges.clone(), &mut reader.inner)
+            .import_bao_reader(hash, root_ranges.clone(), &mut reader.inner)
             .await?;
     }
     if request.ranges.is_blob() {
@@ -480,7 +485,7 @@ pub async fn handle_push(
             continue;
         }
         store
-            .import_bao_quinn(child_hash, child_ranges.clone(), &mut reader.inner)
+            .import_bao_reader(child_hash, child_ranges.clone(), &mut reader.inner)
             .await?;
     }
     Ok(())
@@ -496,7 +501,7 @@ pub(crate) async fn send_blob(
 ) -> ExportBaoResult<()> {
     store
         .export_bao(hash, ranges)
-        .write_quinn_with_progress(&mut writer.inner, &mut writer.context, &hash, index)
+        .write_with_progress(&mut writer.inner, &mut writer.context, &hash, index)
         .await
 }
 
@@ -527,7 +532,7 @@ pub async fn handle_observe(
                 send_observe_item(writer, &diff).await?;
                 old = new;
             }
-            _ = writer.inner.stopped() => {
+            _ = writer.inner.0.stopped() => {
                 debug!("observer closed");
                 break;
             }
@@ -539,13 +544,13 @@ pub async fn handle_observe(
 async fn send_observe_item(writer: &mut ProgressWriter, item: &Bitfield) -> Result<()> {
     use irpc::util::AsyncWriteVarintExt;
     let item = ObserveItem::from(item);
-    let len = writer.inner.write_length_prefixed(item).await?;
+    let len = writer.inner.0.write_length_prefixed(item).await?;
     writer.context.log_other_write(len);
     Ok(())
 }
 
-pub struct ProgressReader {
-    inner: RecvStream,
+pub struct ProgressReader<R: AsyncStreamReader = DefaultReader> {
+    inner: R,
     context: ReaderContext,
 }
 

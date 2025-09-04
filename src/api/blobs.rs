@@ -23,14 +23,12 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
-use iroh_io::{AsyncStreamReader, TokioStreamReader};
+use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use irpc::channel::{mpsc, oneshot};
 use n0_future::{future, stream, Stream, StreamExt};
-use quinn::SendStream;
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 use tracing::trace;
 mod reader;
 pub use reader::BlobReader;
@@ -431,7 +429,7 @@ impl Blobs {
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
-    async fn import_bao_reader<R: AsyncStreamReader>(
+    pub async fn import_bao_reader<R: AsyncStreamReader>(
         &self,
         hash: Hash,
         ranges: ChunkRanges,
@@ -466,18 +464,6 @@ impl Blobs {
         let (reader, res) = tokio::join!(driver, fut);
         res?;
         Ok(reader?)
-    }
-
-    #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
-    pub async fn import_bao_quinn(
-        &self,
-        hash: Hash,
-        ranges: ChunkRanges,
-        stream: &mut iroh::endpoint::RecvStream,
-    ) -> RequestResult<()> {
-        let reader = TokioStreamReader::new(stream);
-        self.import_bao_reader(hash, ranges, reader).await?;
-        Ok(())
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
@@ -1058,24 +1044,21 @@ impl ExportBaoProgress {
         Ok(data)
     }
 
-    pub async fn write_quinn(self, target: &mut quinn::SendStream) -> super::ExportBaoResult<()> {
+    pub async fn write<W: AsyncStreamWriter>(self, target: &mut W) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
         while let Some(item) = rx.recv().await? {
             match item {
                 EncodedItem::Size(size) => {
-                    target.write_u64_le(size).await?;
+                    target.write(&size.to_le_bytes()).await?;
                 }
                 EncodedItem::Parent(parent) => {
                     let mut data = vec![0u8; 64];
                     data[..32].copy_from_slice(parent.pair.0.as_bytes());
                     data[32..].copy_from_slice(parent.pair.1.as_bytes());
-                    target.write_all(&data).await.map_err(io::Error::from)?;
+                    target.write(&data).await?;
                 }
                 EncodedItem::Leaf(leaf) => {
-                    target
-                        .write_chunk(leaf.data)
-                        .await
-                        .map_err(io::Error::from)?;
+                    target.write_bytes(leaf.data).await?;
                 }
                 EncodedItem::Done => break,
                 EncodedItem::Error(cause) => return Err(cause.into()),
@@ -1085,9 +1068,9 @@ impl ExportBaoProgress {
     }
 
     /// Write quinn variant that also feeds a progress writer.
-    pub(crate) async fn write_quinn_with_progress(
+    pub(crate) async fn write_with_progress<W: AsyncStreamWriter>(
         self,
-        writer: &mut SendStream,
+        writer: &mut W,
         progress: &mut impl WriteProgress,
         hash: &Hash,
         index: u64,
@@ -1097,22 +1080,19 @@ impl ExportBaoProgress {
             match item {
                 EncodedItem::Size(size) => {
                     progress.send_transfer_started(index, hash, size).await;
-                    writer.write_u64_le(size).await?;
+                    writer.write(&size.to_le_bytes()).await?;
                     progress.log_other_write(8);
                 }
                 EncodedItem::Parent(parent) => {
                     let mut data = vec![0u8; 64];
                     data[..32].copy_from_slice(parent.pair.0.as_bytes());
                     data[32..].copy_from_slice(parent.pair.1.as_bytes());
-                    writer.write_all(&data).await.map_err(io::Error::from)?;
+                    writer.write(&data).await?;
                     progress.log_other_write(64);
                 }
                 EncodedItem::Leaf(leaf) => {
                     let len = leaf.data.len();
-                    writer
-                        .write_chunk(leaf.data)
-                        .await
-                        .map_err(io::Error::from)?;
+                    writer.write_bytes(leaf.data).await?;
                     progress
                         .notify_payload_write(index, leaf.offset, len)
                         .await?;
