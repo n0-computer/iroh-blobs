@@ -5,29 +5,36 @@
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
 use std::{
     fmt::Debug,
+    future::Future,
     io,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bao_tree::ChunkRanges;
-use iroh::endpoint::{self, RecvStream, SendStream};
+use iroh::endpoint;
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_future::StreamExt;
-use quinn::{ClosedStream, ConnectionError, ReadToEndError};
+use quinn::{ConnectionError, VarInt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use snafu::Snafu;
 use tokio::select;
 use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
     api::{
         blobs::{Bitfield, WriteProgress},
-        ExportBaoResult, Store,
+        ExportBaoError, ExportBaoResult, RequestError, Store,
     },
     get::{IrohStreamReader, IrohStreamWriter},
     hashseq::HashSeq,
-    protocol::{GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request},
-    provider::events::{ClientConnected, ClientResult, ConnectionClosed, RequestTracker},
+    protocol::{
+        GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
+    },
+    provider::events::{
+        ClientConnected, ClientResult, ConnectionClosed, HasErrorCode, ProgressError,
+        RequestTracker,
+    },
     Hash,
 };
 pub mod events;
@@ -56,12 +63,12 @@ pub struct TransferStats {
 
 /// A pair of [`SendStream`] and [`RecvStream`] with additional context data.
 #[derive(Debug)]
-pub struct StreamPair {
+pub struct StreamPair<R: AsyncStreamReader = DefaultReader, W: AsyncStreamWriter = DefaultWriter> {
     t0: Instant,
     connection_id: u64,
     request_id: u64,
-    reader: RecvStream,
-    writer: SendStream,
+    reader: R,
+    writer: W,
     other_bytes_read: u64,
     events: EventSender,
 }
@@ -69,18 +76,36 @@ pub struct StreamPair {
 impl StreamPair {
     pub async fn accept(
         conn: &endpoint::Connection,
-        events: &EventSender,
+        events: EventSender,
     ) -> Result<Self, ConnectionError> {
         let (writer, reader) = conn.accept_bi().await?;
-        Ok(Self {
+        Ok(Self::new(
+            conn.stable_id() as u64,
+            reader.id().into(),
+            IrohStreamReader(reader),
+            IrohStreamWriter(writer),
+            events,
+        ))
+    }
+}
+
+impl<R: AsyncStreamReader, W: AsyncStreamWriter> StreamPair<R, W> {
+    pub fn new(
+        connection_id: u64,
+        request_id: u64,
+        reader: R,
+        writer: W,
+        events: EventSender,
+    ) -> Self {
+        Self {
             t0: Instant::now(),
-            connection_id: conn.stable_id() as u64,
-            request_id: reader.id().into(),
+            connection_id,
+            request_id,
             reader,
             writer,
             other_bytes_read: 0,
-            events: events.clone(),
-        })
+            events,
+        }
     }
 
     /// Read the request.
@@ -98,20 +123,14 @@ impl StreamPair {
     }
 
     /// We are done with reading. Return a ProgressWriter that contains the read stats and connection id
-    async fn into_writer(
+    pub async fn into_writer(
         mut self,
         tracker: RequestTracker,
-    ) -> Result<ProgressWriter, ReadToEndError> {
-        let res = self.reader.read_to_end(0).await;
-        if let Err(e) = res {
-            tracker
-                .transfer_aborted(|| Box::new(self.stats()))
-                .await
-                .ok();
-            return Err(e);
-        };
+    ) -> Result<ProgressWriter<W>, io::Error> {
+        self.reader.expect_eof().await?;
+        drop(self.reader);
         Ok(ProgressWriter::new(
-            IrohStreamWriter(self.writer),
+            self.writer,
             WriterContext {
                 t0: self.t0,
                 other_bytes_read: self.other_bytes_read,
@@ -122,20 +141,14 @@ impl StreamPair {
         ))
     }
 
-    async fn into_reader(
+    pub async fn into_reader(
         mut self,
         tracker: RequestTracker,
-    ) -> Result<ProgressReader, ClosedStream> {
-        let res = self.writer.finish();
-        if let Err(e) = res {
-            tracker
-                .transfer_aborted(|| Box::new(self.stats()))
-                .await
-                .ok();
-            return Err(e);
-        };
+    ) -> Result<ProgressReader<R>, io::Error> {
+        self.writer.sync().await?;
+        drop(self.writer);
         Ok(ProgressReader {
-            inner: IrohStreamReader(self.reader),
+            inner: self.reader,
             context: ReaderContext {
                 t0: self.t0,
                 other_bytes_read: self.other_bytes_read,
@@ -145,74 +158,42 @@ impl StreamPair {
     }
 
     pub async fn get_request(
-        mut self,
+        &self,
         f: impl FnOnce() -> GetRequest,
-    ) -> anyhow::Result<ProgressWriter> {
-        let res = self
-            .events
+    ) -> Result<RequestTracker, ProgressError> {
+        self.events
             .request(f, self.connection_id, self.request_id)
-            .await;
-        match res {
-            Err(e) => {
-                self.writer.reset(e.code()).ok();
-                Err(e.into())
-            }
-            Ok(tracker) => Ok(self.into_writer(tracker).await?),
-        }
+            .await
     }
 
     pub async fn get_many_request(
-        mut self,
+        &self,
         f: impl FnOnce() -> GetManyRequest,
-    ) -> anyhow::Result<ProgressWriter> {
-        let res = self
-            .events
+    ) -> Result<RequestTracker, ProgressError> {
+        self.events
             .request(f, self.connection_id, self.request_id)
-            .await;
-        match res {
-            Err(e) => {
-                self.writer.reset(e.code()).ok();
-                Err(e.into())
-            }
-            Ok(tracker) => Ok(self.into_writer(tracker).await?),
-        }
+            .await
     }
 
     pub async fn push_request(
-        mut self,
+        &self,
         f: impl FnOnce() -> PushRequest,
-    ) -> anyhow::Result<ProgressReader> {
-        let res = self
-            .events
+    ) -> Result<RequestTracker, ProgressError> {
+        self.events
             .request(f, self.connection_id, self.request_id)
-            .await;
-        match res {
-            Err(e) => {
-                self.writer.reset(e.code()).ok();
-                Err(e.into())
-            }
-            Ok(tracker) => Ok(self.into_reader(tracker).await?),
-        }
+            .await
     }
 
     pub async fn observe_request(
-        mut self,
+        &self,
         f: impl FnOnce() -> ObserveRequest,
-    ) -> anyhow::Result<ProgressWriter> {
-        let res = self
-            .events
+    ) -> Result<RequestTracker, ProgressError> {
+        self.events
             .request(f, self.connection_id, self.request_id)
-            .await;
-        match res {
-            Err(e) => {
-                self.writer.reset(e.code()).ok();
-                Err(e.into())
-            }
-            Ok(tracker) => Ok(self.into_writer(tracker).await?),
-        }
+            .await
     }
 
-    fn stats(&self) -> TransferStats {
+    pub fn stats(&self) -> TransferStats {
         TransferStats {
             payload_bytes_sent: 0,
             other_bytes_sent: 0,
@@ -339,7 +320,7 @@ pub async fn handle_connection(
             debug!("closing connection: {cause}");
             return;
         }
-        while let Ok(context) = StreamPair::accept(&connection, &progress).await {
+        while let Ok(context) = StreamPair::accept(&connection, progress.clone()).await {
             let span = debug_span!("stream", stream_id = %context.request_id);
             let store = store.clone();
             tokio::spawn(handle_stream(store, context).instrument(span));
@@ -353,58 +334,120 @@ pub async fn handle_connection(
     .await
 }
 
-async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<()> {
+/// Describes how to handle errors for a stream.
+pub trait ErrorHandler {
+    type W: AsyncStreamWriter;
+    type R: AsyncStreamReader;
+    fn stop(reader: &mut Self::R, code: VarInt) -> impl Future<Output = ()>;
+    fn reset(writer: &mut Self::W, code: VarInt) -> impl Future<Output = ()>;
+}
+
+async fn handle_read_request_result<H: ErrorHandler, T, E: HasErrorCode>(
+    pair: &mut StreamPair<H::R, H::W>,
+    r: Result<T, E>,
+) -> Result<T, E> {
+    match r {
+        Ok(x) => Ok(x),
+        Err(e) => {
+            H::reset(&mut pair.writer, e.code()).await;
+            Err(e)
+        }
+    }
+}
+async fn handle_write_result<H: ErrorHandler, T, E: HasErrorCode>(
+    writer: &mut ProgressWriter<H::W>,
+    r: Result<T, E>,
+) -> Result<T, E> {
+    match r {
+        Ok(x) => {
+            writer.transfer_completed().await;
+            Ok(x)
+        }
+        Err(e) => {
+            H::reset(&mut writer.inner, e.code()).await;
+            writer.transfer_aborted().await;
+            Err(e)
+        }
+    }
+}
+async fn handle_read_result<H: ErrorHandler, T, E: HasErrorCode>(
+    reader: &mut ProgressReader<H::R>,
+    r: Result<T, E>,
+) -> Result<T, E> {
+    match r {
+        Ok(x) => {
+            reader.transfer_completed().await;
+            Ok(x)
+        }
+        Err(e) => {
+            H::stop(&mut reader.inner, e.code()).await;
+            reader.transfer_aborted().await;
+            Err(e)
+        }
+    }
+}
+struct IrohErrorHandler;
+
+impl ErrorHandler for IrohErrorHandler {
+    type W = DefaultWriter;
+    type R = DefaultReader;
+
+    async fn stop(reader: &mut Self::R, code: VarInt) {
+        reader.0.stop(code).ok();
+    }
+    async fn reset(writer: &mut Self::W, code: VarInt) {
+        writer.0.reset(code).ok();
+    }
+}
+
+pub async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<()> {
     // 1. Decode the request.
     debug!("reading request");
     let request = context.read_request().await?;
+    type H = IrohErrorHandler;
 
     match request {
-        Request::Get(request) => {
-            let mut writer = context.get_request(|| request.clone()).await?;
-            let res = handle_get(store, request, &mut writer).await;
-            if res.is_ok() {
-                writer.transfer_completed().await;
-            } else {
-                writer.transfer_aborted().await;
-            }
-        }
-        Request::GetMany(request) => {
-            let mut writer = context.get_many_request(|| request.clone()).await?;
-            if handle_get_many(store, request, &mut writer).await.is_ok() {
-                writer.transfer_completed().await;
-            } else {
-                writer.transfer_aborted().await;
-            }
-        }
-        Request::Observe(request) => {
-            let mut writer = context.observe_request(|| request.clone()).await?;
-            if handle_observe(store, request, &mut writer).await.is_ok() {
-                writer.transfer_completed().await;
-            } else {
-                writer.transfer_aborted().await;
-            }
-        }
-        Request::Push(request) => {
-            let mut reader = context.push_request(|| request.clone()).await?;
-            if handle_push(store, request, &mut reader).await.is_ok() {
-                reader.transfer_completed().await;
-            } else {
-                reader.transfer_aborted().await;
-            }
-        }
+        Request::Get(request) => handle_get::<H>(context, store, request).await?,
+        Request::GetMany(request) => handle_get_many::<H>(context, store, request).await?,
+        Request::Observe(request) => handle_observe::<H>(context, store, request).await?,
+        Request::Push(request) => handle_push::<H>(context, store, request).await?,
         _ => {}
     }
     Ok(())
 }
 
+#[derive(Debug, Snafu)]
+#[snafu(module)]
+pub enum HandleGetError {
+    #[snafu(transparent)]
+    ExportBao {
+        source: ExportBaoError,
+    },
+    InvalidHashSeq,
+    InvalidOffset,
+}
+
+impl HasErrorCode for HandleGetError {
+    fn code(&self) -> VarInt {
+        match self {
+            HandleGetError::ExportBao {
+                source: ExportBaoError::Progress { source, .. },
+            } => source.code(),
+            HandleGetError::InvalidHashSeq => ERR_INTERNAL,
+            HandleGetError::InvalidOffset => ERR_INTERNAL,
+            _ => ERR_INTERNAL,
+        }
+    }
+}
+
 /// Handle a single get request.
 ///
 /// Requires a database, the request, and a writer.
-pub async fn handle_get(
+async fn handle_get_impl<W: AsyncStreamWriter>(
     store: Store,
     request: GetRequest,
-    writer: &mut ProgressWriter,
-) -> anyhow::Result<()> {
+    writer: &mut ProgressWriter<W>,
+) -> Result<(), HandleGetError> {
     let hash = request.hash;
     debug!(%hash, "get received request");
     let mut hash_seq = None;
@@ -421,12 +464,13 @@ pub async fn handle_get(
                 Some(b) => b,
                 None => {
                     let bytes = store.get_bytes(hash).await?;
-                    let hs = HashSeq::try_from(bytes)?;
+                    let hs =
+                        HashSeq::try_from(bytes).map_err(|_| HandleGetError::InvalidHashSeq)?;
                     hash_seq = Some(hs);
                     hash_seq.as_ref().unwrap()
                 }
             };
-            let o = usize::try_from(offset - 1).context("offset too large")?;
+            let o = usize::try_from(offset - 1).map_err(|_| HandleGetError::InvalidOffset)?;
             let Some(hash) = hash_seq.get(o) else {
                 break;
             };
@@ -437,14 +481,44 @@ pub async fn handle_get(
     Ok(())
 }
 
+pub async fn handle_get<H: ErrorHandler>(
+    mut pair: StreamPair<H::R, H::W>,
+    store: Store,
+    request: GetRequest,
+) -> anyhow::Result<()> {
+    let res = pair.get_request(|| request.clone()).await;
+    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let mut writer = pair.into_writer(tracker).await?;
+    let res = handle_get_impl(store, request, &mut writer).await;
+    handle_write_result::<H, _, _>(&mut writer, res).await?;
+    Ok(())
+}
+
+#[derive(Debug, Snafu)]
+pub enum HandleGetManyError {
+    #[snafu(transparent)]
+    ExportBao { source: ExportBaoError },
+}
+
+impl HasErrorCode for HandleGetManyError {
+    fn code(&self) -> VarInt {
+        match self {
+            Self::ExportBao {
+                source: ExportBaoError::Progress { source, .. },
+            } => source.code(),
+            _ => ERR_INTERNAL,
+        }
+    }
+}
+
 /// Handle a single get request.
 ///
 /// Requires a database, the request, and a writer.
-pub async fn handle_get_many(
+async fn handle_get_many_impl<W: AsyncStreamWriter>(
     store: Store,
     request: GetManyRequest,
-    writer: &mut ProgressWriter,
-) -> Result<()> {
+    writer: &mut ProgressWriter<W>,
+) -> Result<(), HandleGetManyError> {
     debug!("get_many received request");
     let request_ranges = request.ranges.iter_infinite();
     for (child, (hash, ranges)) in request.hashes.iter().zip(request_ranges).enumerate() {
@@ -455,14 +529,53 @@ pub async fn handle_get_many(
     Ok(())
 }
 
+pub async fn handle_get_many<H: ErrorHandler>(
+    mut pair: StreamPair<H::R, H::W>,
+    store: Store,
+    request: GetManyRequest,
+) -> anyhow::Result<()> {
+    let res = pair.get_many_request(|| request.clone()).await;
+    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let mut writer = pair.into_writer(tracker).await?;
+    let res = handle_get_many_impl(store, request, &mut writer).await;
+    handle_write_result::<H, _, _>(&mut writer, res).await?;
+    Ok(())
+}
+
+#[derive(Debug, Snafu)]
+pub enum HandlePushError {
+    #[snafu(transparent)]
+    ExportBao {
+        source: ExportBaoError,
+    },
+
+    InvalidHashSeq,
+
+    #[snafu(transparent)]
+    Request {
+        source: RequestError,
+    },
+}
+
+impl HasErrorCode for HandlePushError {
+    fn code(&self) -> VarInt {
+        match self {
+            Self::ExportBao {
+                source: ExportBaoError::Progress { source, .. },
+            } => source.code(),
+            _ => ERR_INTERNAL,
+        }
+    }
+}
+
 /// Handle a single push request.
 ///
 /// Requires a database, the request, and a reader.
-pub async fn handle_push(
+async fn handle_push_impl<R: AsyncStreamReader>(
     store: Store,
     request: PushRequest,
-    reader: &mut ProgressReader,
-) -> Result<()> {
+    reader: &mut ProgressReader<R>,
+) -> Result<(), HandlePushError> {
     let hash = request.hash;
     debug!(%hash, "push received request");
     let mut request_ranges = request.ranges.iter_infinite();
@@ -479,7 +592,7 @@ pub async fn handle_push(
     }
     // todo: we assume here that the hash sequence is complete. For some requests this might not be the case. We would need `LazyHashSeq` for that, but it is buggy as of now!
     let hash_seq = store.get_bytes(hash).await?;
-    let hash_seq = HashSeq::try_from(hash_seq)?;
+    let hash_seq = HashSeq::try_from(hash_seq).map_err(|_| HandlePushError::InvalidHashSeq)?;
     for (child_hash, child_ranges) in hash_seq.into_iter().zip(request_ranges) {
         if child_ranges.is_empty() {
             continue;
@@ -491,13 +604,26 @@ pub async fn handle_push(
     Ok(())
 }
 
+pub async fn handle_push<H: ErrorHandler>(
+    mut pair: StreamPair<H::R, H::W>,
+    store: Store,
+    request: PushRequest,
+) -> anyhow::Result<()> {
+    let res = pair.push_request(|| request.clone()).await;
+    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let mut reader = pair.into_reader(tracker).await?;
+    let res = handle_push_impl(store, request, &mut reader).await;
+    handle_read_result::<H, _, _>(&mut reader, res).await?;
+    Ok(())
+}
+
 /// Send a blob to the client.
-pub(crate) async fn send_blob(
+pub(crate) async fn send_blob<W: AsyncStreamWriter>(
     store: &Store,
     index: u64,
     hash: Hash,
     ranges: ChunkRanges,
-    writer: &mut ProgressWriter,
+    writer: &mut ProgressWriter<W>,
 ) -> ExportBaoResult<()> {
     store
         .export_bao(hash, ranges)
@@ -505,26 +631,46 @@ pub(crate) async fn send_blob(
         .await
 }
 
+#[derive(Debug, Snafu)]
+pub enum HandleObserveError {
+    ObserveStreamClosed,
+
+    #[snafu(transparent)]
+    RemoteClosed {
+        source: io::Error,
+    },
+}
+
+impl HasErrorCode for HandleObserveError {
+    fn code(&self) -> VarInt {
+        ERR_INTERNAL
+    }
+}
+
 /// Handle a single push request.
 ///
 /// Requires a database, the request, and a reader.
-pub async fn handle_observe(
+async fn handle_observe_impl(
     store: Store,
     request: ObserveRequest,
     writer: &mut ProgressWriter,
-) -> Result<()> {
-    let mut stream = store.observe(request.hash).stream().await?;
+) -> std::result::Result<(), HandleObserveError> {
+    let mut stream = store
+        .observe(request.hash)
+        .stream()
+        .await
+        .map_err(|_| HandleObserveError::ObserveStreamClosed)?;
     let mut old = stream
         .next()
         .await
-        .ok_or(anyhow::anyhow!("observe stream closed before first value"))?;
+        .ok_or(HandleObserveError::ObserveStreamClosed)?;
     // send the initial bitfield
     send_observe_item(writer, &old).await?;
     // send updates until the remote loses interest
     loop {
         select! {
             new = stream.next() => {
-                let new = new.context("observe stream closed")?;
+                let new = new.ok_or(HandleObserveError::ObserveStreamClosed)?;
                 let diff = old.diff(&new);
                 if diff.is_empty() {
                     continue;
@@ -541,11 +687,24 @@ pub async fn handle_observe(
     Ok(())
 }
 
-async fn send_observe_item(writer: &mut ProgressWriter, item: &Bitfield) -> Result<()> {
+async fn send_observe_item(writer: &mut ProgressWriter, item: &Bitfield) -> io::Result<()> {
     use irpc::util::AsyncWriteVarintExt;
     let item = ObserveItem::from(item);
     let len = writer.inner.0.write_length_prefixed(item).await?;
     writer.context.log_other_write(len);
+    Ok(())
+}
+
+pub async fn handle_observe<H: ErrorHandler<W = DefaultWriter>>(
+    mut pair: StreamPair<H::R, H::W>,
+    store: Store,
+    request: ObserveRequest,
+) -> anyhow::Result<()> {
+    let res = pair.observe_request(|| request.clone()).await;
+    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let mut writer = pair.into_writer(tracker).await?;
+    let res = handle_observe_impl(store, request, &mut writer).await;
+    handle_write_result::<H, _, _>(&mut writer, res).await?;
     Ok(())
 }
 
@@ -554,7 +713,7 @@ pub struct ProgressReader<R: AsyncStreamReader = DefaultReader> {
     context: ReaderContext,
 }
 
-impl ProgressReader {
+impl<R: AsyncStreamReader> ProgressReader<R> {
     async fn transfer_aborted(&self) {
         self.context
             .tracker
@@ -572,24 +731,106 @@ impl ProgressReader {
     }
 }
 
-pub(crate) trait RecvStreamExt {
-    async fn read_to_end_as<T: DeserializeOwned>(
-        &mut self,
-        max_size: usize,
-    ) -> io::Result<(T, usize)>;
-}
+pub(crate) trait RecvStreamExt: AsyncStreamReader {
+    async fn expect_eof(&mut self) -> io::Result<()> {
+        match self.read_u8().await {
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected data",
+            )),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
 
-impl RecvStreamExt for RecvStream {
+    async fn read_u8(&mut self) -> io::Result<u8> {
+        let buf = self.read::<1>().await?;
+        Ok(buf[0])
+    }
+
     async fn read_to_end_as<T: DeserializeOwned>(
         &mut self,
         max_size: usize,
     ) -> io::Result<(T, usize)> {
-        let data = self
-            .read_to_end(max_size)
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data = self.read_bytes(max_size).await?;
+        self.expect_eof().await?;
         let value = postcard::from_bytes(&data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok((value, data.len()))
     }
+
+    async fn read_length_prefixed<T: DeserializeOwned>(
+        &mut self,
+        max_size: usize,
+    ) -> io::Result<T> {
+        let Some(n) = self.read_varint_u64().await? else {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        };
+        if n > max_size as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "length prefix too large",
+            ));
+        }
+        let n = n as usize;
+        let data = self.read_bytes(n).await?;
+        let value = postcard::from_bytes(&data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(value)
+    }
+
+    /// Reads a u64 varint from an AsyncRead source, using the Postcard/LEB128 format.
+    ///
+    /// In Postcard's varint format (LEB128):
+    /// - Each byte uses 7 bits for the value
+    /// - The MSB (most significant bit) of each byte indicates if there are more bytes (1) or not (0)
+    /// - Values are stored in little-endian order (least significant group first)
+    ///
+    /// Returns the decoded u64 value.
+    async fn read_varint_u64(&mut self) -> io::Result<Option<u64>> {
+        let mut result: u64 = 0;
+        let mut shift: u32 = 0;
+
+        loop {
+            // We can only shift up to 63 bits (for a u64)
+            if shift >= 64 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Varint is too large for u64",
+                ));
+            }
+
+            // Read a single byte
+            let res = self.read_u8().await;
+            if shift == 0 {
+                if let Err(cause) = res {
+                    if cause.kind() == io::ErrorKind::UnexpectedEof {
+                        return Ok(None);
+                    } else {
+                        return Err(cause);
+                    }
+                }
+            }
+
+            let byte = res?;
+
+            // Extract the 7 value bits (bits 0-6, excluding the MSB which is the continuation bit)
+            let value = (byte & 0x7F) as u64;
+
+            // Add the bits to our result at the current shift position
+            result |= value << shift;
+
+            // If the high bit is not set (0), this is the last byte
+            if byte & 0x80 == 0 {
+                break;
+            }
+
+            // Move to the next 7 bits
+            shift += 7;
+        }
+
+        Ok(Some(result))
+    }
 }
+
+impl<R: AsyncStreamReader> RecvStreamExt for R {}

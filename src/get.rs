@@ -53,7 +53,7 @@ impl AsyncStreamWriter for IrohStreamWriter {
     }
 
     async fn sync(&mut self) -> io::Result<()> {
-        Ok(self.0.flush().await?)
+        self.0.flush().await
     }
 }
 
@@ -716,7 +716,7 @@ pub mod fsm {
                 DecodeError::LeafNotFound { .. } => {
                     io::Error::new(io::ErrorKind::UnexpectedEof, cause)
                 }
-                DecodeError::Read { source, .. } => source.into(),
+                DecodeError::Read { source, .. } => source,
                 DecodeError::Write { source, .. } => source,
                 _ => io::Error::other(cause),
             }

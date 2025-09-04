@@ -382,7 +382,7 @@ use bao_tree::{io::round_up_to_chunks, ChunkNum};
 use builder::GetRequestBuilder;
 use derive_more::From;
 use iroh::endpoint::VarInt;
-use irpc::util::AsyncReadVarintExt;
+use iroh_io::AsyncStreamReader;
 use postcard::experimental::max_size::MaxSize;
 use range_collections::{range_set::RangeSetEntry, RangeSet2};
 use serde::{Deserialize, Serialize};
@@ -390,7 +390,6 @@ mod range_spec;
 pub use bao_tree::ChunkRanges;
 pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 use snafu::{GenerateImplicitData, Snafu};
-use tokio::io::AsyncReadExt;
 
 use crate::{api::blobs::Bitfield, provider::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
@@ -448,7 +447,7 @@ pub enum RequestType {
 }
 
 impl Request {
-    pub async fn read_async(reader: &mut iroh::endpoint::RecvStream) -> io::Result<(Self, usize)> {
+    pub async fn read_async<R: AsyncStreamReader>(reader: &mut R) -> io::Result<(Self, usize)> {
         let request_type = reader.read_u8().await?;
         let request_type: RequestType = postcard::from_bytes(std::slice::from_ref(&request_type))
             .map_err(|_| {

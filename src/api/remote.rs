@@ -99,8 +99,7 @@ impl GetProgress {
 
     pub async fn complete(self) -> GetResult<Stats> {
         just_result(self.stream()).await.unwrap_or_else(|| {
-            Err(LocalFailureSnafu
-                .into_error(anyhow::anyhow!("stream closed without result").into()))
+            Err(LocalFailureSnafu.into_error(anyhow::anyhow!("stream closed without result")))
         })
     }
 }
@@ -512,7 +511,7 @@ impl Remote {
         let local = self
             .local(content)
             .await
-            .map_err(|e: anyhow::Error| LocalFailureSnafu.into_error(e.into()))?;
+            .map_err(|e: anyhow::Error| LocalFailureSnafu.into_error(e))?;
         if local.is_complete() {
             return Ok(Default::default());
         }
@@ -520,7 +519,7 @@ impl Remote {
         let conn = conn
             .connection()
             .await
-            .map_err(|e| LocalFailureSnafu.into_error(e.into()))?;
+            .map_err(|e| LocalFailureSnafu.into_error(e))?;
         let stats = self.execute_get_sink(&conn, request, progress).await?;
         Ok(stats)
     }
@@ -914,8 +913,7 @@ async fn get_blob_ranges_impl(
     };
     let complete = async move {
         handle.rx.await.map_err(|e| {
-            LocalFailureSnafu
-                .into_error(anyhow::anyhow!("error reading from import stream: {e}").into())
+            LocalFailureSnafu.into_error(anyhow::anyhow!("error reading from import stream: {e}"))
         })
     };
     let (_, end) = tokio::try_join!(complete, write)?;

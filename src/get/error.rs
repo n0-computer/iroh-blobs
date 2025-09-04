@@ -82,7 +82,7 @@ impl GetError {
             Self::ConnectedNext {
                 source: ConnectedNextError::Write { source, .. },
                 ..
-            } => Some(&source),
+            } => Some(source),
             _ => None,
         }
     }
@@ -92,7 +92,7 @@ impl GetError {
             Self::InitialNext {
                 source: InitialNextError::Open { source, .. },
                 ..
-            } => Some(&source),
+            } => Some(source),
             _ => None,
         }
     }
@@ -102,15 +102,15 @@ impl GetError {
             Self::AtBlobHeaderNext {
                 source: AtBlobHeaderNextError::Read { source, .. },
                 ..
-            } => Some(&source),
+            } => Some(source),
             Self::Decode {
                 source: DecodeError::Read { source, .. },
                 ..
-            } => Some(&source),
+            } => Some(source),
             Self::AtClosingNext {
                 source: AtClosingNextError::Read { source, .. },
                 ..
-            } => Some(&source),
+            } => Some(source),
             _ => None,
         }
     }
@@ -120,7 +120,7 @@ impl GetError {
             Self::Decode {
                 source: DecodeError::Write { source, .. },
                 ..
-            } => Some(&source),
+            } => Some(source),
             _ => None,
         }
     }

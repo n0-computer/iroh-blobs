@@ -95,15 +95,21 @@ impl From<ProgressError> for io::Error {
     }
 }
 
-impl ProgressError {
-    pub fn code(&self) -> quinn::VarInt {
+pub trait HasErrorCode {
+    fn code(&self) -> quinn::VarInt;
+}
+
+impl HasErrorCode for ProgressError {
+    fn code(&self) -> quinn::VarInt {
         match self {
             ProgressError::Limit => ERR_LIMIT,
             ProgressError::Permission => ERR_PERMISSION,
             ProgressError::Internal { .. } => ERR_INTERNAL,
         }
     }
+}
 
+impl ProgressError {
     pub fn reason(&self) -> &'static [u8] {
         match self {
             ProgressError::Limit => b"limit",

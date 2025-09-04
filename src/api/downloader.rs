@@ -563,7 +563,7 @@ mod tests {
             .download(request, Shuffled::new(vec![node1_id, node2_id]))
             .stream()
             .await?;
-        while let Some(_) = progress.next().await {}
+        while progress.next().await.is_some() {}
         assert_eq!(store3.get_bytes(tt1.hash).await?.deref(), b"hello world");
         assert_eq!(store3.get_bytes(tt2.hash).await?.deref(), b"hello world 2");
         Ok(())
@@ -606,7 +606,7 @@ mod tests {
                 ))
                 .stream()
                 .await?;
-            while let Some(_) = progress.next().await {}
+            while progress.next().await.is_some() {}
         }
         if false {
             let conn = r3.endpoint().connect(node1_addr, crate::ALPN).await?;
@@ -668,7 +668,7 @@ mod tests {
             ))
             .stream()
             .await?;
-        while let Some(_) = progress.next().await {}
+        while progress.next().await.is_some() {}
         Ok(())
     }
 }
