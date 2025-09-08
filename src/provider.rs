@@ -323,7 +323,7 @@ pub async fn handle_connection(
         while let Ok(context) = StreamPair::accept(&connection, progress.clone()).await {
             let span = debug_span!("stream", stream_id = %context.request_id);
             let store = store.clone();
-            tokio::spawn(handle_stream(store, context).instrument(span));
+            tokio::spawn(handle_stream(context, store).instrument(span));
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })
@@ -400,17 +400,17 @@ impl ErrorHandler for IrohErrorHandler {
     }
 }
 
-pub async fn handle_stream(store: Store, mut context: StreamPair) -> anyhow::Result<()> {
+pub async fn handle_stream(mut pair: StreamPair, store: Store) -> anyhow::Result<()> {
     // 1. Decode the request.
     debug!("reading request");
-    let request = context.read_request().await?;
+    let request = pair.read_request().await?;
     type H = IrohErrorHandler;
 
     match request {
-        Request::Get(request) => handle_get::<H>(context, store, request).await?,
-        Request::GetMany(request) => handle_get_many::<H>(context, store, request).await?,
-        Request::Observe(request) => handle_observe::<H>(context, store, request).await?,
-        Request::Push(request) => handle_push::<H>(context, store, request).await?,
+        Request::Get(request) => handle_get::<H>(pair, store, request).await?,
+        Request::GetMany(request) => handle_get_many::<H>(pair, store, request).await?,
+        Request::Observe(request) => handle_observe::<H>(pair, store, request).await?,
+        Request::Push(request) => handle_push::<H>(pair, store, request).await?,
         _ => {}
     }
     Ok(())
@@ -477,6 +477,11 @@ async fn handle_get_impl<W: AsyncStreamWriter>(
             send_blob(&store, offset, hash, ranges.clone(), writer).await?;
         }
     }
+    writer
+        .inner
+        .sync()
+        .await
+        .map_err(|e| HandleGetError::ExportBao { source: e.into() })?;
 
     Ok(())
 }

@@ -339,7 +339,10 @@ impl EventSender {
             }
             while let Some(msg) = rx.recv().await {
                 match msg {
-                    ProviderMessage::ClientConnected(_) => todo!(),
+                    ProviderMessage::ClientConnected(msg) => {
+                        trace!("{:?}", msg.inner);
+                        msg.tx.send(Ok(())).await.ok();
+                    }
                     ProviderMessage::ClientConnectedNotify(msg) => {
                         trace!("{:?}", msg.inner);
                     }
