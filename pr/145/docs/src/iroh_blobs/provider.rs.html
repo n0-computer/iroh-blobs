@@ -834,7 +834,12 @@
 <a href="#833" id="833">833</a>
 <a href="#834" id="834">834</a>
 <a href="#835" id="835">835</a>
-<a href="#836" id="836">836</a></pre></div><pre class="rust"><code><span class="doccomment">//! The low level server side API
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a></pre></div><pre class="rust"><code><span class="doccomment">//! The low level server side API
 //!
 //! Note that while using this API directly is fine, the standard way
 //! to provide data is to just register a [`crate::BlobsProtocol`] protocol
@@ -1159,7 +1164,7 @@
         <span class="kw">while let </span><span class="prelude-val">Ok</span>(context) = StreamPair::accept(<span class="kw-2">&amp;</span>connection, progress.clone()).<span class="kw">await </span>{
             <span class="kw">let </span>span = <span class="macro">debug_span!</span>(<span class="string">"stream"</span>, stream_id = %context.request_id);
             <span class="kw">let </span>store = store.clone();
-            tokio::spawn(handle_stream(store, context).instrument(span));
+            tokio::spawn(handle_stream(context, store).instrument(span));
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })
@@ -1236,17 +1241,17 @@
     }
 }
 
-<span class="kw">pub async fn </span>handle_stream(store: Store, <span class="kw-2">mut </span>context: StreamPair) -&gt; anyhow::Result&lt;()&gt; {
+<span class="kw">pub async fn </span>handle_stream(<span class="kw-2">mut </span>pair: StreamPair, store: Store) -&gt; anyhow::Result&lt;()&gt; {
     <span class="comment">// 1. Decode the request.
     </span><span class="macro">debug!</span>(<span class="string">"reading request"</span>);
-    <span class="kw">let </span>request = context.read_request().<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">let </span>request = pair.read_request().<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="kw">type </span>H = IrohErrorHandler;
 
     <span class="kw">match </span>request {
-        Request::Get(request) =&gt; handle_get::&lt;H&gt;(context, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
-        Request::GetMany(request) =&gt; handle_get_many::&lt;H&gt;(context, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
-        Request::Observe(request) =&gt; handle_observe::&lt;H&gt;(context, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
-        Request::Push(request) =&gt; handle_push::&lt;H&gt;(context, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
+        Request::Get(request) =&gt; handle_get::&lt;H&gt;(pair, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
+        Request::GetMany(request) =&gt; handle_get_many::&lt;H&gt;(pair, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
+        Request::Observe(request) =&gt; handle_observe::&lt;H&gt;(pair, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
+        Request::Push(request) =&gt; handle_push::&lt;H&gt;(pair, store, request).<span class="kw">await</span><span class="question-mark">?</span>,
         <span class="kw">_ </span>=&gt; {}
     }
     <span class="prelude-val">Ok</span>(())
@@ -1313,6 +1318,11 @@
             send_blob(<span class="kw-2">&amp;</span>store, offset, hash, ranges.clone(), writer).<span class="kw">await</span><span class="question-mark">?</span>;
         }
     }
+    writer
+        .inner
+        .sync()
+        .<span class="kw">await
+        </span>.map_err(|e| HandleGetError::ExportBao { source: e.into() })<span class="question-mark">?</span>;
 
     <span class="prelude-val">Ok</span>(())
 }

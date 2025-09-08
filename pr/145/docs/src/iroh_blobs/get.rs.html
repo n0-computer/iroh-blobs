@@ -1024,7 +1024,27 @@
 <a href="#1023" id="1023">1023</a>
 <a href="#1024" id="1024">1024</a>
 <a href="#1025" id="1025">1025</a>
-<a href="#1026" id="1026">1026</a></pre></div><pre class="rust"><code><span class="doccomment">//! The low level client side API
+<a href="#1026" id="1026">1026</a>
+<a href="#1027" id="1027">1027</a>
+<a href="#1028" id="1028">1028</a>
+<a href="#1029" id="1029">1029</a>
+<a href="#1030" id="1030">1030</a>
+<a href="#1031" id="1031">1031</a>
+<a href="#1032" id="1032">1032</a>
+<a href="#1033" id="1033">1033</a>
+<a href="#1034" id="1034">1034</a>
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a></pre></div><pre class="rust"><code><span class="doccomment">//! The low level client side API
 //!
 //! Note that while using this API directly is fine, a simpler way to get data
 //! to a store is to use the [`crate::api::remote`] API, in particular the
@@ -1367,7 +1387,23 @@
         </span>Write { source: io::Error },
     }
 
-    <span class="kw">impl</span>&lt;R: AsyncStreamReader&gt; AtConnected&lt;R&gt; {
+    <span class="kw">impl</span>&lt;R: AsyncStreamReader, W: AsyncStreamWriter&gt; AtConnected&lt;R, W&gt; {
+        <span class="kw">pub fn </span>new(
+            start: Instant,
+            reader: R,
+            writer: W,
+            request: GetRequest,
+            counters: RequestCounters,
+        ) -&gt; <span class="self">Self </span>{
+            <span class="self">Self </span>{
+                start,
+                reader,
+                writer,
+                request,
+                counters,
+            }
+        }
+
         <span class="doccomment">/// Send the request and move to the next state
         ///
         /// The next state will be either `StartRoot` or `StartChild` depending on whether
@@ -1401,6 +1437,10 @@
                 </span><span class="kw">let </span>len = request_bytes.len() <span class="kw">as </span>u64;
                 writer
                     .write_bytes(request_bytes.into())
+                    .<span class="kw">await
+                    </span>.context(connected_next_error::WriteSnafu)<span class="question-mark">?</span>;
+                writer
+                    .sync()
                     .<span class="kw">await
                     </span>.context(connected_next_error::WriteSnafu)<span class="question-mark">?</span>;
                 len
