@@ -44,6 +44,7 @@ iroh-base = "0.91.1"
 reflink-copy = "0.1.24"
 irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
+async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
@@ -60,6 +61,7 @@ tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
 iroh = { version = "0.91.1", features = ["discovery-local-network"]}
+async-compression = { version = "0.4.30", features = ["zstd", "tokio"] }
 
 [features]
 hide-proto-docs = []

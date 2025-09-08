@@ -341,7 +341,23 @@ pub mod fsm {
         Write { source: io::Error },
     }
 
-    impl<R: AsyncStreamReader> AtConnected<R> {
+    impl<R: AsyncStreamReader, W: AsyncStreamWriter> AtConnected<R, W> {
+        pub fn new(
+            start: Instant,
+            reader: R,
+            writer: W,
+            request: GetRequest,
+            counters: RequestCounters,
+        ) -> Self {
+            Self {
+                start,
+                reader,
+                writer,
+                request,
+                counters,
+            }
+        }
+
         /// Send the request and move to the next state
         ///
         /// The next state will be either `StartRoot` or `StartChild` depending on whether
@@ -375,6 +391,10 @@ pub mod fsm {
                 let len = request_bytes.len() as u64;
                 writer
                     .write_bytes(request_bytes.into())
+                    .await
+                    .context(connected_next_error::WriteSnafu)?;
+                writer
+                    .sync()
                     .await
                     .context(connected_next_error::WriteSnafu)?;
                 len
