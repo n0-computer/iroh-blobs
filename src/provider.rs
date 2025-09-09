@@ -7,7 +7,7 @@ use std::{
     fmt::Debug,
     future::Future,
     io,
-    ops::DerefMut,
+    ops::{Deref, DerefMut},
     time::{Duration, Instant},
 };
 
@@ -20,7 +20,10 @@ use n0_future::StreamExt;
 use quinn::{ConnectionError, ReadExactError, VarInt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::Snafu;
-use tokio::{io::AsyncRead, select};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    select,
+};
 use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
@@ -64,15 +67,11 @@ pub struct TransferStats {
 
 /// A pair of [`SendStream`] and [`RecvStream`] with additional context data.
 #[derive(Debug)]
-pub struct StreamPair<
-    R: crate::provider::RecvStream = DefaultReader,
-    W: crate::provider::SendStream = DefaultWriter,
-> {
-    t0: Instant,
+pub struct StreamPair<R: RecvStream = DefaultReader, W: SendStream = DefaultWriter> {
+    pub t0: Instant,
     connection_id: u64,
-    request_id: u64,
-    reader: R,
-    writer: W,
+    pub reader: R,
+    pub writer: W,
     other_bytes_read: u64,
     events: EventSender,
 }
@@ -83,28 +82,19 @@ impl StreamPair {
         events: EventSender,
     ) -> Result<Self, ConnectionError> {
         let (writer, reader) = conn.accept_bi().await?;
-        Ok(Self::new(
-            conn.stable_id() as u64,
-            reader.id().into(),
-            reader,
-            writer,
-            events,
-        ))
+        Ok(Self::new(conn.stable_id() as u64, reader, writer, events))
     }
 }
 
 impl<R: crate::provider::RecvStream, W: crate::provider::SendStream> StreamPair<R, W> {
-    pub fn new(
-        connection_id: u64,
-        request_id: u64,
-        reader: R,
-        writer: W,
-        events: EventSender,
-    ) -> Self {
+    pub fn stream_id(&self) -> u64 {
+        self.reader.id()
+    }
+
+    pub fn new(connection_id: u64, reader: R, writer: W, events: EventSender) -> Self {
         Self {
             t0: Instant::now(),
             connection_id,
-            request_id,
             reader,
             writer,
             other_bytes_read: 0,
@@ -166,7 +156,7 @@ impl<R: crate::provider::RecvStream, W: crate::provider::SendStream> StreamPair<
         f: impl FnOnce() -> GetRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.request_id)
+            .request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -175,7 +165,7 @@ impl<R: crate::provider::RecvStream, W: crate::provider::SendStream> StreamPair<
         f: impl FnOnce() -> GetManyRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.request_id)
+            .request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -184,7 +174,7 @@ impl<R: crate::provider::RecvStream, W: crate::provider::SendStream> StreamPair<
         f: impl FnOnce() -> PushRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.request_id)
+            .request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -193,7 +183,7 @@ impl<R: crate::provider::RecvStream, W: crate::provider::SendStream> StreamPair<
         f: impl FnOnce() -> ObserveRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.request_id)
+            .request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -324,10 +314,10 @@ pub async fn handle_connection(
             debug!("closing connection: {cause}");
             return;
         }
-        while let Ok(context) = StreamPair::accept(&connection, progress.clone()).await {
-            let span = debug_span!("stream", stream_id = %context.request_id);
+        while let Ok(pair) = StreamPair::accept(&connection, progress.clone()).await {
+            let span = debug_span!("stream", stream_id = %pair.stream_id());
             let store = store.clone();
-            tokio::spawn(handle_stream(context, store).instrument(span));
+            tokio::spawn(handle_stream(pair, store).instrument(span));
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })
@@ -338,15 +328,8 @@ pub async fn handle_connection(
     .await
 }
 
-pub trait SendStreamSpecific: Send {
-    /// Reset the stream with the given error code.
-    fn reset(&mut self, code: VarInt) -> io::Result<()>;
-    /// Wait for the stream to be stopped, returning the error code if it was.
-    fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
-}
-
 /// An abstract `iroh::endpoint::SendStream`.
-pub trait SendStream: SendStreamSpecific {
+pub trait SendStream: Send {
     /// Send bytes to the stream. This takes a `Bytes` because iroh can directly use them.
     fn send_bytes(&mut self, bytes: Bytes) -> impl Future<Output = io::Result<()>> + Send;
     /// Send that sends a fixed sized buffer.
@@ -356,15 +339,14 @@ pub trait SendStream: SendStreamSpecific {
     ) -> impl Future<Output = io::Result<()>> + Send;
     /// Sync the stream. Not needed for iroh, but needed for intermediate buffered streams such as compression.
     fn sync(&mut self) -> impl Future<Output = io::Result<()>> + Send;
-}
-
-pub trait RecvStreamSpecific: Send {
-    /// Stop the stream with the given error code.
-    fn stop(&mut self, code: VarInt) -> io::Result<()>;
+    /// Reset the stream with the given error code.
+    fn reset(&mut self, code: VarInt) -> io::Result<()>;
+    /// Wait for the stream to be stopped, returning the error code if it was.
+    fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
 }
 
 /// An abstract `iroh::endpoint::RecvStream`.
-pub trait RecvStream: RecvStreamSpecific {
+pub trait RecvStream: Send {
     /// Receive up to `len` bytes from the stream, directly into a `Bytes`.
     fn recv_bytes(&mut self, len: usize) -> impl Future<Output = io::Result<Bytes>> + Send;
     /// Receive exactly `len` bytes from the stream, directly into a `Bytes`.
@@ -375,6 +357,10 @@ pub trait RecvStream: RecvStreamSpecific {
     fn recv_bytes_exact(&mut self, len: usize) -> impl Future<Output = io::Result<Bytes>> + Send;
     /// Receive exactly `L` bytes from the stream, directly into a `[u8; L]`.
     fn recv<const L: usize>(&mut self) -> impl Future<Output = io::Result<[u8; L]>> + Send;
+    /// Stop the stream with the given error code.
+    fn stop(&mut self, code: VarInt) -> io::Result<()>;
+    /// Get the stream id.
+    fn id(&self) -> u64;
 }
 
 impl SendStream for iroh::endpoint::SendStream {
@@ -389,9 +375,7 @@ impl SendStream for iroh::endpoint::SendStream {
     async fn sync(&mut self) -> io::Result<()> {
         Ok(())
     }
-}
 
-impl SendStreamSpecific for iroh::endpoint::SendStream {
     fn reset(&mut self, code: VarInt) -> io::Result<()> {
         Ok(self.reset(code)?)
     }
@@ -435,11 +419,13 @@ impl RecvStream for iroh::endpoint::RecvStream {
         })?;
         Ok(buf)
     }
-}
 
-impl RecvStreamSpecific for iroh::endpoint::RecvStream {
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
         Ok(self.stop(code)?)
+    }
+
+    fn id(&self) -> u64 {
+        self.id().index()
     }
 }
 
@@ -455,11 +441,13 @@ impl<R: RecvStream> RecvStream for &mut R {
     async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
         self.deref_mut().recv::<L>().await
     }
-}
 
-impl<R: RecvStreamSpecific> RecvStreamSpecific for &mut R {
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
         self.deref_mut().stop(code)
+    }
+
+    fn id(&self) -> u64 {
+        self.deref().id()
     }
 }
 
@@ -475,9 +463,7 @@ impl<W: SendStream> SendStream for &mut W {
     async fn sync(&mut self) -> io::Result<()> {
         self.deref_mut().sync().await
     }
-}
 
-impl<W: SendStreamSpecific> SendStreamSpecific for &mut W {
     fn reset(&mut self, code: VarInt) -> io::Result<()> {
         self.deref_mut().reset(code)
     }
@@ -494,20 +480,14 @@ impl<R> AsyncReadRecvStream<R> {
     pub fn new(inner: R) -> Self {
         Self(inner)
     }
-
-    pub fn into_inner(self) -> R {
-        self.0
-    }
 }
 
-use tokio::io::AsyncReadExt;
-
-impl<R: AsyncRead + Unpin + RecvStreamSpecific> RecvStream for AsyncReadRecvStream<R> {
+impl<R: RecvStreamSpecific> RecvStream for AsyncReadRecvStream<R> {
     async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
         let mut res = vec![0; len];
         let mut n = 0;
         loop {
-            let read = self.0.read(&mut res[n..]).await?;
+            let read = self.0.inner().read(&mut res[n..]).await?;
             if read == 0 {
                 res.truncate(n);
                 break;
@@ -522,21 +502,35 @@ impl<R: AsyncRead + Unpin + RecvStreamSpecific> RecvStream for AsyncReadRecvStre
 
     async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<Bytes> {
         let mut res = vec![0; len];
-        self.0.read_exact(&mut res).await?;
+        self.0.inner().read_exact(&mut res).await?;
         Ok(res.into())
     }
 
     async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
         let mut res = [0; L];
-        self.0.read_exact(&mut res).await?;
+        self.0.inner().read_exact(&mut res).await?;
         Ok(res)
     }
-}
 
-impl<R: RecvStreamSpecific> RecvStreamSpecific for AsyncReadRecvStream<R> {
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
         self.0.stop(code)
     }
+
+    fn id(&self) -> u64 {
+        self.0.id()
+    }
+}
+
+pub trait RecvStreamSpecific: Send {
+    fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send);
+    fn stop(&mut self, code: VarInt) -> io::Result<()>;
+    fn id(&self) -> u64;
+}
+
+pub trait SendStreamSpecific: Send {
+    fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send);
+    fn reset(&mut self, code: VarInt) -> io::Result<()>;
+    fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
 }
 
 impl RecvStream for Bytes {
@@ -565,11 +559,13 @@ impl RecvStream for Bytes {
         *self = self.slice(L..);
         Ok(res)
     }
-}
 
-impl RecvStreamSpecific for Bytes {
     fn stop(&mut self, _code: VarInt) -> io::Result<()> {
         Ok(())
+    }
+
+    fn id(&self) -> u64 {
+        0
     }
 }
 
@@ -577,40 +573,39 @@ impl RecvStreamSpecific for Bytes {
 #[derive(Debug, Clone)]
 pub struct AsyncWriteSendStream<W>(W);
 
-impl<W> AsyncWriteSendStream<W> {
+impl<W: SendStreamSpecific> AsyncWriteSendStream<W> {
     pub fn new(inner: W) -> Self {
         Self(inner)
     }
+}
 
+impl<W: SendStreamSpecific> AsyncWriteSendStream<W> {
     pub fn into_inner(self) -> W {
         self.0
     }
 }
 
-use tokio::io::AsyncWriteExt;
-
-impl<W: tokio::io::AsyncWrite + Unpin + SendStreamSpecific> SendStream for AsyncWriteSendStream<W> {
+impl<W: SendStreamSpecific> SendStream for AsyncWriteSendStream<W> {
     async fn send_bytes(&mut self, bytes: Bytes) -> io::Result<()> {
-        self.0.write_all(&bytes).await
+        self.0.inner().write_all(&bytes).await
     }
 
     async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
-        self.0.write_all(buf).await
+        self.0.inner().write_all(buf).await
     }
 
     async fn sync(&mut self) -> io::Result<()> {
-        self.0.flush().await
+        self.0.inner().flush().await
     }
-}
 
-impl<W: SendStreamSpecific> SendStreamSpecific for AsyncWriteSendStream<W> {
     fn reset(&mut self, code: VarInt) -> io::Result<()> {
         self.0.reset(code)?;
         Ok(())
     }
 
     async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
-        Ok(self.0.stopped().await?)
+        let res = self.0.stopped().await?;
+        Ok(res)
     }
 }
 
@@ -695,11 +690,11 @@ async fn handle_read_result<R: crate::provider::RecvStream, T, E: HasErrorCode>(
     }
 }
 
-pub async fn handle_stream(mut pair: StreamPair, store: Store) -> anyhow::Result<()> {
-    // 1. Decode the request.
-    debug!("reading request");
+pub async fn handle_stream<R: RecvStream, W: SendStream>(
+    mut pair: StreamPair<R, W>,
+    store: Store,
+) -> anyhow::Result<()> {
     let request = pair.read_request().await?;
-
     match request {
         Request::Get(request) => handle_get(pair, store, request).await?,
         Request::GetMany(request) => handle_get_many(pair, store, request).await?,

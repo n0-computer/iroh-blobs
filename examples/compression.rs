@@ -9,26 +9,24 @@
 /// grade code you might nevertheless put the tasks into a [tokio::task::JoinSet] or
 /// [n0_future::FuturesUnordered].
 mod common;
-use std::{io, path::PathBuf, time::Instant};
+use std::{io, path::PathBuf};
 
 use anyhow::Result;
 use async_compression::tokio::{bufread::Lz4Decoder, write::Lz4Encoder};
-use bao_tree::blake3;
 use clap::Parser;
 use common::setup_logging;
-use iroh::protocol::ProtocolHandler;
+use iroh::{endpoint::VarInt, protocol::ProtocolHandler};
 use iroh_blobs::{
     api::Store,
-    get::fsm::{AtConnected, ConnectedNext, EndBlobNext},
-    protocol::{ChunkRangesSeq, GetRequest, Request},
     provider::{
         events::{ClientConnected, EventSender, HasErrorCode},
-        handle_get, AsyncReadRecvStream, AsyncWriteSendStream, StreamPair,
+        handle_stream, AsyncReadRecvStream, AsyncWriteSendStream, RecvStreamSpecific,
+        SendStreamSpecific, StreamPair,
     },
     store::mem::MemStore,
     ticket::BlobTicket,
 };
-use tokio::io::BufReader;
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tracing::debug;
 
 use crate::common::get_or_generate_secret_key;
@@ -51,89 +49,35 @@ pub enum Args {
     },
 }
 
-struct CompressedWriter(async_compression::tokio::write::Lz4Encoder<iroh::endpoint::SendStream>);
-struct CompressedReader(
-    async_compression::tokio::bufread::Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>,
-);
+struct CompressedWriteStream(Lz4Encoder<iroh::endpoint::SendStream>);
 
-impl iroh_blobs::provider::SendStream for CompressedWriter {
-    async fn send_bytes(&mut self, bytes: bytes::Bytes) -> io::Result<()> {
-        AsyncWriteSendStream::new(self).send_bytes(bytes).await
+impl SendStreamSpecific for CompressedWriteStream {
+    fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send) {
+        &mut self.0
     }
 
-    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
-        AsyncWriteSendStream::new(self).send(buf).await
+    fn reset(&mut self, code: VarInt) -> io::Result<()> {
+        Ok(self.0.get_mut().reset(code)?)
     }
 
-    async fn sync(&mut self) -> io::Result<()> {
-        AsyncWriteSendStream::new(self).sync().await
+    async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+        Ok(self.0.get_mut().stopped().await?)
     }
 }
 
-impl iroh_blobs::provider::RecvStream for CompressedReader {
-    async fn recv_bytes(&mut self, len: usize) -> io::Result<bytes::Bytes> {
-        AsyncReadRecvStream::new(self).recv_bytes(len).await
+struct CompressedReadStream(Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>);
+
+impl RecvStreamSpecific for CompressedReadStream {
+    fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send) {
+        &mut self.0
     }
 
-    async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<bytes::Bytes> {
-        AsyncReadRecvStream::new(self).recv_bytes_exact(len).await
+    fn stop(&mut self, code: VarInt) -> io::Result<()> {
+        Ok(self.0.get_mut().get_mut().stop(code)?)
     }
 
-    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
-        AsyncReadRecvStream::new(self).recv::<L>().await
-    }
-}
-
-impl tokio::io::AsyncRead for CompressedReader {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
-    }
-}
-
-impl tokio::io::AsyncWrite for CompressedWriter {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<io::Result<usize>> {
-        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
-    }
-}
-
-impl iroh_blobs::provider::SendStreamSpecific for CompressedWriter {
-    fn reset(&mut self, code: quinn::VarInt) -> io::Result<()> {
-        self.0.get_mut().reset(code)?;
-        Ok(())
-    }
-
-    async fn stopped(&mut self) -> io::Result<Option<quinn::VarInt>> {
-        let res = self.0.get_mut().stopped().await?;
-        Ok(res)
-    }
-}
-
-impl iroh_blobs::provider::RecvStreamSpecific for CompressedReader {
-    fn stop(&mut self, code: quinn::VarInt) -> io::Result<()> {
-        self.0.get_mut().get_mut().stop(code)?;
-        Ok(())
+    fn id(&self) -> u64 {
+        self.0.get_ref().get_ref().id().index()
     }
 }
 
@@ -172,19 +116,13 @@ impl ProtocolHandler for CompressedBlobsProtocol {
             return Ok(());
         }
         while let Ok((send, recv)) = connection.accept_bi().await {
-            let stream_id = send.id().index();
-            let send = CompressedWriter(Lz4Encoder::new(send));
-            let recv = CompressedReader(Lz4Decoder::new(BufReader::new(recv)));
+            let send = AsyncWriteSendStream::new(CompressedWriteStream(Lz4Encoder::new(send)));
+            let recv = AsyncReadRecvStream::new(CompressedReadStream(Lz4Decoder::new(
+                BufReader::new(recv),
+            )));
             let store = self.store.clone();
-            let mut pair =
-                StreamPair::new(connection_id, stream_id, recv, send, self.events.clone());
-            tokio::spawn(async move {
-                let request = pair.read_request().await?;
-                if let Request::Get(request) = request {
-                    handle_get(pair, store, request).await?;
-                }
-                anyhow::Ok(())
-            });
+            let pair = StreamPair::new(connection_id, recv, send, self.events.clone());
+            tokio::spawn(handle_stream(pair, store));
         }
         Ok(())
     }
@@ -219,34 +157,21 @@ async fn main() -> Result<()> {
             router.shutdown().await?;
         }
         Args::Get { ticket, target } => {
+            let store = MemStore::new();
             let conn = endpoint.connect(ticket.node_addr().clone(), ALPN).await?;
+            let connection_id = conn.stable_id() as u64;
             let (send, recv) = conn.open_bi().await?;
-            let send = CompressedWriter(Lz4Encoder::new(send));
-            let recv = CompressedReader(Lz4Decoder::new(BufReader::new(recv)));
-            let request = GetRequest {
-                hash: ticket.hash(),
-                ranges: ChunkRangesSeq::root(),
-            };
-            let connected =
-                AtConnected::new(Instant::now(), recv, send, request, Default::default());
-            let ConnectedNext::StartRoot(start) = connected.next().await? else {
-                unreachable!("expected start root");
-            };
-            let (end, data) = start.next().concatenate_into_vec().await?;
-            let EndBlobNext::Closing(closing) = end.next() else {
-                unreachable!("expected closing");
-            };
-            let stats = closing.next().await?;
+            let send = AsyncWriteSendStream::new(CompressedWriteStream(Lz4Encoder::new(send)));
+            let recv = AsyncReadRecvStream::new(CompressedReadStream(Lz4Decoder::new(
+                BufReader::new(recv),
+            )));
+            let sp = StreamPair::new(connection_id, recv, send, EventSender::DEFAULT);
+            let stats = store.remote().fetch(sp, ticket.hash_and_format()).await?;
             if let Some(target) = target {
-                tokio::fs::write(&target, &data).await?;
-                println!(
-                    "Wrote {} bytes to {}",
-                    stats.payload_bytes_read,
-                    target.display()
-                );
+                let size = store.export(ticket.hash(), &target).await?;
+                println!("Wrote {} bytes to {}", size, target.display());
             } else {
-                let hash = blake3::hash(&data);
-                println!("Hash: {hash}");
+                println!("Hash: {}", ticket.hash());
             }
         }
     }

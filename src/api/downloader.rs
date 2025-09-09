@@ -456,7 +456,7 @@ async fn execute_get(
         };
         match remote
             .execute_get_sink(
-                &conn,
+                conn.clone(),
                 local.missing(),
                 (&mut progress).with_map(move |x| DownloadProgessItem::Progress(x + local_bytes)),
             )

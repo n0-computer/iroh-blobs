@@ -14,7 +14,7 @@ use super::blobs::{Bitfield, ExportBaoOptions};
 use crate::{
     api::{blobs::WriteProgress, ApiClient},
     get::{
-        fsm::DecodeError,
+        fsm::{AtConnected, DecodeError},
         get_error::{BadRequestSnafu, LocalFailureSnafu},
         GetError, GetResult, Stats,
     },
@@ -22,7 +22,10 @@ use crate::{
         GetManyRequest, ObserveItem, ObserveRequest, PushRequest, Request, RequestType,
         MAX_MESSAGE_SIZE,
     },
-    provider::events::{ClientResult, ProgressError},
+    provider::{
+        events::{ClientResult, EventSender, ProgressError},
+        RecvStream, StreamPair,
+    },
     util::sink::{Sink, TokioMpscSenderSink},
 };
 
@@ -476,7 +479,7 @@ impl Remote {
 
     pub fn fetch(
         &self,
-        conn: impl GetConnection + Send + 'static,
+        sp: impl GetStreamPair + Send + 'static,
         content: impl Into<HashAndFormat>,
     ) -> GetProgress {
         let content = content.into();
@@ -485,7 +488,7 @@ impl Remote {
         let sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         let this = self.clone();
         let fut = async move {
-            let res = this.fetch_sink(conn, content, sink).await.into();
+            let res = this.fetch_sink(sp, content, sink).await.into();
             tx2.send(res).await.ok();
         };
         GetProgress {
@@ -503,7 +506,7 @@ impl Remote {
     /// This will return the stats of the download.
     pub(crate) async fn fetch_sink(
         &self,
-        mut conn: impl GetConnection,
+        sp: impl GetStreamPair,
         content: impl Into<HashAndFormat>,
         progress: impl Sink<u64, Error = irpc::channel::SendError>,
     ) -> GetResult<Stats> {
@@ -516,11 +519,7 @@ impl Remote {
             return Ok(Default::default());
         }
         let request = local.missing();
-        let conn = conn
-            .connection()
-            .await
-            .map_err(|e| LocalFailureSnafu.into_error(e))?;
-        let stats = self.execute_get_sink(&conn, request, progress).await?;
+        let stats = self.execute_get_sink(sp, request, progress).await?;
         Ok(stats)
     }
 
@@ -620,17 +619,21 @@ impl Remote {
         Ok(Default::default())
     }
 
-    pub fn execute_get(&self, conn: Connection, request: GetRequest) -> GetProgress {
+    pub fn execute_get(&self, conn: impl GetStreamPair, request: GetRequest) -> GetProgress {
         self.execute_get_with_opts(conn, request)
     }
 
-    pub fn execute_get_with_opts(&self, conn: Connection, request: GetRequest) -> GetProgress {
+    pub fn execute_get_with_opts(
+        &self,
+        conn: impl GetStreamPair,
+        request: GetRequest,
+    ) -> GetProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
         let sink = TokioMpscSenderSink(tx).with_map(GetProgressItem::Progress);
         let this = self.clone();
         let fut = async move {
-            let res = this.execute_get_sink(&conn, request, sink).await.into();
+            let res = this.execute_get_sink(conn, request, sink).await.into();
             tx2.send(res).await.ok();
         };
         GetProgress {
@@ -649,16 +652,24 @@ impl Remote {
     /// This will return the stats of the download.
     pub(crate) async fn execute_get_sink(
         &self,
-        conn: &Connection,
+        conn: impl GetStreamPair,
         request: GetRequest,
         mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
     ) -> GetResult<Stats> {
         let store = self.store();
         let root = request.hash;
+        let conn = conn.open_stream_pair().await.map_err(|e| {
+            LocalFailureSnafu.into_error(anyhow::anyhow!("failed to open stream pair: {e}"))
+        })?;
         // I am cloning the connection, but it's fine because the original connection or ConnectionRef stays alive
         // for the duration of the operation.
-        let start = crate::get::fsm::start(conn.clone(), request, Default::default());
-        let connected = start.next().await?;
+        let connected = AtConnected::new(
+            conn.t0,
+            conn.reader,
+            conn.writer,
+            request,
+            Default::default(),
+        );
         trace!("Getting header");
         // read the header
         let next_child = match connected.next().await? {
@@ -840,29 +851,51 @@ use crate::{
     Hash, HashAndFormat,
 };
 
-/// Trait to lazily get a connection
-pub trait GetConnection {
-    fn connection(&mut self)
-        -> impl Future<Output = Result<Connection, anyhow::Error>> + Send + '_;
+pub trait GetStreamPair: Send + 'static {
+    fn open_stream_pair(
+        self,
+    ) -> impl Future<
+        Output = io::Result<
+            StreamPair<impl crate::provider::RecvStream, impl crate::provider::SendStream>,
+        >,
+    > + Send
+           + 'static;
 }
 
-/// If we already have a connection, the impl is trivial
-impl GetConnection for Connection {
-    fn connection(
-        &mut self,
-    ) -> impl Future<Output = Result<Connection, anyhow::Error>> + Send + '_ {
-        let conn = self.clone();
-        async { Ok(conn) }
+impl<R: crate::provider::RecvStream + 'static, W: crate::provider::SendStream + 'static>
+    GetStreamPair for StreamPair<R, W>
+{
+    fn open_stream_pair(
+        self,
+    ) -> impl Future<
+        Output = io::Result<
+            StreamPair<impl crate::provider::RecvStream, impl crate::provider::SendStream>,
+        >,
+    > + Send
+           + 'static {
+        async move { Ok(self) }
     }
 }
 
-/// If we already have a connection, the impl is trivial
-impl GetConnection for &Connection {
-    fn connection(
-        &mut self,
-    ) -> impl Future<Output = Result<Connection, anyhow::Error>> + Send + '_ {
-        let conn = self.clone();
-        async { Ok(conn) }
+impl GetStreamPair for Connection {
+    fn open_stream_pair(
+        self,
+    ) -> impl Future<
+        Output = io::Result<
+            StreamPair<impl crate::provider::RecvStream, impl crate::provider::SendStream>,
+        >,
+    > + Send
+           + 'static {
+        let connection_id = self.stable_id() as u64;
+        async move {
+            let (send, recv) = self.open_bi().await?;
+            Ok(StreamPair::new(
+                connection_id,
+                recv,
+                send,
+                EventSender::DEFAULT,
+            ))
+        }
     }
 }
 
@@ -870,12 +903,12 @@ fn get_buffer_size(size: NonZeroU64) -> usize {
     (size.get() / (IROH_BLOCK_SIZE.bytes() as u64) + 2).min(64) as usize
 }
 
-async fn get_blob_ranges_impl(
-    header: AtBlobHeader,
+async fn get_blob_ranges_impl<R: RecvStream>(
+    header: AtBlobHeader<R>,
     hash: Hash,
     store: &Store,
     mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
-) -> GetResult<AtEndBlob> {
+) -> GetResult<AtEndBlob<R>> {
     let (mut content, size) = header.next().await?;
     let Some(size) = NonZeroU64::new(size) else {
         return if hash == Hash::EMPTY {
