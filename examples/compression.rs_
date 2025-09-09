@@ -22,13 +22,11 @@ use iroh_blobs::{
     get::fsm::{AtConnected, ConnectedNext, EndBlobNext},
     protocol::{ChunkRangesSeq, GetRequest, Request},
     provider::{
-        events::{ClientConnected, EventSender, HasErrorCode},
-        handle_get, ErrorHandler, StreamPair,
+        events::{ClientConnected, EventSender, HasErrorCode}, handle_get, AsyncReadRecvStream, AsyncWriteSendStream, ErrorHandler, StreamPair
     },
     store::mem::MemStore,
     ticket::BlobTicket,
 };
-use iroh_io::{TokioStreamReader, TokioStreamWriter};
 use tokio::io::BufReader;
 use tracing::debug;
 
@@ -53,8 +51,8 @@ pub enum Args {
 }
 
 type CompressedWriter =
-    TokioStreamWriter<async_compression::tokio::write::Lz4Encoder<iroh::endpoint::SendStream>>;
-type CompressedReader = TokioStreamReader<
+    AsyncWriteSendStream<async_compression::tokio::write::Lz4Encoder<iroh::endpoint::SendStream>>;
+type CompressedReader = AsyncReadRecvStream<
     async_compression::tokio::bufread::Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>,
 >;
 
@@ -158,8 +156,8 @@ async fn main() -> Result<()> {
         Args::Get { ticket, target } => {
             let conn = endpoint.connect(ticket.node_addr().clone(), ALPN).await?;
             let (send, recv) = conn.open_bi().await?;
-            let send = TokioStreamWriter(Lz4Encoder::new(send));
-            let recv = TokioStreamReader(Lz4Decoder::new(BufReader::new(recv)));
+            let send = AsyncWriteSendStream(Lz4Encoder::new(send));
+            let recv = AsyncReadRecvStream::new(Lz4Decoder::new(BufReader::new(recv)));
             let request = GetRequest {
                 hash: ticket.hash(),
                 ranges: ChunkRangesSeq::root(),

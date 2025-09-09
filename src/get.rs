@@ -82,8 +82,8 @@ impl AsyncStreamReader for IrohStreamReader {
     }
 }
 
-type DefaultReader = IrohStreamReader;
-type DefaultWriter = IrohStreamWriter;
+type DefaultReader = iroh::endpoint::RecvStream;
+type DefaultWriter = iroh::endpoint::SendStream;
 
 /// Stats about the transfer.
 #[derive(
@@ -139,14 +139,14 @@ pub mod fsm {
     };
     use derive_more::From;
     use iroh::endpoint::Connection;
-    use iroh_io::{AsyncSliceWriter, AsyncStreamReader, AsyncStreamWriter};
+    use iroh_io::{AsyncSliceWriter};
 
     use super::*;
     use crate::{
         get::get_error::BadRequestSnafu,
         protocol::{
             GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
-        },
+        }, provider::{RecvStream, RecvStreamAsyncStreamReader, SendStream},
     };
 
     self_cell::self_cell! {
@@ -173,17 +173,15 @@ pub mod fsm {
         counters: RequestCounters,
     ) -> std::result::Result<Result<AtStartChild, AtClosing>, GetError> {
         let start = Instant::now();
-        let (writer, reader) = connection
+        let (mut writer, reader) = connection
             .open_bi()
             .await
             .map_err(|e| OpenSnafu.into_error(e.into()))?;
-        let reader = IrohStreamReader(reader);
-        let mut writer = IrohStreamWriter(writer);
         let request = Request::GetMany(request);
         let request_bytes = postcard::to_stdvec(&request)
             .map_err(|source| BadRequestSnafu.into_error(source.into()))?;
         writer
-            .write_bytes(request_bytes.into())
+            .send_bytes(request_bytes.into())
             .await
             .context(connected_next_error::WriteSnafu)?;
         let Request::GetMany(request) = request else {
@@ -270,8 +268,6 @@ pub mod fsm {
                 .open_bi()
                 .await
                 .map_err(|e| OpenSnafu.into_error(e.into()))?;
-            let reader = IrohStreamReader(reader);
-            let writer = IrohStreamWriter(writer);
             Ok(AtConnected {
                 start,
                 reader,
@@ -298,8 +294,8 @@ pub mod fsm {
     /// State of the get response machine after the handshake has been sent
     #[derive(Debug)]
     pub struct AtConnected<
-        R: AsyncStreamReader = DefaultReader,
-        W: AsyncStreamWriter = DefaultWriter,
+        R: RecvStream = DefaultReader,
+        W: SendStream = DefaultWriter,
     > {
         start: Instant,
         reader: R,
@@ -310,7 +306,7 @@ pub mod fsm {
 
     /// Possible next states after the handshake has been sent
     #[derive(Debug, From)]
-    pub enum ConnectedNext<R: AsyncStreamReader> {
+    pub enum ConnectedNext<R: RecvStream = DefaultReader> {
         /// First response is either a collection or a single blob
         StartRoot(AtStartRoot<R>),
         /// First response is a child
@@ -341,7 +337,7 @@ pub mod fsm {
         Write { source: io::Error },
     }
 
-    impl<R: AsyncStreamReader, W: AsyncStreamWriter> AtConnected<R, W> {
+    impl<R: RecvStream, W: SendStream> AtConnected<R, W> {
         pub fn new(
             start: Instant,
             reader: R,
@@ -390,7 +386,7 @@ pub mod fsm {
                 // write the request itself
                 let len = request_bytes.len() as u64;
                 writer
-                    .write_bytes(request_bytes.into())
+                    .send_bytes(request_bytes.into())
                     .await
                     .context(connected_next_error::WriteSnafu)?;
                 writer
@@ -438,7 +434,7 @@ pub mod fsm {
 
     /// State of the get response when we start reading a collection
     #[derive(Debug)]
-    pub struct AtStartRoot<R: AsyncStreamReader = DefaultReader> {
+    pub struct AtStartRoot<R: RecvStream = DefaultReader> {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,
@@ -447,14 +443,14 @@ pub mod fsm {
 
     /// State of the get response when we start reading a child
     #[derive(Debug)]
-    pub struct AtStartChild<R: AsyncStreamReader = DefaultReader> {
+    pub struct AtStartChild<R: RecvStream = DefaultReader> {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,
         offset: u64,
     }
 
-    impl<R: AsyncStreamReader> AtStartChild<R> {
+    impl<R: RecvStream> AtStartChild<R> {
         /// The offset of the child we are currently reading
         ///
         /// This must be used to determine the hash needed to call next.
@@ -491,7 +487,7 @@ pub mod fsm {
         }
     }
 
-    impl<R: AsyncStreamReader> AtStartRoot<R> {
+    impl<R: RecvStream> AtStartRoot<R> {
         /// The ranges we have requested for the child
         pub fn ranges(&self) -> &ChunkRanges {
             &self.ranges
@@ -522,7 +518,8 @@ pub mod fsm {
 
     /// State before reading a size header
     #[derive(Debug)]
-    pub struct AtBlobHeader<R: AsyncStreamReader = DefaultReader> {
+    pub struct AtBlobHeader<R: RecvStream = DefaultReader>
+    {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,
@@ -560,10 +557,10 @@ pub mod fsm {
         }
     }
 
-    impl<R: AsyncStreamReader> AtBlobHeader<R> {
+    impl<R: RecvStream> AtBlobHeader<R> {
         /// Read the size header, returning it and going into the `Content` state.
         pub async fn next(mut self) -> Result<(AtBlobContent<R>, u64), AtBlobHeaderNextError> {
-            let size = self.reader.read::<8>().await.map_err(|cause| {
+            let size = self.reader.recv::<8>().await.map_err(|cause| {
                 if cause.kind() == io::ErrorKind::UnexpectedEof {
                     at_blob_header_next_error::NotFoundSnafu.build()
                 } else {
@@ -576,7 +573,7 @@ pub mod fsm {
                 self.hash.into(),
                 self.ranges,
                 BaoTree::new(size, IROH_BLOCK_SIZE),
-                self.reader,
+                RecvStreamAsyncStreamReader::new(self.reader),
             );
             Ok((
                 AtBlobContent {
@@ -650,8 +647,8 @@ pub mod fsm {
 
     /// State while we are reading content
     #[derive(Debug)]
-    pub struct AtBlobContent<R: AsyncStreamReader = DefaultReader> {
-        stream: ResponseDecoder<R>,
+    pub struct AtBlobContent<R: RecvStream = DefaultReader> {
+        stream: ResponseDecoder<RecvStreamAsyncStreamReader<R>>,
         misc: Box<Misc>,
     }
 
@@ -765,7 +762,7 @@ pub mod fsm {
 
     /// The next state after reading a content item
     #[derive(Debug, From)]
-    pub enum BlobContentNext<R: AsyncStreamReader> {
+    pub enum BlobContentNext<R: RecvStream> {
         /// We expect more content
         More(
             (
@@ -777,7 +774,7 @@ pub mod fsm {
         Done(AtEndBlob<R>),
     }
 
-    impl<R: AsyncStreamReader> AtBlobContent<R> {
+    impl<R: RecvStream> AtBlobContent<R> {
         /// Read the next item, either content, an error, or the end of the blob
         pub async fn next(self) -> BlobContentNext<R> {
             match self.stream.next().await {
@@ -796,7 +793,7 @@ pub mod fsm {
                     BlobContentNext::More((next, res))
                 }
                 ResponseDecoderNext::Done(stream) => BlobContentNext::Done(AtEndBlob {
-                    stream,
+                    stream: stream.into_inner(),
                     misc: self.misc,
                 }),
             }
@@ -933,27 +930,27 @@ pub mod fsm {
 
         /// Immediately finish the get response without reading further
         pub fn finish(self) -> AtClosing<R> {
-            AtClosing::new(self.misc, self.stream.finish(), false)
+            AtClosing::new(self.misc, self.stream.finish().into_inner(), false)
         }
     }
 
     /// State after we have read all the content for a blob
     #[derive(Debug)]
-    pub struct AtEndBlob<R: AsyncStreamReader = DefaultReader> {
+    pub struct AtEndBlob<R: RecvStream = DefaultReader> {
         stream: R,
         misc: Box<Misc>,
     }
 
     /// The next state after the end of a blob
     #[derive(Debug, From)]
-    pub enum EndBlobNext<R: AsyncStreamReader = DefaultReader> {
+    pub enum EndBlobNext<R: RecvStream = DefaultReader> {
         /// Response is expected to have more children
         MoreChildren(AtStartChild<R>),
         /// No more children expected
         Closing(AtClosing<R>),
     }
 
-    impl<R: AsyncStreamReader> AtEndBlob<R> {
+    impl<R: RecvStream> AtEndBlob<R> {
         /// Read the next child, or finish
         pub fn next(mut self) -> EndBlobNext<R> {
             if let Some((offset, ranges)) = self.misc.ranges_iter.next() {
@@ -972,13 +969,13 @@ pub mod fsm {
 
     /// State when finishing the get response
     #[derive(Debug)]
-    pub struct AtClosing<R: AsyncStreamReader = DefaultReader> {
+    pub struct AtClosing<R: RecvStream = DefaultReader> {
         misc: Box<Misc>,
         reader: R,
         check_extra_data: bool,
     }
 
-    impl<R: AsyncStreamReader> AtClosing<R> {
+    impl<R: RecvStream> AtClosing<R> {
         fn new(misc: Box<Misc>, reader: R, check_extra_data: bool) -> Self {
             Self {
                 misc,
@@ -992,7 +989,7 @@ pub mod fsm {
             // Shut down the stream
             let mut reader = self.reader;
             if self.check_extra_data {
-                let rest = reader.read_bytes(1).await?;
+                let rest = reader.recv_bytes(1).await?;
                 if !rest.is_empty() {
                     error!("Unexpected extra data at the end of the stream");
                 }

@@ -4,21 +4,19 @@
 //! to provide data is to just register a [`crate::BlobsProtocol`] protocol
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
 use std::{
-    fmt::Debug,
-    future::Future,
-    io,
-    time::{Duration, Instant},
+    fmt::Debug, future::Future, io, ops::DerefMut, time::{Duration, Instant}
 };
 
 use anyhow::Result;
 use bao_tree::ChunkRanges;
+use bytes::Bytes;
 use iroh::endpoint;
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_future::StreamExt;
-use quinn::{ConnectionError, VarInt};
+use quinn::{ConnectionError, ReadExactError, VarInt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::Snafu;
-use tokio::select;
+use tokio::{io::AsyncRead, select};
 use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
@@ -332,6 +330,214 @@ pub async fn handle_connection(
     }
     .instrument(span)
     .await
+}
+
+/// An abstract `iroh::endpoint::SendStream`.
+pub trait SendStream: Send {
+    /// Send bytes to the stream. This takes a `Bytes` because iroh can directly use them.
+    fn send_bytes(&mut self, bytes: Bytes) -> impl Future<Output = io::Result<()>> + Send;
+    /// Send that sends a fixed sized buffer.
+    fn send<const L: usize>(&mut self, buf: &[u8; L]) -> impl Future<Output = io::Result<()>> + Send;
+    /// Sync the stream. Not needed for iroh, but needed for intermediate buffered streams such as compression.
+    fn sync(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+    /// Reset the stream with the given error code.
+    fn reset(&mut self, code: VarInt) -> io::Result<()>;
+    /// Wait for the stream to be stopped, returning the error code if it was.
+    fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
+}
+
+/// An abstract `iroh::endpoint::RecvStream`.
+pub trait RecvStream: Send {
+    /// Receive up to `len` bytes from the stream, directly into a `Bytes`.
+    fn recv_bytes(&mut self, len: usize) -> impl Future<Output = io::Result<Bytes>> + Send;
+    /// Receive exactly `len` bytes from the stream, directly into a `Bytes`.
+    ///
+    /// This will return an error if the stream ends before `len` bytes are read.
+    ///
+    /// Note that this is different from `recv_bytes`, which will return fewer bytes if the stream ends.
+    fn recv_bytes_exact(
+        &mut self,
+        len: usize,
+    ) -> impl Future<Output = io::Result<Bytes>> + Send;
+    /// Receive exactly `L` bytes from the stream, directly into a `[u8; L]`.
+    fn recv<const L: usize>(&mut self) -> impl Future<Output = io::Result<[u8; L]>> + Send;
+    /// Stop the stream with the given error code.
+    fn stop(&mut self, code: VarInt) -> io::Result<()>;
+}
+
+impl SendStream for iroh::endpoint::SendStream {
+    async fn send_bytes(&mut self, bytes: Bytes) -> io::Result<()> {
+        Ok(self.write_chunk(bytes).await?)
+    }
+
+    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+        Ok(self.write_all(buf).await?)
+    }
+
+    async fn sync(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn reset(&mut self, code: VarInt) -> io::Result<()> {
+        Ok(self.reset(code)?)
+    }
+
+    async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+        Ok(self.stopped().await?)
+    }
+}
+
+impl RecvStream for iroh::endpoint::RecvStream {
+    async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
+        let mut buf = vec![0; len];
+        match self.read_exact(&mut buf).await {
+            Err(ReadExactError::FinishedEarly(n)) => {
+                buf.truncate(n);
+            }
+            Err(ReadExactError::ReadError(e)) => {
+                return Err(e.into());
+            }
+            Ok(()) => {}
+        };
+        Ok(buf.into())
+    }
+
+    async fn recv_bytes_exact(
+        &mut self,
+        len: usize,
+    ) -> io::Result<Bytes> {
+        let mut buf = vec![0; len];
+        self.read_exact(&mut buf).await.map_err(|e| {
+            match e {
+                ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
+                ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
+                ReadExactError::ReadError(e) => e.into(),
+            }
+        })?;
+        Ok(buf.into())
+    }
+
+    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+        let mut buf = [0; L];
+        self.read_exact(&mut buf).await.map_err(|e| {
+            match e {
+                ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
+                ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
+                ReadExactError::ReadError(e) => e.into(),
+            }
+        })?;
+        Ok(buf)
+    }
+
+    fn stop(&mut self, code: VarInt) -> io::Result<()> {
+        Ok(self.stop(code)?)
+    }
+}
+
+#[derive(Debug)]
+pub struct AsyncReadRecvStream<R>(R);
+
+impl<R> AsyncReadRecvStream<R> {
+    pub fn new(inner: R) -> Self {
+        Self(inner)
+    }
+
+    pub fn into_inner(self) -> R {
+        self.0
+    }
+}
+
+use tokio::io::AsyncReadExt;
+
+impl<R: AsyncRead + Unpin + Send + DerefMut<Target = iroh::endpoint::RecvStream>> RecvStream for AsyncReadRecvStream<R> {
+    async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
+        let mut res = vec![0; len];
+        let mut n = 0;
+        loop {
+            let read = self.0.read(&mut res[n..]).await?;
+            if read == 0 {
+                res.truncate(n);
+                break;
+            }
+            n += read;
+            if n == len {
+                break;
+            }
+        }
+        Ok(res.into())
+    }
+
+    async fn recv_bytes_exact(
+        &mut self,
+        len: usize,
+    ) -> io::Result<Bytes> {
+        let mut res = vec![0; len];
+        self.0.read_exact(&mut res).await?;
+        Ok(res.into())
+    }
+
+    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+        let mut res = [0; L];
+        self.0.read_exact(&mut res).await?;
+        Ok(res)
+    }
+
+    fn stop(&mut self, code: VarInt) -> io::Result<()> {
+        self.0.deref_mut().stop(code)?;
+        Ok(())
+    }
+}
+
+/// Utility to convert a [tokio::io::AsyncWrite] into an [SendStream].
+#[derive(Debug, Clone)]
+pub struct AsyncWriteSendStream<W>(pub W);
+
+use tokio::io::AsyncWriteExt;
+
+impl<W: tokio::io::AsyncWrite + Send + Unpin + DerefMut<Target = iroh::endpoint::SendStream>> SendStream for AsyncWriteSendStream<W> {
+    async fn send_bytes(&mut self, bytes: Bytes) -> io::Result<()> {
+        self.0.write_all(&bytes).await
+    }
+
+    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+        self.0.write_all(buf).await
+    }
+
+    async fn sync(&mut self) -> io::Result<()> {
+        self.0.flush().await
+    }
+
+    fn reset(&mut self, code: VarInt) -> io::Result<()> {
+        self.0.deref_mut().reset(code)?;
+        Ok(())
+    }
+
+    async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+        Ok(self.0.deref_mut().stopped().await?)
+    }
+}
+
+#[derive(Debug)]
+pub struct RecvStreamAsyncStreamReader<R>(R);
+
+impl<R: RecvStream> RecvStreamAsyncStreamReader<R> {
+    pub fn new(inner: R) -> Self {
+        Self(inner)
+    }
+
+    pub fn into_inner(self) -> R {
+        self.0
+    }
+}
+
+impl<R: RecvStream> AsyncStreamReader for RecvStreamAsyncStreamReader<R> {
+    async fn read_bytes(&mut self, len: usize) -> io::Result<Bytes> {
+        self.0.recv_bytes_exact(len).await
+    }
+
+    async fn read<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+        self.0.recv::<L>().await
+    }
 }
 
 /// Describes how to handle errors for a stream.
