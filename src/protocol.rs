@@ -382,7 +382,6 @@ use bao_tree::{io::round_up_to_chunks, ChunkNum};
 use builder::GetRequestBuilder;
 use derive_more::From;
 use iroh::endpoint::VarInt;
-use iroh_io::AsyncStreamReader;
 use postcard::experimental::max_size::MaxSize;
 use range_collections::{range_set::RangeSetEntry, RangeSet2};
 use serde::{Deserialize, Serialize};
@@ -447,7 +446,9 @@ pub enum RequestType {
 }
 
 impl Request {
-    pub async fn read_async<R: AsyncStreamReader>(reader: &mut R) -> io::Result<(Self, usize)> {
+    pub async fn read_async<R: crate::provider::RecvStream>(
+        reader: &mut R,
+    ) -> io::Result<(Self, usize)> {
         let request_type = reader.read_u8().await?;
         let request_type: RequestType = postcard::from_bytes(std::slice::from_ref(&request_type))
             .map_err(|_| {

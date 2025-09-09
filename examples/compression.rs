@@ -9,7 +9,7 @@
 /// grade code you might nevertheless put the tasks into a [tokio::task::JoinSet] or
 /// [n0_future::FuturesUnordered].
 mod common;
-use std::{path::PathBuf, time::Instant};
+use std::{io, path::PathBuf, time::Instant};
 
 use anyhow::Result;
 use async_compression::tokio::{bufread::Lz4Decoder, write::Lz4Encoder};
@@ -22,7 +22,8 @@ use iroh_blobs::{
     get::fsm::{AtConnected, ConnectedNext, EndBlobNext},
     protocol::{ChunkRangesSeq, GetRequest, Request},
     provider::{
-        events::{ClientConnected, EventSender, HasErrorCode}, handle_get, AsyncReadRecvStream, AsyncWriteSendStream, ErrorHandler, StreamPair
+        events::{ClientConnected, EventSender, HasErrorCode},
+        handle_get, AsyncReadRecvStream, AsyncWriteSendStream, StreamPair,
     },
     store::mem::MemStore,
     ticket::BlobTicket,
@@ -50,11 +51,91 @@ pub enum Args {
     },
 }
 
-type CompressedWriter =
-    AsyncWriteSendStream<async_compression::tokio::write::Lz4Encoder<iroh::endpoint::SendStream>>;
-type CompressedReader = AsyncReadRecvStream<
+struct CompressedWriter(async_compression::tokio::write::Lz4Encoder<iroh::endpoint::SendStream>);
+struct CompressedReader(
     async_compression::tokio::bufread::Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>,
->;
+);
+
+impl iroh_blobs::provider::SendStream for CompressedWriter {
+    async fn send_bytes(&mut self, bytes: bytes::Bytes) -> io::Result<()> {
+        AsyncWriteSendStream::new(self).send_bytes(bytes).await
+    }
+
+    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+        AsyncWriteSendStream::new(self).send(buf).await
+    }
+
+    async fn sync(&mut self) -> io::Result<()> {
+        AsyncWriteSendStream::new(self).sync().await
+    }
+}
+
+impl iroh_blobs::provider::RecvStream for CompressedReader {
+    async fn recv_bytes(&mut self, len: usize) -> io::Result<bytes::Bytes> {
+        AsyncReadRecvStream::new(self).recv_bytes(len).await
+    }
+
+    async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<bytes::Bytes> {
+        AsyncReadRecvStream::new(self).recv_bytes_exact(len).await
+    }
+
+    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+        AsyncReadRecvStream::new(self).recv::<L>().await
+    }
+}
+
+impl tokio::io::AsyncRead for CompressedReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for CompressedWriter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+impl iroh_blobs::provider::SendStreamSpecific for CompressedWriter {
+    fn reset(&mut self, code: quinn::VarInt) -> io::Result<()> {
+        self.0.get_mut().reset(code)?;
+        Ok(())
+    }
+
+    async fn stopped(&mut self) -> io::Result<Option<quinn::VarInt>> {
+        let res = self.0.get_mut().stopped().await?;
+        Ok(res)
+    }
+}
+
+impl iroh_blobs::provider::RecvStreamSpecific for CompressedReader {
+    fn stop(&mut self, code: quinn::VarInt) -> io::Result<()> {
+        self.0.get_mut().get_mut().stop(code)?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 struct CompressedBlobsProtocol {
@@ -68,22 +149,6 @@ impl CompressedBlobsProtocol {
             store: store.clone(),
             events,
         }
-    }
-}
-
-struct CompressedErrorHandler;
-
-impl ErrorHandler for CompressedErrorHandler {
-    type W = CompressedWriter;
-
-    type R = CompressedReader;
-
-    async fn stop(reader: &mut Self::R, code: quinn::VarInt) {
-        reader.0.get_mut().get_mut().stop(code).ok();
-    }
-
-    async fn reset(writer: &mut Self::W, code: quinn::VarInt) {
-        writer.0.get_mut().reset(code).ok();
     }
 }
 
@@ -108,15 +173,15 @@ impl ProtocolHandler for CompressedBlobsProtocol {
         }
         while let Ok((send, recv)) = connection.accept_bi().await {
             let stream_id = send.id().index();
-            let send = TokioStreamWriter(Lz4Encoder::new(send));
-            let recv = TokioStreamReader(Lz4Decoder::new(BufReader::new(recv)));
+            let send = CompressedWriter(Lz4Encoder::new(send));
+            let recv = CompressedReader(Lz4Decoder::new(BufReader::new(recv)));
             let store = self.store.clone();
             let mut pair =
                 StreamPair::new(connection_id, stream_id, recv, send, self.events.clone());
             tokio::spawn(async move {
                 let request = pair.read_request().await?;
                 if let Request::Get(request) = request {
-                    handle_get::<CompressedErrorHandler>(pair, store, request).await?;
+                    handle_get(pair, store, request).await?;
                 }
                 anyhow::Ok(())
             });
@@ -156,8 +221,8 @@ async fn main() -> Result<()> {
         Args::Get { ticket, target } => {
             let conn = endpoint.connect(ticket.node_addr().clone(), ALPN).await?;
             let (send, recv) = conn.open_bi().await?;
-            let send = AsyncWriteSendStream(Lz4Encoder::new(send));
-            let recv = AsyncReadRecvStream::new(Lz4Decoder::new(BufReader::new(recv)));
+            let send = CompressedWriter(Lz4Encoder::new(send));
+            let recv = CompressedReader(Lz4Decoder::new(BufReader::new(recv)));
             let request = GetRequest {
                 hash: ticket.hash(),
                 ranges: ChunkRangesSeq::root(),

@@ -23,7 +23,7 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
-use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
+use iroh_io::AsyncStreamWriter;
 use irpc::channel::{mpsc, oneshot};
 use n0_future::{future, stream, Stream, StreamExt};
 use range_collections::{range_set::RangeSetRange, RangeSet2};
@@ -55,7 +55,7 @@ use super::{
 };
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::events::ClientResult,
+    provider::{events::ClientResult, RecvStreamAsyncStreamReader},
     store::IROH_BLOCK_SIZE,
     util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
@@ -429,13 +429,13 @@ impl Blobs {
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
-    pub async fn import_bao_reader<R: AsyncStreamReader>(
+    pub async fn import_bao_reader<R: crate::provider::RecvStream>(
         &self,
         hash: Hash,
         ranges: ChunkRanges,
         mut reader: R,
     ) -> RequestResult<R> {
-        let size = u64::from_le_bytes(reader.read::<8>().await.map_err(super::Error::other)?);
+        let size = u64::from_le_bytes(reader.recv::<8>().await.map_err(super::Error::other)?);
         let Some(size) = NonZeroU64::new(size) else {
             return if hash == Hash::EMPTY {
                 Ok(reader)
@@ -444,7 +444,12 @@ impl Blobs {
             };
         };
         let tree = BaoTree::new(size.get(), IROH_BLOCK_SIZE);
-        let mut decoder = ResponseDecoder::new(hash.into(), ranges, tree, reader);
+        let mut decoder = ResponseDecoder::new(
+            hash.into(),
+            ranges,
+            tree,
+            RecvStreamAsyncStreamReader::new(reader),
+        );
         let options = ImportBaoOptions { hash, size };
         let handle = self.import_bao_with_opts(options, 32).await?;
         let driver = async move {
@@ -463,7 +468,7 @@ impl Blobs {
         let fut = async move { handle.rx.await.map_err(io::Error::other)? };
         let (reader, res) = tokio::join!(driver, fut);
         res?;
-        Ok(reader?)
+        Ok(reader?.into_inner())
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
@@ -1068,7 +1073,7 @@ impl ExportBaoProgress {
     }
 
     /// Write quinn variant that also feeds a progress writer.
-    pub(crate) async fn write_with_progress<W: AsyncStreamWriter>(
+    pub(crate) async fn write_with_progress<W: crate::provider::SendStream>(
         self,
         writer: &mut W,
         progress: &mut impl WriteProgress,
@@ -1080,19 +1085,19 @@ impl ExportBaoProgress {
             match item {
                 EncodedItem::Size(size) => {
                     progress.send_transfer_started(index, hash, size).await;
-                    writer.write(&size.to_le_bytes()).await?;
+                    writer.send(&size.to_le_bytes()).await?;
                     progress.log_other_write(8);
                 }
                 EncodedItem::Parent(parent) => {
-                    let mut data = vec![0u8; 64];
+                    let mut data = [0u8; 64];
                     data[..32].copy_from_slice(parent.pair.0.as_bytes());
                     data[32..].copy_from_slice(parent.pair.1.as_bytes());
-                    writer.write(&data).await?;
+                    writer.send(&data).await?;
                     progress.log_other_write(64);
                 }
                 EncodedItem::Leaf(leaf) => {
                     let len = leaf.data.len();
-                    writer.write_bytes(leaf.data).await?;
+                    writer.send_bytes(leaf.data).await?;
                     progress
                         .notify_payload_write(index, leaf.offset, len)
                         .await?;

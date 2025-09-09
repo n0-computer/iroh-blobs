@@ -18,20 +18,16 @@
 //! [iroh]: https://docs.rs/iroh
 use std::{
     fmt::{self, Debug},
-    io,
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
-use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
-use quinn::ReadExactError;
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, IntoError, ResultExt, Snafu};
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
 
 use crate::{protocol::ChunkRangesSeq, store::IROH_BLOCK_SIZE, Hash};
@@ -40,47 +36,6 @@ mod error;
 pub mod request;
 pub(crate) use error::get_error;
 pub use error::{GetError, GetResult};
-
-pub struct IrohStreamWriter(pub iroh::endpoint::SendStream);
-
-impl AsyncStreamWriter for IrohStreamWriter {
-    async fn write(&mut self, data: &[u8]) -> io::Result<()> {
-        Ok(self.0.write_all(data).await?)
-    }
-
-    async fn write_bytes(&mut self, data: bytes::Bytes) -> io::Result<()> {
-        Ok(self.0.write_chunk(data).await?)
-    }
-
-    async fn sync(&mut self) -> io::Result<()> {
-        self.0.flush().await
-    }
-}
-
-pub struct IrohStreamReader(pub iroh::endpoint::RecvStream);
-
-impl AsyncStreamReader for IrohStreamReader {
-    async fn read<const N: usize>(&mut self) -> io::Result<[u8; N]> {
-        let mut buf = [0u8; N];
-        match self.0.read_exact(&mut buf).await {
-            Ok(()) => Ok(buf),
-            Err(ReadExactError::ReadError(e)) => Err(e.into()),
-            Err(ReadExactError::FinishedEarly(_)) => Err(io::ErrorKind::UnexpectedEof.into()),
-        }
-    }
-
-    async fn read_bytes(&mut self, len: usize) -> io::Result<bytes::Bytes> {
-        let mut buf = vec![0u8; len];
-        match self.0.read_exact(&mut buf).await {
-            Ok(()) => Ok(buf.into()),
-            Err(ReadExactError::ReadError(e)) => Err(e.into()),
-            Err(ReadExactError::FinishedEarly(n)) => {
-                buf.truncate(n);
-                Ok(buf.into())
-            }
-        }
-    }
-}
 
 type DefaultReader = iroh::endpoint::RecvStream;
 type DefaultWriter = iroh::endpoint::SendStream;
@@ -139,14 +94,15 @@ pub mod fsm {
     };
     use derive_more::From;
     use iroh::endpoint::Connection;
-    use iroh_io::{AsyncSliceWriter};
+    use iroh_io::AsyncSliceWriter;
 
     use super::*;
     use crate::{
         get::get_error::BadRequestSnafu,
         protocol::{
             GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
-        }, provider::{RecvStream, RecvStreamAsyncStreamReader, SendStream},
+        },
+        provider::{RecvStream, RecvStreamAsyncStreamReader, SendStream},
     };
 
     self_cell::self_cell! {
@@ -293,10 +249,7 @@ pub mod fsm {
 
     /// State of the get response machine after the handshake has been sent
     #[derive(Debug)]
-    pub struct AtConnected<
-        R: RecvStream = DefaultReader,
-        W: SendStream = DefaultWriter,
-    > {
+    pub struct AtConnected<R: RecvStream = DefaultReader, W: SendStream = DefaultWriter> {
         start: Instant,
         reader: R,
         writer: W,
@@ -518,8 +471,7 @@ pub mod fsm {
 
     /// State before reading a size header
     #[derive(Debug)]
-    pub struct AtBlobHeader<R: RecvStream = DefaultReader>
-    {
+    pub struct AtBlobHeader<R: RecvStream = DefaultReader> {
         ranges: ChunkRanges,
         reader: R,
         misc: Box<Misc>,

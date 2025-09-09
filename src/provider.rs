@@ -4,7 +4,11 @@
 //! to provide data is to just register a [`crate::BlobsProtocol`] protocol
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
 use std::{
-    fmt::Debug, future::Future, io, ops::DerefMut, time::{Duration, Instant}
+    fmt::Debug,
+    future::Future,
+    io,
+    ops::DerefMut,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -24,7 +28,6 @@ use crate::{
         blobs::{Bitfield, WriteProgress},
         ExportBaoError, ExportBaoResult, RequestError, Store,
     },
-    get::{IrohStreamReader, IrohStreamWriter},
     hashseq::HashSeq,
     protocol::{
         GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
@@ -38,8 +41,8 @@ use crate::{
 pub mod events;
 use events::EventSender;
 
-type DefaultWriter = IrohStreamWriter;
-type DefaultReader = IrohStreamReader;
+type DefaultWriter = iroh::endpoint::SendStream;
+type DefaultReader = iroh::endpoint::RecvStream;
 
 /// Statistics about a successful or failed transfer.
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,7 +64,10 @@ pub struct TransferStats {
 
 /// A pair of [`SendStream`] and [`RecvStream`] with additional context data.
 #[derive(Debug)]
-pub struct StreamPair<R: AsyncStreamReader = DefaultReader, W: AsyncStreamWriter = DefaultWriter> {
+pub struct StreamPair<
+    R: crate::provider::RecvStream = DefaultReader,
+    W: crate::provider::SendStream = DefaultWriter,
+> {
     t0: Instant,
     connection_id: u64,
     request_id: u64,
@@ -80,14 +86,14 @@ impl StreamPair {
         Ok(Self::new(
             conn.stable_id() as u64,
             reader.id().into(),
-            IrohStreamReader(reader),
-            IrohStreamWriter(writer),
+            reader,
+            writer,
             events,
         ))
     }
 }
 
-impl<R: AsyncStreamReader, W: AsyncStreamWriter> StreamPair<R, W> {
+impl<R: crate::provider::RecvStream, W: crate::provider::SendStream> StreamPair<R, W> {
     pub fn new(
         connection_id: u64,
         request_id: u64,
@@ -266,13 +272,13 @@ impl WriteProgress for WriterContext {
 
 /// Wrapper for a [`quinn::SendStream`] with additional per request information.
 #[derive(Debug)]
-pub struct ProgressWriter<W: AsyncStreamWriter = DefaultWriter> {
+pub struct ProgressWriter<W: crate::provider::SendStream = DefaultWriter> {
     /// The quinn::SendStream to write to
     pub inner: W,
     pub(crate) context: WriterContext,
 }
 
-impl<W: AsyncStreamWriter> ProgressWriter<W> {
+impl<W: crate::provider::SendStream> ProgressWriter<W> {
     fn new(inner: W, context: WriterContext) -> Self {
         Self { inner, context }
     }
@@ -332,22 +338,33 @@ pub async fn handle_connection(
     .await
 }
 
-/// An abstract `iroh::endpoint::SendStream`.
-pub trait SendStream: Send {
-    /// Send bytes to the stream. This takes a `Bytes` because iroh can directly use them.
-    fn send_bytes(&mut self, bytes: Bytes) -> impl Future<Output = io::Result<()>> + Send;
-    /// Send that sends a fixed sized buffer.
-    fn send<const L: usize>(&mut self, buf: &[u8; L]) -> impl Future<Output = io::Result<()>> + Send;
-    /// Sync the stream. Not needed for iroh, but needed for intermediate buffered streams such as compression.
-    fn sync(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+pub trait SendStreamSpecific: Send {
     /// Reset the stream with the given error code.
     fn reset(&mut self, code: VarInt) -> io::Result<()>;
     /// Wait for the stream to be stopped, returning the error code if it was.
     fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
 }
 
+/// An abstract `iroh::endpoint::SendStream`.
+pub trait SendStream: SendStreamSpecific {
+    /// Send bytes to the stream. This takes a `Bytes` because iroh can directly use them.
+    fn send_bytes(&mut self, bytes: Bytes) -> impl Future<Output = io::Result<()>> + Send;
+    /// Send that sends a fixed sized buffer.
+    fn send<const L: usize>(
+        &mut self,
+        buf: &[u8; L],
+    ) -> impl Future<Output = io::Result<()>> + Send;
+    /// Sync the stream. Not needed for iroh, but needed for intermediate buffered streams such as compression.
+    fn sync(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+}
+
+pub trait RecvStreamSpecific: Send {
+    /// Stop the stream with the given error code.
+    fn stop(&mut self, code: VarInt) -> io::Result<()>;
+}
+
 /// An abstract `iroh::endpoint::RecvStream`.
-pub trait RecvStream: Send {
+pub trait RecvStream: RecvStreamSpecific {
     /// Receive up to `len` bytes from the stream, directly into a `Bytes`.
     fn recv_bytes(&mut self, len: usize) -> impl Future<Output = io::Result<Bytes>> + Send;
     /// Receive exactly `len` bytes from the stream, directly into a `Bytes`.
@@ -355,14 +372,9 @@ pub trait RecvStream: Send {
     /// This will return an error if the stream ends before `len` bytes are read.
     ///
     /// Note that this is different from `recv_bytes`, which will return fewer bytes if the stream ends.
-    fn recv_bytes_exact(
-        &mut self,
-        len: usize,
-    ) -> impl Future<Output = io::Result<Bytes>> + Send;
+    fn recv_bytes_exact(&mut self, len: usize) -> impl Future<Output = io::Result<Bytes>> + Send;
     /// Receive exactly `L` bytes from the stream, directly into a `[u8; L]`.
     fn recv<const L: usize>(&mut self) -> impl Future<Output = io::Result<[u8; L]>> + Send;
-    /// Stop the stream with the given error code.
-    fn stop(&mut self, code: VarInt) -> io::Result<()>;
 }
 
 impl SendStream for iroh::endpoint::SendStream {
@@ -377,7 +389,9 @@ impl SendStream for iroh::endpoint::SendStream {
     async fn sync(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
 
+impl SendStreamSpecific for iroh::endpoint::SendStream {
     fn reset(&mut self, code: VarInt) -> io::Result<()> {
         Ok(self.reset(code)?)
     }
@@ -402,35 +416,74 @@ impl RecvStream for iroh::endpoint::RecvStream {
         Ok(buf.into())
     }
 
-    async fn recv_bytes_exact(
-        &mut self,
-        len: usize,
-    ) -> io::Result<Bytes> {
+    async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<Bytes> {
         let mut buf = vec![0; len];
-        self.read_exact(&mut buf).await.map_err(|e| {
-            match e {
-                ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
-                ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
-                ReadExactError::ReadError(e) => e.into(),
-            }
+        self.read_exact(&mut buf).await.map_err(|e| match e {
+            ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
+            ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
+            ReadExactError::ReadError(e) => e.into(),
         })?;
         Ok(buf.into())
     }
 
     async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
         let mut buf = [0; L];
-        self.read_exact(&mut buf).await.map_err(|e| {
-            match e {
-                ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
-                ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
-                ReadExactError::ReadError(e) => e.into(),
-            }
+        self.read_exact(&mut buf).await.map_err(|e| match e {
+            ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
+            ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
+            ReadExactError::ReadError(e) => e.into(),
         })?;
         Ok(buf)
     }
+}
 
+impl RecvStreamSpecific for iroh::endpoint::RecvStream {
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
         Ok(self.stop(code)?)
+    }
+}
+
+impl<R: RecvStream> RecvStream for &mut R {
+    async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
+        self.deref_mut().recv_bytes(len).await
+    }
+
+    async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<Bytes> {
+        self.deref_mut().recv_bytes_exact(len).await
+    }
+
+    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+        self.deref_mut().recv::<L>().await
+    }
+}
+
+impl<R: RecvStreamSpecific> RecvStreamSpecific for &mut R {
+    fn stop(&mut self, code: VarInt) -> io::Result<()> {
+        self.deref_mut().stop(code)
+    }
+}
+
+impl<W: SendStream> SendStream for &mut W {
+    async fn send_bytes(&mut self, bytes: Bytes) -> io::Result<()> {
+        self.deref_mut().send_bytes(bytes).await
+    }
+
+    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+        self.deref_mut().send(buf).await
+    }
+
+    async fn sync(&mut self) -> io::Result<()> {
+        self.deref_mut().sync().await
+    }
+}
+
+impl<W: SendStreamSpecific> SendStreamSpecific for &mut W {
+    fn reset(&mut self, code: VarInt) -> io::Result<()> {
+        self.deref_mut().reset(code)
+    }
+
+    async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+        self.deref_mut().stopped().await
     }
 }
 
@@ -449,7 +502,7 @@ impl<R> AsyncReadRecvStream<R> {
 
 use tokio::io::AsyncReadExt;
 
-impl<R: AsyncRead + Unpin + Send + DerefMut<Target = iroh::endpoint::RecvStream>> RecvStream for AsyncReadRecvStream<R> {
+impl<R: AsyncRead + Unpin + RecvStreamSpecific> RecvStream for AsyncReadRecvStream<R> {
     async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
         let mut res = vec![0; len];
         let mut n = 0;
@@ -467,10 +520,7 @@ impl<R: AsyncRead + Unpin + Send + DerefMut<Target = iroh::endpoint::RecvStream>
         Ok(res.into())
     }
 
-    async fn recv_bytes_exact(
-        &mut self,
-        len: usize,
-    ) -> io::Result<Bytes> {
+    async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<Bytes> {
         let mut res = vec![0; len];
         self.0.read_exact(&mut res).await?;
         Ok(res.into())
@@ -481,20 +531,65 @@ impl<R: AsyncRead + Unpin + Send + DerefMut<Target = iroh::endpoint::RecvStream>
         self.0.read_exact(&mut res).await?;
         Ok(res)
     }
+}
 
+impl<R: RecvStreamSpecific> RecvStreamSpecific for AsyncReadRecvStream<R> {
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
-        self.0.deref_mut().stop(code)?;
+        self.0.stop(code)
+    }
+}
+
+impl RecvStream for Bytes {
+    async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
+        let n = len.min(self.len());
+        let res = self.slice(..n);
+        *self = self.slice(n..);
+        Ok(res)
+    }
+
+    async fn recv_bytes_exact(&mut self, len: usize) -> io::Result<Bytes> {
+        if self.len() < len {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        let res = self.slice(..len);
+        *self = self.slice(len..);
+        Ok(res)
+    }
+
+    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+        if self.len() < L {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        let mut res = [0; L];
+        res.copy_from_slice(&self[..L]);
+        *self = self.slice(L..);
+        Ok(res)
+    }
+}
+
+impl RecvStreamSpecific for Bytes {
+    fn stop(&mut self, _code: VarInt) -> io::Result<()> {
         Ok(())
     }
 }
 
 /// Utility to convert a [tokio::io::AsyncWrite] into an [SendStream].
 #[derive(Debug, Clone)]
-pub struct AsyncWriteSendStream<W>(pub W);
+pub struct AsyncWriteSendStream<W>(W);
+
+impl<W> AsyncWriteSendStream<W> {
+    pub fn new(inner: W) -> Self {
+        Self(inner)
+    }
+
+    pub fn into_inner(self) -> W {
+        self.0
+    }
+}
 
 use tokio::io::AsyncWriteExt;
 
-impl<W: tokio::io::AsyncWrite + Send + Unpin + DerefMut<Target = iroh::endpoint::SendStream>> SendStream for AsyncWriteSendStream<W> {
+impl<W: tokio::io::AsyncWrite + Unpin + SendStreamSpecific> SendStream for AsyncWriteSendStream<W> {
     async fn send_bytes(&mut self, bytes: Bytes) -> io::Result<()> {
         self.0.write_all(&bytes).await
     }
@@ -506,14 +601,16 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin + DerefMut<Target = iroh::endpoint:
     async fn sync(&mut self) -> io::Result<()> {
         self.0.flush().await
     }
+}
 
+impl<W: SendStreamSpecific> SendStreamSpecific for AsyncWriteSendStream<W> {
     fn reset(&mut self, code: VarInt) -> io::Result<()> {
-        self.0.deref_mut().reset(code)?;
+        self.0.reset(code)?;
         Ok(())
     }
 
     async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
-        Ok(self.0.deref_mut().stopped().await?)
+        Ok(self.0.stopped().await?)
     }
 }
 
@@ -548,20 +645,25 @@ pub trait ErrorHandler {
     fn reset(writer: &mut Self::W, code: VarInt) -> impl Future<Output = ()>;
 }
 
-async fn handle_read_request_result<H: ErrorHandler, T, E: HasErrorCode>(
-    pair: &mut StreamPair<H::R, H::W>,
+async fn handle_read_request_result<
+    R: crate::provider::RecvStream,
+    W: crate::provider::SendStream,
+    T,
+    E: HasErrorCode,
+>(
+    pair: &mut StreamPair<R, W>,
     r: Result<T, E>,
 ) -> Result<T, E> {
     match r {
         Ok(x) => Ok(x),
         Err(e) => {
-            H::reset(&mut pair.writer, e.code()).await;
+            pair.writer.reset(e.code()).ok();
             Err(e)
         }
     }
 }
-async fn handle_write_result<H: ErrorHandler, T, E: HasErrorCode>(
-    writer: &mut ProgressWriter<H::W>,
+async fn handle_write_result<W: crate::provider::SendStream, T, E: HasErrorCode>(
+    writer: &mut ProgressWriter<W>,
     r: Result<T, E>,
 ) -> Result<T, E> {
     match r {
@@ -570,14 +672,14 @@ async fn handle_write_result<H: ErrorHandler, T, E: HasErrorCode>(
             Ok(x)
         }
         Err(e) => {
-            H::reset(&mut writer.inner, e.code()).await;
+            writer.inner.reset(e.code()).ok();
             writer.transfer_aborted().await;
             Err(e)
         }
     }
 }
-async fn handle_read_result<H: ErrorHandler, T, E: HasErrorCode>(
-    reader: &mut ProgressReader<H::R>,
+async fn handle_read_result<R: crate::provider::RecvStream, T, E: HasErrorCode>(
+    reader: &mut ProgressReader<R>,
     r: Result<T, E>,
 ) -> Result<T, E> {
     match r {
@@ -586,23 +688,10 @@ async fn handle_read_result<H: ErrorHandler, T, E: HasErrorCode>(
             Ok(x)
         }
         Err(e) => {
-            H::stop(&mut reader.inner, e.code()).await;
+            reader.inner.stop(e.code()).ok();
             reader.transfer_aborted().await;
             Err(e)
         }
-    }
-}
-struct IrohErrorHandler;
-
-impl ErrorHandler for IrohErrorHandler {
-    type W = DefaultWriter;
-    type R = DefaultReader;
-
-    async fn stop(reader: &mut Self::R, code: VarInt) {
-        reader.0.stop(code).ok();
-    }
-    async fn reset(writer: &mut Self::W, code: VarInt) {
-        writer.0.reset(code).ok();
     }
 }
 
@@ -610,13 +699,12 @@ pub async fn handle_stream(mut pair: StreamPair, store: Store) -> anyhow::Result
     // 1. Decode the request.
     debug!("reading request");
     let request = pair.read_request().await?;
-    type H = IrohErrorHandler;
 
     match request {
-        Request::Get(request) => handle_get::<H>(pair, store, request).await?,
-        Request::GetMany(request) => handle_get_many::<H>(pair, store, request).await?,
-        Request::Observe(request) => handle_observe::<H>(pair, store, request).await?,
-        Request::Push(request) => handle_push::<H>(pair, store, request).await?,
+        Request::Get(request) => handle_get(pair, store, request).await?,
+        Request::GetMany(request) => handle_get_many(pair, store, request).await?,
+        Request::Observe(request) => handle_observe(pair, store, request).await?,
+        Request::Push(request) => handle_push(pair, store, request).await?,
         _ => {}
     }
     Ok(())
@@ -649,7 +737,7 @@ impl HasErrorCode for HandleGetError {
 /// Handle a single get request.
 ///
 /// Requires a database, the request, and a writer.
-async fn handle_get_impl<W: AsyncStreamWriter>(
+async fn handle_get_impl<W: crate::provider::SendStream>(
     store: Store,
     request: GetRequest,
     writer: &mut ProgressWriter<W>,
@@ -692,16 +780,16 @@ async fn handle_get_impl<W: AsyncStreamWriter>(
     Ok(())
 }
 
-pub async fn handle_get<H: ErrorHandler>(
-    mut pair: StreamPair<H::R, H::W>,
+pub async fn handle_get<R: crate::provider::RecvStream, W: crate::provider::SendStream>(
+    mut pair: StreamPair<R, W>,
     store: Store,
     request: GetRequest,
 ) -> anyhow::Result<()> {
     let res = pair.get_request(|| request.clone()).await;
-    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_get_impl(store, request, &mut writer).await;
-    handle_write_result::<H, _, _>(&mut writer, res).await?;
+    handle_write_result(&mut writer, res).await?;
     Ok(())
 }
 
@@ -725,7 +813,7 @@ impl HasErrorCode for HandleGetManyError {
 /// Handle a single get request.
 ///
 /// Requires a database, the request, and a writer.
-async fn handle_get_many_impl<W: AsyncStreamWriter>(
+async fn handle_get_many_impl<W: crate::provider::SendStream>(
     store: Store,
     request: GetManyRequest,
     writer: &mut ProgressWriter<W>,
@@ -740,16 +828,16 @@ async fn handle_get_many_impl<W: AsyncStreamWriter>(
     Ok(())
 }
 
-pub async fn handle_get_many<H: ErrorHandler>(
-    mut pair: StreamPair<H::R, H::W>,
+pub async fn handle_get_many<R: crate::provider::RecvStream, W: crate::provider::SendStream>(
+    mut pair: StreamPair<R, W>,
     store: Store,
     request: GetManyRequest,
 ) -> anyhow::Result<()> {
     let res = pair.get_many_request(|| request.clone()).await;
-    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_get_many_impl(store, request, &mut writer).await;
-    handle_write_result::<H, _, _>(&mut writer, res).await?;
+    handle_write_result(&mut writer, res).await?;
     Ok(())
 }
 
@@ -782,7 +870,7 @@ impl HasErrorCode for HandlePushError {
 /// Handle a single push request.
 ///
 /// Requires a database, the request, and a reader.
-async fn handle_push_impl<R: AsyncStreamReader>(
+async fn handle_push_impl<R: crate::provider::RecvStream>(
     store: Store,
     request: PushRequest,
     reader: &mut ProgressReader<R>,
@@ -815,21 +903,21 @@ async fn handle_push_impl<R: AsyncStreamReader>(
     Ok(())
 }
 
-pub async fn handle_push<H: ErrorHandler>(
-    mut pair: StreamPair<H::R, H::W>,
+pub async fn handle_push<R: crate::provider::RecvStream, W: crate::provider::SendStream>(
+    mut pair: StreamPair<R, W>,
     store: Store,
     request: PushRequest,
 ) -> anyhow::Result<()> {
     let res = pair.push_request(|| request.clone()).await;
-    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut reader = pair.into_reader(tracker).await?;
     let res = handle_push_impl(store, request, &mut reader).await;
-    handle_read_result::<H, _, _>(&mut reader, res).await?;
+    handle_read_result(&mut reader, res).await?;
     Ok(())
 }
 
 /// Send a blob to the client.
-pub(crate) async fn send_blob<W: AsyncStreamWriter>(
+pub(crate) async fn send_blob<W: crate::provider::SendStream>(
     store: &Store,
     index: u64,
     hash: Hash,
@@ -861,10 +949,10 @@ impl HasErrorCode for HandleObserveError {
 /// Handle a single push request.
 ///
 /// Requires a database, the request, and a reader.
-async fn handle_observe_impl(
+async fn handle_observe_impl<W: crate::provider::SendStream>(
     store: Store,
     request: ObserveRequest,
-    writer: &mut ProgressWriter,
+    writer: &mut ProgressWriter<W>,
 ) -> std::result::Result<(), HandleObserveError> {
     let mut stream = store
         .observe(request.hash)
@@ -889,7 +977,7 @@ async fn handle_observe_impl(
                 send_observe_item(writer, &diff).await?;
                 old = new;
             }
-            _ = writer.inner.0.stopped() => {
+            _ = writer.inner.stopped() => {
                 debug!("observer closed");
                 break;
             }
@@ -898,33 +986,35 @@ async fn handle_observe_impl(
     Ok(())
 }
 
-async fn send_observe_item(writer: &mut ProgressWriter, item: &Bitfield) -> io::Result<()> {
-    use irpc::util::AsyncWriteVarintExt;
+async fn send_observe_item<W: crate::provider::SendStream>(
+    writer: &mut ProgressWriter<W>,
+    item: &Bitfield,
+) -> io::Result<()> {
     let item = ObserveItem::from(item);
-    let len = writer.inner.0.write_length_prefixed(item).await?;
+    let len = writer.inner.write_length_prefixed(item).await?;
     writer.context.log_other_write(len);
     Ok(())
 }
 
-pub async fn handle_observe<H: ErrorHandler<W = DefaultWriter>>(
-    mut pair: StreamPair<H::R, H::W>,
+pub async fn handle_observe<R: crate::provider::RecvStream, W: crate::provider::SendStream>(
+    mut pair: StreamPair<R, W>,
     store: Store,
     request: ObserveRequest,
 ) -> anyhow::Result<()> {
     let res = pair.observe_request(|| request.clone()).await;
-    let tracker = handle_read_request_result::<H, _, _>(&mut pair, res).await?;
+    let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_observe_impl(store, request, &mut writer).await;
-    handle_write_result::<H, _, _>(&mut writer, res).await?;
+    handle_write_result(&mut writer, res).await?;
     Ok(())
 }
 
-pub struct ProgressReader<R: AsyncStreamReader = DefaultReader> {
+pub struct ProgressReader<R: crate::provider::RecvStream = DefaultReader> {
     inner: R,
     context: ReaderContext,
 }
 
-impl<R: AsyncStreamReader> ProgressReader<R> {
+impl<R: crate::provider::RecvStream> ProgressReader<R> {
     async fn transfer_aborted(&self) {
         self.context
             .tracker
@@ -942,7 +1032,7 @@ impl<R: AsyncStreamReader> ProgressReader<R> {
     }
 }
 
-pub(crate) trait RecvStreamExt: AsyncStreamReader {
+pub(crate) trait RecvStreamExt: crate::provider::RecvStream {
     async fn expect_eof(&mut self) -> io::Result<()> {
         match self.read_u8().await {
             Ok(_) => Err(io::Error::new(
@@ -955,7 +1045,7 @@ pub(crate) trait RecvStreamExt: AsyncStreamReader {
     }
 
     async fn read_u8(&mut self) -> io::Result<u8> {
-        let buf = self.read::<1>().await?;
+        let buf = self.recv::<1>().await?;
         Ok(buf[0])
     }
 
@@ -963,7 +1053,7 @@ pub(crate) trait RecvStreamExt: AsyncStreamReader {
         &mut self,
         max_size: usize,
     ) -> io::Result<(T, usize)> {
-        let data = self.read_bytes(max_size).await?;
+        let data = self.recv_bytes(max_size).await?;
         self.expect_eof().await?;
         let value = postcard::from_bytes(&data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -984,7 +1074,7 @@ pub(crate) trait RecvStreamExt: AsyncStreamReader {
             ));
         }
         let n = n as usize;
-        let data = self.read_bytes(n).await?;
+        let data = self.recv_bytes(n).await?;
         let value = postcard::from_bytes(&data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok(value)
@@ -1044,4 +1134,18 @@ pub(crate) trait RecvStreamExt: AsyncStreamReader {
     }
 }
 
-impl<R: AsyncStreamReader> RecvStreamExt for R {}
+impl<R: crate::provider::RecvStream> RecvStreamExt for R {}
+
+pub(crate) trait SendStreamExt: crate::provider::SendStream {
+    async fn write_length_prefixed<T: Serialize>(&mut self, value: T) -> io::Result<usize> {
+        let size = postcard::experimental::serialized_size(&value)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut buf = Vec::with_capacity(size + 9);
+        irpc::util::WriteVarintExt::write_length_prefixed(&mut buf, value)?;
+        let n = buf.len();
+        self.send_bytes(buf.into()).await?;
+        Ok(n)
+    }
+}
+
+impl<W: crate::provider::SendStream> SendStreamExt for W {}
