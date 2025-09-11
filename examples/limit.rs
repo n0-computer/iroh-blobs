@@ -81,7 +81,7 @@ fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
     let mask = EventMask {
         // We want a request for each incoming connection so we can accept
         // or reject them. We don't need any other events.
-        connected: ConnectMode::Request,
+        connected: ConnectMode::Intercept,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
@@ -108,7 +108,7 @@ fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
         // We want to get a request for each get request that we can answer
         // with OK or not OK depending on the hash. We do not want detailed
         // events once it has been decided to handle a request.
-        get: RequestMode::Request,
+        get: RequestMode::Intercept,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
@@ -136,7 +136,7 @@ fn throttle(delay_ms: u64) -> EventSender {
     let mask = EventMask {
         // We want to get requests for each sent user data blob, so we can add a delay.
         // Other than that, we don't need any events.
-        throttle: ThrottleMode::Throttle,
+        throttle: ThrottleMode::Intercept,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
@@ -190,7 +190,7 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
         // based on the current connection count if we want to accept or reject.
         // We also want detailed logging of events for the get request, so we can
         // detect when the request is finished one way or another.
-        connected: ConnectMode::Request,
+        connected: ConnectMode::Intercept,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
