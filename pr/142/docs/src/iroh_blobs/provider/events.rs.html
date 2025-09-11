@@ -682,7 +682,25 @@
 <a href="#681" id="681">681</a>
 <a href="#682" id="682">682</a>
 <a href="#683" id="683">683</a>
-<a href="#684" id="684">684</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, io, ops::Deref};
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, io, ops::Deref};
 
 <span class="kw">use </span>irpc::{
     channel::{mpsc, none::NoSender, oneshot},
@@ -700,7 +718,8 @@
     Hash,
 };
 
-<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<span class="doccomment">/// Mode for connect events.
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 </span><span class="kw">pub enum </span>ConnectMode {
     <span class="doccomment">/// We don't get notification of connect events at all.
@@ -709,10 +728,11 @@
     <span class="doccomment">/// We get a notification for connect events.
     </span>Notify,
     <span class="doccomment">/// We get a request for connect events and can reject incoming connections.
-    </span>Request,
+    </span>Intercept,
 }
 
-<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<span class="doccomment">/// Request mode for observe requests.
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 </span><span class="kw">pub enum </span>ObserveMode {
     <span class="doccomment">/// We don't get notification of connect events at all.
@@ -721,10 +741,11 @@
     <span class="doccomment">/// We get a notification for connect events.
     </span>Notify,
     <span class="doccomment">/// We get a request for connect events and can reject incoming connections.
-    </span>Request,
+    </span>Intercept,
 }
 
-<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<span class="doccomment">/// Request mode for all data related requests.
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 </span><span class="kw">pub enum </span>RequestMode {
     <span class="doccomment">/// We don't get request events at all.
@@ -733,33 +754,40 @@
     <span class="doccomment">/// We get a notification for each request, but no transfer events.
     </span>Notify,
     <span class="doccomment">/// We get a request for each request, and can reject incoming requests, but no transfer events.
-    </span>Request,
+    </span>Intercept,
     <span class="doccomment">/// We get a notification for each request as well as detailed transfer events.
     </span>NotifyLog,
     <span class="doccomment">/// We get a request for each request, and can reject incoming requests.
     /// We also get detailed transfer events.
-    </span>RequestLog,
+    </span>InterceptLog,
     <span class="doccomment">/// This request type is completely disabled. All requests will be rejected.
+    ///
+    /// This means that requests of this kind will always be rejected, whereas
+    /// None means that we don't get any events, but requests will be processed normally.
     </span>Disabled,
 }
 
-<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<span class="doccomment">/// Throttling mode for requests that support throttling.
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 </span><span class="kw">pub enum </span>ThrottleMode {
     <span class="doccomment">/// We don't get these kinds of events at all
     </span><span class="attr">#[default]
     </span><span class="prelude-val">None</span>,
     <span class="doccomment">/// We call throttle to give the event handler a way to throttle requests
-    </span>Throttle,
+    </span>Intercept,
 }
 
 <span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 </span><span class="kw">pub enum </span>AbortReason {
-    RateLimited,
-    Permission,
+    <span class="doccomment">/// The request was aborted because a limit was exceeded. It is OK to try again later.
+    </span>RateLimited,
+    <span class="doccomment">/// The request was aborted because the client does not have permission to perform the operation.
+    </span>Permission,
 }
 
-<span class="attr">#[derive(Debug, Snafu)]
+<span class="doccomment">/// Errors that can occur when sending progress updates.
+</span><span class="attr">#[derive(Debug, Snafu)]
 </span><span class="kw">pub enum </span>ProgressError {
     Limit,
     Permission,
@@ -825,7 +853,11 @@
 <span class="kw">pub type </span>EventResult = <span class="prelude-ty">Result</span>&lt;(), AbortReason&gt;;
 <span class="kw">pub type </span>ClientResult = <span class="prelude-ty">Result</span>&lt;(), ProgressError&gt;;
 
-<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+<span class="doccomment">/// Event mask to configure which events are sent to the event handler.
+///
+/// This can also be used to completely disable certain request types. E.g.
+/// push requests are disabled by default, as they can write to the local store.
+</span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 </span><span class="kw">pub struct </span>EventMask {
     <span class="doccomment">/// Connection event mask
     </span><span class="kw">pub </span>connected: ConnectMode,
@@ -864,12 +896,12 @@
     /// need to do it manually. Providing constants that have push enabled would
     /// risk misuse.
     </span><span class="kw">pub const </span>ALL_READONLY: <span class="self">Self </span>= <span class="self">Self </span>{
-        connected: ConnectMode::Request,
-        get: RequestMode::RequestLog,
-        get_many: RequestMode::RequestLog,
+        connected: ConnectMode::Intercept,
+        get: RequestMode::InterceptLog,
+        get_many: RequestMode::InterceptLog,
         push: RequestMode::Disabled,
-        throttle: ThrottleMode::Throttle,
-        observe: ObserveMode::Request,
+        throttle: ThrottleMode::Intercept,
+        observe: ObserveMode::Intercept,
     };
 }
 
@@ -923,7 +955,7 @@
         throttle: <span class="prelude-val">None</span>,
     };
 
-    <span class="doccomment">/// Transfer for index `index` started, size `size`
+    <span class="doccomment">/// Transfer for index `index` started, size `size` in bytes.
     </span><span class="kw">pub async fn </span>transfer_started(<span class="kw-2">&amp;</span><span class="self">self</span>, index: u64, hash: <span class="kw-2">&amp;</span>Hash, size: u64) -&gt; irpc::Result&lt;()&gt; {
         <span class="kw">if let </span>RequestUpdates::Active(tx) = <span class="kw-2">&amp;</span><span class="self">self</span>.updates {
             tx.send(
@@ -1017,7 +1049,10 @@
             }
             <span class="kw">while let </span><span class="prelude-val">Some</span>(msg) = rx.recv().<span class="kw">await </span>{
                 <span class="kw">match </span>msg {
-                    ProviderMessage::ClientConnected(<span class="kw">_</span>) =&gt; <span class="macro">todo!</span>(),
+                    ProviderMessage::ClientConnected(msg) =&gt; {
+                        <span class="macro">trace!</span>(<span class="string">"{:?}"</span>, msg.inner);
+                        msg.tx.send(<span class="prelude-val">Ok</span>(())).<span class="kw">await</span>.ok();
+                    }
                     ProviderMessage::ClientConnectedNotify(msg) =&gt; {
                         <span class="macro">trace!</span>(<span class="string">"{:?}"</span>, msg.inner);
                     }
@@ -1079,7 +1114,7 @@
             <span class="kw">match </span><span class="self">self</span>.mask.connected {
                 ConnectMode::None =&gt; {}
                 ConnectMode::Notify =&gt; client.notify(Notify(f())).<span class="kw">await</span><span class="question-mark">?</span>,
-                ConnectMode::Request =&gt; client.rpc(f()).<span class="kw">await</span><span class="question-mark">??</span>,
+                ConnectMode::Intercept =&gt; client.rpc(f()).<span class="kw">await</span><span class="question-mark">??</span>,
             }
         };
         <span class="prelude-val">Ok</span>(())
@@ -1129,7 +1164,7 @@
                         client.unwrap().notify_streaming(Notify(msg), <span class="number">32</span>).<span class="kw">await</span><span class="question-mark">?</span>,
                     )
                 }
-                RequestMode::Request <span class="kw">if </span>client.is_some() =&gt; {
+                RequestMode::Intercept <span class="kw">if </span>client.is_some() =&gt; {
                     <span class="kw">let </span>msg = RequestReceived {
                         request: f(),
                         connection_id,
@@ -1148,7 +1183,7 @@
                     };
                     RequestUpdates::Active(client.unwrap().notify_streaming(Notify(msg), <span class="number">32</span>).<span class="kw">await</span><span class="question-mark">?</span>)
                 }
-                RequestMode::RequestLog <span class="kw">if </span>client.is_some() =&gt; {
+                RequestMode::InterceptLog <span class="kw">if </span>client.is_some() =&gt; {
                     <span class="kw">let </span>msg = RequestReceived {
                         request: f(),
                         connection_id,
@@ -1175,7 +1210,7 @@
     ) -&gt; RequestTracker {
         <span class="kw">let </span>throttle = <span class="kw">match </span><span class="self">self</span>.mask.throttle {
             ThrottleMode::None =&gt; <span class="prelude-val">None</span>,
-            ThrottleMode::Throttle =&gt; <span class="self">self
+            ThrottleMode::Intercept =&gt; <span class="self">self
                 </span>.inner
                 .clone()
                 .map(|client| (client, connection_id, request_id)),
@@ -1199,39 +1234,40 @@
     </span><span class="attr">#[rpc(tx = NoSender)]
     </span>ConnectionClosed(ConnectionClosed),
 
-    <span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = oneshot::Sender&lt;EventResult&gt;)]
-    </span><span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new get request was received from the provider.
+    </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = oneshot::Sender&lt;EventResult&gt;)]
     </span>GetRequestReceived(RequestReceived&lt;GetRequest&gt;),
 
-    <span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = NoSender)]
-    </span><span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new get request was received from the provider (notify variant).
+    </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = NoSender)]
     </span>GetRequestReceivedNotify(Notify&lt;RequestReceived&lt;GetRequest&gt;&gt;),
 
-    <span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new get many request was received from the provider.
     </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = oneshot::Sender&lt;EventResult&gt;)]
     </span>GetManyRequestReceived(RequestReceived&lt;GetManyRequest&gt;),
 
-    <span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new get many request was received from the provider (notify variant).
     </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = NoSender)]
     </span>GetManyRequestReceivedNotify(Notify&lt;RequestReceived&lt;GetManyRequest&gt;&gt;),
 
-    <span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new push request was received from the provider.
     </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = oneshot::Sender&lt;EventResult&gt;)]
     </span>PushRequestReceived(RequestReceived&lt;PushRequest&gt;),
 
-    <span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new push request was received from the provider (notify variant).
     </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = NoSender)]
     </span>PushRequestReceivedNotify(Notify&lt;RequestReceived&lt;PushRequest&gt;&gt;),
 
-    <span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new observe request was received from the provider.
     </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = oneshot::Sender&lt;EventResult&gt;)]
     </span>ObserveRequestReceived(RequestReceived&lt;ObserveRequest&gt;),
 
-    <span class="doccomment">/// A new get request was received from the provider.
+    <span class="doccomment">/// A new observe request was received from the provider (notify variant).
     </span><span class="attr">#[rpc(rx = mpsc::Receiver&lt;RequestUpdate&gt;, tx = NoSender)]
     </span>ObserveRequestReceivedNotify(Notify&lt;RequestReceived&lt;ObserveRequest&gt;&gt;),
 
-    <span class="attr">#[rpc(tx = oneshot::Sender&lt;EventResult&gt;)]
+    <span class="doccomment">/// Request to throttle sending for a specific data request.
+    </span><span class="attr">#[rpc(tx = oneshot::Sender&lt;EventResult&gt;)]
     </span>Throttle(Throttle),
 }
 
