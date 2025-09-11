@@ -1315,11 +1315,7 @@
 <a href="#1314" id="1314">1314</a>
 <a href="#1315" id="1315">1315</a>
 <a href="#1316" id="1316">1316</a>
-<a href="#1317" id="1317">1317</a>
-<a href="#1318" id="1318">1318</a>
-<a href="#1319" id="1319">1319</a>
-<a href="#1320" id="1320">1320</a>
-<a href="#1321" id="1321">1321</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
+<a href="#1317" id="1317">1317</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
 //!
 //! The entry point is the [`Remote`] struct.
 </span><span class="kw">use </span>std::{
@@ -1822,7 +1818,7 @@
 
     <span class="kw">pub fn </span>fetch(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        sp: <span class="kw">impl </span>GetStreamPair + Send + <span class="lifetime">'static</span>,
+        sp: <span class="kw">impl </span>GetStreamPair + <span class="lifetime">'static</span>,
         content: <span class="kw">impl </span>Into&lt;HashAndFormat&gt;,
     ) -&gt; GetProgress {
         <span class="kw">let </span>content = content.into();
@@ -2172,12 +2168,8 @@
     ) -&gt; <span class="kw">impl </span>Future&lt;Output = io::Result&lt;StreamPair&lt;<span class="kw">impl </span>RecvStream, <span class="kw">impl </span>SendStream&gt;&gt;&gt; + Send + <span class="lifetime">'static</span>;
 }
 
-<span class="kw">impl</span>&lt;R: RecvStream + <span class="lifetime">'static</span>, W: SendStream + <span class="lifetime">'static</span>&gt; GetStreamPair
-    <span class="kw">for </span>StreamPair&lt;R, W&gt;
-{
-    <span class="kw">async fn </span>open_stream_pair(
-        <span class="self">self</span>,
-    ) -&gt; io::Result&lt;StreamPair&lt;<span class="kw">impl </span>RecvStream, <span class="kw">impl </span>SendStream&gt;&gt; {
+<span class="kw">impl</span>&lt;R: RecvStream + <span class="lifetime">'static</span>, W: SendStream + <span class="lifetime">'static</span>&gt; GetStreamPair <span class="kw">for </span>StreamPair&lt;R, W&gt; {
+    <span class="kw">async fn </span>open_stream_pair(<span class="self">self</span>) -&gt; io::Result&lt;StreamPair&lt;<span class="kw">impl </span>RecvStream, <span class="kw">impl </span>SendStream&gt;&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">self</span>)
     }
 }
