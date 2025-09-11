@@ -1,32 +1,54 @@
 //! API for downloading blobs from a single remote node.
 //!
 //! The entry point is the [`Remote`] struct.
+use std::{
+    collections::BTreeMap,
+    future::{Future, IntoFuture},
+    num::NonZeroU64,
+    sync::Arc,
+};
+
+use bao_tree::{
+    io::{BaoContentItem, Leaf},
+    ChunkNum, ChunkRanges,
+};
 use genawaiter::sync::{Co, Gen};
-use iroh::endpoint::SendStream;
+use iroh::endpoint::Connection;
 use irpc::util::{AsyncReadVarintExt, WriteVarintExt};
 use n0_future::{io, Stream, StreamExt};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use ref_cast::RefCast;
 use snafu::{Backtrace, IntoError, ResultExt, Snafu};
+use tracing::{debug, trace};
 
 use super::blobs::{Bitfield, ExportBaoOptions};
 use crate::{
-    api::{blobs::WriteProgress, ApiClient},
+    api::{
+        self,
+        blobs::{Blobs, WriteProgress},
+        ApiClient, Store,
+    },
     get::{
-        fsm::{AtConnected, DecodeError},
+        fsm::{
+            AtBlobHeader, AtConnected, AtEndBlob, BlobContentNext, ConnectedNext, DecodeError,
+            EndBlobNext,
+        },
         get_error::{BadRequestSnafu, LocalFailureSnafu},
-        GetError, GetResult, Stats,
+        GetError, GetResult, Stats, StreamPair,
     },
+    hashseq::{HashSeq, HashSeqIter},
     protocol::{
-        GetManyRequest, ObserveItem, ObserveRequest, PushRequest, Request, RequestType,
-        MAX_MESSAGE_SIZE,
+        ChunkRangesSeq, GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest,
+        Request, RequestType, MAX_MESSAGE_SIZE,
     },
-    provider::{
-        events::{ClientResult, EventSender, ProgressError},
-        RecvStream, StreamPair,
+    provider::events::{ClientResult, ProgressError},
+    store::IROH_BLOCK_SIZE,
+    util::{
+        sink::{Sink, TokioMpscSenderSink},
+        RecvStream, SendStream,
     },
-    util::sink::{Sink, TokioMpscSenderSink},
+    Hash, HashAndFormat,
 };
 
 /// API to compute request and to download from remote nodes.
@@ -663,13 +685,8 @@ impl Remote {
         })?;
         // I am cloning the connection, but it's fine because the original connection or ConnectionRef stays alive
         // for the duration of the operation.
-        let connected = AtConnected::new(
-            conn.t0,
-            conn.reader,
-            conn.writer,
-            request,
-            Default::default(),
-        );
+        let connected =
+            AtConnected::new(conn.t0, conn.recv, conn.send, request, Default::default());
         trace!("Getting header");
         // read the header
         let next_child = match connected.next().await? {
@@ -828,74 +845,29 @@ pub enum ExecuteError {
     },
 }
 
-use std::{
-    collections::BTreeMap,
-    future::{Future, IntoFuture},
-    num::NonZeroU64,
-    sync::Arc,
-};
-
-use bao_tree::{
-    io::{BaoContentItem, Leaf},
-    ChunkNum, ChunkRanges,
-};
-use iroh::endpoint::Connection;
-use tracing::{debug, trace};
-
-use crate::{
-    api::{self, blobs::Blobs, Store},
-    get::fsm::{AtBlobHeader, AtEndBlob, BlobContentNext, ConnectedNext, EndBlobNext},
-    hashseq::{HashSeq, HashSeqIter},
-    protocol::{ChunkRangesSeq, GetRequest},
-    store::IROH_BLOCK_SIZE,
-    Hash, HashAndFormat,
-};
-
 pub trait GetStreamPair: Send + 'static {
     fn open_stream_pair(
         self,
-    ) -> impl Future<
-        Output = io::Result<
-            StreamPair<impl crate::provider::RecvStream, impl crate::provider::SendStream>,
-        >,
-    > + Send
-           + 'static;
+    ) -> impl Future<Output = io::Result<StreamPair<impl RecvStream, impl SendStream>>> + Send + 'static;
 }
 
-impl<R: crate::provider::RecvStream + 'static, W: crate::provider::SendStream + 'static>
-    GetStreamPair for StreamPair<R, W>
+impl<R: RecvStream + 'static, W: SendStream + 'static> GetStreamPair
+    for StreamPair<R, W>
 {
-    fn open_stream_pair(
+    async fn open_stream_pair(
         self,
-    ) -> impl Future<
-        Output = io::Result<
-            StreamPair<impl crate::provider::RecvStream, impl crate::provider::SendStream>,
-        >,
-    > + Send
-           + 'static {
-        async move { Ok(self) }
+    ) -> io::Result<StreamPair<impl RecvStream, impl SendStream>> {
+        Ok(self)
     }
 }
 
 impl GetStreamPair for Connection {
-    fn open_stream_pair(
+    async fn open_stream_pair(
         self,
-    ) -> impl Future<
-        Output = io::Result<
-            StreamPair<impl crate::provider::RecvStream, impl crate::provider::SendStream>,
-        >,
-    > + Send
-           + 'static {
+    ) -> io::Result<StreamPair<impl crate::util::RecvStream, impl crate::util::SendStream>> {
         let connection_id = self.stable_id() as u64;
-        async move {
-            let (send, recv) = self.open_bi().await?;
-            Ok(StreamPair::new(
-                connection_id,
-                recv,
-                send,
-                EventSender::DEFAULT,
-            ))
-        }
+        let (send, recv) = self.open_bi().await?;
+        Ok(StreamPair::new(connection_id, recv, send))
     }
 }
 
@@ -1046,20 +1018,23 @@ impl LazyHashSeq {
 
 async fn write_push_request(
     request: PushRequest,
-    stream: &mut SendStream,
+    stream: &mut impl SendStream,
 ) -> anyhow::Result<PushRequest> {
     let mut request_bytes = Vec::new();
     request_bytes.push(RequestType::Push as u8);
     request_bytes.write_length_prefixed(&request).unwrap();
-    stream.write_all(&request_bytes).await?;
+    stream.send_bytes(request_bytes.into()).await?;
     Ok(request)
 }
 
-async fn write_observe_request(request: ObserveRequest, stream: &mut SendStream) -> io::Result<()> {
+async fn write_observe_request(
+    request: ObserveRequest,
+    stream: &mut impl SendStream,
+) -> io::Result<()> {
     let request = Request::Observe(request);
     let request_bytes = postcard::to_allocvec(&request)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    stream.write_all(&request_bytes).await?;
+    stream.send_bytes(request_bytes.into()).await?;
     Ok(())
 }
 

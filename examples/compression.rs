@@ -9,24 +9,23 @@
 /// grade code you might nevertheless put the tasks into a [tokio::task::JoinSet] or
 /// [n0_future::FuturesUnordered].
 mod common;
-use std::{io, path::PathBuf};
+use std::{fmt::Debug, path::PathBuf};
 
 use anyhow::Result;
-use async_compression::tokio::{bufread::Lz4Decoder, write::Lz4Encoder};
 use clap::Parser;
 use common::setup_logging;
-use iroh::{endpoint::VarInt, protocol::ProtocolHandler};
+use iroh::protocol::ProtocolHandler;
 use iroh_blobs::{
     api::Store,
+    get::StreamPair,
     provider::{
+        self,
         events::{ClientConnected, EventSender, HasErrorCode},
-        handle_stream, AsyncReadRecvStream, AsyncWriteSendStream, RecvStreamSpecific,
-        SendStreamSpecific, StreamPair,
+        handle_stream,
     },
     store::mem::MemStore,
     ticket::BlobTicket,
 };
-use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tracing::debug;
 
 use crate::common::get_or_generate_secret_key;
@@ -49,54 +48,110 @@ pub enum Args {
     },
 }
 
-struct CompressedWriteStream(Lz4Encoder<iroh::endpoint::SendStream>);
-
-impl SendStreamSpecific for CompressedWriteStream {
-    fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send) {
-        &mut self.0
-    }
-
-    fn reset(&mut self, code: VarInt) -> io::Result<()> {
-        Ok(self.0.get_mut().reset(code)?)
-    }
-
-    async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
-        Ok(self.0.get_mut().stopped().await?)
-    }
+trait Compression: Clone + Send + Sync + Debug + 'static {
+    const ALPN: &'static [u8];
+    fn recv_stream(
+        &self,
+        stream: iroh::endpoint::RecvStream,
+    ) -> impl iroh_blobs::util::RecvStream + Sync + 'static;
+    fn send_stream(
+        &self,
+        stream: iroh::endpoint::SendStream,
+    ) -> impl iroh_blobs::util::SendStream + Sync + 'static;
 }
 
-struct CompressedReadStream(Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>);
+mod lz4 {
+    use std::io;
 
-impl RecvStreamSpecific for CompressedReadStream {
-    fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send) {
-        &mut self.0
+    use async_compression::tokio::{bufread::Lz4Decoder, write::Lz4Encoder};
+    use iroh::endpoint::VarInt;
+    use iroh_blobs::util::{
+        AsyncReadRecvStream, AsyncWriteSendStream, RecvStreamSpecific, SendStreamSpecific,
+    };
+    use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+
+    struct SendStream(Lz4Encoder<iroh::endpoint::SendStream>);
+
+    impl SendStream {
+        pub fn new(inner: iroh::endpoint::SendStream) -> AsyncWriteSendStream<Self> {
+            AsyncWriteSendStream::new(Self(Lz4Encoder::new(inner)))
+        }
     }
 
-    fn stop(&mut self, code: VarInt) -> io::Result<()> {
-        Ok(self.0.get_mut().get_mut().stop(code)?)
+    impl SendStreamSpecific for SendStream {
+        fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send) {
+            &mut self.0
+        }
+
+        fn reset(&mut self, code: VarInt) -> io::Result<()> {
+            Ok(self.0.get_mut().reset(code)?)
+        }
+
+        async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+            Ok(self.0.get_mut().stopped().await?)
+        }
     }
 
-    fn id(&self) -> u64 {
-        self.0.get_ref().get_ref().id().index()
+    struct RecvStream(Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>);
+
+    impl RecvStream {
+        pub fn new(inner: iroh::endpoint::RecvStream) -> AsyncReadRecvStream<Self> {
+            AsyncReadRecvStream::new(Self(Lz4Decoder::new(BufReader::new(inner))))
+        }
     }
-}
 
-#[derive(Debug, Clone)]
-struct CompressedBlobsProtocol {
-    store: Store,
-    events: EventSender,
-}
+    impl RecvStreamSpecific for RecvStream {
+        fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send) {
+            &mut self.0
+        }
 
-impl CompressedBlobsProtocol {
-    fn new(store: &Store, events: EventSender) -> Self {
-        Self {
-            store: store.clone(),
-            events,
+        fn stop(&mut self, code: VarInt) -> io::Result<()> {
+            Ok(self.0.get_mut().get_mut().stop(code)?)
+        }
+
+        fn id(&self) -> u64 {
+            self.0.get_ref().get_ref().id().index()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Compression;
+
+    impl super::Compression for Compression {
+        const ALPN: &[u8] = concat_const::concat_bytes!(b"lz4/", iroh_blobs::ALPN);
+        fn recv_stream(
+            &self,
+            stream: iroh::endpoint::RecvStream,
+        ) -> impl iroh_blobs::util::RecvStream + Sync + 'static {
+            RecvStream::new(stream)
+        }
+        fn send_stream(
+            &self,
+            stream: iroh::endpoint::SendStream,
+        ) -> impl iroh_blobs::util::SendStream + Sync + 'static {
+            SendStream::new(stream)
         }
     }
 }
 
-impl ProtocolHandler for CompressedBlobsProtocol {
+#[derive(Debug, Clone)]
+struct CompressedBlobsProtocol<C: Compression> {
+    store: Store,
+    events: EventSender,
+    compression: C,
+}
+
+impl<C: Compression> CompressedBlobsProtocol<C> {
+    fn new(store: &Store, events: EventSender, compression: C) -> Self {
+        Self {
+            store: store.clone(),
+            events,
+            compression,
+        }
+    }
+}
+
+impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
     async fn accept(
         &self,
         connection: iroh::endpoint::Connection,
@@ -116,19 +171,15 @@ impl ProtocolHandler for CompressedBlobsProtocol {
             return Ok(());
         }
         while let Ok((send, recv)) = connection.accept_bi().await {
-            let send = AsyncWriteSendStream::new(CompressedWriteStream(Lz4Encoder::new(send)));
-            let recv = AsyncReadRecvStream::new(CompressedReadStream(Lz4Decoder::new(
-                BufReader::new(recv),
-            )));
+            let send = self.compression.send_stream(send);
+            let recv = self.compression.recv_stream(recv);
             let store = self.store.clone();
-            let pair = StreamPair::new(connection_id, recv, send, self.events.clone());
+            let pair = provider::StreamPair::new(connection_id, recv, send, self.events.clone());
             tokio::spawn(handle_stream(pair, store));
         }
         Ok(())
     }
 }
-
-const ALPN: &[u8] = b"iroh-blobs-compressed/0.1.0";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -140,13 +191,14 @@ async fn main() -> Result<()> {
         .discovery_n0()
         .bind()
         .await?;
+    let compression = lz4::Compression;
     match args {
         Args::Provide { path } => {
             let store = MemStore::new();
             let tag = store.add_path(path).await?;
-            let blobs = CompressedBlobsProtocol::new(&store, EventSender::DEFAULT);
+            let blobs = CompressedBlobsProtocol::new(&store, EventSender::DEFAULT, compression);
             let router = iroh::protocol::Router::builder(endpoint.clone())
-                .accept(ALPN, blobs)
+                .accept(lz4::Compression::ALPN, blobs)
                 .spawn();
             let ticket = BlobTicket::new(endpoint.node_id().into(), tag.hash, tag.format);
             println!("Serving blob with hash {}", tag.hash);
@@ -158,14 +210,14 @@ async fn main() -> Result<()> {
         }
         Args::Get { ticket, target } => {
             let store = MemStore::new();
-            let conn = endpoint.connect(ticket.node_addr().clone(), ALPN).await?;
+            let conn = endpoint
+                .connect(ticket.node_addr().clone(), &lz4::Compression::ALPN)
+                .await?;
             let connection_id = conn.stable_id() as u64;
             let (send, recv) = conn.open_bi().await?;
-            let send = AsyncWriteSendStream::new(CompressedWriteStream(Lz4Encoder::new(send)));
-            let recv = AsyncReadRecvStream::new(CompressedReadStream(Lz4Decoder::new(
-                BufReader::new(recv),
-            )));
-            let sp = StreamPair::new(connection_id, recv, send, EventSender::DEFAULT);
+            let send = compression.send_stream(send);
+            let recv = compression.recv_stream(recv);
+            let sp = StreamPair::new(connection_id, recv, send);
             let stats = store.remote().fetch(sp, ticket.hash_and_format()).await?;
             if let Some(target) = target {
                 let size = store.export(ticket.hash(), &target).await?;

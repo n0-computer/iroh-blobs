@@ -55,9 +55,9 @@ use super::{
 };
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::{events::ClientResult, RecvStreamAsyncStreamReader},
+    provider::events::ClientResult,
     store::IROH_BLOCK_SIZE,
-    util::temp_tag::TempTag,
+    util::{temp_tag::TempTag, RecvStreamAsyncStreamReader},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -429,7 +429,7 @@ impl Blobs {
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
-    pub async fn import_bao_reader<R: crate::provider::RecvStream>(
+    pub async fn import_bao_reader<R: crate::util::RecvStream>(
         &self,
         hash: Hash,
         ranges: ChunkRanges,
@@ -1073,7 +1073,7 @@ impl ExportBaoProgress {
     }
 
     /// Write quinn variant that also feeds a progress writer.
-    pub(crate) async fn write_with_progress<W: crate::provider::SendStream>(
+    pub(crate) async fn write_with_progress<W: crate::util::SendStream>(
         self,
         writer: &mut W,
         progress: &mut impl WriteProgress,

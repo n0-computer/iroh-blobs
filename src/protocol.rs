@@ -390,7 +390,7 @@ pub use bao_tree::ChunkRanges;
 pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 use snafu::{GenerateImplicitData, Snafu};
 
-use crate::{api::blobs::Bitfield, provider::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
+use crate::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
 /// Maximum message size is limited to 100MiB for now.
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
@@ -446,7 +446,7 @@ pub enum RequestType {
 }
 
 impl Request {
-    pub async fn read_async<R: crate::provider::RecvStream>(
+    pub async fn read_async<R: crate::util::RecvStream>(
         reader: &mut R,
     ) -> io::Result<(Self, usize)> {
         let request_type = reader.read_u8().await?;

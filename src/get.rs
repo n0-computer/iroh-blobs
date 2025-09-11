@@ -30,7 +30,12 @@ use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, IntoError, ResultExt, Snafu};
 use tracing::{debug, error};
 
-use crate::{protocol::ChunkRangesSeq, store::IROH_BLOCK_SIZE, Hash};
+use crate::{
+    protocol::ChunkRangesSeq,
+    store::IROH_BLOCK_SIZE,
+    util::{RecvStream, SendStream},
+    Hash,
+};
 
 mod error;
 pub mod request;
@@ -39,6 +44,24 @@ pub use error::{GetError, GetResult};
 
 type DefaultReader = iroh::endpoint::RecvStream;
 type DefaultWriter = iroh::endpoint::SendStream;
+
+pub struct StreamPair<R: RecvStream = DefaultReader, W: SendStream = DefaultWriter> {
+    pub connection_id: u64,
+    pub t0: Instant,
+    pub recv: R,
+    pub send: W,
+}
+
+impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
+    pub fn new(connection_id: u64, recv: R, send: W) -> Self {
+        Self {
+            t0: Instant::now(),
+            recv,
+            send,
+            connection_id,
+        }
+    }
+}
 
 /// Stats about the transfer.
 #[derive(
@@ -102,7 +125,7 @@ pub mod fsm {
         protocol::{
             GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
         },
-        provider::{RecvStream, RecvStreamAsyncStreamReader, SendStream},
+        util::{RecvStream, RecvStreamAsyncStreamReader, SendStream},
     };
 
     self_cell::self_cell! {
