@@ -190,40 +190,30 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
         // based on the current connection count if we want to accept or reject.
         // We also want detailed logging of events for the get request, so we can
         // detect when the request is finished one way or another.
-        get: RequestMode::RequestLog,
+        connected: ConnectMode::Request,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
     n0_future::task::spawn(async move {
         let requests = ConnectionCounter::new(max_connections);
         while let Some(msg) = rx.recv().await {
-            if let ProviderMessage::GetRequestReceived(mut msg) = msg {
-                let connection_id = msg.connection_id;
-                let request_id = msg.request_id;
-                let res = requests.inc();
-                match res {
-                    Ok(n) => {
-                        println!("Accepting request {n}, id ({connection_id},{request_id})");
-                        msg.tx.send(Ok(())).await.ok();
-                    }
-                    Err(_) => {
-                        println!(
-                            "Connection limit of {max_connections} exceeded, rejecting request"
-                        );
-                        msg.tx.send(Err(AbortReason::RateLimited)).await.ok();
-                        continue;
-                    }
+            match msg {
+                ProviderMessage::ClientConnected(msg) => {
+                    let connection_id = msg.connection_id;
+                    let node_id = msg.node_id;
+                    let res = if let Ok(n) = requests.inc() {
+                        println!("Accepting connection {n}, node_id {node_id}, connection_id {connection_id}");
+                        Ok(())
+                    } else {
+                        Err(AbortReason::RateLimited)
+                    };
+                    msg.tx.send(res).await.ok();
                 }
-                let requests = requests.clone();
-                n0_future::task::spawn(async move {
-                    // just drain the per request events
-                    //
-                    // Note that we have requested updates for the request, now we also need to process them
-                    // otherwise the request will be aborted!
-                    while let Ok(Some(_)) = msg.rx.recv().await {}
-                    println!("Stopping request, id ({connection_id},{request_id})");
+                ProviderMessage::ConnectionClosed(msg) => {
                     requests.dec();
-                });
+                    println!("Connection closed, connection_id {}", msg.connection_id,);
+                }
+                _ => {}
             }
         }
     });

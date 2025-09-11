@@ -401,7 +401,7 @@ impl EventSender {
         Ok(())
     }
 
-    /// A new client has been connected.
+    /// A connection has been closed.
     pub async fn connection_closed(&self, f: impl Fn() -> ConnectionClosed) -> ClientResult {
         if let Some(client) = &self.inner {
             client.notify(f()).await?;
