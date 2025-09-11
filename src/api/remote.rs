@@ -501,7 +501,7 @@ impl Remote {
 
     pub fn fetch(
         &self,
-        sp: impl GetStreamPair + Send + 'static,
+        sp: impl GetStreamPair + 'static,
         content: impl Into<HashAndFormat>,
     ) -> GetProgress {
         let content = content.into();
@@ -851,12 +851,8 @@ pub trait GetStreamPair: Send + 'static {
     ) -> impl Future<Output = io::Result<StreamPair<impl RecvStream, impl SendStream>>> + Send + 'static;
 }
 
-impl<R: RecvStream + 'static, W: SendStream + 'static> GetStreamPair
-    for StreamPair<R, W>
-{
-    async fn open_stream_pair(
-        self,
-    ) -> io::Result<StreamPair<impl RecvStream, impl SendStream>> {
+impl<R: RecvStream + 'static, W: SendStream + 'static> GetStreamPair for StreamPair<R, W> {
+    async fn open_stream_pair(self) -> io::Result<StreamPair<impl RecvStream, impl SendStream>> {
         Ok(self)
     }
 }

@@ -7,7 +7,7 @@ pub use stream::{
     AsyncReadRecvStream, AsyncWriteSendStream, RecvStream, RecvStreamAsyncStreamReader,
     RecvStreamSpecific, SendStream, SendStreamSpecific,
 };
-pub(crate) use stream::{SendStreamExt, RecvStreamExt};
+pub(crate) use stream::{RecvStreamExt, SendStreamExt};
 
 pub(crate) mod serde {
     // Module that handles io::Error serialization/deserialization

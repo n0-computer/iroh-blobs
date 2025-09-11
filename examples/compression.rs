@@ -1,13 +1,7 @@
-/// Example how to limit blob requests by hash and node id, and to add
-/// throttling or limiting the maximum number of connections.
+/// Example how to use compression with iroh-blobs
 ///
-/// Limiting is done via a fn that returns an EventSender and internally
-/// makes liberal use of spawn to spawn background tasks.
-///
-/// This is fine, since the tasks will terminate as soon as the [BlobsProtocol]
-/// instance holding the [EventSender] will be dropped. But for production
-/// grade code you might nevertheless put the tasks into a [tokio::task::JoinSet] or
-/// [n0_future::FuturesUnordered].
+/// We create a derived protocol that compresses both requests and responses using lz4
+/// or any other compression algorithm supported by async-compression.
 mod common;
 use std::{fmt::Debug, path::PathBuf};
 
@@ -211,14 +205,14 @@ async fn main() -> Result<()> {
         Args::Get { ticket, target } => {
             let store = MemStore::new();
             let conn = endpoint
-                .connect(ticket.node_addr().clone(), &lz4::Compression::ALPN)
+                .connect(ticket.node_addr().clone(), lz4::Compression::ALPN)
                 .await?;
             let connection_id = conn.stable_id() as u64;
             let (send, recv) = conn.open_bi().await?;
             let send = compression.send_stream(send);
             let recv = compression.recv_stream(recv);
             let sp = StreamPair::new(connection_id, recv, send);
-            let stats = store.remote().fetch(sp, ticket.hash_and_format()).await?;
+            let _stats = store.remote().fetch(sp, ticket.hash_and_format()).await?;
             if let Some(target) = target {
                 let size = store.export(ticket.hash(), &target).await?;
                 println!("Wrote {} bytes to {}", size, target.display());

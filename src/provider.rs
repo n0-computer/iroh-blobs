@@ -34,7 +34,7 @@ use crate::{
         ClientConnected, ClientResult, ConnectionClosed, HasErrorCode, ProgressError,
         RequestTracker,
     },
-    util::{RecvStream, SendStream, SendStreamExt, RecvStreamExt},
+    util::{RecvStream, RecvStreamExt, SendStream, SendStreamExt},
     Hash,
 };
 pub mod events;
@@ -332,12 +332,7 @@ pub trait ErrorHandler {
     fn reset(writer: &mut Self::W, code: VarInt) -> impl Future<Output = ()>;
 }
 
-async fn handle_read_request_result<
-    R: RecvStream,
-    W: SendStream,
-    T,
-    E: HasErrorCode,
->(
+async fn handle_read_request_result<R: RecvStream, W: SendStream, T, E: HasErrorCode>(
     pair: &mut StreamPair<R, W>,
     r: Result<T, E>,
 ) -> Result<T, E> {
