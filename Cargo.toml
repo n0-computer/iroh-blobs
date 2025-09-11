@@ -21,7 +21,6 @@ quinn = { package = "iroh-quinn", version = "0.14.0" }
 n0-future = "0.2.0"
 n0-snafu = "0.2.0"
 range-collections = { version = "0.4.6", features = ["serde"] }
-redb = { version = "=2.4" }
 smallvec = { version = "1", features = ["serde", "const_new"] }
 snafu = "0.8.5"
 tokio = { version = "1.43.0", features = ["full"] }
@@ -41,9 +40,10 @@ iroh = "0.91.1"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.91.1"
-reflink-copy = "0.1.24"
 irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
+redb = { version = "=2.4", optional = true }
+reflink-copy = { version = "0.1.24", optional = true }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
@@ -64,7 +64,8 @@ iroh = { version = "0.91.1", features = ["discovery-local-network"]}
 [features]
 hide-proto-docs = []
 metrics = []
-default = ["hide-proto-docs"]
+default = ["hide-proto-docs", "fs-store"]
+fs-store = ["dep:redb", "dep:reflink-copy"]
 
 [patch.crates-io]
 iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }

@@ -214,6 +214,7 @@ impl tokio::io::AsyncSeek for BlobReader {
 }
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests {
     use bao_tree::ChunkRanges;
     use testresult::TestResult;
