@@ -1063,6 +1063,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests {
     use bao_tree::{ChunkNum, ChunkRanges};
     use testresult::TestResult;

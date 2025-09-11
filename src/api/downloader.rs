@@ -521,6 +521,7 @@ impl ContentDiscovery for Shuffled {
 }
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests {
     use std::ops::Deref;
 

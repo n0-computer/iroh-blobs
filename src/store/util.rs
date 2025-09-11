@@ -1,30 +1,25 @@
-use std::{
-    borrow::Borrow,
-    fmt,
-    fs::{File, OpenOptions},
-    io::{self, Read, Write},
-    path::Path,
-    time::SystemTime,
-};
+use std::{borrow::Borrow, fmt, time::SystemTime};
 
-use arrayvec::ArrayString;
-use bao_tree::{blake3, io::mixed::EncodedItem};
+use bao_tree::io::mixed::EncodedItem;
 use bytes::Bytes;
 use derive_more::{From, Into};
 
-mod mem_or_file;
 mod sparse_mem_file;
 use irpc::channel::mpsc;
-pub use mem_or_file::{FixedSize, MemOrFile};
 use range_collections::{range_set::RangeSetEntry, RangeSetRef};
 use ref_cast::RefCast;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 pub use sparse_mem_file::SparseMemFile;
 pub mod observer;
 mod size_info;
 pub use size_info::SizeInfo;
 mod partial_mem_storage;
 pub use partial_mem_storage::PartialMemStorage;
+
+#[cfg(feature = "fs-store")]
+mod mem_or_file;
+#[cfg(feature = "fs-store")]
+pub use mem_or_file::{FixedSize, MemOrFile};
 
 /// A named, persistent tag.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, From, Into)]
@@ -138,48 +133,6 @@ pub(crate) fn get_limited_slice(bytes: &Bytes, offset: u64, len: usize) -> Bytes
     bytes.slice(limited_range(offset, len, bytes.len()))
 }
 
-mod redb_support {
-    use bytes::Bytes;
-    use redb::{Key as RedbKey, Value as RedbValue};
-
-    use super::Tag;
-
-    impl RedbValue for Tag {
-        type SelfType<'a> = Self;
-
-        type AsBytes<'a> = bytes::Bytes;
-
-        fn fixed_width() -> Option<usize> {
-            None
-        }
-
-        fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
-        where
-            Self: 'a,
-        {
-            Self(Bytes::copy_from_slice(data))
-        }
-
-        fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
-        where
-            Self: 'a,
-            Self: 'b,
-        {
-            value.0.clone()
-        }
-
-        fn type_name() -> redb::TypeName {
-            redb::TypeName::new("Tag")
-        }
-    }
-
-    impl RedbKey for Tag {
-        fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
-            data1.cmp(data2)
-        }
-    }
-}
-
 pub trait RangeSetExt<T> {
     fn upper_bound(&self) -> Option<T>;
 }
@@ -198,161 +151,226 @@ impl<T: RangeSetEntry + Clone> RangeSetExt<T> for RangeSetRef<T> {
     }
 }
 
-pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> io::Result<()> {
-    // Build Vec with space for hash
-    let mut buffer = Vec::with_capacity(32 + 128);
-    buffer.extend_from_slice(&[0u8; 32]);
+#[cfg(feature = "fs-store")]
+mod fs {
+    use std::{
+        fmt,
+        fs::{File, OpenOptions},
+        io::{self, Read, Write},
+        path::Path,
+    };
 
-    // Serialize directly into buffer
-    postcard::to_io(data, &mut buffer).map_err(io::Error::other)?;
+    use arrayvec::ArrayString;
+    use bao_tree::blake3;
+    use serde::{de::DeserializeOwned, Serialize};
 
-    // Compute hash over data (skip first 32 bytes)
-    let data_slice = &buffer[32..];
-    let hash = blake3::hash(data_slice);
-    buffer[..32].copy_from_slice(hash.as_bytes());
+    mod redb_support {
+        use bytes::Bytes;
+        use redb::{Key as RedbKey, Value as RedbValue};
 
-    // Write all at once
-    let mut file = File::create(&path)?;
-    file.write_all(&buffer)?;
-    file.sync_all()?;
+        use super::super::Tag;
 
-    Ok(())
-}
+        impl RedbValue for Tag {
+            type SelfType<'a> = Self;
 
-pub fn read_checksummed_and_truncate<T: DeserializeOwned>(path: impl AsRef<Path>) -> io::Result<T> {
-    let path = path.as_ref();
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-    file.set_len(0)?;
-    file.sync_all()?;
+            type AsBytes<'a> = bytes::Bytes;
 
-    if buffer.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File marked dirty",
-        ));
+            fn fixed_width() -> Option<usize> {
+                None
+            }
+
+            fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+            where
+                Self: 'a,
+            {
+                Self(Bytes::copy_from_slice(data))
+            }
+
+            fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+            where
+                Self: 'a,
+                Self: 'b,
+            {
+                value.0.clone()
+            }
+
+            fn type_name() -> redb::TypeName {
+                redb::TypeName::new("Tag")
+            }
+        }
+
+        impl RedbKey for Tag {
+            fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
+                data1.cmp(data2)
+            }
+        }
     }
 
-    if buffer.len() < 32 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+    pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> io::Result<()> {
+        // Build Vec with space for hash
+        let mut buffer = Vec::with_capacity(32 + 128);
+        buffer.extend_from_slice(&[0u8; 32]);
+
+        // Serialize directly into buffer
+        postcard::to_io(data, &mut buffer).map_err(io::Error::other)?;
+
+        // Compute hash over data (skip first 32 bytes)
+        let data_slice = &buffer[32..];
+        let hash = blake3::hash(data_slice);
+        buffer[..32].copy_from_slice(hash.as_bytes());
+
+        // Write all at once
+        let mut file = File::create(&path)?;
+        file.write_all(&buffer)?;
+        file.sync_all()?;
+
+        Ok(())
     }
 
-    let stored_hash = &buffer[..32];
-    let data = &buffer[32..];
+    pub fn read_checksummed_and_truncate<T: DeserializeOwned>(
+        path: impl AsRef<Path>,
+    ) -> io::Result<T> {
+        let path = path.as_ref();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        file.set_len(0)?;
+        file.sync_all()?;
 
-    let computed_hash = blake3::hash(data);
-    if computed_hash.as_bytes() != stored_hash {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Hash mismatch"));
+        if buffer.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "File marked dirty",
+            ));
+        }
+
+        if buffer.len() < 32 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+        }
+
+        let stored_hash = &buffer[..32];
+        let data = &buffer[32..];
+
+        let computed_hash = blake3::hash(data);
+        if computed_hash.as_bytes() != stored_hash {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Hash mismatch"));
+        }
+
+        let deserialized = postcard::from_bytes(data).map_err(io::Error::other)?;
+
+        Ok(deserialized)
     }
 
-    let deserialized = postcard::from_bytes(data).map_err(io::Error::other)?;
+    #[cfg(test)]
+    pub fn read_checksummed<T: DeserializeOwned>(path: impl AsRef<Path>) -> io::Result<T> {
+        use std::{fs::File, io::Read};
 
-    Ok(deserialized)
-}
+        use bao_tree::blake3;
+        use tracing::info;
 
-#[cfg(test)]
-pub fn read_checksummed<T: DeserializeOwned>(path: impl AsRef<Path>) -> io::Result<T> {
-    use tracing::info;
+        let path = path.as_ref();
+        let mut file = File::open(path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        info!("{} {}", path.display(), hex::encode(&buffer));
 
-    let path = path.as_ref();
-    let mut file = File::open(path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-    info!("{} {}", path.display(), hex::encode(&buffer));
+        if buffer.is_empty() {
+            use std::io;
 
-    if buffer.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File marked dirty",
-        ));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "File marked dirty",
+            ));
+        }
+
+        if buffer.len() < 32 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+        }
+
+        let stored_hash = &buffer[..32];
+        let data = &buffer[32..];
+
+        let computed_hash = blake3::hash(data);
+        if computed_hash.as_bytes() != stored_hash {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Hash mismatch"));
+        }
+
+        let deserialized = postcard::from_bytes(data).map_err(io::Error::other)?;
+
+        Ok(deserialized)
     }
 
-    if buffer.len() < 32 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+    /// Helper trait for bytes for debugging
+    pub trait SliceInfoExt: AsRef<[u8]> {
+        // get the addr of the actual data, to check if data was copied
+        fn addr(&self) -> usize;
+
+        // a short symbol string for the address
+        fn addr_short(&self) -> ArrayString<12> {
+            let addr = self.addr().to_le_bytes();
+            symbol_string(&addr)
+        }
+
+        #[allow(dead_code)]
+        fn hash_short(&self) -> ArrayString<10> {
+            crate::Hash::new(self.as_ref()).fmt_short()
+        }
     }
 
-    let stored_hash = &buffer[..32];
-    let data = &buffer[32..];
+    impl<T: AsRef<[u8]>> SliceInfoExt for T {
+        fn addr(&self) -> usize {
+            self.as_ref() as *const [u8] as *const u8 as usize
+        }
 
-    let computed_hash = blake3::hash(data);
-    if computed_hash.as_bytes() != stored_hash {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Hash mismatch"));
+        fn hash_short(&self) -> ArrayString<10> {
+            crate::Hash::new(self.as_ref()).fmt_short()
+        }
     }
 
-    let deserialized = postcard::from_bytes(data).map_err(io::Error::other)?;
+    pub fn symbol_string(data: &[u8]) -> ArrayString<12> {
+        const SYMBOLS: &[char] = &[
+            '😀', '😂', '😍', '😎', '😢', '😡', '😱', '😴', '🤓', '🤔', '🤗', '🤢', '🤡', '🤖',
+            '👽', '👾', '👻', '💀', '💩', '♥', '💥', '💦', '💨', '💫', '💬', '💭', '💰', '💳',
+            '💼', '📈', '📉', '📍', '📢', '📦', '📱', '📷', '📺', '🎃', '🎄', '🎉', '🎋', '🎍',
+            '🎒', '🎓', '🎖', '🎤', '🎧', '🎮', '🎰', '🎲', '🎳', '🎴', '🎵', '🎷', '🎸', '🎹',
+            '🎺', '🎻', '🎼', '🏀', '🏁', '🏆', '🏈',
+        ];
+        const BASE: usize = SYMBOLS.len(); // 64
 
-    Ok(deserialized)
-}
+        // Hash the input with BLAKE3
+        let hash = blake3::hash(data);
+        let bytes = hash.as_bytes(); // 32-byte hash
 
-/// Helper trait for bytes for debugging
-pub trait SliceInfoExt: AsRef<[u8]> {
-    // get the addr of the actual data, to check if data was copied
-    fn addr(&self) -> usize;
+        // Create an ArrayString with capacity 12 (bytes)
+        let mut result = ArrayString::<12>::new();
 
-    // a short symbol string for the address
-    fn addr_short(&self) -> ArrayString<12> {
-        let addr = self.addr().to_le_bytes();
-        symbol_string(&addr)
+        // Fill with 3 symbols
+        for byte in bytes.iter().take(3) {
+            let byte = *byte as usize;
+            let index = byte % BASE;
+            result.push(SYMBOLS[index]); // Each char can be up to 4 bytes
+        }
+
+        result
     }
 
-    #[allow(dead_code)]
-    fn hash_short(&self) -> ArrayString<10> {
-        crate::Hash::new(self.as_ref()).fmt_short()
-    }
-}
+    pub struct ValueOrPoisioned<T>(pub Option<T>);
 
-impl<T: AsRef<[u8]>> SliceInfoExt for T {
-    fn addr(&self) -> usize {
-        self.as_ref() as *const [u8] as *const u8 as usize
-    }
-
-    fn hash_short(&self) -> ArrayString<10> {
-        crate::Hash::new(self.as_ref()).fmt_short()
-    }
-}
-
-pub fn symbol_string(data: &[u8]) -> ArrayString<12> {
-    const SYMBOLS: &[char] = &[
-        '😀', '😂', '😍', '😎', '😢', '😡', '😱', '😴', '🤓', '🤔', '🤗', '🤢', '🤡', '🤖', '👽',
-        '👾', '👻', '💀', '💩', '♥', '💥', '💦', '💨', '💫', '💬', '💭', '💰', '💳', '💼', '📈',
-        '📉', '📍', '📢', '📦', '📱', '📷', '📺', '🎃', '🎄', '🎉', '🎋', '🎍', '🎒', '🎓', '🎖',
-        '🎤', '🎧', '🎮', '🎰', '🎲', '🎳', '🎴', '🎵', '🎷', '🎸', '🎹', '🎺', '🎻', '🎼', '🏀',
-        '🏁', '🏆', '🏈',
-    ];
-    const BASE: usize = SYMBOLS.len(); // 64
-
-    // Hash the input with BLAKE3
-    let hash = blake3::hash(data);
-    let bytes = hash.as_bytes(); // 32-byte hash
-
-    // Create an ArrayString with capacity 12 (bytes)
-    let mut result = ArrayString::<12>::new();
-
-    // Fill with 3 symbols
-    for byte in bytes.iter().take(3) {
-        let byte = *byte as usize;
-        let index = byte % BASE;
-        result.push(SYMBOLS[index]); // Each char can be up to 4 bytes
-    }
-
-    result
-}
-
-pub struct ValueOrPoisioned<T>(pub Option<T>);
-
-impl<T: fmt::Debug> fmt::Debug for ValueOrPoisioned<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            Some(x) => x.fmt(f),
-            None => f.debug_tuple("Poisoned").finish(),
+    impl<T: fmt::Debug> fmt::Debug for ValueOrPoisioned<T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match &self.0 {
+                Some(x) => x.fmt(f),
+                None => f.debug_tuple("Poisoned").finish(),
+            }
         }
     }
 }
+#[cfg(feature = "fs-store")]
+pub use fs::*;
 
 /// Given a prefix, increment it lexographically.
 ///
