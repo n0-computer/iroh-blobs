@@ -1085,7 +1085,7 @@
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="doccomment">/// A new client has been connected.
+    <span class="doccomment">/// A connection has been closed.
     </span><span class="kw">pub async fn </span>connection_closed(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw">impl </span>Fn() -&gt; ConnectionClosed) -&gt; ClientResult {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(client) = <span class="kw-2">&amp;</span><span class="self">self</span>.inner {
             client.notify(f()).<span class="kw">await</span><span class="question-mark">?</span>;

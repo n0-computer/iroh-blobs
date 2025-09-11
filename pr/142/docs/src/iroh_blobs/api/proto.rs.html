@@ -704,7 +704,8 @@
 <a href="#703" id="703">703</a>
 <a href="#704" id="704">704</a>
 <a href="#705" id="705">705</a>
-<a href="#706" id="706">706</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(feature = <span class="string">"hide-proto-docs"</span>, doc(hidden))]
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(feature = <span class="string">"hide-proto-docs"</span>, doc(hidden))]
 </span><span class="doccomment">//! The protocol that a store implementation needs to implement.
 //!
 //! A store needs to handle [`Request`]s. It is fine to just return an error for some
@@ -746,7 +747,8 @@
 
 <span class="kw">use crate</span>::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>HashSpecific {
+<span class="attr">#[allow(dead_code)]
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>HashSpecific {
     <span class="kw">fn </span>hash(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Hash;
 
     <span class="kw">fn </span>hash_short(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrayString&lt;<span class="number">10</span>&gt; {

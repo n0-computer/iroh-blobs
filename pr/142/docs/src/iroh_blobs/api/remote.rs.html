@@ -1315,7 +1315,8 @@
 <a href="#1314" id="1314">1314</a>
 <a href="#1315" id="1315">1315</a>
 <a href="#1316" id="1316">1316</a>
-<a href="#1317" id="1317">1317</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
+<a href="#1317" id="1317">1317</a>
+<a href="#1318" id="1318">1318</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloading blobs from a single remote node.
 //!
 //! The entry point is the [`Remote`] struct.
 </span><span class="kw">use </span>genawaiter::sync::{Co, Gen};
@@ -2380,6 +2381,7 @@
 }
 
 <span class="attr">#[cfg(test)]
+#[cfg(feature = <span class="string">"fs-store"</span>)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>bao_tree::{ChunkNum, ChunkRanges};
     <span class="kw">use </span>testresult::TestResult;

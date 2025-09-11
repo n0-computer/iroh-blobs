@@ -678,7 +678,8 @@
 <a href="#677" id="677">677</a>
 <a href="#678" id="678">678</a>
 <a href="#679" id="679">679</a>
-<a href="#680" id="680">680</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -1201,6 +1202,7 @@
 }
 
 <span class="attr">#[cfg(test)]
+#[cfg(feature = <span class="string">"fs-store"</span>)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::ops::Deref;
 
