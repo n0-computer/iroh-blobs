@@ -57,7 +57,7 @@ use super::{
 };
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::StreamContext,
+    provider::events::ClientResult,
     store::IROH_BLOCK_SIZE,
     util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
@@ -1116,7 +1116,9 @@ impl ExportBaoProgress {
                         .write_chunk(leaf.data)
                         .await
                         .map_err(io::Error::from)?;
-                    progress.notify_payload_write(index, leaf.offset, len).await;
+                    progress
+                        .notify_payload_write(index, leaf.offset, len)
+                        .await?;
                 }
                 EncodedItem::Done => break,
                 EncodedItem::Error(cause) => return Err(cause.into()),
@@ -1162,25 +1164,11 @@ impl ExportBaoProgress {
 
 pub(crate) trait WriteProgress {
     /// Notify the progress writer that a payload write has happened.
-    async fn notify_payload_write(&mut self, index: u64, offset: u64, len: usize);
+    async fn notify_payload_write(&mut self, index: u64, offset: u64, len: usize) -> ClientResult;
 
     /// Log a write of some other data.
     fn log_other_write(&mut self, len: usize);
 
     /// Notify the progress writer that a transfer has started.
     async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64);
-}
-
-impl WriteProgress for StreamContext {
-    async fn notify_payload_write(&mut self, index: u64, offset: u64, len: usize) {
-        StreamContext::notify_payload_write(self, index, offset, len);
-    }
-
-    fn log_other_write(&mut self, len: usize) {
-        StreamContext::log_other_write(self, len);
-    }
-
-    async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64) {
-        StreamContext::send_transfer_started(self, index, hash, size).await
-    }
 }

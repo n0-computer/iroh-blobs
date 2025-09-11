@@ -30,7 +30,7 @@ pub mod downloader;
 pub mod proto;
 pub mod remote;
 pub mod tags;
-use crate::api::proto::WaitIdleRequest;
+use crate::{api::proto::WaitIdleRequest, provider::events::ProgressError};
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
 pub(crate) type ApiClient = irpc::Client<proto::Request>;
@@ -97,6 +97,8 @@ pub enum ExportBaoError {
     ExportBaoIo { source: io::Error },
     #[snafu(display("encode error: {source}"))]
     ExportBaoInner { source: bao_tree::io::EncodeError },
+    #[snafu(display("client error: {source}"))]
+    ClientError { source: ProgressError },
 }
 
 impl From<ExportBaoError> for Error {
@@ -107,6 +109,7 @@ impl From<ExportBaoError> for Error {
             ExportBaoError::Request { source, .. } => Self::Io(source.into()),
             ExportBaoError::ExportBaoIo { source, .. } => Self::Io(source),
             ExportBaoError::ExportBaoInner { source, .. } => Self::Io(source.into()),
+            ExportBaoError::ClientError { source, .. } => Self::Io(source.into()),
         }
     }
 }
@@ -149,6 +152,12 @@ impl From<irpc::RequestError> for ExportBaoError {
 impl From<bao_tree::io::EncodeError> for ExportBaoError {
     fn from(value: bao_tree::io::EncodeError) -> Self {
         ExportBaoInnerSnafu.into_error(value)
+    }
+}
+
+impl From<ProgressError> for ExportBaoError {
+    fn from(value: ProgressError) -> Self {
+        ClientSnafu.into_error(value)
     }
 }
 
