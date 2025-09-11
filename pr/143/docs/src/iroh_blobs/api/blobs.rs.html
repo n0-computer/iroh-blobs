@@ -1330,7 +1330,7 @@
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
-    </span><span class="attr">#[allow(dead_code)]
+    </span><span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete_with_opts(<span class="kw-2">&amp;</span><span class="self">self</span>, options: DeleteOptions) -&gt; RequestResult&lt;()&gt; {
         <span class="macro">trace!</span>(<span class="string">"{options:?}"</span>);
         <span class="self">self</span>.client.rpc(options).<span class="kw">await</span><span class="question-mark">??</span>;
@@ -1338,7 +1338,7 @@
     }
 
     <span class="doccomment">/// See [`Self::delete_with_opts`].
-    </span><span class="attr">#[allow(dead_code)]
+    </span><span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         hashes: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>Into&lt;Hash&gt;&gt;,
