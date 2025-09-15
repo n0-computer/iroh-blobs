@@ -214,6 +214,7 @@ pub(crate) mod serde {
     }
 }
 
+#[cfg(feature = "fs-store")]
 pub(crate) mod outboard_with_progress {
     use std::io::{self, BufReader, Read};
 
@@ -363,7 +364,7 @@ pub(crate) mod outboard_with_progress {
 }
 
 pub(crate) mod sink {
-    use std::{future::Future, io};
+    use std::future::Future;
 
     use irpc::RpcMessage;
 
@@ -433,10 +434,13 @@ pub(crate) mod sink {
     pub struct TokioMpscSenderSink<T>(pub tokio::sync::mpsc::Sender<T>);
 
     impl<T> Sink<T> for TokioMpscSenderSink<T> {
-        type Error = tokio::sync::mpsc::error::SendError<T>;
+        type Error = irpc::channel::SendError;
 
         async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
-            self.0.send(value).await
+            self.0
+                .send(value)
+                .await
+                .map_err(|_| irpc::channel::SendError::ReceiverClosed)
         }
     }
 
@@ -483,10 +487,10 @@ pub(crate) mod sink {
     pub struct Drain;
 
     impl<T> Sink<T> for Drain {
-        type Error = io::Error;
+        type Error = irpc::channel::SendError;
 
         async fn send(&mut self, _offset: T) -> std::result::Result<(), Self::Error> {
-            io::Result::Ok(())
+            Ok(())
         }
     }
 }

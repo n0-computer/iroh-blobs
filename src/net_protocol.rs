@@ -36,22 +36,16 @@
 //! # }
 //! ```
 
-use std::{fmt::Debug, future::Future, ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use iroh::{
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler},
     Endpoint, Watcher,
 };
-use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::{
-    api::Store,
-    provider::{Event, EventSender},
-    ticket::BlobTicket,
-    HashAndFormat,
-};
+use crate::{api::Store, provider::events::EventSender, ticket::BlobTicket, HashAndFormat};
 
 #[derive(Debug)]
 pub(crate) struct BlobsInner {
@@ -75,12 +69,12 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
-    pub fn new(store: &Store, endpoint: Endpoint, events: Option<mpsc::Sender<Event>>) -> Self {
+    pub fn new(store: &Store, endpoint: Endpoint, events: Option<EventSender>) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
                 endpoint,
-                events: EventSender::new(events),
+                events: events.unwrap_or(EventSender::DEFAULT),
             }),
         }
     }
@@ -106,25 +100,16 @@ impl BlobsProtocol {
 }
 
 impl ProtocolHandler for BlobsProtocol {
-    fn accept(
-        &self,
-        conn: Connection,
-    ) -> impl Future<Output = std::result::Result<(), AcceptError>> + Send {
+    async fn accept(&self, conn: Connection) -> std::result::Result<(), AcceptError> {
         let store = self.store().clone();
         let events = self.inner.events.clone();
-
-        Box::pin(async move {
-            crate::provider::handle_connection(conn, store, events).await;
-            Ok(())
-        })
+        crate::provider::handle_connection(conn, store, events).await;
+        Ok(())
     }
 
-    fn shutdown(&self) -> impl Future<Output = ()> + Send {
-        let store = self.store().clone();
-        Box::pin(async move {
-            if let Err(cause) = store.shutdown().await {
-                error!("error shutting down store: {:?}", cause);
-            }
-        })
+    async fn shutdown(&self) {
+        if let Err(cause) = self.store().shutdown().await {
+            error!("error shutting down store: {:?}", cause);
+        }
     }
 }

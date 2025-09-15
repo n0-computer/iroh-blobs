@@ -283,7 +283,7 @@ impl From<Hash> for HashAndFormat {
     }
 }
 
-// #[cfg(feature = "redb")]
+#[cfg(feature = "fs-store")]
 mod redb_support {
     use postcard::experimental::max_size::MaxSize;
     use redb::{Key as RedbKey, Value as RedbValue};
@@ -493,7 +493,7 @@ mod tests {
         assert_eq_hex!(serialized, expected);
     }
 
-    // #[cfg(feature = "redb")]
+    #[cfg(feature = "fs-store")]
     #[test]
     fn hash_redb() {
         use redb::Value as RedbValue;
@@ -518,7 +518,7 @@ mod tests {
         assert_eq_hex!(serialized, expected);
     }
 
-    // #[cfg(feature = "redb")]
+    #[cfg(feature = "fs-store")]
     #[test]
     fn hash_and_format_redb() {
         use redb::Value as RedbValue;

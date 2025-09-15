@@ -121,12 +121,13 @@ use crate::{
             util::entity_manager::{self, ActiveEntityState},
         },
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
-        Hash, IROH_BLOCK_SIZE,
+        IROH_BLOCK_SIZE,
     },
     util::{
         channel::oneshot,
         temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
     },
+    Hash,
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
@@ -142,11 +143,13 @@ use options::Options;
 use tracing::Instrument;
 mod gc;
 
-use super::HashAndFormat;
-use crate::api::{
-    self,
-    blobs::{AddProgressItem, ExportMode, ExportProgressItem},
-    Store,
+use crate::{
+    api::{
+        self,
+        blobs::{AddProgressItem, ExportMode, ExportProgressItem},
+        Store,
+    },
+    HashAndFormat,
 };
 
 /// Create a 16 byte unique ID.
@@ -1477,7 +1480,7 @@ pub mod tests {
         api::blobs::Bitfield,
         store::{
             util::{read_checksummed, SliceInfoExt, Tag},
-            HashAndFormat, IROH_BLOCK_SIZE,
+            IROH_BLOCK_SIZE,
         },
     };
 

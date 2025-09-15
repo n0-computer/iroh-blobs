@@ -3,7 +3,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     future::{Future, IntoFuture},
-    io,
     sync::Arc,
 };
 
@@ -113,7 +112,7 @@ async fn handle_download_impl(
         SplitStrategy::Split => handle_download_split_impl(store, pool, request, tx).await?,
         SplitStrategy::None => match request.request {
             FiniteRequest::Get(get) => {
-                let sink = IrpcSenderRefSink(tx).with_map_err(io::Error::other);
+                let sink = IrpcSenderRefSink(tx);
                 execute_get(&pool, Arc::new(get), &request.providers, &store, sink).await?;
             }
             FiniteRequest::GetMany(_) => {
@@ -143,9 +142,7 @@ async fn handle_download_split_impl(
                 let hash = request.hash;
                 let (tx, rx) = tokio::sync::mpsc::channel::<(usize, DownloadProgressItem)>(16);
                 progress_tx.send(rx).await.ok();
-                let sink = TokioMpscSenderSink(tx)
-                    .with_map_err(io::Error::other)
-                    .with_map(move |x| (id, x));
+                let sink = TokioMpscSenderSink(tx).with_map(move |x| (id, x));
                 let res = execute_get(&pool, Arc::new(request), &providers, &store, sink).await;
                 (hash, res)
             }
@@ -375,7 +372,7 @@ async fn split_request<'a>(
     providers: &Arc<dyn ContentDiscovery>,
     pool: &ConnectionPool,
     store: &Store,
-    progress: impl Sink<DownloadProgressItem, Error = io::Error>,
+    progress: impl Sink<DownloadProgressItem, Error = irpc::channel::SendError>,
 ) -> anyhow::Result<Box<dyn Iterator<Item = GetRequest> + Send + 'a>> {
     Ok(match request {
         FiniteRequest::Get(req) => {
@@ -431,7 +428,7 @@ async fn execute_get(
     request: Arc<GetRequest>,
     providers: &Arc<dyn ContentDiscovery>,
     store: &Store,
-    mut progress: impl Sink<DownloadProgressItem, Error = io::Error>,
+    mut progress: impl Sink<DownloadProgressItem, Error = irpc::channel::SendError>,
 ) -> anyhow::Result<()> {
     let remote = store.remote();
     let mut providers = providers.find_providers(request.content());
@@ -524,6 +521,7 @@ impl ContentDiscovery for Shuffled {
 }
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests {
     use std::ops::Deref;
 

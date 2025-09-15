@@ -16,7 +16,7 @@ use crate::{
     hashseq::HashSeq,
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
-    provider::Event,
+    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage, RequestUpdate},
     store::{
         fs::{
             tests::{create_n0_bao, test_data, INTERESTING_SIZES},
@@ -340,27 +340,31 @@ async fn two_nodes_get_many_mem() -> TestResult<()> {
 
 fn event_handler(
     allowed_nodes: impl IntoIterator<Item = NodeId>,
-) -> (
-    mpsc::Sender<Event>,
-    watch::Receiver<usize>,
-    AbortOnDropHandle<()>,
-) {
+) -> (EventSender, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
-    let (events_tx, mut events_rx) = mpsc::channel::<Event>(16);
+    let (events_tx, mut events_rx) = EventSender::channel(16, EventMask::ALL_READONLY);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
     let task = AbortOnDropHandle::new(tokio::task::spawn(async move {
         while let Some(event) = events_rx.recv().await {
             match event {
-                Event::ClientConnected {
-                    node_id, permitted, ..
-                } => {
-                    permitted.send(allowed_nodes.contains(&node_id)).await.ok();
+                ProviderMessage::ClientConnected(msg) => {
+                    let res = if allowed_nodes.contains(&msg.inner.node_id) {
+                        Ok(())
+                    } else {
+                        Err(AbortReason::Permission)
+                    };
+                    msg.tx.send(res).await.ok();
                 }
-                Event::PushRequestReceived { permitted, .. } => {
-                    permitted.send(true).await.ok();
-                }
-                Event::TransferCompleted { .. } => {
-                    count_tx.send_modify(|count| *count += 1);
+                ProviderMessage::PushRequestReceived(mut msg) => {
+                    msg.tx.send(Ok(())).await.ok();
+                    let count_tx = count_tx.clone();
+                    tokio::task::spawn(async move {
+                        while let Ok(Some(update)) = msg.rx.recv().await {
+                            if let RequestUpdate::Completed(_) = update {
+                                count_tx.send_modify(|x| *x += 1);
+                            }
+                        }
+                    });
                 }
                 _ => {}
             }
@@ -409,7 +413,7 @@ async fn two_nodes_push_blobs_fs() -> TestResult<()> {
     let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
     let (events_tx, count_rx, _task) = event_handler([r1.endpoint().node_id()]);
     let (r2, store2, _) =
-        node_test_setup_with_events_fs(testdir.path().join("b"), Some(events_tx)).await?;
+        node_test_setup_with_events_fs(testdir.path().join("b"), events_tx).await?;
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
 }
 
@@ -418,7 +422,7 @@ async fn two_nodes_push_blobs_mem() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (r1, store1) = node_test_setup_mem().await?;
     let (events_tx, count_rx, _task) = event_handler([r1.endpoint().node_id()]);
-    let (r2, store2) = node_test_setup_with_events_mem(Some(events_tx)).await?;
+    let (r2, store2) = node_test_setup_with_events_mem(events_tx).await?;
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
 }
 
@@ -481,30 +485,30 @@ async fn check_presence(store: &Store, sizes: &[usize]) -> TestResult<()> {
 }
 
 pub async fn node_test_setup_fs(db_path: PathBuf) -> TestResult<(Router, FsStore, PathBuf)> {
-    node_test_setup_with_events_fs(db_path, None).await
+    node_test_setup_with_events_fs(db_path, EventSender::DEFAULT).await
 }
 
 pub async fn node_test_setup_with_events_fs(
     db_path: PathBuf,
-    events: Option<mpsc::Sender<Event>>,
+    events: EventSender,
 ) -> TestResult<(Router, FsStore, PathBuf)> {
     let store = crate::store::fs::FsStore::load(&db_path).await?;
     let ep = Endpoint::builder().bind().await?;
-    let blobs = BlobsProtocol::new(&store, ep.clone(), events);
+    let blobs = BlobsProtocol::new(&store, ep.clone(), Some(events));
     let router = Router::builder(ep).accept(crate::ALPN, blobs).spawn();
     Ok((router, store, db_path))
 }
 
 pub async fn node_test_setup_mem() -> TestResult<(Router, MemStore)> {
-    node_test_setup_with_events_mem(None).await
+    node_test_setup_with_events_mem(EventSender::DEFAULT).await
 }
 
 pub async fn node_test_setup_with_events_mem(
-    events: Option<mpsc::Sender<Event>>,
+    events: EventSender,
 ) -> TestResult<(Router, MemStore)> {
     let store = MemStore::new();
     let ep = Endpoint::builder().bind().await?;
-    let blobs = BlobsProtocol::new(&store, ep.clone(), events);
+    let blobs = BlobsProtocol::new(&store, ep.clone(), Some(events));
     let router = Router::builder(ep).accept(crate::ALPN, blobs).spawn();
     Ok((router, store))
 }
