@@ -88,13 +88,19 @@ fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let ProviderMessage::ClientConnected(msg) = msg {
-                let node_id = msg.node_id;
-                let res = if allowed_nodes.contains(&node_id) {
-                    println!("Client connected: {node_id}");
-                    Ok(())
-                } else {
-                    println!("Client rejected: {node_id}");
-                    Err(AbortReason::Permission)
+                let res = match msg.node_id {
+                    Some(node_id) if allowed_nodes.contains(&node_id) => {
+                        println!("Client connected: {node_id}");
+                        Ok(())
+                    }
+                    Some(node_id) => {
+                        println!("Client rejected: {node_id}");
+                        Err(AbortReason::Permission)
+                    }
+                    None => {
+                        println!("Client rejected: no node id");
+                        Err(AbortReason::Permission)
+                    }
                 };
                 msg.tx.send(res).await.ok();
             }
@@ -202,7 +208,7 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
                     let connection_id = msg.connection_id;
                     let node_id = msg.node_id;
                     let res = if let Ok(n) = requests.inc() {
-                        println!("Accepting connection {n}, node_id {node_id}, connection_id {connection_id}");
+                        println!("Accepting connection {n}, node_id {node_id:?}, connection_id {connection_id}");
                         Ok(())
                     } else {
                         Err(AbortReason::RateLimited)
