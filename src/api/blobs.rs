@@ -142,6 +142,7 @@ impl Blobs {
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
+    #[cfg(feature = "fs-store")]
     pub(crate) async fn delete_with_opts(&self, options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
         self.client.rpc(options).await??;
@@ -149,6 +150,7 @@ impl Blobs {
     }
 
     /// See [`Self::delete_with_opts`].
+    #[cfg(feature = "fs-store")]
     pub(crate) async fn delete(
         &self,
         hashes: impl IntoIterator<Item = impl Into<Hash>>,
@@ -501,6 +503,7 @@ impl Blobs {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn clear_protected(&self) -> RequestResult<()> {
         let msg = ClearProtectedRequest;
         self.client.rpc(msg).await??;

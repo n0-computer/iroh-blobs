@@ -151,12 +151,11 @@ impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
         connection: iroh::endpoint::Connection,
     ) -> std::result::Result<(), iroh::protocol::AcceptError> {
         let connection_id = connection.stable_id() as u64;
-        let node_id = connection.remote_node_id()?;
         if let Err(cause) = self
             .events
             .client_connected(|| ClientConnected {
                 connection_id,
-                node_id,
+                node_id: connection.remote_node_id().ok(),
             })
             .await
         {

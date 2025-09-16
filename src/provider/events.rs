@@ -16,6 +16,7 @@ use crate::{
     Hash,
 };
 
+/// Mode for connect events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ConnectMode {
@@ -25,9 +26,10 @@ pub enum ConnectMode {
     /// We get a notification for connect events.
     Notify,
     /// We get a request for connect events and can reject incoming connections.
-    Request,
+    Intercept,
 }
 
+/// Request mode for observe requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ObserveMode {
@@ -37,9 +39,10 @@ pub enum ObserveMode {
     /// We get a notification for connect events.
     Notify,
     /// We get a request for connect events and can reject incoming connections.
-    Request,
+    Intercept,
 }
 
+/// Request mode for all data related requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum RequestMode {
@@ -49,16 +52,20 @@ pub enum RequestMode {
     /// We get a notification for each request, but no transfer events.
     Notify,
     /// We get a request for each request, and can reject incoming requests, but no transfer events.
-    Request,
+    Intercept,
     /// We get a notification for each request as well as detailed transfer events.
     NotifyLog,
     /// We get a request for each request, and can reject incoming requests.
     /// We also get detailed transfer events.
-    RequestLog,
+    InterceptLog,
     /// This request type is completely disabled. All requests will be rejected.
+    ///
+    /// This means that requests of this kind will always be rejected, whereas
+    /// None means that we don't get any events, but requests will be processed normally.
     Disabled,
 }
 
+/// Throttling mode for requests that support throttling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ThrottleMode {
@@ -66,15 +73,18 @@ pub enum ThrottleMode {
     #[default]
     None,
     /// We call throttle to give the event handler a way to throttle requests
-    Throttle,
+    Intercept,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AbortReason {
+    /// The request was aborted because a limit was exceeded. It is OK to try again later.
     RateLimited,
+    /// The request was aborted because the client does not have permission to perform the operation.
     Permission,
 }
 
+/// Errors that can occur when sending progress updates.
 #[derive(Debug, Snafu)]
 pub enum ProgressError {
     Limit,
@@ -147,6 +157,10 @@ impl From<irpc::channel::SendError> for ProgressError {
 pub type EventResult = Result<(), AbortReason>;
 pub type ClientResult = Result<(), ProgressError>;
 
+/// Event mask to configure which events are sent to the event handler.
+///
+/// This can also be used to completely disable certain request types. E.g.
+/// push requests are disabled by default, as they can write to the local store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventMask {
     /// Connection event mask
@@ -186,12 +200,12 @@ impl EventMask {
     /// need to do it manually. Providing constants that have push enabled would
     /// risk misuse.
     pub const ALL_READONLY: Self = Self {
-        connected: ConnectMode::Request,
-        get: RequestMode::RequestLog,
-        get_many: RequestMode::RequestLog,
+        connected: ConnectMode::Intercept,
+        get: RequestMode::InterceptLog,
+        get_many: RequestMode::InterceptLog,
         push: RequestMode::Disabled,
-        throttle: ThrottleMode::Throttle,
-        observe: ObserveMode::Request,
+        throttle: ThrottleMode::Intercept,
+        observe: ObserveMode::Intercept,
     };
 }
 
@@ -245,7 +259,7 @@ impl RequestTracker {
         throttle: None,
     };
 
-    /// Transfer for index `index` started, size `size`
+    /// Transfer for index `index` started, size `size` in bytes.
     pub async fn transfer_started(&self, index: u64, hash: &Hash, size: u64) -> irpc::Result<()> {
         if let RequestUpdates::Active(tx) = &self.updates {
             tx.send(
@@ -404,13 +418,13 @@ impl EventSender {
             match self.mask.connected {
                 ConnectMode::None => {}
                 ConnectMode::Notify => client.notify(Notify(f())).await?,
-                ConnectMode::Request => client.rpc(f()).await??,
+                ConnectMode::Intercept => client.rpc(f()).await??,
             }
         };
         Ok(())
     }
 
-    /// A new client has been connected.
+    /// A connection has been closed.
     pub async fn connection_closed(&self, f: impl Fn() -> ConnectionClosed) -> ClientResult {
         if let Some(client) = &self.inner {
             client.notify(f()).await?;
@@ -454,7 +468,7 @@ impl EventSender {
                         client.unwrap().notify_streaming(Notify(msg), 32).await?,
                     )
                 }
-                RequestMode::Request if client.is_some() => {
+                RequestMode::Intercept if client.is_some() => {
                     let msg = RequestReceived {
                         request: f(),
                         connection_id,
@@ -473,7 +487,7 @@ impl EventSender {
                     };
                     RequestUpdates::Active(client.unwrap().notify_streaming(Notify(msg), 32).await?)
                 }
-                RequestMode::RequestLog if client.is_some() => {
+                RequestMode::InterceptLog if client.is_some() => {
                     let msg = RequestReceived {
                         request: f(),
                         connection_id,
@@ -500,7 +514,7 @@ impl EventSender {
     ) -> RequestTracker {
         let throttle = match self.mask.throttle {
             ThrottleMode::None => None,
-            ThrottleMode::Throttle => self
+            ThrottleMode::Intercept => self
                 .inner
                 .clone()
                 .map(|client| (client, connection_id, request_id)),
@@ -524,38 +538,39 @@ pub enum ProviderProto {
     #[rpc(tx = NoSender)]
     ConnectionClosed(ConnectionClosed),
 
-    #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     /// A new get request was received from the provider.
+    #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     GetRequestReceived(RequestReceived<GetRequest>),
 
+    /// A new get request was received from the provider (notify variant).
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
-    /// A new get request was received from the provider.
     GetRequestReceivedNotify(Notify<RequestReceived<GetRequest>>),
 
-    /// A new get request was received from the provider.
+    /// A new get many request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     GetManyRequestReceived(RequestReceived<GetManyRequest>),
 
-    /// A new get request was received from the provider.
+    /// A new get many request was received from the provider (notify variant).
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
     GetManyRequestReceivedNotify(Notify<RequestReceived<GetManyRequest>>),
 
-    /// A new get request was received from the provider.
+    /// A new push request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     PushRequestReceived(RequestReceived<PushRequest>),
 
-    /// A new get request was received from the provider.
+    /// A new push request was received from the provider (notify variant).
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
     PushRequestReceivedNotify(Notify<RequestReceived<PushRequest>>),
 
-    /// A new get request was received from the provider.
+    /// A new observe request was received from the provider.
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = oneshot::Sender<EventResult>)]
     ObserveRequestReceived(RequestReceived<ObserveRequest>),
 
-    /// A new get request was received from the provider.
+    /// A new observe request was received from the provider (notify variant).
     #[rpc(rx = mpsc::Receiver<RequestUpdate>, tx = NoSender)]
     ObserveRequestReceivedNotify(Notify<RequestReceived<ObserveRequest>>),
 
+    /// Request to throttle sending for a specific data request.
     #[rpc(tx = oneshot::Sender<EventResult>)]
     Throttle(Throttle),
 }
@@ -569,7 +584,7 @@ mod proto {
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ClientConnected {
         pub connection_id: u64,
-        pub node_id: NodeId,
+        pub node_id: Option<NodeId>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]

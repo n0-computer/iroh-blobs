@@ -40,6 +40,7 @@ pub use bitfield::Bitfield;
 
 use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
 
+#[allow(dead_code)]
 pub(crate) trait HashSpecific {
     fn hash(&self) -> Hash;
 

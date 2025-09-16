@@ -12,14 +12,14 @@ use std::{
 
 use anyhow::Result;
 use bao_tree::ChunkRanges;
-use iroh::endpoint;
+use iroh::endpoint::{self, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_future::StreamExt;
-use quinn::{ConnectionError, VarInt};
+use quinn::ConnectionError;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use tokio::select;
-use tracing::{debug, debug_span, warn, Instrument};
+use tracing::{debug, debug_span, Instrument};
 
 use crate::{
     api::{
@@ -40,8 +40,8 @@ use crate::{
 pub mod events;
 use events::EventSender;
 
-type DefaultWriter = iroh::endpoint::SendStream;
 type DefaultReader = iroh::endpoint::RecvStream;
+type DefaultWriter = iroh::endpoint::SendStream;
 
 /// Statistics about a successful or failed transfer.
 #[derive(Debug, Serialize, Deserialize)]
@@ -295,14 +295,10 @@ pub async fn handle_connection(
     let connection_id = connection.stable_id() as u64;
     let span = debug_span!("connection", connection_id);
     async move {
-        let Ok(node_id) = connection.remote_node_id() else {
-            warn!("failed to get node id");
-            return;
-        };
         if let Err(cause) = progress
             .client_connected(|| ClientConnected {
                 connection_id,
-                node_id,
+                node_id: connection.remote_node_id().ok(),
             })
             .await
         {
@@ -407,7 +403,7 @@ impl HasErrorCode for HandleGetError {
     fn code(&self) -> VarInt {
         match self {
             HandleGetError::ExportBao {
-                source: ExportBaoError::Progress { source, .. },
+                source: ExportBaoError::ClientError { source, .. },
             } => source.code(),
             HandleGetError::InvalidHashSeq => ERR_INTERNAL,
             HandleGetError::InvalidOffset => ERR_INTERNAL,
@@ -485,7 +481,7 @@ impl HasErrorCode for HandleGetManyError {
     fn code(&self) -> VarInt {
         match self {
             Self::ExportBao {
-                source: ExportBaoError::Progress { source, .. },
+                source: ExportBaoError::ClientError { source, .. },
             } => source.code(),
             _ => ERR_INTERNAL,
         }
@@ -542,7 +538,7 @@ impl HasErrorCode for HandlePushError {
     fn code(&self) -> VarInt {
         match self {
             Self::ExportBao {
-                source: ExportBaoError::Progress { source, .. },
+                source: ExportBaoError::ClientError { source, .. },
             } => source.code(),
             _ => ERR_INTERNAL,
         }

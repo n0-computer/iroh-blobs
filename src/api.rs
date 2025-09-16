@@ -98,7 +98,7 @@ pub enum ExportBaoError {
     #[snafu(display("encode error: {source}"))]
     ExportBaoInner { source: bao_tree::io::EncodeError },
     #[snafu(display("client error: {source}"))]
-    Progress { source: ProgressError },
+    ClientError { source: ProgressError },
 }
 
 impl From<ExportBaoError> for Error {
@@ -109,7 +109,7 @@ impl From<ExportBaoError> for Error {
             ExportBaoError::Request { source, .. } => Self::Io(source.into()),
             ExportBaoError::ExportBaoIo { source, .. } => Self::Io(source),
             ExportBaoError::ExportBaoInner { source, .. } => Self::Io(source.into()),
-            ExportBaoError::Progress { source, .. } => Self::Io(source.into()),
+            ExportBaoError::ClientError { source, .. } => Self::Io(source.into()),
         }
     }
 }
@@ -157,7 +157,7 @@ impl From<bao_tree::io::EncodeError> for ExportBaoError {
 
 impl From<ProgressError> for ExportBaoError {
     fn from(value: ProgressError) -> Self {
-        ProgressSnafu.into_error(value)
+        ClientSnafu.into_error(value)
     }
 }
 

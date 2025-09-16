@@ -1,3 +1,4 @@
+#![cfg(feature = "fs-store")]
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Deref,

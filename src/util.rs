@@ -220,6 +220,7 @@ pub(crate) mod serde {
     }
 }
 
+#[cfg(feature = "fs-store")]
 pub(crate) mod outboard_with_progress {
     use std::io::{self, BufReader, Read};
 

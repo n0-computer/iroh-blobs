@@ -348,10 +348,10 @@ fn event_handler(
         while let Some(event) = events_rx.recv().await {
             match event {
                 ProviderMessage::ClientConnected(msg) => {
-                    let res = if allowed_nodes.contains(&msg.inner.node_id) {
-                        Ok(())
-                    } else {
-                        Err(AbortReason::Permission)
+                    let res = match msg.node_id {
+                        Some(node_id) if allowed_nodes.contains(&node_id) => Ok(()),
+                        Some(_) => Err(AbortReason::Permission),
+                        None => Err(AbortReason::Permission),
                     };
                     msg.tx.send(res).await.ok();
                 }
