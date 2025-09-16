@@ -578,7 +578,7 @@ mod proto {
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ClientConnected {
         pub connection_id: u64,
-        pub node_id: NodeId,
+        pub node_id: Option<NodeId>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]

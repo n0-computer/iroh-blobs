@@ -16,7 +16,7 @@ use n0_future::StreamExt;
 use quinn::{ClosedStream, ConnectionError, ReadToEndError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::select;
-use tracing::{debug, debug_span, warn, Instrument};
+use tracing::{debug, debug_span, Instrument};
 
 use crate::{
     api::{
@@ -319,14 +319,10 @@ pub async fn handle_connection(
     let connection_id = connection.stable_id() as u64;
     let span = debug_span!("connection", connection_id);
     async move {
-        let Ok(node_id) = connection.remote_node_id() else {
-            warn!("failed to get node id");
-            return;
-        };
         if let Err(cause) = progress
             .client_connected(|| ClientConnected {
                 connection_id,
-                node_id,
+                node_id: connection.remote_node_id().ok(),
             })
             .await
         {
