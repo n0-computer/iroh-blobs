@@ -14,21 +14,19 @@
 <a href="#13" id="13">13</a>
 <a href="#14" id="14">14</a>
 <a href="#15" id="15">15</a>
-<a href="#16" id="16">16</a>
-<a href="#17" id="17">17</a></pre></div><pre class="rust"><code><span class="doccomment">//! Store implementations
+<a href="#16" id="16">16</a></pre></div><pre class="rust"><code><span class="doccomment">//! Store implementations
 //!
 //! Use the [`mem`] store for sharing a small amount of mutable data,
 //! the [`readonly_mem`] store for sharing static data, and the [`fs`] store
 //! for when you want to efficiently share more than the available memory and
 //! have access to a writeable filesystem.
 </span><span class="kw">use </span>bao_tree::BlockSize;
-<span class="kw">pub mod </span>fs;
+<span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+</span><span class="kw">pub mod </span>fs;
 <span class="kw">pub mod </span>mem;
 <span class="kw">pub mod </span>readonly_mem;
 <span class="kw">mod </span>test;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>util;
-
-<span class="kw">use </span><span class="kw">crate</span>::hash::{Hash, HashAndFormat};
 
 <span class="doccomment">/// Block size used by iroh, 2^4*1024 = 16KiB
 </span><span class="kw">pub const </span>IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(<span class="number">4</span>);

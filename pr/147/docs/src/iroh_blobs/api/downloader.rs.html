@@ -672,7 +672,8 @@
 <a href="#671" id="671">671</a>
 <a href="#672" id="672">672</a>
 <a href="#673" id="673">673</a>
-<a href="#674" id="674">674</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a></pre></div><pre class="rust"><code><span class="doccomment">//! API for downloads from multiple nodes.
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -708,7 +709,7 @@
 <span class="attr">#[rpc_requests(message = SwarmMsg, alias = <span class="string">"Msg"</span>)]
 #[derive(Debug, Serialize, Deserialize)]
 </span><span class="kw">enum </span>SwarmProtocol {
-    <span class="attr">#[rpc(tx = mpsc::Sender&lt;DownloadProgessItem&gt;)]
+    <span class="attr">#[rpc(tx = mpsc::Sender&lt;DownloadProgressItem&gt;)]
     </span>Download(DownloadRequest),
 }
 
@@ -720,7 +721,7 @@
 }
 
 <span class="attr">#[derive(Debug, Serialize, Deserialize)]
-</span><span class="kw">pub enum </span>DownloadProgessItem {
+</span><span class="kw">pub enum </span>DownloadProgressItem {
     <span class="attr">#[serde(skip)]
     </span>Error(anyhow::Error),
     TryProvider {
@@ -772,7 +773,7 @@
 <span class="kw">async fn </span>handle_download(store: Store, pool: ConnectionPool, msg: DownloadMsg) {
     <span class="kw">let </span>DownloadMsg { inner, <span class="kw-2">mut </span>tx, .. } = msg;
     <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = handle_download_impl(store, pool, inner, <span class="kw-2">&amp;mut </span>tx).<span class="kw">await </span>{
-        tx.send(DownloadProgessItem::Error(cause)).<span class="kw">await</span>.ok();
+        tx.send(DownloadProgressItem::Error(cause)).<span class="kw">await</span>.ok();
     }
 }
 
@@ -780,7 +781,7 @@
     store: Store,
     pool: ConnectionPool,
     request: DownloadRequest,
-    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;DownloadProgessItem&gt;,
+    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;DownloadProgressItem&gt;,
 ) -&gt; anyhow::Result&lt;()&gt; {
     <span class="kw">match </span>request.strategy {
         SplitStrategy::Split =&gt; handle_download_split_impl(store, pool, request, tx).<span class="kw">await</span><span class="question-mark">?</span>,
@@ -801,7 +802,7 @@
     store: Store,
     pool: ConnectionPool,
     request: DownloadRequest,
-    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;DownloadProgessItem&gt;,
+    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;DownloadProgressItem&gt;,
 ) -&gt; anyhow::Result&lt;()&gt; {
     <span class="kw">let </span>providers = request.providers;
     <span class="kw">let </span>requests = split_request(<span class="kw-2">&amp;</span>request.request, <span class="kw-2">&amp;</span>providers, <span class="kw-2">&amp;</span>pool, <span class="kw-2">&amp;</span>store, Drain).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -814,7 +815,7 @@
             <span class="kw">let </span>progress_tx = progress_tx.clone();
             <span class="kw">async move </span>{
                 <span class="kw">let </span>hash = request.hash;
-                <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel::&lt;(usize, DownloadProgessItem)&gt;(<span class="number">16</span>);
+                <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel::&lt;(usize, DownloadProgressItem)&gt;(<span class="number">16</span>);
                 progress_tx.send(rx).<span class="kw">await</span>.ok();
                 <span class="kw">let </span>sink = TokioMpscSenderSink(tx).with_map(<span class="kw">move </span>|x| (id, x));
                 <span class="kw">let </span>res = execute_get(<span class="kw-2">&amp;</span>pool, Arc::new(request), <span class="kw-2">&amp;</span>providers, <span class="kw-2">&amp;</span>store, sink).<span class="kw">await</span>;
@@ -828,12 +829,12 @@
         into_stream(progress_rx)
             .flat_map(into_stream)
             .map(<span class="kw">move </span>|(id, item)| <span class="kw">match </span>item {
-                DownloadProgessItem::Progress(offset) =&gt; {
+                DownloadProgressItem::Progress(offset) =&gt; {
                     total += offset;
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(prev) = offsets.insert(id, offset) {
                         total -= prev;
                     }
-                    DownloadProgessItem::Progress(total)
+                    DownloadProgressItem::Progress(total)
                 }
                 x =&gt; x,
             })
@@ -848,7 +849,7 @@
                     <span class="prelude-val">Some</span>((_hash, <span class="prelude-val">Ok</span>(()))) =&gt; {
                     }
                     <span class="prelude-val">Some</span>((_hash, <span class="prelude-val">Err</span>(_e))) =&gt; {
-                        tx.send(DownloadProgessItem::DownloadError).<span class="kw">await</span><span class="question-mark">?</span>;
+                        tx.send(DownloadProgressItem::DownloadError).<span class="kw">await</span><span class="question-mark">?</span>;
                     }
                     <span class="prelude-val">None </span>=&gt; <span class="kw">break</span>,
                 }
@@ -972,19 +973,19 @@
 <span class="kw">pub type </span>DownloadOptions = DownloadRequest;
 
 <span class="kw">pub struct </span>DownloadProgress {
-    fut: future::Boxed&lt;irpc::Result&lt;mpsc::Receiver&lt;DownloadProgessItem&gt;&gt;&gt;,
+    fut: future::Boxed&lt;irpc::Result&lt;mpsc::Receiver&lt;DownloadProgressItem&gt;&gt;&gt;,
 }
 
 <span class="kw">impl </span>DownloadProgress {
-    <span class="kw">fn </span>new(fut: future::Boxed&lt;irpc::Result&lt;mpsc::Receiver&lt;DownloadProgessItem&gt;&gt;&gt;) -&gt; <span class="self">Self </span>{
+    <span class="kw">fn </span>new(fut: future::Boxed&lt;irpc::Result&lt;mpsc::Receiver&lt;DownloadProgressItem&gt;&gt;&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{ fut }
     }
 
-    <span class="kw">pub async fn </span>stream(<span class="self">self</span>) -&gt; irpc::Result&lt;<span class="kw">impl </span>Stream&lt;Item = DownloadProgessItem&gt; + Unpin&gt; {
+    <span class="kw">pub async fn </span>stream(<span class="self">self</span>) -&gt; irpc::Result&lt;<span class="kw">impl </span>Stream&lt;Item = DownloadProgressItem&gt; + Unpin&gt; {
         <span class="kw">let </span>rx = <span class="self">self</span>.fut.<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(Box::pin(rx.into_stream().map(|item| <span class="kw">match </span>item {
             <span class="prelude-val">Ok</span>(item) =&gt; item,
-            <span class="prelude-val">Err</span>(e) =&gt; DownloadProgessItem::Error(e.into()),
+            <span class="prelude-val">Err</span>(e) =&gt; DownloadProgressItem::Error(e.into()),
         })))
     }
 
@@ -994,8 +995,8 @@
         <span class="macro">tokio::pin!</span>(stream);
         <span class="kw">while let </span><span class="prelude-val">Some</span>(item) = stream.next().<span class="kw">await </span>{
             <span class="kw">match </span>item<span class="question-mark">? </span>{
-                DownloadProgessItem::Error(e) =&gt; <span class="prelude-val">Err</span>(e)<span class="question-mark">?</span>,
-                DownloadProgessItem::DownloadError =&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"Download error"</span>),
+                DownloadProgressItem::Error(e) =&gt; <span class="prelude-val">Err</span>(e)<span class="question-mark">?</span>,
+                DownloadProgressItem::DownloadError =&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"Download error"</span>),
                 <span class="kw">_ </span>=&gt; {}
             }
         }
@@ -1046,7 +1047,7 @@
     providers: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>ContentDiscovery&gt;,
     pool: <span class="kw-2">&amp;</span>ConnectionPool,
     store: <span class="kw-2">&amp;</span>Store,
-    progress: <span class="kw">impl </span>Sink&lt;DownloadProgessItem, Error = irpc::channel::SendError&gt;,
+    progress: <span class="kw">impl </span>Sink&lt;DownloadProgressItem, Error = irpc::channel::SendError&gt;,
 ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = GetRequest&gt; + Send + <span class="lifetime">'a</span>&gt;&gt; {
     <span class="prelude-val">Ok</span>(<span class="kw">match </span>request {
         FiniteRequest::Get(req) =&gt; {
@@ -1102,13 +1103,13 @@
     request: Arc&lt;GetRequest&gt;,
     providers: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">dyn </span>ContentDiscovery&gt;,
     store: <span class="kw-2">&amp;</span>Store,
-    <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;DownloadProgessItem, Error = irpc::channel::SendError&gt;,
+    <span class="kw-2">mut </span>progress: <span class="kw">impl </span>Sink&lt;DownloadProgressItem, Error = irpc::channel::SendError&gt;,
 ) -&gt; anyhow::Result&lt;()&gt; {
     <span class="kw">let </span>remote = store.remote();
     <span class="kw">let </span><span class="kw-2">mut </span>providers = providers.find_providers(request.content());
     <span class="kw">while let </span><span class="prelude-val">Some</span>(provider) = providers.next().<span class="kw">await </span>{
         progress
-            .send(DownloadProgessItem::TryProvider {
+            .send(DownloadProgressItem::TryProvider {
                 id: provider,
                 request: request.clone(),
             })
@@ -1121,7 +1122,7 @@
         <span class="kw">let </span>local_bytes = local.local_bytes();
         <span class="kw">let </span><span class="prelude-val">Ok</span>(conn) = conn.<span class="kw">await else </span>{
             progress
-                .send(DownloadProgessItem::ProviderFailed {
+                .send(DownloadProgressItem::ProviderFailed {
                     id: provider,
                     request: request.clone(),
                 })
@@ -1132,13 +1133,13 @@
             .execute_get_sink(
                 conn.clone(),
                 local.missing(),
-                (<span class="kw-2">&amp;mut </span>progress).with_map(<span class="kw">move </span>|x| DownloadProgessItem::Progress(x + local_bytes)),
+                (<span class="kw-2">&amp;mut </span>progress).with_map(<span class="kw">move </span>|x| DownloadProgressItem::Progress(x + local_bytes)),
             )
             .<span class="kw">await
         </span>{
             <span class="prelude-val">Ok</span>(_stats) =&gt; {
                 progress
-                    .send(DownloadProgessItem::PartComplete {
+                    .send(DownloadProgressItem::PartComplete {
                         request: request.clone(),
                     })
                     .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -1146,7 +1147,7 @@
             }
             <span class="prelude-val">Err</span>(_cause) =&gt; {
                 progress
-                    .send(DownloadProgessItem::ProviderFailed {
+                    .send(DownloadProgressItem::ProviderFailed {
                         id: provider,
                         request: request.clone(),
                     })
@@ -1195,6 +1196,7 @@
 }
 
 <span class="attr">#[cfg(test)]
+#[cfg(feature = <span class="string">"fs-store"</span>)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>std::ops::Deref;
 

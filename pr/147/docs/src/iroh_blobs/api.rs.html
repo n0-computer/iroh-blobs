@@ -433,7 +433,7 @@
     <span class="attr">#[snafu(display(<span class="string">"encode error: {source}"</span>))]
     </span>ExportBaoInner { source: bao_tree::io::EncodeError },
     <span class="attr">#[snafu(display(<span class="string">"client error: {source}"</span>))]
-    </span>Progress { source: ProgressError },
+    </span>ClientError { source: ProgressError },
 }
 
 <span class="kw">impl </span>From&lt;ExportBaoError&gt; <span class="kw">for </span>Error {
@@ -444,7 +444,7 @@
             ExportBaoError::Request { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
             ExportBaoError::ExportBaoIo { source, .. } =&gt; <span class="self">Self</span>::Io(source),
             ExportBaoError::ExportBaoInner { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
-            ExportBaoError::Progress { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
+            ExportBaoError::ClientError { source, .. } =&gt; <span class="self">Self</span>::Io(source.into()),
         }
     }
 }
@@ -492,7 +492,7 @@
 
 <span class="kw">impl </span>From&lt;ProgressError&gt; <span class="kw">for </span>ExportBaoError {
     <span class="kw">fn </span>from(value: ProgressError) -&gt; <span class="self">Self </span>{
-        ProgressSnafu.into_error(value)
+        ClientSnafu.into_error(value)
     }
 }
 

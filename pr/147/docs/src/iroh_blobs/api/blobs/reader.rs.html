@@ -332,7 +332,8 @@
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
-<a href="#334" id="334">334</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io::{<span class="self">self</span>, ErrorKind, SeekFrom},
     pin::Pin,
     task::{Context, Poll},
@@ -548,6 +549,7 @@
 }
 
 <span class="attr">#[cfg(test)]
+#[cfg(feature = <span class="string">"fs-store"</span>)]
 </span><span class="kw">mod </span>tests {
     <span class="kw">use </span>bao_tree::ChunkRanges;
     <span class="kw">use </span>testresult::TestResult;

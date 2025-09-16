@@ -902,7 +902,7 @@
     }
 }
 
-<span class="comment">// #[cfg(feature = "redb")]
+<span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
 </span><span class="kw">mod </span>redb_support {
     <span class="kw">use </span>postcard::experimental::max_size::MaxSize;
     <span class="kw">use </span>redb::{Key <span class="kw">as </span>RedbKey, Value <span class="kw">as </span>RedbValue};
@@ -1112,8 +1112,8 @@
         <span class="macro">assert_eq_hex!</span>(serialized, expected);
     }
 
-    <span class="comment">// #[cfg(feature = "redb")]
-    </span><span class="attr">#[test]
+    <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+    #[test]
     </span><span class="kw">fn </span>hash_redb() {
         <span class="kw">use </span>redb::Value <span class="kw">as </span>RedbValue;
         <span class="kw">let </span>bytes: [u8; <span class="number">32</span>] = (<span class="number">0</span>..<span class="number">32</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().as_slice().try_into().unwrap();
@@ -1137,8 +1137,8 @@
         <span class="macro">assert_eq_hex!</span>(serialized, expected);
     }
 
-    <span class="comment">// #[cfg(feature = "redb")]
-    </span><span class="attr">#[test]
+    <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+    #[test]
     </span><span class="kw">fn </span>hash_and_format_redb() {
         <span class="kw">use </span>redb::Value <span class="kw">as </span>RedbValue;
         <span class="kw">let </span>hash_bytes: [u8; <span class="number">32</span>] = (<span class="number">0</span>..<span class="number">32</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;().as_slice().try_into().unwrap();

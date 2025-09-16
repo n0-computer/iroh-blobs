@@ -499,7 +499,8 @@
 <a href="#498" id="498">498</a>
 <a href="#499" id="499">499</a>
 <a href="#500" id="500">500</a>
-<a href="#501" id="501">501</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>channel;
 <span class="kw">pub mod </span>connection_pool;
 <span class="kw">mod </span>stream;
@@ -721,7 +722,8 @@
     }
 }
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>outboard_with_progress {
+<span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>outboard_with_progress {
     <span class="kw">use </span>std::io::{<span class="self">self</span>, BufReader, Read};
 
     <span class="kw">use </span>bao_tree::{
