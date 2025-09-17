@@ -431,7 +431,23 @@
 <a href="#430" id="430">430</a>
 <a href="#431" id="431">431</a>
 <a href="#432" id="432">432</a>
-<a href="#433" id="433">433</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     future::Future,
     io,
     ops::{Deref, DerefMut},
@@ -446,6 +462,8 @@
 <span class="doccomment">/// An abstract `iroh::endpoint::SendStream`.
 </span><span class="kw">pub trait </span>SendStream: Send {
     <span class="doccomment">/// Send bytes to the stream. This takes a `Bytes` because iroh can directly use them.
+    ///
+    /// This method is not cancellation safe. Even if this does not resolve, some bytes may have been written when previously polled.
     </span><span class="kw">fn </span>send_bytes(<span class="kw-2">&amp;mut </span><span class="self">self</span>, bytes: Bytes) -&gt; <span class="kw">impl </span>Future&lt;Output = io::Result&lt;()&gt;&gt; + Send;
     <span class="doccomment">/// Send that sends a fixed sized buffer.
     </span><span class="kw">fn </span>send&lt;<span class="kw">const </span>L: usize&gt;(
@@ -458,6 +476,8 @@
     </span><span class="kw">fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>, code: VarInt) -&gt; io::Result&lt;()&gt;;
     <span class="doccomment">/// Wait for the stream to be stopped, returning the error code if it was.
     </span><span class="kw">fn </span>stopped(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Future&lt;Output = io::Result&lt;<span class="prelude-ty">Option</span>&lt;VarInt&gt;&gt;&gt; + Send;
+    <span class="doccomment">/// Get the stream id.
+    </span><span class="kw">fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64;
 }
 
 <span class="doccomment">/// An abstract `iroh::endpoint::RecvStream`.
@@ -497,6 +517,10 @@
 
     <span class="kw">async fn </span>stopped(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; io::Result&lt;<span class="prelude-ty">Option</span>&lt;VarInt&gt;&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.stopped().<span class="kw">await</span><span class="question-mark">?</span>)
+    }
+
+    <span class="kw">fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.id().index()
     }
 }
 
@@ -586,6 +610,10 @@
     <span class="kw">async fn </span>stopped(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; io::Result&lt;<span class="prelude-ty">Option</span>&lt;VarInt&gt;&gt; {
         <span class="self">self</span>.deref_mut().stopped().<span class="kw">await
     </span>}
+
+    <span class="kw">fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.deref().id()
+    }
 }
 
 <span class="attr">#[derive(Debug)]
@@ -722,6 +750,10 @@
         <span class="kw">let </span>res = <span class="self">self</span>.<span class="number">0</span>.stopped().<span class="kw">await</span><span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(res)
     }
+
+    <span class="kw">fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="number">0
+    </span>}
 }
 
 <span class="attr">#[derive(Debug)]
