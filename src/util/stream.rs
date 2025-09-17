@@ -13,6 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// An abstract `iroh::endpoint::SendStream`.
 pub trait SendStream: Send {
     /// Send bytes to the stream. This takes a `Bytes` because iroh can directly use them.
+    ///
+    /// This method is not cancellation safe. Even if this does not resolve, some bytes may have been written when previously polled.
     fn send_bytes(&mut self, bytes: Bytes) -> impl Future<Output = io::Result<()>> + Send;
     /// Send that sends a fixed sized buffer.
     fn send<const L: usize>(
@@ -25,6 +27,8 @@ pub trait SendStream: Send {
     fn reset(&mut self, code: VarInt) -> io::Result<()>;
     /// Wait for the stream to be stopped, returning the error code if it was.
     fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
+    /// Get the stream id.
+    fn id(&self) -> u64;
 }
 
 /// An abstract `iroh::endpoint::RecvStream`.
@@ -64,6 +68,10 @@ impl SendStream for iroh::endpoint::SendStream {
 
     async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
         Ok(self.stopped().await?)
+    }
+
+    fn id(&self) -> u64 {
+        self.id().index()
     }
 }
 
@@ -152,6 +160,10 @@ impl<W: SendStream> SendStream for &mut W {
 
     async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
         self.deref_mut().stopped().await
+    }
+
+    fn id(&self) -> u64 {
+        self.deref().id()
     }
 }
 
@@ -288,6 +300,10 @@ impl<W: SendStreamSpecific> SendStream for AsyncWriteSendStream<W> {
     async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
         let res = self.0.stopped().await?;
         Ok(res)
+    }
+
+    fn id(&self) -> u64 {
+        0
     }
 }
 
