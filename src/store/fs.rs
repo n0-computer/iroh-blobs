@@ -1250,7 +1250,7 @@ async fn export_path_impl(
         ),
         DataLocation::External(paths, size) => (
             MemOrFile::File((
-                paths.iter().cloned().next().ok_or_else(|| {
+                paths.first().cloned().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::NotFound, "no external data path")
                 })?,
                 size,
@@ -1304,7 +1304,6 @@ async fn export_path_impl(
                             if cause.raw_os_error() == Some(ERR_CROSS) {
                                 reflink_or_copy_with_progress(&source_path, &target, size, tx)
                                     .await?;
-                                // todo: delete file at source_path
                             } else {
                                 return Err(cause.into());
                             }
@@ -1312,6 +1311,7 @@ async fn export_path_impl(
                     }
                     external.push(target);
                 };
+                // setting the new entry state will also take care of deleting the owned data file!
                 ctx.set(EntryState::Complete {
                     data_location: DataLocation::External(external, size),
                     outboard_location,
