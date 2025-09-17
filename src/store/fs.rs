@@ -152,6 +152,9 @@ use crate::{
     HashAndFormat,
 };
 
+/// Maximum number of external paths we track per blob.
+const MAX_EXTERNAL_PATHS: usize = 8;
+
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
     use rand::RngCore;
@@ -1239,18 +1242,21 @@ async fn export_path_impl(
         }
     };
     trace!("exporting {} to {}", cmd.hash.to_hex(), target.display());
-    let data = match data_location {
-        DataLocation::Inline(data) => MemOrFile::Mem(data),
-        DataLocation::Owned(size) => {
-            MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size))
-        }
-        DataLocation::External(paths, size) => MemOrFile::File((
-            paths
-                .into_iter()
-                .next()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no external data path"))?,
-            size,
-        )),
+    let (data, mut external) = match data_location {
+        DataLocation::Inline(data) => (MemOrFile::Mem(data), vec![]),
+        DataLocation::Owned(size) => (
+            MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
+            vec![],
+        ),
+        DataLocation::External(paths, size) => (
+            MemOrFile::File((
+                paths.first().cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "no external data path")
+                })?,
+                size,
+            )),
+            paths,
+        ),
     };
     let size = match &data {
         MemOrFile::Mem(data) => data.len() as u64,
@@ -1274,21 +1280,40 @@ async fn export_path_impl(
                 );
             }
             ExportMode::TryReference => {
-                match std::fs::rename(&source_path, &target) {
-                    Ok(()) => {}
-                    Err(cause) => {
-                        const ERR_CROSS: i32 = 18;
-                        if cause.raw_os_error() == Some(ERR_CROSS) {
-                            let source = fs::File::open(&source_path)?;
-                            let mut target = fs::File::create(&target)?;
-                            copy_with_progress(&source, size, &mut target, tx).await?;
-                        } else {
-                            return Err(cause.into());
+                if !external.is_empty() {
+                    // the file already exists externally, so we need to copy it.
+                    // if the OS supports reflink, we might as well use that.
+                    let res =
+                        reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
+                    trace!(
+                        "exported {} also to {}, {res:?}",
+                        source_path.display(),
+                        target.display()
+                    );
+                    external.push(target);
+                    external.sort();
+                    external.dedup();
+                    external.truncate(MAX_EXTERNAL_PATHS);
+                } else {
+                    // the file was previously owned, so we can just move it.
+                    // if that fails with ERR_CROSS, we fall back to copy.
+                    match std::fs::rename(&source_path, &target) {
+                        Ok(()) => {}
+                        Err(cause) => {
+                            const ERR_CROSS: i32 = 18;
+                            if cause.raw_os_error() == Some(ERR_CROSS) {
+                                reflink_or_copy_with_progress(&source_path, &target, size, tx)
+                                    .await?;
+                            } else {
+                                return Err(cause.into());
+                            }
                         }
                     }
-                }
+                    external.push(target);
+                };
+                // setting the new entry state will also take care of deleting the owned data file!
                 ctx.set(EntryState::Complete {
-                    data_location: DataLocation::External(vec![target], size),
+                    data_location: DataLocation::External(external, size),
                     outboard_location,
                 })
                 .await?;
