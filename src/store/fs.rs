@@ -152,6 +152,9 @@ use crate::{
     HashAndFormat,
 };
 
+/// Maximum number of external paths we track per blob.
+const MAX_EXTERNAL_PATHS: usize = 8;
+
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
     use rand::RngCore;
@@ -1239,20 +1242,20 @@ async fn export_path_impl(
         }
     };
     trace!("exporting {} to {}", cmd.hash.to_hex(), target.display());
-    let (data, external) = match data_location {
-        DataLocation::Inline(data) => (MemOrFile::Mem(data), false),
+    let (data, mut external) = match data_location {
+        DataLocation::Inline(data) => (MemOrFile::Mem(data), vec![]),
         DataLocation::Owned(size) => (
             MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
-            false,
+            vec![],
         ),
         DataLocation::External(paths, size) => (
             MemOrFile::File((
-                paths.into_iter().next().ok_or_else(|| {
+                paths.iter().cloned().next().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::NotFound, "no external data path")
                 })?,
                 size,
             )),
-            true,
+            paths,
         ),
     };
     let size = match &data {
@@ -1277,7 +1280,9 @@ async fn export_path_impl(
                 );
             }
             ExportMode::TryReference => {
-                if external {
+                if !external.is_empty() {
+                    // the file already exists externally, so we need to copy it.
+                    // if the OS supports reflink, we might as well use that.
                     let res =
                         reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
                     trace!(
@@ -1285,26 +1290,33 @@ async fn export_path_impl(
                         source_path.display(),
                         target.display()
                     );
+                    external.push(target);
+                    external.sort();
+                    external.dedup();
+                    external.truncate(MAX_EXTERNAL_PATHS);
                 } else {
+                    // the file was previously owned, so we can just move it.
+                    // if that fails with ERR_CROSS, we fall back to copy.
                     match std::fs::rename(&source_path, &target) {
                         Ok(()) => {}
                         Err(cause) => {
                             const ERR_CROSS: i32 = 18;
                             if cause.raw_os_error() == Some(ERR_CROSS) {
-                                let source = fs::File::open(&source_path)?;
-                                let mut target = fs::File::create(&target)?;
-                                copy_with_progress(&source, size, &mut target, tx).await?;
+                                reflink_or_copy_with_progress(&source_path, &target, size, tx)
+                                    .await?;
+                                // todo: delete file at source_path
                             } else {
                                 return Err(cause.into());
                             }
                         }
                     }
-                    ctx.set(EntryState::Complete {
-                        data_location: DataLocation::External(vec![target], size),
-                        outboard_location,
-                    })
-                    .await?;
-                }
+                    external.push(target);
+                };
+                ctx.set(EntryState::Complete {
+                    data_location: DataLocation::External(external, size),
+                    outboard_location,
+                })
+                .await?;
             }
         },
     }
