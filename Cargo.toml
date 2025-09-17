@@ -42,7 +42,6 @@ genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.91.1"
 irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
-async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 redb = { version = "=2.4", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 
@@ -61,7 +60,7 @@ tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
 iroh = { version = "0.91.1", features = ["discovery-local-network"]}
-async-compression = { version = "0.4.30", features = ["zstd", "tokio"] }
+async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 
 [features]
