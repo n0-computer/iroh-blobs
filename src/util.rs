@@ -4,8 +4,8 @@ pub mod connection_pool;
 mod stream;
 pub(crate) mod temp_tag;
 pub use stream::{
-    AsyncReadRecvStream, AsyncWriteSendStream, RecvStream, RecvStreamAsyncStreamReader,
-    RecvStreamSpecific, SendStream, SendStreamSpecific,
+    AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream, AsyncWriteSendStreamExtra,
+    RecvStream, RecvStreamAsyncStreamReader, SendStream,
 };
 pub(crate) use stream::{RecvStreamExt, SendStreamExt};
 

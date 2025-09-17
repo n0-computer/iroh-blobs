@@ -170,13 +170,22 @@ impl<W: SendStream> SendStream for &mut W {
 #[derive(Debug)]
 pub struct AsyncReadRecvStream<R>(R);
 
+/// This is a helper trait to work with [`AsyncReadRecvStream`]. If you have an
+/// `AsyncRead + Unpin + Send`, you can implement these additional methods and wrap the result
+/// in an `AsyncReadRecvStream` to get a `RecvStream` that reads from the underlying `AsyncRead`.
+pub trait AsyncReadRecvStreamExtra: Send {
+    fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send);
+    fn stop(&mut self, code: VarInt) -> io::Result<()>;
+    fn id(&self) -> u64;
+}
+
 impl<R> AsyncReadRecvStream<R> {
     pub fn new(inner: R) -> Self {
         Self(inner)
     }
 }
 
-impl<R: RecvStreamSpecific> RecvStream for AsyncReadRecvStream<R> {
+impl<R: AsyncReadRecvStreamExtra> RecvStream for AsyncReadRecvStream<R> {
     async fn recv_bytes(&mut self, len: usize) -> io::Result<Bytes> {
         let mut res = vec![0; len];
         let mut n = 0;
@@ -213,18 +222,6 @@ impl<R: RecvStreamSpecific> RecvStream for AsyncReadRecvStream<R> {
     fn id(&self) -> u64 {
         self.0.id()
     }
-}
-
-pub trait RecvStreamSpecific: Send {
-    fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send);
-    fn stop(&mut self, code: VarInt) -> io::Result<()>;
-    fn id(&self) -> u64;
-}
-
-pub trait SendStreamSpecific: Send {
-    fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send);
-    fn reset(&mut self, code: VarInt) -> io::Result<()>;
-    fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
 }
 
 impl RecvStream for Bytes {
@@ -267,19 +264,31 @@ impl RecvStream for Bytes {
 #[derive(Debug, Clone)]
 pub struct AsyncWriteSendStream<W>(W);
 
-impl<W: SendStreamSpecific> AsyncWriteSendStream<W> {
+/// This is a helper trait to work with [`AsyncWriteSendStream`].
+///
+/// If you have an `AsyncWrite + Unpin + Send`, you can implement these additional
+/// methods and wrap the result in an `AsyncWriteSendStream` to get a `SendStream`
+/// that writes to the underlying `AsyncWrite`.
+pub trait AsyncWriteSendStreamExtra: Send {
+    fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send);
+    fn reset(&mut self, code: VarInt) -> io::Result<()>;
+    fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
+    fn id(&self) -> u64;
+}
+
+impl<W: AsyncWriteSendStreamExtra> AsyncWriteSendStream<W> {
     pub fn new(inner: W) -> Self {
         Self(inner)
     }
 }
 
-impl<W: SendStreamSpecific> AsyncWriteSendStream<W> {
+impl<W: AsyncWriteSendStreamExtra> AsyncWriteSendStream<W> {
     pub fn into_inner(self) -> W {
         self.0
     }
 }
 
-impl<W: SendStreamSpecific> SendStream for AsyncWriteSendStream<W> {
+impl<W: AsyncWriteSendStreamExtra> SendStream for AsyncWriteSendStream<W> {
     async fn send_bytes(&mut self, bytes: Bytes) -> io::Result<()> {
         self.0.inner().write_all(&bytes).await
     }
@@ -303,7 +312,7 @@ impl<W: SendStreamSpecific> SendStream for AsyncWriteSendStream<W> {
     }
 
     fn id(&self) -> u64 {
-        0
+        self.0.id()
     }
 }
 

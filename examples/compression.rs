@@ -60,7 +60,8 @@ mod lz4 {
     use async_compression::tokio::{bufread::Lz4Decoder, write::Lz4Encoder};
     use iroh::endpoint::VarInt;
     use iroh_blobs::util::{
-        AsyncReadRecvStream, AsyncWriteSendStream, RecvStreamSpecific, SendStreamSpecific,
+        AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream,
+        AsyncWriteSendStreamExtra,
     };
     use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 
@@ -72,7 +73,7 @@ mod lz4 {
         }
     }
 
-    impl SendStreamSpecific for SendStream {
+    impl AsyncWriteSendStreamExtra for SendStream {
         fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send) {
             &mut self.0
         }
@@ -84,6 +85,10 @@ mod lz4 {
         async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
             Ok(self.0.get_mut().stopped().await?)
         }
+
+        fn id(&self) -> u64 {
+            self.0.get_ref().id().index()
+        }
     }
 
     struct RecvStream(Lz4Decoder<BufReader<iroh::endpoint::RecvStream>>);
@@ -94,7 +99,7 @@ mod lz4 {
         }
     }
 
-    impl RecvStreamSpecific for RecvStream {
+    impl AsyncReadRecvStreamExtra for RecvStream {
         fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send) {
             &mut self.0
         }
