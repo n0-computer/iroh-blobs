@@ -1186,10 +1186,6 @@ mod tests {
                     .spawn(id, move |arg| async move {
                         match arg {
                             SpawnArg::Active(state) => {
-                                println!(
-                                    "Adding value {} to entity actor with id {:?}",
-                                    value, state.id
-                                );
                                 state
                                     .with_value(|v| *v = v.wrapping_add(value))
                                     .await
