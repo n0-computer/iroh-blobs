@@ -36,11 +36,11 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.91.1"
+iroh = "0.92"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.91.1"
-irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+iroh-base = "0.92"
+irpc = { version = "0.8.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
 redb = { version = "=2.4", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -55,18 +55,14 @@ serde_test = "1.0.177"
 tempfile = "3.17.1"
 test-strategy = "0.4.0"
 testresult = "0.4.1"
-tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.91.1", features = ["discovery-local-network"]}
+iroh = { version = "0.92", features = ["discovery-local-network"]}
 
 [features]
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
-
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }
