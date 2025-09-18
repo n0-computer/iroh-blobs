@@ -19,7 +19,7 @@ derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debu
 futures-lite = "2.6.0"
 quinn = { package = "iroh-quinn", version = "0.14.0" }
 n0-future = "0.2.0"
-n0-snafu = "0.2.0"
+n0-snafu = "0.2.2"
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
 snafu = "0.8.5"
