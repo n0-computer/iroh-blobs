@@ -1446,6 +1446,12 @@ pub struct FsStore {
     db: tokio::sync::mpsc::Sender<InternalCommand>,
 }
 
+impl From<FsStore> for Store {
+    fn from(value: FsStore) -> Self {
+        Store::from_sender(value.sender)
+    }
+}
+
 impl Deref for FsStore {
     type Target = Store;
 
