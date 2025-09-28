@@ -12,7 +12,7 @@
 //!
 //! You can also [`connect`](Store::connect) to a remote store that is listening
 //! to rpc requests.
-use std::{io, net::SocketAddr, ops::Deref};
+use std::{io, net::SocketAddr};
 
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
@@ -248,14 +248,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[repr(transparent)]
 pub struct Store {
     client: ApiClient,
-}
-
-impl Deref for Store {
-    type Target = blobs::Blobs;
-
-    fn deref(&self) -> &Self::Target {
-        blobs::Blobs::ref_from_sender(&self.client)
-    }
 }
 
 impl Store {

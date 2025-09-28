@@ -63,7 +63,7 @@ pub(super) async fn gc_mark_task(
     for HashAndFormat { hash, format } in roots {
         // we need to do this for all formats except raw
         if live.insert(hash) && !format.is_raw() {
-            let mut stream = store.export_bao(hash, ChunkRanges::all()).hashes();
+            let mut stream = store.blobs().export_bao(hash, ChunkRanges::all()).hashes();
             while let Some(hash) = stream.next().await {
                 match hash {
                     Ok(hash) => {
@@ -176,7 +176,7 @@ pub type ProtectCb = Arc<
 pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api::Result<()> {
     debug!(externally_protected = live.len(), "gc: start");
     {
-        store.clear_protected().await?;
+        store.blobs().clear_protected().await?;
         let mut stream = gc_mark(store, live);
         while let Some(ev) = stream.next().await {
             match ev {
@@ -296,23 +296,23 @@ mod tests {
         gc_run_once(store, &mut live).await?;
         // a is protected because we keep the temp tag
         assert!(live.contains(&a));
-        assert!(store.has(a).await?);
+        assert!(store.blobs().has(a).await?);
         // b is not protected because we drop the temp tag
         assert!(!live.contains(&b));
-        assert!(!store.has(b).await?);
+        assert!(!store.blobs().has(b).await?);
         // c is protected because we set an explicit tag
         assert!(live.contains(&c));
-        assert!(store.has(c).await?);
+        assert!(store.blobs().has(c).await?);
         // d and e are protected because they are part of a hashseq protected by a temp tag
         assert!(live.contains(&d));
-        assert!(store.has(d).await?);
+        assert!(store.blobs().has(d).await?);
         assert!(live.contains(&e));
-        assert!(store.has(e).await?);
+        assert!(store.blobs().has(e).await?);
         // f and g are protected because they are part of a hashseq protected by a tag
         assert!(live.contains(&f));
-        assert!(store.has(f).await?);
+        assert!(store.blobs().has(f).await?);
         assert!(live.contains(&g));
-        assert!(store.has(g).await?);
+        assert!(store.blobs().has(g).await?);
         drop(at);
         drop(hehs);
         Ok(())
@@ -333,7 +333,7 @@ mod tests {
             let outboard_path = options.outboard_path(ah);
             assert!(data_path.exists());
             assert!(outboard_path.exists());
-            assert!(store.has(*ah).await?);
+            assert!(store.blobs().has(*ah).await?);
             drop(a);
             gc_run_once(store, &mut live).await?;
             assert!(!data_path.exists());
@@ -346,7 +346,7 @@ mod tests {
             let data = vec![1u8; 8000000];
             let ranges = ChunkRanges::from(..ChunkNum(19));
             let (bh, b_bao) = create_n0_bao(&data, &ranges)?;
-            store.import_bao_bytes(bh, ranges, b_bao).await?;
+            store.blobs().import_bao_bytes(bh, ranges, b_bao).await?;
             let data_path = options.data_path(&bh);
             let outboard_path = options.outboard_path(&bh);
             let sizes_path = options.sizes_path(&bh);
@@ -401,15 +401,15 @@ mod tests {
     }
 
     async fn gc_check_deletion(store: &Store) -> TestResult {
-        let temp_tag = store.add_bytes(b"foo".to_vec()).temp_tag().await?;
+        let temp_tag = store.blobs().add_bytes(b"foo".to_vec()).temp_tag().await?;
         let hash = *temp_tag.hash();
-        assert_eq!(store.get_bytes(hash).await?.as_ref(), b"foo");
+        assert_eq!(store.blobs().get_bytes(hash).await?.as_ref(), b"foo");
         drop(temp_tag);
         let mut live = HashSet::new();
         gc_run_once(store, &mut live).await?;
 
         // check that `get_bytes` returns an error.
-        let res = store.get_bytes(hash).await;
+        let res = store.blobs().get_bytes(hash).await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -421,6 +421,7 @@ mod tests {
 
         // check that `export_ranges` returns an error.
         let res = store
+            .blobs()
             .export_ranges(hash, RangeSet2::all())
             .concatenate()
             .await;
@@ -435,6 +436,7 @@ mod tests {
 
         // check that `export_bao` returns an error.
         let res = store
+            .blobs()
             .export_bao(hash, ChunkRanges::all())
             .bao_to_vec()
             .await;
@@ -451,7 +453,7 @@ mod tests {
         // check that `export` returns an error.
         let target = tempfile::NamedTempFile::new()?;
         let path = target.path();
-        let res = store.export(hash, path).await;
+        let res = store.blobs().export(hash, path).await;
         assert!(res.is_err());
         assert!(matches!(
             res,

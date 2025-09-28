@@ -224,14 +224,14 @@ async fn two_nodes_get_blobs(
     let sizes = INTERESTING_SIZES;
     let mut tts = Vec::new();
     for size in sizes {
-        tts.push(store1.add_bytes(test_data(size)).await?);
+        tts.push(store1.blobs().add_bytes(test_data(size)).await?);
     }
     let addr1 = r1.endpoint().node_addr().initialized().await;
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
     for size in sizes {
         let hash = Hash::new(test_data(size));
         store2.remote().fetch(conn.clone(), hash).await?;
-        let actual = store2.get_bytes(hash).await?;
+        let actual = store2.blobs().get_bytes(hash).await?;
         assert_eq!(actual, test_data(size));
     }
     tokio::try_join!(r1.shutdown(), r2.shutdown())?;
@@ -275,6 +275,7 @@ async fn two_nodes_observe(
         io::Result::Ok(())
     });
     store1
+        .blobs()
         .import_bao_bytes(hash, ChunkRanges::all(), bao)
         .await?;
     remote_observe_task.await??;
@@ -305,7 +306,7 @@ async fn two_nodes_get_many(
     let sizes = INTERESTING_SIZES;
     let mut tts = Vec::new();
     for size in sizes {
-        tts.push(store1.add_bytes(test_data(size)).await?);
+        tts.push(store1.blobs().add_bytes(test_data(size)).await?);
     }
     let hashes = tts.iter().map(|tt| tt.hash).collect::<Vec<_>>();
     let addr1 = r1.endpoint().node_addr().initialized().await;
@@ -317,7 +318,7 @@ async fn two_nodes_get_many(
     for size in sizes {
         let expected = test_data(size);
         let hash = Hash::new(&expected);
-        let actual = store2.get_bytes(hash).await?;
+        let actual = store2.blobs().get_bytes(hash).await?;
         assert_eq!(actual, expected);
     }
     tokio::try_join!(r1.shutdown(), r2.shutdown())?;
@@ -383,7 +384,7 @@ async fn two_nodes_push_blobs(
     let sizes = INTERESTING_SIZES;
     let mut tts = Vec::new();
     for size in sizes {
-        tts.push(store1.add_bytes(test_data(size)).await?);
+        tts.push(store1.blobs().add_bytes(test_data(size)).await?);
     }
     let addr2 = r2.endpoint().node_addr().initialized().await;
     let conn = r1.endpoint().connect(addr2, crate::ALPN).await?;
@@ -399,7 +400,7 @@ async fn two_nodes_push_blobs(
             )
             .await?;
         count_rx.changed().await?;
-        let actual = store2.get_bytes(hash).await?;
+        let actual = store2.blobs().get_bytes(hash).await?;
         assert_eq!(actual, test_data(size));
     }
     tokio::try_join!(r1.shutdown(), r2.shutdown())?;
@@ -427,10 +428,10 @@ async fn two_nodes_push_blobs_mem() -> TestResult<()> {
 }
 
 pub async fn add_test_hash_seq(
-    blobs: &Store,
+    store: &Store,
     sizes: impl IntoIterator<Item = usize>,
 ) -> TestResult<HashAndFormat> {
-    let batch = blobs.batch().await?;
+    let batch = store.blobs().batch().await?;
     let mut tts = Vec::new();
     for size in sizes {
         tts.push(batch.add_bytes(test_data(size)).await?);
@@ -444,11 +445,11 @@ pub async fn add_test_hash_seq(
 }
 
 pub async fn add_test_hash_seq_incomplete(
-    blobs: &Store,
+    store: &Store,
     sizes: impl IntoIterator<Item = usize>,
     present: impl Fn(usize) -> ChunkRanges,
 ) -> TestResult<HashAndFormat> {
-    let batch = blobs.batch().await?;
+    let batch = store.blobs().batch().await?;
     let mut tts = Vec::new();
     for (i, size) in sizes.into_iter().enumerate() {
         let data = test_data(size);
@@ -458,7 +459,7 @@ pub async fn add_test_hash_seq_incomplete(
         // why isn't import_bao_bytes returning a temp tag anyway?
         tts.push(batch.temp_tag(hash).await?);
         if !ranges.is_empty() {
-            blobs.import_bao_bytes(hash, ranges, bao).await?;
+            store.blobs().import_bao_bytes(hash, ranges, bao).await?;
         }
     }
     let hash_seq = tts.iter().map(|tt| *tt.hash()).collect::<HashSeq>();
@@ -466,8 +467,8 @@ pub async fn add_test_hash_seq_incomplete(
     let ranges = present(0);
     let (root, bao) = create_n0_bao(&hash_seq_bytes, &ranges)?;
     let content = HashAndFormat::hash_seq(root);
-    blobs.tags().create(content).await?;
-    blobs.import_bao_bytes(root, ranges, bao).await?;
+    store.tags().create(content).await?;
+    store.blobs().import_bao_bytes(root, ranges, bao).await?;
     Ok(content)
 }
 
@@ -476,6 +477,7 @@ async fn check_presence(store: &Store, sizes: &[usize]) -> TestResult<()> {
         let expected = test_data(*size);
         let hash = Hash::new(&expected);
         let actual = store
+            .blobs()
             .export_bao(hash, ChunkRanges::all())
             .data_to_bytes()
             .await?;
@@ -598,11 +600,11 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     let mut tts = Vec::new();
     // add all the sizes
     for size in sizes {
-        let tt = store.add_bytes(test_data(size)).await?;
+        let tt = store.blobs().add_bytes(test_data(size)).await?;
         tts.push(tt);
     }
     let hash_seq = tts.iter().map(|x| x.hash).collect::<HashSeq>();
-    let root_tt = store.add_bytes(hash_seq).await?;
+    let root_tt = store.blobs().add_bytes(hash_seq).await?;
     let root = root_tt.hash;
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), None);
@@ -633,7 +635,7 @@ async fn node_serve_blobs() -> TestResult<()> {
     // add all the sizes
     let mut tts = Vec::new();
     for size in sizes {
-        tts.push(store.add_bytes(test_data(size)).await?);
+        tts.push(store.blobs().add_bytes(test_data(size)).await?);
     }
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, endpoint.clone(), None);
@@ -675,7 +677,7 @@ async fn node_smoke_mem() -> TestResult<()> {
 }
 
 async fn node_smoke(store: &Store) -> TestResult<()> {
-    let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
+    let tt = store.blobs().add_bytes(b"hello world".to_vec()).temp_tag().await?;
     let hash = *tt.hash();
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(store, endpoint.clone(), None);
@@ -703,7 +705,7 @@ async fn test_export_chunk() -> TestResult {
     let blobs = store.blobs();
     for size in [1024 * 18 + 1] {
         let data = vec![0u8; size];
-        let tt = store.add_slice(&data).temp_tag().await?;
+        let tt = blobs.add_slice(&data).temp_tag().await?;
         let hash = *tt.hash();
         let c = blobs.export_chunk(hash, 0).await;
         println!("{c:?}");
@@ -720,6 +722,7 @@ async fn test_export_ranges(
     range: Range<u64>,
 ) -> TestResult {
     let actual = store
+        .blobs()
         .export_ranges(hash, range.clone())
         .concatenate()
         .await?;
@@ -749,7 +752,7 @@ async fn export_ranges_smoke(store: &Store) -> TestResult {
     let sizes = INTERESTING_SIZES;
     for size in sizes {
         let data = test_data(size);
-        let tt = store.add_bytes(data.clone()).await?;
+        let tt = store.blobs().add_bytes(data.clone()).await?;
         let hash = tt.hash;
         let size = size as u64;
         test_export_ranges(store, hash, &data, 0..size).await?;

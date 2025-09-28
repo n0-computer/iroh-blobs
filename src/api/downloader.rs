@@ -381,7 +381,7 @@ async fn split_request<'a>(
             };
             let first = GetRequest::blob(req.hash);
             execute_get(pool, Arc::new(first), providers, store, progress).await?;
-            let size = store.observe(req.hash).await?.size();
+            let size = store.blobs().observe(req.hash).await?.size();
             anyhow::ensure!(size % 32 == 0, "Size is not a multiple of 32");
             let n = size / 32;
             Box::new(
@@ -547,8 +547,8 @@ mod tests {
         let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
         let (r2, store2, _) = node_test_setup_fs(testdir.path().join("b")).await?;
         let (r3, store3, _) = node_test_setup_fs(testdir.path().join("c")).await?;
-        let tt1 = store1.add_slice("hello world").await?;
-        let tt2 = store2.add_slice("hello world 2").await?;
+        let tt1 = store1.blobs().add_slice("hello world").await?;
+        let tt2 = store2.blobs().add_slice("hello world 2").await?;
         let node1_addr = r1.endpoint().node_addr().initialized().await;
         let node1_id = node1_addr.node_id;
         let node2_addr = r2.endpoint().node_addr().initialized().await;
@@ -567,8 +567,8 @@ mod tests {
         while let Some(item) = progress.next().await {
             println!("Got item: {item:?}");
         }
-        assert_eq!(store3.get_bytes(tt1.hash).await?.deref(), b"hello world");
-        assert_eq!(store3.get_bytes(tt2.hash).await?.deref(), b"hello world 2");
+        assert_eq!(store3.blobs().get_bytes(tt1.hash).await?.deref(), b"hello world");
+        assert_eq!(store3.blobs().get_bytes(tt2.hash).await?.deref(), b"hello world 2");
         Ok(())
     }
 
@@ -579,10 +579,11 @@ mod tests {
         let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
         let (r2, store2, _) = node_test_setup_fs(testdir.path().join("b")).await?;
         let (r3, store3, _) = node_test_setup_fs(testdir.path().join("c")).await?;
-        let tt1 = store1.add_slice(vec![1; 10000000]).await?;
-        let tt2 = store2.add_slice(vec![2; 10000000]).await?;
+        let tt1 = store1.blobs().add_slice(vec![1; 10000000]).await?;
+        let tt2 = store2.blobs().add_slice(vec![2; 10000000]).await?;
         let hs = [tt1.hash, tt2.hash].into_iter().collect::<HashSeq>();
         let root = store1
+            .blobs()
             .add_bytes_with_opts(AddBytesOptions {
                 data: hs.clone().into(),
                 format: crate::BlobFormat::HashSeq,
@@ -648,10 +649,11 @@ mod tests {
         let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
         let (r2, store2, _) = node_test_setup_fs(testdir.path().join("b")).await?;
         let (r3, store3, _) = node_test_setup_fs(testdir.path().join("c")).await?;
-        let tt1 = store1.add_slice(vec![1; 10000000]).await?;
-        let tt2 = store2.add_slice(vec![2; 10000000]).await?;
+        let tt1 = store1.blobs().add_slice(vec![1; 10000000]).await?;
+        let tt2 = store2.blobs().add_slice(vec![2; 10000000]).await?;
         let hs = [tt1.hash, tt2.hash].into_iter().collect::<HashSeq>();
         let root = store1
+            .blobs()
             .add_bytes_with_opts(AddBytesOptions {
                 data: hs.clone().into(),
                 format: crate::BlobFormat::HashSeq,

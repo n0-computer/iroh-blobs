@@ -25,7 +25,7 @@ pub async fn create_random_blobs<R: rand::Rng>(
             let mut rand = rand::rngs::StdRng::seed_from_u64(seed);
             let mut data = vec![0u8; size];
             rand.fill_bytes(&mut data);
-            store.add_bytes(data).into_future()
+            store.blobs().add_bytes(data).into_future()
         })
         .collect::<Vec<_>>()
         .await;
@@ -49,7 +49,7 @@ pub async fn add_hash_sequences<R: rand::Rng>(
                     tags[j].hash
                 })
                 .collect::<HashSeq>();
-            store
+            store.blobs()
                 .add_bytes_with_opts(AddBytesOptions {
                     data: hs.into(),
                     format: BlobFormat::HashSeq,

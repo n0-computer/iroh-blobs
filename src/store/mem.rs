@@ -1071,28 +1071,30 @@ mod tests {
     #[tokio::test]
     async fn smoke() -> TestResult<()> {
         let store = MemStore::new();
-        let tt = store.add_bytes(vec![0u8; 1024 * 64]).temp_tag().await?;
+        let tt = store.blobs().add_bytes(vec![0u8; 1024 * 64]).temp_tag().await?;
         let hash = *tt.hash();
         println!("hash: {hash:?}");
-        let mut stream = store.export_bao(hash, ChunkRanges::all()).stream();
+        let mut stream = store.blobs().export_bao(hash, ChunkRanges::all()).stream();
         while let Some(item) = stream.next().await {
             println!("item: {item:?}");
         }
-        let stream = store.export_bao(hash, ChunkRanges::all());
+        let stream = store.blobs().export_bao(hash, ChunkRanges::all());
         let exported = stream.bao_to_vec().await?;
 
         let store2 = MemStore::new();
-        let mut or = store2.observe(hash).stream().await?;
+        let mut or = store2.blobs().observe(hash).stream().await?;
         tokio::spawn(async move {
             while let Some(event) = or.next().await {
                 println!("event: {event:?}");
             }
         });
         store2
+            .blobs()
             .import_bao_bytes(hash, ChunkRanges::all(), exported.clone())
             .await?;
 
         let exported2 = store2
+            .blobs()
             .export_bao(hash, ChunkRanges::all())
             .bao_to_vec()
             .await?;

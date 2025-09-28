@@ -416,13 +416,13 @@ impl Remote {
     ) -> anyhow::Result<LocalInfo> {
         let request = request.into();
         let root = request.hash;
-        let bitfield = self.store().observe(root).await?;
+        let bitfield = self.store().blobs().observe(root).await?;
         let children = if !request.ranges.is_blob() {
             let opts = ExportBaoOptions {
                 hash: root,
                 ranges: bitfield.ranges.clone(),
             };
-            let bao = self.store().export_bao_with_opts(opts, 32);
+            let bao = self.store().blobs().export_bao_with_opts(opts, 32);
             let mut by_index = BTreeMap::new();
             let mut stream = bao.hashes_with_index();
             while let Some(item) = stream.next().await {
@@ -447,7 +447,7 @@ impl Remote {
                     // we don't have the hash, so we can't store the bitfield
                     continue;
                 };
-                let bitfield = self.store().observe(*hash).await?;
+                let bitfield = self.store().blobs().observe(*hash).await?;
                 bitfields.insert(*hash, bitfield);
                 hash_seq.insert(child, *hash);
             }
@@ -592,6 +592,7 @@ impl Remote {
         let root_ranges = request_ranges.next().expect("infinite iterator");
         if !root_ranges.is_empty() {
             self.store()
+                .blobs()
                 .export_bao(root, root_ranges.clone())
                 .write_quinn_with_progress(&mut send, &mut context, &root, 0)
                 .await?;
@@ -601,13 +602,14 @@ impl Remote {
             send.finish()?;
             return Ok(Default::default());
         }
-        let hash_seq = self.store().get_bytes(root).await?;
+        let hash_seq = self.store().blobs().get_bytes(root).await?;
         let hash_seq = HashSeq::try_from(hash_seq)?;
         for (child, (child_hash, child_ranges)) in
             hash_seq.into_iter().zip(request_ranges).enumerate()
         {
             if !child_ranges.is_empty() {
                 self.store()
+                    .blobs()
                     .export_bao(child_hash, child_ranges.clone())
                     .write_quinn_with_progress(
                         &mut send,
@@ -681,6 +683,7 @@ impl Remote {
                 let mut next_child = Ok(at_start_child);
                 let hash_seq = HashSeq::try_from(
                     store
+                        .blobs()
                         .get_bytes(root)
                         .await
                         .map_err(|e| LocalFailureSnafu.into_error(e.into()))?,
@@ -891,6 +894,7 @@ async fn get_blob_ranges_impl(
     let buffer_size = get_buffer_size(size);
     trace!(%size, %buffer_size, "get blob");
     let handle = store
+        .blobs()
         .import_bao(hash, size, buffer_size)
         .await
         .map_err(|e| LocalFailureSnafu.into_error(e.into()))?;
