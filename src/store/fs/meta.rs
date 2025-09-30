@@ -36,7 +36,7 @@ mod proto;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables};
-use tracing::{debug, error, info_span, trace, Span};
+use tracing::{debug, error, info, info_span, trace, warn, Span};
 
 use super::{
     delete_set::DeleteHandle,
@@ -475,13 +475,18 @@ impl Actor {
         options: BatchOptions,
     ) -> anyhow::Result<Self> {
         debug!("creating or opening meta database at {}", db_path.display());
-        let db = match redb::Database::create(db_path) {
+        let mut db = match redb::Database::create(db_path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
                 return Err(anyhow::anyhow!("migration from v1 no longer supported"));
             }
             Err(err) => return Err(err.into()),
         };
+        match db.upgrade() {
+            Ok(true) => info!("Database was upgraded to redb v3 compatible format"),
+            Ok(false) => {}
+            Err(err) => warn!("Database upgrade to redb v3 compatible format failed: {err:#}"),
+        }
         let tx = db.begin_write()?;
         let ftx = ds.begin_write();
         Tables::new(&tx, &ftx)?;

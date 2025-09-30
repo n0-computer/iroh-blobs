@@ -42,7 +42,7 @@ genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.92"
 irpc = { version = "0.8.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
-redb = { version = "=2.4", optional = true }
+redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 
 [dev-dependencies]
