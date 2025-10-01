@@ -74,6 +74,12 @@ pub struct MemStore {
     client: ApiClient,
 }
 
+impl From<MemStore> for crate::api::Store {
+    fn from(value: MemStore) -> Self {
+        crate::api::Store::from_sender(value.client)
+    }
+}
+
 impl AsRef<crate::api::Store> for MemStore {
     fn as_ref(&self) -> &crate::api::Store {
         crate::api::Store::ref_from_sender(&self.client)

@@ -1,6 +1,6 @@
 [package]
 name = "iroh-blobs"
-version = "0.93.0"
+version = "0.94.0"
 edition = "2021"
 description = "content-addressed blobs for iroh"
 license = "MIT OR Apache-2.0"
@@ -19,7 +19,7 @@ derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debu
 futures-lite = "2.6.0"
 quinn = { package = "iroh-quinn", version = "0.14.0" }
 n0-future = "0.2.0"
-n0-snafu = "0.2.0"
+n0-snafu = "0.2.2"
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
 snafu = "0.8.5"
@@ -36,11 +36,11 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.91.1"
+iroh = "0.92"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.91.1"
-irpc = { version = "0.7.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+iroh-base = "0.92"
+irpc = { version = "0.8.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.35" }
 redb = { version = "=2.4", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -55,11 +55,11 @@ serde_test = "1.0.177"
 tempfile = "3.17.1"
 test-strategy = "0.4.0"
 testresult = "0.4.1"
-tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.91.1", features = ["discovery-local-network"]}
+iroh = { version = "0.92", features = ["discovery-local-network"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 
