@@ -1095,7 +1095,13 @@
 <a href="#1094" id="1094">1094</a>
 <a href="#1095" id="1095">1095</a>
 <a href="#1096" id="1096">1096</a>
-<a href="#1097" id="1097">1097</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
+<a href="#1097" id="1097">1097</a>
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a>
+<a href="#1100" id="1100">1100</a>
+<a href="#1101" id="1101">1101</a>
+<a href="#1102" id="1102">1102</a>
+<a href="#1103" id="1103">1103</a></pre></div><pre class="rust"><code><span class="doccomment">//! Mutable in-memory blob store.
 //!
 //! Being a memory store, this store has to import all data into memory before it can
 //! serve it. So the amount of data you can serve is limited by your available memory.
@@ -1169,6 +1175,12 @@
 #[repr(transparent)]
 </span><span class="kw">pub struct </span>MemStore {
     client: ApiClient,
+}
+
+<span class="kw">impl </span>From&lt;MemStore&gt; <span class="kw">for </span><span class="kw">crate</span>::api::Store {
+    <span class="kw">fn </span>from(value: MemStore) -&gt; <span class="self">Self </span>{
+        <span class="kw">crate</span>::api::Store::from_sender(value.client)
+    }
 }
 
 <span class="kw">impl </span>AsRef&lt;<span class="kw">crate</span>::api::Store&gt; <span class="kw">for </span>MemStore {

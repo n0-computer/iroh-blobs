@@ -2293,7 +2293,38 @@
 <a href="#2292" id="2292">2292</a>
 <a href="#2293" id="2293">2293</a>
 <a href="#2294" id="2294">2294</a>
-<a href="#2295" id="2295">2295</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
+<a href="#2295" id="2295">2295</a>
+<a href="#2296" id="2296">2296</a>
+<a href="#2297" id="2297">2297</a>
+<a href="#2298" id="2298">2298</a>
+<a href="#2299" id="2299">2299</a>
+<a href="#2300" id="2300">2300</a>
+<a href="#2301" id="2301">2301</a>
+<a href="#2302" id="2302">2302</a>
+<a href="#2303" id="2303">2303</a>
+<a href="#2304" id="2304">2304</a>
+<a href="#2305" id="2305">2305</a>
+<a href="#2306" id="2306">2306</a>
+<a href="#2307" id="2307">2307</a>
+<a href="#2308" id="2308">2308</a>
+<a href="#2309" id="2309">2309</a>
+<a href="#2310" id="2310">2310</a>
+<a href="#2311" id="2311">2311</a>
+<a href="#2312" id="2312">2312</a>
+<a href="#2313" id="2313">2313</a>
+<a href="#2314" id="2314">2314</a>
+<a href="#2315" id="2315">2315</a>
+<a href="#2316" id="2316">2316</a>
+<a href="#2317" id="2317">2317</a>
+<a href="#2318" id="2318">2318</a>
+<a href="#2319" id="2319">2319</a>
+<a href="#2320" id="2320">2320</a>
+<a href="#2321" id="2321">2321</a>
+<a href="#2322" id="2322">2322</a>
+<a href="#2323" id="2323">2323</a>
+<a href="#2324" id="2324">2324</a>
+<a href="#2325" id="2325">2325</a>
+<a href="#2326" id="2326">2326</a></pre></div><pre class="rust"><code><span class="doccomment">//! # File based blob store.
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
@@ -2446,6 +2477,9 @@
     },
     HashAndFormat,
 };
+
+<span class="doccomment">/// Maximum number of external paths we track per blob.
+</span><span class="kw">const </span>MAX_EXTERNAL_PATHS: usize = <span class="number">8</span>;
 
 <span class="doccomment">/// Create a 16 byte unique ID.
 </span><span class="kw">fn </span>new_uuid() -&gt; [u8; <span class="number">16</span>] {
@@ -3534,18 +3568,21 @@
         }
     };
     <span class="macro">trace!</span>(<span class="string">"exporting {} to {}"</span>, cmd.hash.to_hex(), target.display());
-    <span class="kw">let </span>data = <span class="kw">match </span>data_location {
-        DataLocation::Inline(data) =&gt; MemOrFile::Mem(data),
-        DataLocation::Owned(size) =&gt; {
-            MemOrFile::File((ctx.options().path.data_path(<span class="kw-2">&amp;</span>cmd.hash), size))
-        }
-        DataLocation::External(paths, size) =&gt; MemOrFile::File((
-            paths
-                .into_iter()
-                .next()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, <span class="string">"no external data path"</span>))<span class="question-mark">?</span>,
-            size,
-        )),
+    <span class="kw">let </span>(data, <span class="kw-2">mut </span>external) = <span class="kw">match </span>data_location {
+        DataLocation::Inline(data) =&gt; (MemOrFile::Mem(data), <span class="macro">vec!</span>[]),
+        DataLocation::Owned(size) =&gt; (
+            MemOrFile::File((ctx.options().path.data_path(<span class="kw-2">&amp;</span>cmd.hash), size)),
+            <span class="macro">vec!</span>[],
+        ),
+        DataLocation::External(paths, size) =&gt; (
+            MemOrFile::File((
+                paths.first().cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, <span class="string">"no external data path"</span>)
+                })<span class="question-mark">?</span>,
+                size,
+            )),
+            paths,
+        ),
     };
     <span class="kw">let </span>size = <span class="kw">match </span><span class="kw-2">&amp;</span>data {
         MemOrFile::Mem(data) =&gt; data.len() <span class="kw">as </span>u64,
@@ -3569,21 +3606,40 @@
                 );
             }
             ExportMode::TryReference =&gt; {
-                <span class="kw">match </span>std::fs::rename(<span class="kw-2">&amp;</span>source_path, <span class="kw-2">&amp;</span>target) {
-                    <span class="prelude-val">Ok</span>(()) =&gt; {}
-                    <span class="prelude-val">Err</span>(cause) =&gt; {
-                        <span class="kw">const </span>ERR_CROSS: i32 = <span class="number">18</span>;
-                        <span class="kw">if </span>cause.raw_os_error() == <span class="prelude-val">Some</span>(ERR_CROSS) {
-                            <span class="kw">let </span>source = fs::File::open(<span class="kw-2">&amp;</span>source_path)<span class="question-mark">?</span>;
-                            <span class="kw">let </span><span class="kw-2">mut </span>target = fs::File::create(<span class="kw-2">&amp;</span>target)<span class="question-mark">?</span>;
-                            copy_with_progress(<span class="kw-2">&amp;</span>source, size, <span class="kw-2">&amp;mut </span>target, tx).<span class="kw">await</span><span class="question-mark">?</span>;
-                        } <span class="kw">else </span>{
-                            <span class="kw">return </span><span class="prelude-val">Err</span>(cause.into());
+                <span class="kw">if </span>!external.is_empty() {
+                    <span class="comment">// the file already exists externally, so we need to copy it.
+                    // if the OS supports reflink, we might as well use that.
+                    </span><span class="kw">let </span>res =
+                        reflink_or_copy_with_progress(<span class="kw-2">&amp;</span>source_path, <span class="kw-2">&amp;</span>target, size, tx).<span class="kw">await</span><span class="question-mark">?</span>;
+                    <span class="macro">trace!</span>(
+                        <span class="string">"exported {} also to {}, {res:?}"</span>,
+                        source_path.display(),
+                        target.display()
+                    );
+                    external.push(target);
+                    external.sort();
+                    external.dedup();
+                    external.truncate(MAX_EXTERNAL_PATHS);
+                } <span class="kw">else </span>{
+                    <span class="comment">// the file was previously owned, so we can just move it.
+                    // if that fails with ERR_CROSS, we fall back to copy.
+                    </span><span class="kw">match </span>std::fs::rename(<span class="kw-2">&amp;</span>source_path, <span class="kw-2">&amp;</span>target) {
+                        <span class="prelude-val">Ok</span>(()) =&gt; {}
+                        <span class="prelude-val">Err</span>(cause) =&gt; {
+                            <span class="kw">const </span>ERR_CROSS: i32 = <span class="number">18</span>;
+                            <span class="kw">if </span>cause.raw_os_error() == <span class="prelude-val">Some</span>(ERR_CROSS) {
+                                reflink_or_copy_with_progress(<span class="kw-2">&amp;</span>source_path, <span class="kw-2">&amp;</span>target, size, tx)
+                                    .<span class="kw">await</span><span class="question-mark">?</span>;
+                            } <span class="kw">else </span>{
+                                <span class="kw">return </span><span class="prelude-val">Err</span>(cause.into());
+                            }
                         }
                     }
-                }
-                ctx.set(EntryState::Complete {
-                    data_location: DataLocation::External(<span class="macro">vec!</span>[target], size),
+                    external.push(target);
+                };
+                <span class="comment">// setting the new entry state will also take care of deleting the owned data file!
+                </span>ctx.set(EntryState::Complete {
+                    data_location: DataLocation::External(external, size),
                     outboard_location,
                 })
                 .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -3714,6 +3770,12 @@
 </span><span class="kw">pub struct </span>FsStore {
     sender: ApiClient,
     db: tokio::sync::mpsc::Sender&lt;InternalCommand&gt;,
+}
+
+<span class="kw">impl </span>From&lt;FsStore&gt; <span class="kw">for </span>Store {
+    <span class="kw">fn </span>from(value: FsStore) -&gt; <span class="self">Self </span>{
+        Store::from_sender(value.sender)
+    }
 }
 
 <span class="kw">impl </span>Deref <span class="kw">for </span>FsStore {
