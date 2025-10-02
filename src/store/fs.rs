@@ -91,7 +91,6 @@ use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
-use gc::run_gc;
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use meta::list_blobs;
@@ -120,6 +119,7 @@ use crate::{
             },
             util::entity_manager::{self, ActiveEntityState},
         },
+        gc::run_gc,
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         IROH_BLOCK_SIZE,
     },
@@ -141,7 +141,6 @@ use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::Options;
 use tracing::Instrument;
-mod gc;
 
 use crate::{
     api::{
