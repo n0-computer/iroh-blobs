@@ -404,3 +404,21 @@ impl bao_tree::io::mixed::Sender for BaoTreeSender {
         self.0.send(item).await
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use crate::hash::Hash;
+    use crate::store::IROH_BLOCK_SIZE;
+    use bao_tree::{io::outboard::PreOrderMemOutboard, ChunkRanges};
+
+    /// Create n0 flavoured bao. Note that this can be used to request ranges below a chunk group size,
+    /// which can not be exported via bao because we don't store hashes below the chunk group level.
+    pub fn create_n0_bao(data: &[u8], ranges: &ChunkRanges) -> anyhow::Result<(Hash, Vec<u8>)> {
+        let outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
+        let mut encoded = Vec::new();
+        let size = data.len() as u64;
+        encoded.extend_from_slice(&size.to_le_bytes());
+        bao_tree::io::sync::encode_ranges_validated(data, &outboard, ranges, &mut encoded)?;
+        Ok((outboard.root.into(), encoded))
+    }
+}

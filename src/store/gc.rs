@@ -253,7 +253,7 @@ mod tests {
     use crate::{
         api::{blobs::AddBytesOptions, ExportBaoError, RequestError, Store},
         hashseq::HashSeq,
-        store::fs::{options::PathOptions, tests::create_n0_bao},
+        store::{fs::options::PathOptions, util::tests::create_n0_bao},
         BlobFormat,
     };
 
