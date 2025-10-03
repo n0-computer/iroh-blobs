@@ -631,10 +631,12 @@ impl Actor {
             .extract_from_if((from, to), |_, _| true)
             .context(StorageSnafu)?;
         // drain the iterator to actually remove the tags
+        let mut deleted = 0;
         for res in removing {
             res.context(StorageSnafu)?;
+            deleted += 1;
         }
-        tx.send(Ok(())).await.ok();
+        tx.send(Ok(deleted)).await.ok();
         Ok(())
     }
 

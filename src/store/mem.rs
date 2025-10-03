@@ -227,6 +227,7 @@ impl Actor {
                 info!("deleting tags from {:?} to {:?}", from, to);
                 // state.tags.remove(&from.unwrap());
                 // todo: more efficient impl
+                let mut deleted = 0;
                 self.state.tags.retain(|tag, _| {
                     if let Some(from) = &from {
                         if tag < from {
@@ -239,9 +240,10 @@ impl Actor {
                         }
                     }
                     info!("    removing {:?}", tag);
+                    deleted += 1;
                     false
                 });
-                tx.send(Ok(())).await.ok();
+                tx.send(Ok(deleted)).await.ok();
             }
             Command::RenameTag(cmd) => {
                 let RenameTagMsg {
