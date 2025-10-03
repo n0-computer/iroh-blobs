@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{protocol::Router, Endpoint, NodeAddr, Watcher};
+use iroh::{
+    discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeAddr, Watcher,
+};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -26,8 +28,11 @@ struct Node {
 }
 
 impl Node {
-    async fn new() -> Result<Self> {
-        let endpoint = Endpoint::builder().bind().await?;
+    async fn new(disc: &StaticProvider) -> Result<Self> {
+        let endpoint = Endpoint::builder()
+            .add_discovery(disc.clone())
+            .bind()
+            .await?;
 
         let store = MemStore::new();
 
@@ -91,7 +96,6 @@ impl Node {
 
     /// retrive an entire collection from a given hash and provider
     async fn get_collection(&self, hash: Hash, provider: NodeAddr) -> Result<()> {
-        self.router.endpoint().add_node_addr(provider.clone())?;
         let req = HashAndFormat::hash_seq(hash);
         let addrs = Shuffled::new(vec![provider.node_id]);
         self.store
@@ -104,8 +108,15 @@ impl Node {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let send_node = Node::new().await?;
+    // create a local provider for nodes to discover each other.
+    // outside of a development environment, production apps would
+    // use `Endpoint::builder().discovery_n0()` or a similar method
+    let disc = StaticProvider::new();
+
+    // create a sending node
+    let send_node = Node::new(&disc).await?;
     let send_node_addr = send_node.node_addr().await?;
+    // add a collection with three files
     let hash = send_node
         .create_collection(vec![
             ("a.txt", b"this is file a".into()),
@@ -114,9 +125,18 @@ async fn main() -> anyhow::Result<()> {
         ])
         .await?;
 
-    let recv_node = Node::new().await?;
+    // create the receiving node
+    let recv_node = Node::new(&disc).await?;
+
+    // add the send node to the discovery provider so the recv node can find it
+    disc.add_node_info(send_node_addr.clone());
+    // fetch the collection and all contents
     recv_node.get_collection(hash, send_node_addr).await?;
 
+    // when listing hashes, you'll see 5 hashes in total:
+    // - one hash for each of the three files
+    // - hash of the collection's metadata (this is where the "a.txt" filenames live)
+    // - the hash of the entire collection which is just the above 4 hashes concatenated, then hashed
     let send_hashes = send_node.list_hashes().await?;
     let recv_hashes = recv_node.list_hashes().await?;
     assert_eq!(send_hashes.len(), recv_hashes.len());
