@@ -407,9 +407,9 @@ impl bao_tree::io::mixed::Sender for BaoTreeSender {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::hash::Hash;
-    use crate::store::IROH_BLOCK_SIZE;
     use bao_tree::{io::outboard::PreOrderMemOutboard, ChunkRanges};
+
+    use crate::{hash::Hash, store::IROH_BLOCK_SIZE};
 
     /// Create n0 flavoured bao. Note that this can be used to request ranges below a chunk group size,
     /// which can not be exported via bao because we don't store hashes below the chunk group level.
