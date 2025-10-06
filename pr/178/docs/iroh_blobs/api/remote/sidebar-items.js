@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ExecuteError","GetProgressItem","PushProgressItem"],"struct":["GetProgress","LocalInfo","PushProgress","Remote"],"trait":["GetConnection"]};
+window.SIDEBAR_ITEMS = {"enum":["ExecuteError","GetProgressItem","PushProgressItem"],"struct":["GetProgress","LocalInfo","PushProgress","Remote"],"trait":["GetStreamPair"]};

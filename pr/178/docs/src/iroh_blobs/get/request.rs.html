@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a>
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use super</span>::{fsm, GetError, GetResult, Stats};
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use crate</span>::{
-<a href=#28 id=28 data-nosnippet>28</a>    get::error::{BadRequestSnafu, LocalFailureSnafu},
+<a href=#28 id=28 data-nosnippet>28</a>    get::get_error::{BadRequestSnafu, LocalFailureSnafu},
 <a href=#29 id=29 data-nosnippet>29</a>    hashseq::HashSeq,
 <a href=#30 id=30 data-nosnippet>30</a>    protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
 <a href=#31 id=31 data-nosnippet>31</a>    Hash, HashAndFormat,
@@ -58,7 +58,7 @@
 <a href=#58 id=58 data-nosnippet>58</a>        <span class="kw">let </span><span class="kw-2">mut </span>parts = Vec::new();
 <a href=#59 id=59 data-nosnippet>59</a>        <span class="kw">let </span>stats = <span class="kw">loop </span>{
 <a href=#60 id=60 data-nosnippet>60</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(item) = <span class="self">self</span>.next().<span class="kw">await else </span>{
-<a href=#61 id=61 data-nosnippet>61</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(LocalFailureSnafu.into_error(<span class="macro">anyhow::anyhow!</span>(<span class="string">"unexpected end"</span>).into()));
+<a href=#61 id=61 data-nosnippet>61</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(LocalFailureSnafu.into_error(<span class="macro">anyhow::anyhow!</span>(<span class="string">"unexpected end"</span>)));
 <a href=#62 id=62 data-nosnippet>62</a>            };
 <a href=#63 id=63 data-nosnippet>63</a>            <span class="kw">match </span>item {
 <a href=#64 id=64 data-nosnippet>64</a>                GetBlobItem::Item(item) =&gt; {
@@ -238,11 +238,11 @@
 <a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">let </span>(at_blob_content, size) = at_start_root.next().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#239 id=239 data-nosnippet>239</a>    <span class="comment">// check the size to avoid parsing a maliciously large hash seq
 <a href=#240 id=240 data-nosnippet>240</a>    </span><span class="kw">if </span>size &gt; max_size {
-<a href=#241 id=241 data-nosnippet>241</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(BadRequestSnafu.into_error(<span class="macro">anyhow::anyhow!</span>(<span class="string">"size too large"</span>).into()));
+<a href=#241 id=241 data-nosnippet>241</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(BadRequestSnafu.into_error(<span class="macro">anyhow::anyhow!</span>(<span class="string">"size too large"</span>)));
 <a href=#242 id=242 data-nosnippet>242</a>    }
 <a href=#243 id=243 data-nosnippet>243</a>    <span class="kw">let </span>(<span class="kw-2">mut </span>curr, hash_seq) = at_blob_content.concatenate_into_vec().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#244 id=244 data-nosnippet>244</a>    <span class="kw">let </span>hash_seq = HashSeq::try_from(Bytes::from(hash_seq))
-<a href=#245 id=245 data-nosnippet>245</a>        .map_err(|e| BadRequestSnafu.into_error(e.into()))<span class="question-mark">?</span>;
+<a href=#244 id=244 data-nosnippet>244</a>    <span class="kw">let </span>hash_seq =
+<a href=#245 id=245 data-nosnippet>245</a>        HashSeq::try_from(Bytes::from(hash_seq)).map_err(|e| BadRequestSnafu.into_error(e))<span class="question-mark">?</span>;
 <a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">let </span><span class="kw-2">mut </span>sizes = Vec::with_capacity(hash_seq.len());
 <a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">let </span>closing = <span class="kw">loop </span>{
 <a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">match </span>curr.next() {
