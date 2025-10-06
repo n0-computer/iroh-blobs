@@ -382,73 +382,73 @@
 <a href=#382 id=382 data-nosnippet>382</a><span class="kw">use </span>builder::GetRequestBuilder;
 <a href=#383 id=383 data-nosnippet>383</a><span class="kw">use </span>derive_more::From;
 <a href=#384 id=384 data-nosnippet>384</a><span class="kw">use </span>iroh::endpoint::VarInt;
-<a href=#385 id=385 data-nosnippet>385</a><span class="kw">use </span>irpc::util::AsyncReadVarintExt;
-<a href=#386 id=386 data-nosnippet>386</a><span class="kw">use </span>postcard::experimental::max_size::MaxSize;
-<a href=#387 id=387 data-nosnippet>387</a><span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
-<a href=#388 id=388 data-nosnippet>388</a><span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#389 id=389 data-nosnippet>389</a><span class="kw">mod </span>range_spec;
-<a href=#390 id=390 data-nosnippet>390</a><span class="kw">pub use </span>bao_tree::ChunkRanges;
-<a href=#391 id=391 data-nosnippet>391</a><span class="kw">pub use </span>range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
-<a href=#392 id=392 data-nosnippet>392</a><span class="kw">use </span>snafu::{GenerateImplicitData, Snafu};
-<a href=#393 id=393 data-nosnippet>393</a><span class="kw">use </span>tokio::io::AsyncReadExt;
+<a href=#385 id=385 data-nosnippet>385</a><span class="kw">use </span>postcard::experimental::max_size::MaxSize;
+<a href=#386 id=386 data-nosnippet>386</a><span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
+<a href=#387 id=387 data-nosnippet>387</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#388 id=388 data-nosnippet>388</a><span class="kw">mod </span>range_spec;
+<a href=#389 id=389 data-nosnippet>389</a><span class="kw">pub use </span>bao_tree::ChunkRanges;
+<a href=#390 id=390 data-nosnippet>390</a><span class="kw">pub use </span>range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
+<a href=#391 id=391 data-nosnippet>391</a><span class="kw">use </span>snafu::{GenerateImplicitData, Snafu};
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a><span class="kw">use crate</span>::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 <a href=#394 id=394 data-nosnippet>394</a>
-<a href=#395 id=395 data-nosnippet>395</a><span class="kw">use crate</span>::{api::blobs::Bitfield, provider::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
-<a href=#396 id=396 data-nosnippet>396</a>
-<a href=#397 id=397 data-nosnippet>397</a><span class="doccomment">/// Maximum message size is limited to 100MiB for now.
-<a href=#398 id=398 data-nosnippet>398</a></span><span class="kw">pub const </span>MAX_MESSAGE_SIZE: usize = <span class="number">1024 </span>* <span class="number">1024</span>;
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a><span class="doccomment">/// Error code for a permission error
-<a href=#401 id=401 data-nosnippet>401</a></span><span class="kw">pub const </span>ERR_PERMISSION: VarInt = VarInt::from_u32(<span class="number">1u32</span>);
-<a href=#402 id=402 data-nosnippet>402</a><span class="doccomment">/// Error code for when a request is aborted due to a rate limit
-<a href=#403 id=403 data-nosnippet>403</a></span><span class="kw">pub const </span>ERR_LIMIT: VarInt = VarInt::from_u32(<span class="number">2u32</span>);
-<a href=#404 id=404 data-nosnippet>404</a><span class="doccomment">/// Error code for when a request is aborted due to internal error
-<a href=#405 id=405 data-nosnippet>405</a></span><span class="kw">pub const </span>ERR_INTERNAL: VarInt = VarInt::from_u32(<span class="number">3u32</span>);
-<a href=#406 id=406 data-nosnippet>406</a>
-<a href=#407 id=407 data-nosnippet>407</a><span class="doccomment">/// The ALPN used with quic for the iroh blobs protocol.
-<a href=#408 id=408 data-nosnippet>408</a></span><span class="kw">pub const </span>ALPN: <span class="kw-2">&amp;</span>[u8] = <span class="string">b"/iroh-bytes/4"</span>;
-<a href=#409 id=409 data-nosnippet>409</a>
-<a href=#410 id=410 data-nosnippet>410</a><span class="attr">#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, From)]
-<a href=#411 id=411 data-nosnippet>411</a></span><span class="doccomment">/// A request to the provider
-<a href=#412 id=412 data-nosnippet>412</a></span><span class="kw">pub enum </span>Request {
-<a href=#413 id=413 data-nosnippet>413</a>    <span class="doccomment">/// A get request for a blob or collection
-<a href=#414 id=414 data-nosnippet>414</a>    </span>Get(GetRequest),
-<a href=#415 id=415 data-nosnippet>415</a>    Observe(ObserveRequest),
-<a href=#416 id=416 data-nosnippet>416</a>    Slot2,
-<a href=#417 id=417 data-nosnippet>417</a>    Slot3,
-<a href=#418 id=418 data-nosnippet>418</a>    Slot4,
-<a href=#419 id=419 data-nosnippet>419</a>    Slot5,
-<a href=#420 id=420 data-nosnippet>420</a>    Slot6,
-<a href=#421 id=421 data-nosnippet>421</a>    Slot7,
-<a href=#422 id=422 data-nosnippet>422</a>    <span class="doccomment">/// The inverse of a get request - push data to the provider
-<a href=#423 id=423 data-nosnippet>423</a>    ///
-<a href=#424 id=424 data-nosnippet>424</a>    /// Note that providers will in many cases reject this request, e.g. if
-<a href=#425 id=425 data-nosnippet>425</a>    /// they don't have write access to the store or don't want to ingest
-<a href=#426 id=426 data-nosnippet>426</a>    /// unknown data.
-<a href=#427 id=427 data-nosnippet>427</a>    </span>Push(PushRequest),
-<a href=#428 id=428 data-nosnippet>428</a>    <span class="doccomment">/// Get multiple blobs in a single request, from a single provider
-<a href=#429 id=429 data-nosnippet>429</a>    ///
-<a href=#430 id=430 data-nosnippet>430</a>    /// This is identical to a [`GetRequest`] for a [`crate::hashseq::HashSeq`], but the provider
-<a href=#431 id=431 data-nosnippet>431</a>    /// does not need to have the hash seq.
-<a href=#432 id=432 data-nosnippet>432</a>    </span>GetMany(GetManyRequest),
-<a href=#433 id=433 data-nosnippet>433</a>}
-<a href=#434 id=434 data-nosnippet>434</a>
-<a href=#435 id=435 data-nosnippet>435</a><span class="doccomment">/// This must contain the request types in the same order as the full requests
-<a href=#436 id=436 data-nosnippet>436</a></span><span class="attr">#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Copy, MaxSize)]
-<a href=#437 id=437 data-nosnippet>437</a></span><span class="kw">pub enum </span>RequestType {
-<a href=#438 id=438 data-nosnippet>438</a>    Get,
-<a href=#439 id=439 data-nosnippet>439</a>    Observe,
-<a href=#440 id=440 data-nosnippet>440</a>    Slot2,
-<a href=#441 id=441 data-nosnippet>441</a>    Slot3,
-<a href=#442 id=442 data-nosnippet>442</a>    Slot4,
-<a href=#443 id=443 data-nosnippet>443</a>    Slot5,
-<a href=#444 id=444 data-nosnippet>444</a>    Slot6,
-<a href=#445 id=445 data-nosnippet>445</a>    Slot7,
-<a href=#446 id=446 data-nosnippet>446</a>    Push,
-<a href=#447 id=447 data-nosnippet>447</a>    GetMany,
-<a href=#448 id=448 data-nosnippet>448</a>}
-<a href=#449 id=449 data-nosnippet>449</a>
-<a href=#450 id=450 data-nosnippet>450</a><span class="kw">impl </span>Request {
-<a href=#451 id=451 data-nosnippet>451</a>    <span class="kw">pub async fn </span>read_async(reader: <span class="kw-2">&amp;mut </span>iroh::endpoint::RecvStream) -&gt; io::Result&lt;(<span class="self">Self</span>, usize)&gt; {
+<a href=#395 id=395 data-nosnippet>395</a><span class="doccomment">/// Maximum message size is limited to 100MiB for now.
+<a href=#396 id=396 data-nosnippet>396</a></span><span class="kw">pub const </span>MAX_MESSAGE_SIZE: usize = <span class="number">1024 </span>* <span class="number">1024</span>;
+<a href=#397 id=397 data-nosnippet>397</a>
+<a href=#398 id=398 data-nosnippet>398</a><span class="doccomment">/// Error code for a permission error
+<a href=#399 id=399 data-nosnippet>399</a></span><span class="kw">pub const </span>ERR_PERMISSION: VarInt = VarInt::from_u32(<span class="number">1u32</span>);
+<a href=#400 id=400 data-nosnippet>400</a><span class="doccomment">/// Error code for when a request is aborted due to a rate limit
+<a href=#401 id=401 data-nosnippet>401</a></span><span class="kw">pub const </span>ERR_LIMIT: VarInt = VarInt::from_u32(<span class="number">2u32</span>);
+<a href=#402 id=402 data-nosnippet>402</a><span class="doccomment">/// Error code for when a request is aborted due to internal error
+<a href=#403 id=403 data-nosnippet>403</a></span><span class="kw">pub const </span>ERR_INTERNAL: VarInt = VarInt::from_u32(<span class="number">3u32</span>);
+<a href=#404 id=404 data-nosnippet>404</a>
+<a href=#405 id=405 data-nosnippet>405</a><span class="doccomment">/// The ALPN used with quic for the iroh blobs protocol.
+<a href=#406 id=406 data-nosnippet>406</a></span><span class="kw">pub const </span>ALPN: <span class="kw-2">&amp;</span>[u8] = <span class="string">b"/iroh-bytes/4"</span>;
+<a href=#407 id=407 data-nosnippet>407</a>
+<a href=#408 id=408 data-nosnippet>408</a><span class="attr">#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, From)]
+<a href=#409 id=409 data-nosnippet>409</a></span><span class="doccomment">/// A request to the provider
+<a href=#410 id=410 data-nosnippet>410</a></span><span class="kw">pub enum </span>Request {
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="doccomment">/// A get request for a blob or collection
+<a href=#412 id=412 data-nosnippet>412</a>    </span>Get(GetRequest),
+<a href=#413 id=413 data-nosnippet>413</a>    Observe(ObserveRequest),
+<a href=#414 id=414 data-nosnippet>414</a>    Slot2,
+<a href=#415 id=415 data-nosnippet>415</a>    Slot3,
+<a href=#416 id=416 data-nosnippet>416</a>    Slot4,
+<a href=#417 id=417 data-nosnippet>417</a>    Slot5,
+<a href=#418 id=418 data-nosnippet>418</a>    Slot6,
+<a href=#419 id=419 data-nosnippet>419</a>    Slot7,
+<a href=#420 id=420 data-nosnippet>420</a>    <span class="doccomment">/// The inverse of a get request - push data to the provider
+<a href=#421 id=421 data-nosnippet>421</a>    ///
+<a href=#422 id=422 data-nosnippet>422</a>    /// Note that providers will in many cases reject this request, e.g. if
+<a href=#423 id=423 data-nosnippet>423</a>    /// they don't have write access to the store or don't want to ingest
+<a href=#424 id=424 data-nosnippet>424</a>    /// unknown data.
+<a href=#425 id=425 data-nosnippet>425</a>    </span>Push(PushRequest),
+<a href=#426 id=426 data-nosnippet>426</a>    <span class="doccomment">/// Get multiple blobs in a single request, from a single provider
+<a href=#427 id=427 data-nosnippet>427</a>    ///
+<a href=#428 id=428 data-nosnippet>428</a>    /// This is identical to a [`GetRequest`] for a [`crate::hashseq::HashSeq`], but the provider
+<a href=#429 id=429 data-nosnippet>429</a>    /// does not need to have the hash seq.
+<a href=#430 id=430 data-nosnippet>430</a>    </span>GetMany(GetManyRequest),
+<a href=#431 id=431 data-nosnippet>431</a>}
+<a href=#432 id=432 data-nosnippet>432</a>
+<a href=#433 id=433 data-nosnippet>433</a><span class="doccomment">/// This must contain the request types in the same order as the full requests
+<a href=#434 id=434 data-nosnippet>434</a></span><span class="attr">#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Copy, MaxSize)]
+<a href=#435 id=435 data-nosnippet>435</a></span><span class="kw">pub enum </span>RequestType {
+<a href=#436 id=436 data-nosnippet>436</a>    Get,
+<a href=#437 id=437 data-nosnippet>437</a>    Observe,
+<a href=#438 id=438 data-nosnippet>438</a>    Slot2,
+<a href=#439 id=439 data-nosnippet>439</a>    Slot3,
+<a href=#440 id=440 data-nosnippet>440</a>    Slot4,
+<a href=#441 id=441 data-nosnippet>441</a>    Slot5,
+<a href=#442 id=442 data-nosnippet>442</a>    Slot6,
+<a href=#443 id=443 data-nosnippet>443</a>    Slot7,
+<a href=#444 id=444 data-nosnippet>444</a>    Push,
+<a href=#445 id=445 data-nosnippet>445</a>    GetMany,
+<a href=#446 id=446 data-nosnippet>446</a>}
+<a href=#447 id=447 data-nosnippet>447</a>
+<a href=#448 id=448 data-nosnippet>448</a><span class="kw">impl </span>Request {
+<a href=#449 id=449 data-nosnippet>449</a>    <span class="kw">pub async fn </span>read_async&lt;R: <span class="kw">crate</span>::util::RecvStream&gt;(
+<a href=#450 id=450 data-nosnippet>450</a>        reader: <span class="kw-2">&amp;mut </span>R,
+<a href=#451 id=451 data-nosnippet>451</a>    ) -&gt; io::Result&lt;(<span class="self">Self</span>, usize)&gt; {
 <a href=#452 id=452 data-nosnippet>452</a>        <span class="kw">let </span>request_type = reader.read_u8().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#453 id=453 data-nosnippet>453</a>        <span class="kw">let </span>request_type: RequestType = postcard::from_bytes(std::slice::from_ref(<span class="kw-2">&amp;</span>request_type))
 <a href=#454 id=454 data-nosnippet>454</a>            .map_err(|<span class="kw">_</span>| {
