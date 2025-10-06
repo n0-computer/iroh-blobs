@@ -7,6 +7,7 @@
 use bao_tree::BlockSize;
 #[cfg(feature = "fs-store")]
 pub mod fs;
+mod gc;
 pub mod mem;
 pub mod readonly_mem;
 mod test;

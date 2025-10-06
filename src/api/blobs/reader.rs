@@ -225,10 +225,11 @@ mod tests {
         protocol::ChunkRangesExt,
         store::{
             fs::{
-                tests::{create_n0_bao, test_data, INTERESTING_SIZES},
+                tests::{test_data, INTERESTING_SIZES},
                 FsStore,
             },
             mem::MemStore,
+            util::tests::create_n0_bao,
         },
     };
 

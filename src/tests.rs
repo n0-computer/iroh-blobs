@@ -19,11 +19,11 @@ use crate::{
     provider::events::{AbortReason, EventMask, EventSender, ProviderMessage, RequestUpdate},
     store::{
         fs::{
-            tests::{create_n0_bao, test_data, INTERESTING_SIZES},
+            tests::{test_data, INTERESTING_SIZES},
             FsStore,
         },
         mem::MemStore,
-        util::observer::Combine,
+        util::{observer::Combine, tests::create_n0_bao},
     },
     util::sink::Drain,
     BlobFormat, Hash, HashAndFormat,

@@ -58,6 +58,7 @@ use crate::{
     },
     protocol::ChunkRangesExt,
     store::{
+        gc::{run_gc, GcConfig},
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
@@ -66,7 +67,9 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
-pub struct Options {}
+pub struct Options {
+    pub gc_config: Option<GcConfig>,
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
@@ -113,6 +116,10 @@ impl MemStore {
     }
 
     pub fn new() -> Self {
+        Self::new_with_opts(Options::default())
+    }
+
+    pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
         tokio::spawn(
             Actor {
@@ -130,7 +137,13 @@ impl MemStore {
             }
             .run(),
         );
-        Self::from_sender(sender.into())
+
+        let store = Self::from_sender(sender.into());
+        if let Some(gc_config) = opts.gc_config {
+            tokio::spawn(run_gc(store.deref().clone(), gc_config));
+        }
+
+        store
     }
 }
 
