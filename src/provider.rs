@@ -411,7 +411,7 @@ pub async fn handle_get(
             let hash_seq = match &hash_seq {
                 Some(b) => b,
                 None => {
-                    let bytes = store.get_bytes(hash).await?;
+                    let bytes = store.blobs().get_bytes(hash).await?;
                     let hs = HashSeq::try_from(bytes)?;
                     hash_seq = Some(hs);
                     hash_seq.as_ref().unwrap()
@@ -460,7 +460,7 @@ pub async fn handle_push(
     let root_ranges = request_ranges.next().expect("infinite iterator");
     if !root_ranges.is_empty() {
         // todo: send progress from import_bao_quinn or rename to import_bao_quinn_with_progress
-        store
+        store.blobs()
             .import_bao_quinn(hash, root_ranges.clone(), &mut reader.inner)
             .await?;
     }
@@ -469,13 +469,13 @@ pub async fn handle_push(
         return Ok(());
     }
     // todo: we assume here that the hash sequence is complete. For some requests this might not be the case. We would need `LazyHashSeq` for that, but it is buggy as of now!
-    let hash_seq = store.get_bytes(hash).await?;
+    let hash_seq = store.blobs().get_bytes(hash).await?;
     let hash_seq = HashSeq::try_from(hash_seq)?;
     for (child_hash, child_ranges) in hash_seq.into_iter().zip(request_ranges) {
         if child_ranges.is_empty() {
             continue;
         }
-        store
+        store.blobs()
             .import_bao_quinn(child_hash, child_ranges.clone(), &mut reader.inner)
             .await?;
     }
@@ -490,7 +490,7 @@ pub(crate) async fn send_blob(
     ranges: ChunkRanges,
     writer: &mut ProgressWriter,
 ) -> ExportBaoResult<()> {
-    store
+    store.blobs()
         .export_bao(hash, ranges)
         .write_quinn_with_progress(&mut writer.inner, &mut writer.context, &hash, index)
         .await
@@ -504,7 +504,7 @@ pub async fn handle_observe(
     request: ObserveRequest,
     writer: &mut ProgressWriter,
 ) -> Result<()> {
-    let mut stream = store.observe(request.hash).stream().await?;
+    let mut stream = store.blobs().observe(request.hash).stream().await?;
     let mut old = stream
         .next()
         .await

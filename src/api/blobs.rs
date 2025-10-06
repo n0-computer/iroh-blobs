@@ -4,37 +4,56 @@
 //! and exporting blobs, observing the bitfield of a blob, and deleting blobs.
 //!
 //! The main entry point is the [`Blobs`] struct.
-use std::{
-    collections::BTreeMap,
-    future::{Future, IntoFuture},
-    io,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-    pin::Pin,
-};
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::future::IntoFuture;
+use std::io;
+use std::num::NonZeroU64;
+use std::path::Path;
+use std::path::PathBuf;
+use std::pin::Pin;
 
+use bao_tree::io::fsm::ResponseDecoder;
+use bao_tree::io::fsm::ResponseDecoderNext;
 pub use bao_tree::io::mixed::EncodedItem;
-use bao_tree::{
-    io::{
-        fsm::{ResponseDecoder, ResponseDecoderNext},
-        BaoContentItem, Leaf,
-    },
-    BaoTree, ChunkNum, ChunkRanges,
-};
+use bao_tree::io::BaoContentItem;
+use bao_tree::io::Leaf;
+use bao_tree::BaoTree;
+use bao_tree::ChunkNum;
+use bao_tree::ChunkRanges;
 use bytes::Bytes;
 use genawaiter::sync::Gen;
-use iroh_io::{AsyncStreamReader, TokioStreamReader};
-use irpc::channel::{mpsc, oneshot};
-use n0_future::{future, stream, Stream, StreamExt};
+use iroh_io::AsyncStreamReader;
+use iroh_io::TokioStreamReader;
+use irpc::channel::mpsc;
+use irpc::channel::oneshot;
+use n0_future::future;
+use n0_future::stream;
+use n0_future::Stream;
+use n0_future::StreamExt;
 use quinn::SendStream;
-use range_collections::{range_set::RangeSetRange, RangeSet2};
+use range_collections::range_set::RangeSetRange;
+use range_collections::RangeSet2;
 use ref_cast::RefCast;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tracing::trace;
 mod reader;
 pub use reader::BlobReader;
 
+use super::proto::BatchResponse;
+use super::proto::BlobStatusRequest;
+use super::proto::ClearProtectedRequest;
+use super::proto::CreateTempTagRequest;
+use super::proto::ExportBaoRequest;
+use super::proto::ExportRangesItem;
+use super::proto::ImportBaoRequest;
+use super::proto::ImportByteStreamRequest;
+use super::proto::ImportBytesRequest;
+use super::proto::ImportPathRequest;
+use super::proto::ListRequest;
+use super::proto::Scope;
 // Public reexports from the proto module.
 //
 // Due to the fact that the proto module is hidden from docs by default,
@@ -45,23 +64,19 @@ pub use super::proto::{
     ExportProgressItem, ExportRangesRequest as ExportRangesOptions,
     ImportBaoRequest as ImportBaoOptions, ImportMode, ObserveRequest as ObserveOptions,
 };
-use super::{
-    proto::{
-        BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
-        ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
-        ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
-    },
-    remote::HashSeqChunk,
-    tags::TagInfo,
-    ApiClient, RequestResult, Tags,
-};
-use crate::{
-    api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::events::ClientResult,
-    store::IROH_BLOCK_SIZE,
-    util::temp_tag::TempTag,
-    BlobFormat, Hash, HashAndFormat,
-};
+use super::remote::HashSeqChunk;
+use super::tags::TagInfo;
+use super::ApiClient;
+use super::RequestResult;
+use super::Tags;
+use crate::api::proto::BatchRequest;
+use crate::api::proto::ImportByteStreamUpdate;
+use crate::provider::events::ClientResult;
+use crate::store::IROH_BLOCK_SIZE;
+use crate::util::temp_tag::TempTag;
+use crate::BlobFormat;
+use crate::Hash;
+use crate::HashAndFormat;
 
 /// Options for adding bytes.
 #[derive(Debug)]

@@ -1575,12 +1575,12 @@ pub mod tests {
             let data = test_data(size);
             let ranges = ChunkRanges::all();
             let (hash, bao) = create_n0_bao(&data, &ranges)?;
-            let obs = store.observe(hash);
+            let obs = store.blobs().observe(hash);
             let task = tokio::spawn(async move {
                 obs.await_completion().await?;
                 api::Result::Ok(())
             });
-            store.import_bao_bytes(hash, ranges, bao).await?;
+            store.blobs().import_bao_bytes(hash, ranges, bao).await?;
             task.await??;
         }
         Ok(())
@@ -1615,12 +1615,12 @@ pub mod tests {
             let expected = test_data(size);
             let expected_hash = Hash::new(&expected);
             let stream = bytes_to_stream(expected.clone(), 1023);
-            let obs = store.observe(expected_hash);
-            let tt = store.add_stream(stream).await.temp_tag().await?;
+            let obs = store.blobs().observe(expected_hash);
+            let tt = store.blobs().add_stream(stream).await.temp_tag().await?;
             assert_eq!(expected_hash, *tt.hash());
             // we must at some point see completion, otherwise the test will hang
             obs.await_completion().await?;
-            let actual = store.get_bytes(expected_hash).await?;
+            let actual = store.blobs().get_bytes(expected_hash).await?;
             // check that the data is there
             assert_eq!(&expected, &actual);
         }
@@ -1639,12 +1639,12 @@ pub mod tests {
         for size in sizes {
             let expected = test_data(size);
             let expected_hash = Hash::new(&expected);
-            let obs = store.observe(expected_hash);
-            let tt = store.add_bytes(expected.clone()).await?;
+            let obs = store.blobs().observe(expected_hash);
+            let tt = store.blobs().add_bytes(expected.clone()).await?;
             assert_eq!(expected_hash, tt.hash);
             // we must at some point see completion, otherwise the test will hang
             obs.await_completion().await?;
-            let actual = store.get_bytes(expected_hash).await?;
+            let actual = store.blobs().get_bytes(expected_hash).await?;
             // check that the data is there
             assert_eq!(&expected, &actual);
         }
@@ -1667,10 +1667,10 @@ pub mod tests {
         {
             let expected = test_data(size);
             let expected_hash = Hash::new(&expected);
-            let obs = store.observe(expected_hash);
-            let tt = store.add_bytes(expected.clone()).await?;
+            let obs = store.blobs().observe(expected_hash);
+            let tt = store.blobs().add_bytes(expected.clone()).await?;
             assert_eq!(expected_hash, tt.hash);
-            let actual = store.get_bytes(expected_hash).await?;
+            let actual = store.blobs().get_bytes(expected_hash).await?;
             // check that the data is there
             assert_eq!(&expected, &actual);
             assert_eq!(
@@ -1699,12 +1699,12 @@ pub mod tests {
             let expected_hash = Hash::new(&expected);
             let path = testdir.path().join(format!("in-{size}"));
             fs::write(&path, &expected)?;
-            let obs = store.observe(expected_hash);
-            let tt = store.add_path(&path).await?;
+            let obs = store.blobs().observe(expected_hash);
+            let tt = store.blobs().add_path(&path).await?;
             assert_eq!(expected_hash, tt.hash);
             // we must at some point see completion, otherwise the test will hang
             obs.await_completion().await?;
-            let actual = store.get_bytes(expected_hash).await?;
+            let actual = store.blobs().get_bytes(expected_hash).await?;
             // check that the data is there
             assert_eq!(&expected, &actual, "size={size}");
         }
@@ -1722,10 +1722,10 @@ pub mod tests {
         for size in INTERESTING_SIZES {
             let expected = test_data(size);
             let expected_hash = Hash::new(&expected);
-            let tt = store.add_bytes(expected.clone()).await?;
+            let tt = store.blobs().add_bytes(expected.clone()).await?;
             assert_eq!(expected_hash, tt.hash);
             let out_path = testdir.path().join(format!("out-{size}"));
-            store.export(expected_hash, &out_path).await?;
+            store.blobs().export(expected_hash, &out_path).await?;
             let actual = fs::read(&out_path)?;
             assert_eq!(expected, actual);
         }
@@ -1743,12 +1743,13 @@ pub mod tests {
             let ranges = ChunkRanges::chunks(16..32);
             let (hash, bao) = create_n0_bao(&data, &ranges)?;
             store
+                .blobs()
                 .import_bao_bytes(hash, ranges.clone(), bao.clone())
                 .await?;
-            let bitfield = store.observe(hash).await?;
+            let bitfield = store.blobs().observe(hash).await?;
             assert_eq!(bitfield.ranges, ranges);
             assert_eq!(bitfield.size(), data.len() as u64);
-            let export = store.export_bao(hash, ranges).bao_to_vec().await?;
+            let export = store.blobs().export_bao(hash, ranges).bao_to_vec().await?;
             assert_eq!(export, bao);
         }
         Ok(())
@@ -1767,6 +1768,7 @@ pub mod tests {
                 let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
                 let data = Bytes::from(encoded);
                 store
+                    .blobs()
                     .import_bao_bytes(hash, ChunkRanges::all(), data)
                     .await?;
             }
@@ -1789,6 +1791,7 @@ pub mod tests {
                 let data = Bytes::from(encoded);
                 trace!("importing size={}", size);
                 store
+                    .blobs()
                     .import_bao_bytes(hash, ChunkRanges::all(), data)
                     .await?;
             }
@@ -1810,6 +1813,7 @@ pub mod tests {
                 let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
                 let data = Bytes::from(encoded);
                 store
+                    .blobs()
                     .import_bao_bytes(hash, ChunkRanges::all(), data)
                     .await?;
             }
@@ -1821,6 +1825,7 @@ pub mod tests {
                 let expected = vec![0u8; size];
                 let hash = Hash::new(&expected);
                 let actual = store
+                    .blobs()
                     .export_bao(hash, ChunkRanges::all())
                     .data_to_vec()
                     .await?;
@@ -1844,7 +1849,7 @@ pub mod tests {
                 let data = test_data(size);
                 let (hash, ranges, encoded) = create_n0_bao_full(&data, &just_size)?;
                 let data = Bytes::from(encoded);
-                if let Err(cause) = store.import_bao_bytes(hash, ranges, data).await {
+                if let Err(cause) = store.blobs().import_bao_bytes(hash, ranges, data).await {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
@@ -1857,7 +1862,7 @@ pub mod tests {
             for size in sizes {
                 let data = test_data(size);
                 let (hash, ranges, expected) = create_n0_bao_full(&data, &just_size)?;
-                let actual = match store.export_bao(hash, ranges).bao_to_vec().await {
+                let actual = match store.blobs().export_bao(hash, ranges).bao_to_vec().await {
                     Ok(actual) => actual,
                     Err(cause) => panic!("failed to export size={size}: {cause}"),
                 };
@@ -1883,7 +1888,7 @@ pub mod tests {
                 let data = test_data(size);
                 let (hash, ranges, encoded) = create_n0_bao_full(&data, &just_size)?;
                 let data = Bytes::from(encoded);
-                if let Err(cause) = store.import_bao_bytes(hash, ranges, data).await {
+                if let Err(cause) = store.blobs().import_bao_bytes(hash, ranges, data).await {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
@@ -1902,7 +1907,7 @@ pub mod tests {
                 let data = test_data(size);
                 let (hash, ranges, encoded) = create_n0_bao_full(&data, &remaining)?;
                 let data = Bytes::from(encoded);
-                if let Err(cause) = store.import_bao_bytes(hash, ranges, data).await {
+                if let Err(cause) = store.blobs().import_bao_bytes(hash, ranges, data).await {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
@@ -1916,7 +1921,7 @@ pub mod tests {
             for size in sizes {
                 let data = test_data(size);
                 let (hash, ranges, expected) = create_n0_bao_full(&data, &ChunkRanges::all())?;
-                let actual = match store.export_bao(hash, ranges).bao_to_vec().await {
+                let actual = match store.blobs().export_bao(hash, ranges).bao_to_vec().await {
                     Ok(actual) => actual,
                     Err(cause) => panic!("failed to export size={size}: {cause}"),
                 };
@@ -1947,7 +1952,7 @@ pub mod tests {
                 let data = test_data(size);
                 let (hash, ranges, encoded) = create_n0_bao_full(&data, &just_size)?;
                 let data = Bytes::from(encoded);
-                if let Err(cause) = store.import_bao_bytes(hash, ranges, data).await {
+                if let Err(cause) = store.blobs().import_bao_bytes(hash, ranges, data).await {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
@@ -1962,7 +1967,7 @@ pub mod tests {
                 let expected_ranges = round_up_request(size as u64, &just_size);
                 let data = test_data(size);
                 let hash = Hash::new(&data);
-                let bitfield = store.observe(hash).await?;
+                let bitfield = store.blobs().observe(hash).await?;
                 assert_eq!(bitfield.ranges, expected_ranges);
             }
             store.dump().await?;
@@ -1986,7 +1991,7 @@ pub mod tests {
                 let data = test_data(size);
                 let (hash, ranges, encoded) = create_n0_bao_full(&data, &just_size)?;
                 let data = Bytes::from(encoded);
-                if let Err(cause) = store.import_bao_bytes(hash, ranges, data).await {
+                if let Err(cause) = store.blobs().import_bao_bytes(hash, ranges, data).await {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
@@ -2002,7 +2007,7 @@ pub mod tests {
                 let expected_ranges = round_up_request(size as u64, &just_size);
                 let data = test_data(size);
                 let hash = Hash::new(&data);
-                let bitfield = store.observe(hash).await?;
+                let bitfield = store.blobs().observe(hash).await?;
                 assert_eq!(bitfield.ranges, expected_ranges, "size={size}");
             }
             store.dump().await?;
@@ -2023,7 +2028,7 @@ pub mod tests {
             for size in sizes {
                 let data = test_data(size);
                 let data = data;
-                tts.push(store.add_bytes(data.clone()).await?);
+                tts.push(store.blobs().add_bytes(data.clone()).await?);
             }
             store.dump().await?;
             store.shutdown().await?;
@@ -2035,6 +2040,7 @@ pub mod tests {
                 let expected = test_data(size);
                 let hash = Hash::new(&expected);
                 let Ok(actual) = store
+                    .blobs()
                     .export_bao(hash, ChunkRanges::all())
                     .data_to_vec()
                     .await
@@ -2103,7 +2109,7 @@ pub mod tests {
         for size in sizes {
             let data = vec![0u8; size];
             let data = Bytes::from(data);
-            let tt = store.add_bytes(data.clone()).temp_tag().await?;
+            let tt = store.blobs().add_bytes(data.clone()).temp_tag().await?;
             data_by_hash.insert(*tt.hash(), data);
             hashes.push(tt);
         }
@@ -2111,17 +2117,19 @@ pub mod tests {
         for tt in &hashes {
             let hash = *tt.hash();
             let path = testdir.path().join(format!("{hash}.txt"));
-            store.export(hash, path).await?;
+            store.blobs().export(hash, path).await?;
         }
         for tt in &hashes {
             let hash = tt.hash();
             let data = store
+                .blobs()
                 .export_bao(*hash, ChunkRanges::all())
                 .data_to_vec()
                 .await
                 .unwrap();
             assert_eq!(data, data_by_hash[hash].to_vec());
             let bao = store
+                .blobs()
                 .export_bao(*hash, ChunkRanges::all())
                 .bao_to_vec()
                 .await
@@ -2134,7 +2142,7 @@ pub mod tests {
             let data = test_data(size);
             let ranges = ChunkRanges::all();
             let (hash, bao) = create_n0_bao(&data, &ranges)?;
-            store.import_bao_bytes(hash, ranges, bao).await?;
+            store.blobs().import_bao_bytes(hash, ranges, bao).await?;
         }
 
         for (_hash, _bao_tree) in bao_by_hash {

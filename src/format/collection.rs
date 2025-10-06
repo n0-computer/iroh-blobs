@@ -71,7 +71,7 @@ pub trait SimpleStore {
 
 impl SimpleStore for crate::api::Store {
     async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
-        Ok(self.get_bytes(hash).await?)
+        Ok(self.blobs().get_bytes(hash).await?)
     }
 }
 
@@ -190,11 +190,12 @@ impl Collection {
     pub async fn store(self, db: &Store) -> anyhow::Result<TempTag> {
         let (links, meta) = self.into_parts();
         let meta_bytes = postcard::to_stdvec(&meta)?;
-        let meta_tag = db.add_bytes(meta_bytes).temp_tag().await?;
+        let meta_tag = db.blobs().add_bytes(meta_bytes).temp_tag().await?;
         let links_bytes = std::iter::once(*meta_tag.hash())
             .chain(links)
             .collect::<HashSeq>();
         let links_tag = db
+            .blobs()
             .add_bytes_with_opts(AddBytesOptions {
                 data: links_bytes.into(),
                 format: BlobFormat::HashSeq,
