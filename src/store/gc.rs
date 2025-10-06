@@ -294,7 +294,7 @@ mod tests {
         store.tags().set("fg", *fghs.hash_and_format()).await?;
         drop(fghs);
         drop(bt);
-        store.tags().delete(ht.name).await?;
+        store.tags().delete("h").await?;
         let mut live = HashSet::new();
         gc_run_once(store, &mut live).await?;
         // a is protected because we keep the temp tag
@@ -372,6 +372,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn gc_smoke_fs() -> TestResult {
         tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
@@ -391,6 +392,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn gc_check_deletion_fs() -> TestResult {
         tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
