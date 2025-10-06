@@ -413,12 +413,13 @@
 <a href=#413 id=413 data-nosnippet>413</a>
 <a href=#414 id=414 data-nosnippet>414</a>    <span class="doccomment">/// Create n0 flavoured bao. Note that this can be used to request ranges below a chunk group size,
 <a href=#415 id=415 data-nosnippet>415</a>    /// which can not be exported via bao because we don't store hashes below the chunk group level.
-<a href=#416 id=416 data-nosnippet>416</a>    </span><span class="kw">pub fn </span>create_n0_bao(data: <span class="kw-2">&amp;</span>[u8], ranges: <span class="kw-2">&amp;</span>ChunkRanges) -&gt; anyhow::Result&lt;(Hash, Vec&lt;u8&gt;)&gt; {
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="kw">let </span>outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
-<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">let </span><span class="kw-2">mut </span>encoded = Vec::new();
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span>size = data.len() <span class="kw">as </span>u64;
-<a href=#420 id=420 data-nosnippet>420</a>        encoded.extend_from_slice(<span class="kw-2">&amp;</span>size.to_le_bytes());
-<a href=#421 id=421 data-nosnippet>421</a>        bao_tree::io::sync::encode_ranges_validated(data, <span class="kw-2">&amp;</span>outboard, ranges, <span class="kw-2">&amp;mut </span>encoded)<span class="question-mark">?</span>;
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="prelude-val">Ok</span>((outboard.root.into(), encoded))
-<a href=#423 id=423 data-nosnippet>423</a>    }
-<a href=#424 id=424 data-nosnippet>424</a>}</code></pre></div></section></main></body></html>
+<a href=#416 id=416 data-nosnippet>416</a>    </span><span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+<a href=#417 id=417 data-nosnippet>417</a>    </span><span class="kw">pub fn </span>create_n0_bao(data: <span class="kw-2">&amp;</span>[u8], ranges: <span class="kw-2">&amp;</span>ChunkRanges) -&gt; anyhow::Result&lt;(Hash, Vec&lt;u8&gt;)&gt; {
+<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">let </span>outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span><span class="kw-2">mut </span>encoded = Vec::new();
+<a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>size = data.len() <span class="kw">as </span>u64;
+<a href=#421 id=421 data-nosnippet>421</a>        encoded.extend_from_slice(<span class="kw-2">&amp;</span>size.to_le_bytes());
+<a href=#422 id=422 data-nosnippet>422</a>        bao_tree::io::sync::encode_ranges_validated(data, <span class="kw-2">&amp;</span>outboard, ranges, <span class="kw-2">&amp;mut </span>encoded)<span class="question-mark">?</span>;
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="prelude-val">Ok</span>((outboard.root.into(), encoded))
+<a href=#424 id=424 data-nosnippet>424</a>    }
+<a href=#425 id=425 data-nosnippet>425</a>}</code></pre></div></section></main></body></html>
