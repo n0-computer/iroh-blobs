@@ -240,12 +240,9 @@ pub async fn run_gc(store: Store, config: GcConfig) {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self},
-        path::Path,
-    };
+    use std::io::{self};
 
-    use bao_tree::{io::EncodeError, ChunkNum};
+    use bao_tree::io::EncodeError;
     use range_collections::RangeSet2;
     use testresult::TestResult;
 
@@ -253,7 +250,6 @@ mod tests {
     use crate::{
         api::{blobs::AddBytesOptions, ExportBaoError, RequestError, Store},
         hashseq::HashSeq,
-        store::{fs::options::PathOptions, util::tests::create_n0_bao},
         BlobFormat,
     };
 
@@ -324,7 +320,11 @@ mod tests {
         Ok(())
     }
 
-    async fn gc_file_delete(path: &Path, store: &Store) -> TestResult<()> {
+    #[cfg(feature = "fs-store")]
+    async fn gc_file_delete(path: &std::path::Path, store: &Store) -> TestResult<()> {
+        use bao_tree::ChunkNum;
+
+        use crate::store::{fs::options::PathOptions, util::tests::create_n0_bao};
         let mut live = HashSet::new();
         let options = PathOptions::new(&path.join("db"));
         // create a large complete file and check that the data and outboard files are deleted by gc
