@@ -437,7 +437,12 @@ impl Blobs {
         ranges: ChunkRanges,
         mut reader: R,
     ) -> RequestResult<R> {
-        let size = u64::from_le_bytes(reader.recv::<8>().await.map_err(super::Error::other)?);
+        let mut size = [0; 8];
+        reader
+            .recv_exact(&mut size)
+            .await
+            .map_err(super::Error::other)?;
+        let size = u64::from_le_bytes(size);
         let Some(size) = NonZeroU64::new(size) else {
             return if hash == Hash::EMPTY {
                 Ok(reader)

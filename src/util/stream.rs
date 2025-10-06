@@ -17,10 +17,7 @@ pub trait SendStream: Send {
     /// This method is not cancellation safe. Even if this does not resolve, some bytes may have been written when previously polled.
     fn send_bytes(&mut self, bytes: Bytes) -> impl Future<Output = io::Result<()>> + Send;
     /// Send that sends a fixed sized buffer.
-    fn send<const L: usize>(
-        &mut self,
-        buf: &[u8; L],
-    ) -> impl Future<Output = io::Result<()>> + Send;
+    fn send(&mut self, buf: &[u8]) -> impl Future<Output = io::Result<()>> + Send;
     /// Sync the stream. Not needed for iroh, but needed for intermediate buffered streams such as compression.
     fn sync(&mut self) -> impl Future<Output = io::Result<()>> + Send;
     /// Reset the stream with the given error code.
@@ -41,8 +38,8 @@ pub trait RecvStream: Send {
     ///
     /// Note that this is different from `recv_bytes`, which will return fewer bytes if the stream ends.
     fn recv_bytes_exact(&mut self, len: usize) -> impl Future<Output = io::Result<Bytes>> + Send;
-    /// Receive exactly `L` bytes from the stream, directly into a `[u8; L]`.
-    fn recv<const L: usize>(&mut self) -> impl Future<Output = io::Result<[u8; L]>> + Send;
+    /// Receive exactly `target.len()` bytes from the stream.
+    fn recv_exact(&mut self, target: &mut [u8]) -> impl Future<Output = io::Result<()>> + Send;
     /// Stop the stream with the given error code.
     fn stop(&mut self, code: VarInt) -> io::Result<()>;
     /// Get the stream id.
@@ -54,7 +51,7 @@ impl SendStream for iroh::endpoint::SendStream {
         Ok(self.write_chunk(bytes).await?)
     }
 
-    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+    async fn send(&mut self, buf: &[u8]) -> io::Result<()> {
         Ok(self.write_all(buf).await?)
     }
 
@@ -100,14 +97,12 @@ impl RecvStream for iroh::endpoint::RecvStream {
         Ok(buf.into())
     }
 
-    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
-        let mut buf = [0; L];
-        self.read_exact(&mut buf).await.map_err(|e| match e {
+    async fn recv_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.read_exact(buf).await.map_err(|e| match e {
             ReadExactError::FinishedEarly(0) => io::Error::new(io::ErrorKind::UnexpectedEof, ""),
             ReadExactError::FinishedEarly(_) => io::Error::new(io::ErrorKind::InvalidData, ""),
             ReadExactError::ReadError(e) => e.into(),
-        })?;
-        Ok(buf)
+        })
     }
 
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
@@ -128,8 +123,8 @@ impl<R: RecvStream> RecvStream for &mut R {
         self.deref_mut().recv_bytes_exact(len).await
     }
 
-    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
-        self.deref_mut().recv::<L>().await
+    async fn recv_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.deref_mut().recv_exact(buf).await
     }
 
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
@@ -146,7 +141,7 @@ impl<W: SendStream> SendStream for &mut W {
         self.deref_mut().send_bytes(bytes).await
     }
 
-    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+    async fn send(&mut self, buf: &[u8]) -> io::Result<()> {
         self.deref_mut().send(buf).await
     }
 
@@ -174,8 +169,15 @@ pub struct AsyncReadRecvStream<R>(R);
 /// `AsyncRead + Unpin + Send`, you can implement these additional methods and wrap the result
 /// in an `AsyncReadRecvStream` to get a `RecvStream` that reads from the underlying `AsyncRead`.
 pub trait AsyncReadRecvStreamExtra: Send {
+    /// Get a mutable reference to the inner `AsyncRead`.
+    ///
+    /// Getting a reference is easier than implementing all methods on `AsyncWrite` with forwarders to the inner instance.
     fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send);
+    /// Stop the stream with the given error code.
     fn stop(&mut self, code: VarInt) -> io::Result<()>;
+    /// A local unique identifier for the stream.
+    ///
+    /// This allows distinguishing between streams, but once the stream is closed, the id may be reused.
     fn id(&self) -> u64;
 }
 
@@ -209,10 +211,9 @@ impl<R: AsyncReadRecvStreamExtra> RecvStream for AsyncReadRecvStream<R> {
         Ok(res.into())
     }
 
-    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
-        let mut res = [0; L];
-        self.0.inner().read_exact(&mut res).await?;
-        Ok(res)
+    async fn recv_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.0.inner().read_exact(buf).await?;
+        Ok(())
     }
 
     fn stop(&mut self, code: VarInt) -> io::Result<()> {
@@ -241,14 +242,13 @@ impl RecvStream for Bytes {
         Ok(res)
     }
 
-    async fn recv<const L: usize>(&mut self) -> io::Result<[u8; L]> {
-        if self.len() < L {
+    async fn recv_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        if self.len() < buf.len() {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
-        let mut res = [0; L];
-        res.copy_from_slice(&self[..L]);
-        *self = self.slice(L..);
-        Ok(res)
+        buf.copy_from_slice(&self[..buf.len()]);
+        *self = self.slice(buf.len()..);
+        Ok(())
     }
 
     fn stop(&mut self, _code: VarInt) -> io::Result<()> {
@@ -270,9 +270,17 @@ pub struct AsyncWriteSendStream<W>(W);
 /// methods and wrap the result in an `AsyncWriteSendStream` to get a `SendStream`
 /// that writes to the underlying `AsyncWrite`.
 pub trait AsyncWriteSendStreamExtra: Send {
+    /// Get a mutable reference to the inner `AsyncWrite`.
+    ///
+    /// Getting a reference is easier than implementing all methods on `AsyncWrite` with forwarders to the inner instance.
     fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send);
+    /// Reset the stream with the given error code.
     fn reset(&mut self, code: VarInt) -> io::Result<()>;
+    /// Wait for the stream to be stopped, returning the optional error code if it was.
     fn stopped(&mut self) -> impl Future<Output = io::Result<Option<VarInt>>> + Send;
+    /// A local unique identifier for the stream.
+    ///
+    /// This allows distinguishing between streams, but once the stream is closed, the id may be reused.
     fn id(&self) -> u64;
 }
 
@@ -293,7 +301,7 @@ impl<W: AsyncWriteSendStreamExtra> SendStream for AsyncWriteSendStream<W> {
         self.0.inner().write_all(&bytes).await
     }
 
-    async fn send<const L: usize>(&mut self, buf: &[u8; L]) -> io::Result<()> {
+    async fn send(&mut self, buf: &[u8]) -> io::Result<()> {
         self.0.inner().write_all(buf).await
     }
 
@@ -335,7 +343,9 @@ impl<R: RecvStream> AsyncStreamReader for RecvStreamAsyncStreamReader<R> {
     }
 
     async fn read<const L: usize>(&mut self) -> io::Result<[u8; L]> {
-        self.0.recv::<L>().await
+        let mut buf = [0; L];
+        self.0.recv_exact(&mut buf).await?;
+        Ok(buf)
     }
 }
 
@@ -352,7 +362,8 @@ pub(crate) trait RecvStreamExt: RecvStream {
     }
 
     async fn read_u8(&mut self) -> io::Result<u8> {
-        let buf = self.recv::<1>().await?;
+        let mut buf = [0; 1];
+        self.recv_exact(&mut buf).await?;
         Ok(buf[0])
     }
 

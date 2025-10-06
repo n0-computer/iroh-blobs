@@ -535,7 +535,8 @@ pub mod fsm {
     impl<R: RecvStream> AtBlobHeader<R> {
         /// Read the size header, returning it and going into the `Content` state.
         pub async fn next(mut self) -> Result<(AtBlobContent<R>, u64), AtBlobHeaderNextError> {
-            let size = self.reader.recv::<8>().await.map_err(|cause| {
+            let mut size = [0; 8];
+            self.reader.recv_exact(&mut size).await.map_err(|cause| {
                 if cause.kind() == io::ErrorKind::UnexpectedEof {
                     at_blob_header_next_error::NotFoundSnafu.build()
                 } else {
