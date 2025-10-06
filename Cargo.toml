@@ -60,9 +60,15 @@ tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
 iroh = { version = "0.92", features = ["discovery-local-network"]}
+async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
+concat_const = "0.2.0"
 
 [features]
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }

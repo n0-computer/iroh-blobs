@@ -1,7 +1,13 @@
 //! Utilities
 pub(crate) mod channel;
 pub mod connection_pool;
+mod stream;
 pub(crate) mod temp_tag;
+pub use stream::{
+    AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream, AsyncWriteSendStreamExtra,
+    RecvStream, RecvStreamAsyncStreamReader, SendStream,
+};
+pub(crate) use stream::{RecvStreamExt, SendStreamExt};
 
 pub(crate) mod serde {
     // Module that handles io::Error serialization/deserialization
