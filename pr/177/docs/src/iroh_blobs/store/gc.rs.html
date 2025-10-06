@@ -372,100 +372,102 @@
 <a href=#372 id=372 data-nosnippet>372</a>    }
 <a href=#373 id=373 data-nosnippet>373</a>
 <a href=#374 id=374 data-nosnippet>374</a>    <span class="attr">#[tokio::test]
-<a href=#375 id=375 data-nosnippet>375</a>    </span><span class="kw">async fn </span>gc_smoke_fs() -&gt; TestResult {
-<a href=#376 id=376 data-nosnippet>376</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
-<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>db_path = testdir.path().join(<span class="string">"db"</span>);
-<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::fs::FsStore::load(<span class="kw-2">&amp;</span>db_path).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#380 id=380 data-nosnippet>380</a>        gc_smoke(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#381 id=381 data-nosnippet>381</a>        gc_file_delete(testdir.path(), <span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#382 id=382 data-nosnippet>382</a>        <span class="prelude-val">Ok</span>(())
-<a href=#383 id=383 data-nosnippet>383</a>    }
-<a href=#384 id=384 data-nosnippet>384</a>
-<a href=#385 id=385 data-nosnippet>385</a>    <span class="attr">#[tokio::test]
-<a href=#386 id=386 data-nosnippet>386</a>    </span><span class="kw">async fn </span>gc_smoke_mem() -&gt; TestResult {
-<a href=#387 id=387 data-nosnippet>387</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::mem::MemStore::new();
-<a href=#389 id=389 data-nosnippet>389</a>        gc_smoke(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#390 id=390 data-nosnippet>390</a>        <span class="prelude-val">Ok</span>(())
-<a href=#391 id=391 data-nosnippet>391</a>    }
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>    <span class="attr">#[tokio::test]
-<a href=#394 id=394 data-nosnippet>394</a>    </span><span class="kw">async fn </span>gc_check_deletion_fs() -&gt; TestResult {
-<a href=#395 id=395 data-nosnippet>395</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
-<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>db_path = testdir.path().join(<span class="string">"db"</span>);
-<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::fs::FsStore::load(<span class="kw-2">&amp;</span>db_path).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#399 id=399 data-nosnippet>399</a>        gc_check_deletion(<span class="kw-2">&amp;</span>store).<span class="kw">await
-<a href=#400 id=400 data-nosnippet>400</a>    </span>}
-<a href=#401 id=401 data-nosnippet>401</a>
-<a href=#402 id=402 data-nosnippet>402</a>    <span class="attr">#[tokio::test]
-<a href=#403 id=403 data-nosnippet>403</a>    </span><span class="kw">async fn </span>gc_check_deletion_mem() -&gt; TestResult {
-<a href=#404 id=404 data-nosnippet>404</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::mem::MemStore::default();
-<a href=#406 id=406 data-nosnippet>406</a>        gc_check_deletion(<span class="kw-2">&amp;</span>store).<span class="kw">await
-<a href=#407 id=407 data-nosnippet>407</a>    </span>}
-<a href=#408 id=408 data-nosnippet>408</a>
-<a href=#409 id=409 data-nosnippet>409</a>    <span class="kw">async fn </span>gc_check_deletion(store: <span class="kw-2">&amp;</span>Store) -&gt; TestResult {
-<a href=#410 id=410 data-nosnippet>410</a>        <span class="kw">let </span>temp_tag = store.add_bytes(<span class="string">b"foo"</span>.to_vec()).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#411 id=411 data-nosnippet>411</a>        <span class="kw">let </span>hash = <span class="kw-2">*</span>temp_tag.hash();
-<a href=#412 id=412 data-nosnippet>412</a>        <span class="macro">assert_eq!</span>(store.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>.as_ref(), <span class="string">b"foo"</span>);
-<a href=#413 id=413 data-nosnippet>413</a>        drop(temp_tag);
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="kw">let </span><span class="kw-2">mut </span>live = HashSet::new();
-<a href=#415 id=415 data-nosnippet>415</a>        gc_run_once(store, <span class="kw-2">&amp;mut </span>live).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#416 id=416 data-nosnippet>416</a>
-<a href=#417 id=417 data-nosnippet>417</a>        <span class="comment">// check that `get_bytes` returns an error.
-<a href=#418 id=418 data-nosnippet>418</a>        </span><span class="kw">let </span>res = store.get_bytes(hash).<span class="kw">await</span>;
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="macro">assert!</span>(res.is_err());
-<a href=#420 id=420 data-nosnippet>420</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#421 id=421 data-nosnippet>421</a>            res,
-<a href=#422 id=422 data-nosnippet>422</a>            <span class="prelude-val">Err</span>(ExportBaoError::ExportBaoInner {
-<a href=#423 id=423 data-nosnippet>423</a>                source: EncodeError::Io(cause),
-<a href=#424 id=424 data-nosnippet>424</a>                ..
-<a href=#425 id=425 data-nosnippet>425</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
-<a href=#426 id=426 data-nosnippet>426</a>        ));
-<a href=#427 id=427 data-nosnippet>427</a>
-<a href=#428 id=428 data-nosnippet>428</a>        <span class="comment">// check that `export_ranges` returns an error.
-<a href=#429 id=429 data-nosnippet>429</a>        </span><span class="kw">let </span>res = store
-<a href=#430 id=430 data-nosnippet>430</a>            .export_ranges(hash, RangeSet2::all())
-<a href=#431 id=431 data-nosnippet>431</a>            .concatenate()
-<a href=#432 id=432 data-nosnippet>432</a>            .<span class="kw">await</span>;
-<a href=#433 id=433 data-nosnippet>433</a>        <span class="macro">assert!</span>(res.is_err());
-<a href=#434 id=434 data-nosnippet>434</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#435 id=435 data-nosnippet>435</a>            res,
-<a href=#436 id=436 data-nosnippet>436</a>            <span class="prelude-val">Err</span>(RequestError::Inner{
-<a href=#437 id=437 data-nosnippet>437</a>                source: <span class="kw">crate</span>::api::Error::Io(cause),
-<a href=#438 id=438 data-nosnippet>438</a>                ..
-<a href=#439 id=439 data-nosnippet>439</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
-<a href=#440 id=440 data-nosnippet>440</a>        ));
-<a href=#441 id=441 data-nosnippet>441</a>
-<a href=#442 id=442 data-nosnippet>442</a>        <span class="comment">// check that `export_bao` returns an error.
-<a href=#443 id=443 data-nosnippet>443</a>        </span><span class="kw">let </span>res = store
-<a href=#444 id=444 data-nosnippet>444</a>            .export_bao(hash, ChunkRanges::all())
-<a href=#445 id=445 data-nosnippet>445</a>            .bao_to_vec()
-<a href=#446 id=446 data-nosnippet>446</a>            .<span class="kw">await</span>;
-<a href=#447 id=447 data-nosnippet>447</a>        <span class="macro">assert!</span>(res.is_err());
-<a href=#448 id=448 data-nosnippet>448</a>        <span class="macro">println!</span>(<span class="string">"export_bao res {res:?}"</span>);
-<a href=#449 id=449 data-nosnippet>449</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#450 id=450 data-nosnippet>450</a>            res,
-<a href=#451 id=451 data-nosnippet>451</a>            <span class="prelude-val">Err</span>(RequestError::Inner{
-<a href=#452 id=452 data-nosnippet>452</a>                source: <span class="kw">crate</span>::api::Error::Io(cause),
-<a href=#453 id=453 data-nosnippet>453</a>                ..
-<a href=#454 id=454 data-nosnippet>454</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
-<a href=#455 id=455 data-nosnippet>455</a>        ));
-<a href=#456 id=456 data-nosnippet>456</a>
-<a href=#457 id=457 data-nosnippet>457</a>        <span class="comment">// check that `export` returns an error.
-<a href=#458 id=458 data-nosnippet>458</a>        </span><span class="kw">let </span>target = tempfile::NamedTempFile::new()<span class="question-mark">?</span>;
-<a href=#459 id=459 data-nosnippet>459</a>        <span class="kw">let </span>path = target.path();
-<a href=#460 id=460 data-nosnippet>460</a>        <span class="kw">let </span>res = store.export(hash, path).<span class="kw">await</span>;
-<a href=#461 id=461 data-nosnippet>461</a>        <span class="macro">assert!</span>(res.is_err());
-<a href=#462 id=462 data-nosnippet>462</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#463 id=463 data-nosnippet>463</a>            res,
-<a href=#464 id=464 data-nosnippet>464</a>            <span class="prelude-val">Err</span>(RequestError::Inner{
-<a href=#465 id=465 data-nosnippet>465</a>                source: <span class="kw">crate</span>::api::Error::Io(cause),
-<a href=#466 id=466 data-nosnippet>466</a>                ..
-<a href=#467 id=467 data-nosnippet>467</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
-<a href=#468 id=468 data-nosnippet>468</a>        ));
-<a href=#469 id=469 data-nosnippet>469</a>        <span class="prelude-val">Ok</span>(())
-<a href=#470 id=470 data-nosnippet>470</a>    }
-<a href=#471 id=471 data-nosnippet>471</a>}</code></pre></div></section></main></body></html>
+<a href=#375 id=375 data-nosnippet>375</a>    #[cfg(feature = <span class="string">"fs-store"</span>)]
+<a href=#376 id=376 data-nosnippet>376</a>    </span><span class="kw">async fn </span>gc_smoke_fs() -&gt; TestResult {
+<a href=#377 id=377 data-nosnippet>377</a>        tracing_subscriber::fmt::try_init().ok();
+<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
+<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span>db_path = testdir.path().join(<span class="string">"db"</span>);
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::fs::FsStore::load(<span class="kw-2">&amp;</span>db_path).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#381 id=381 data-nosnippet>381</a>        gc_smoke(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#382 id=382 data-nosnippet>382</a>        gc_file_delete(testdir.path(), <span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#383 id=383 data-nosnippet>383</a>        <span class="prelude-val">Ok</span>(())
+<a href=#384 id=384 data-nosnippet>384</a>    }
+<a href=#385 id=385 data-nosnippet>385</a>
+<a href=#386 id=386 data-nosnippet>386</a>    <span class="attr">#[tokio::test]
+<a href=#387 id=387 data-nosnippet>387</a>    </span><span class="kw">async fn </span>gc_smoke_mem() -&gt; TestResult {
+<a href=#388 id=388 data-nosnippet>388</a>        tracing_subscriber::fmt::try_init().ok();
+<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::mem::MemStore::new();
+<a href=#390 id=390 data-nosnippet>390</a>        gc_smoke(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="prelude-val">Ok</span>(())
+<a href=#392 id=392 data-nosnippet>392</a>    }
+<a href=#393 id=393 data-nosnippet>393</a>
+<a href=#394 id=394 data-nosnippet>394</a>    <span class="attr">#[tokio::test]
+<a href=#395 id=395 data-nosnippet>395</a>    #[cfg(feature = <span class="string">"fs-store"</span>)]
+<a href=#396 id=396 data-nosnippet>396</a>    </span><span class="kw">async fn </span>gc_check_deletion_fs() -&gt; TestResult {
+<a href=#397 id=397 data-nosnippet>397</a>        tracing_subscriber::fmt::try_init().ok();
+<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
+<a href=#399 id=399 data-nosnippet>399</a>        <span class="kw">let </span>db_path = testdir.path().join(<span class="string">"db"</span>);
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::fs::FsStore::load(<span class="kw-2">&amp;</span>db_path).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#401 id=401 data-nosnippet>401</a>        gc_check_deletion(<span class="kw-2">&amp;</span>store).<span class="kw">await
+<a href=#402 id=402 data-nosnippet>402</a>    </span>}
+<a href=#403 id=403 data-nosnippet>403</a>
+<a href=#404 id=404 data-nosnippet>404</a>    <span class="attr">#[tokio::test]
+<a href=#405 id=405 data-nosnippet>405</a>    </span><span class="kw">async fn </span>gc_check_deletion_mem() -&gt; TestResult {
+<a href=#406 id=406 data-nosnippet>406</a>        tracing_subscriber::fmt::try_init().ok();
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::mem::MemStore::default();
+<a href=#408 id=408 data-nosnippet>408</a>        gc_check_deletion(<span class="kw-2">&amp;</span>store).<span class="kw">await
+<a href=#409 id=409 data-nosnippet>409</a>    </span>}
+<a href=#410 id=410 data-nosnippet>410</a>
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="kw">async fn </span>gc_check_deletion(store: <span class="kw-2">&amp;</span>Store) -&gt; TestResult {
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">let </span>temp_tag = store.add_bytes(<span class="string">b"foo"</span>.to_vec()).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span>hash = <span class="kw-2">*</span>temp_tag.hash();
+<a href=#414 id=414 data-nosnippet>414</a>        <span class="macro">assert_eq!</span>(store.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>.as_ref(), <span class="string">b"foo"</span>);
+<a href=#415 id=415 data-nosnippet>415</a>        drop(temp_tag);
+<a href=#416 id=416 data-nosnippet>416</a>        <span class="kw">let </span><span class="kw-2">mut </span>live = HashSet::new();
+<a href=#417 id=417 data-nosnippet>417</a>        gc_run_once(store, <span class="kw-2">&amp;mut </span>live).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="comment">// check that `get_bytes` returns an error.
+<a href=#420 id=420 data-nosnippet>420</a>        </span><span class="kw">let </span>res = store.get_bytes(hash).<span class="kw">await</span>;
+<a href=#421 id=421 data-nosnippet>421</a>        <span class="macro">assert!</span>(res.is_err());
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#423 id=423 data-nosnippet>423</a>            res,
+<a href=#424 id=424 data-nosnippet>424</a>            <span class="prelude-val">Err</span>(ExportBaoError::ExportBaoInner {
+<a href=#425 id=425 data-nosnippet>425</a>                source: EncodeError::Io(cause),
+<a href=#426 id=426 data-nosnippet>426</a>                ..
+<a href=#427 id=427 data-nosnippet>427</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
+<a href=#428 id=428 data-nosnippet>428</a>        ));
+<a href=#429 id=429 data-nosnippet>429</a>
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="comment">// check that `export_ranges` returns an error.
+<a href=#431 id=431 data-nosnippet>431</a>        </span><span class="kw">let </span>res = store
+<a href=#432 id=432 data-nosnippet>432</a>            .export_ranges(hash, RangeSet2::all())
+<a href=#433 id=433 data-nosnippet>433</a>            .concatenate()
+<a href=#434 id=434 data-nosnippet>434</a>            .<span class="kw">await</span>;
+<a href=#435 id=435 data-nosnippet>435</a>        <span class="macro">assert!</span>(res.is_err());
+<a href=#436 id=436 data-nosnippet>436</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#437 id=437 data-nosnippet>437</a>            res,
+<a href=#438 id=438 data-nosnippet>438</a>            <span class="prelude-val">Err</span>(RequestError::Inner{
+<a href=#439 id=439 data-nosnippet>439</a>                source: <span class="kw">crate</span>::api::Error::Io(cause),
+<a href=#440 id=440 data-nosnippet>440</a>                ..
+<a href=#441 id=441 data-nosnippet>441</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
+<a href=#442 id=442 data-nosnippet>442</a>        ));
+<a href=#443 id=443 data-nosnippet>443</a>
+<a href=#444 id=444 data-nosnippet>444</a>        <span class="comment">// check that `export_bao` returns an error.
+<a href=#445 id=445 data-nosnippet>445</a>        </span><span class="kw">let </span>res = store
+<a href=#446 id=446 data-nosnippet>446</a>            .export_bao(hash, ChunkRanges::all())
+<a href=#447 id=447 data-nosnippet>447</a>            .bao_to_vec()
+<a href=#448 id=448 data-nosnippet>448</a>            .<span class="kw">await</span>;
+<a href=#449 id=449 data-nosnippet>449</a>        <span class="macro">assert!</span>(res.is_err());
+<a href=#450 id=450 data-nosnippet>450</a>        <span class="macro">println!</span>(<span class="string">"export_bao res {res:?}"</span>);
+<a href=#451 id=451 data-nosnippet>451</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#452 id=452 data-nosnippet>452</a>            res,
+<a href=#453 id=453 data-nosnippet>453</a>            <span class="prelude-val">Err</span>(RequestError::Inner{
+<a href=#454 id=454 data-nosnippet>454</a>                source: <span class="kw">crate</span>::api::Error::Io(cause),
+<a href=#455 id=455 data-nosnippet>455</a>                ..
+<a href=#456 id=456 data-nosnippet>456</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
+<a href=#457 id=457 data-nosnippet>457</a>        ));
+<a href=#458 id=458 data-nosnippet>458</a>
+<a href=#459 id=459 data-nosnippet>459</a>        <span class="comment">// check that `export` returns an error.
+<a href=#460 id=460 data-nosnippet>460</a>        </span><span class="kw">let </span>target = tempfile::NamedTempFile::new()<span class="question-mark">?</span>;
+<a href=#461 id=461 data-nosnippet>461</a>        <span class="kw">let </span>path = target.path();
+<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw">let </span>res = store.export(hash, path).<span class="kw">await</span>;
+<a href=#463 id=463 data-nosnippet>463</a>        <span class="macro">assert!</span>(res.is_err());
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#465 id=465 data-nosnippet>465</a>            res,
+<a href=#466 id=466 data-nosnippet>466</a>            <span class="prelude-val">Err</span>(RequestError::Inner{
+<a href=#467 id=467 data-nosnippet>467</a>                source: <span class="kw">crate</span>::api::Error::Io(cause),
+<a href=#468 id=468 data-nosnippet>468</a>                ..
+<a href=#469 id=469 data-nosnippet>469</a>            }) <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
+<a href=#470 id=470 data-nosnippet>470</a>        ));
+<a href=#471 id=471 data-nosnippet>471</a>        <span class="prelude-val">Ok</span>(())
+<a href=#472 id=472 data-nosnippet>472</a>    }
+<a href=#473 id=473 data-nosnippet>473</a>}</code></pre></div></section></main></body></html>
