@@ -74,7 +74,7 @@ impl Node {
 
         let tx = self.store.batch().await?;
         for (name, data) in named_blobs {
-            let tmp_tag = tx.add_slice(data).await?;
+            let tmp_tag = tx.add_bytes(data).await?;
             collection_items.insert(name, tmp_tag);
         }
 
@@ -88,10 +88,9 @@ impl Node {
 
         let collection = Collection::from_iter(collection_items);
 
-        let collection = collection.store(&self.store).await?;
-        let hash = collection.hash().clone();
-        self.store.tags().create(collection).await?;
-        Ok(hash)
+        let tt = collection.store(&self.store).await?;
+        self.store.tags().create(*tt.hash_and_format()).await?;
+        Ok(*tt.hash())
     }
 
     /// retrive an entire collection from a given hash and provider
