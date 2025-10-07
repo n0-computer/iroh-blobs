@@ -614,7 +614,7 @@ pub struct AddPathOptions {
 /// stream directly can be inconvenient, so this struct provides some convenience
 /// methods to work with the result.
 ///
-/// It also implements [`IntoFuture`], so you can await it to get the [`TempTag`] that
+/// It also implements [`IntoFuture`], so you can await it to get the [`TagInfo`] that
 /// contains the hash of the added content and also protects the content.
 ///
 /// If you want access to the stream, you can use the [`AddProgress::stream`] method.
