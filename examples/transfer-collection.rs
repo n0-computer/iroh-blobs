@@ -80,10 +80,7 @@ impl Node {
 
         let collection_items = collection_items
             .iter()
-            .map(|(name, tag)| {
-                let hash = tag.hash().clone();
-                (name.to_string(), hash)
-            })
+            .map(|(name, tag)| (name.to_string(), *tag.hash()))
             .collect::<Vec<_>>();
 
         let collection = Collection::from_iter(collection_items);
@@ -93,7 +90,7 @@ impl Node {
         Ok(*tt.hash())
     }
 
-    /// retrive an entire collection from a given hash and provider
+    /// retrieve an entire collection from a given hash and provider
     async fn get_collection(&self, hash: Hash, provider: NodeAddr) -> Result<()> {
         let req = HashAndFormat::hash_seq(hash);
         let addrs = Shuffled::new(vec![provider.node_id]);
