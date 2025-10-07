@@ -91,7 +91,6 @@ use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
-use gc::run_gc;
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use meta::list_blobs;
@@ -120,6 +119,7 @@ use crate::{
             },
             util::entity_manager::{self, ActiveEntityState},
         },
+        gc::run_gc,
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         IROH_BLOCK_SIZE,
     },
@@ -141,7 +141,6 @@ use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::Options;
 use tracing::Instrument;
-mod gc;
 
 use crate::{
     api::{
@@ -1498,10 +1497,7 @@ pub mod tests {
     use core::panic;
     use std::collections::{HashMap, HashSet};
 
-    use bao_tree::{
-        io::{outboard::PreOrderMemOutboard, round_up_to_chunks_groups},
-        ChunkRanges,
-    };
+    use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
     use n0_future::{stream, Stream, StreamExt};
     use testresult::TestResult;
     use walkdir::WalkDir;
@@ -1510,7 +1506,7 @@ pub mod tests {
     use crate::{
         api::blobs::Bitfield,
         store::{
-            util::{read_checksummed, SliceInfoExt, Tag},
+            util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
             IROH_BLOCK_SIZE,
         },
     };
@@ -1526,17 +1522,6 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
-
-    /// Create n0 flavoured bao. Note that this can be used to request ranges below a chunk group size,
-    /// which can not be exported via bao because we don't store hashes below the chunk group level.
-    pub fn create_n0_bao(data: &[u8], ranges: &ChunkRanges) -> anyhow::Result<(Hash, Vec<u8>)> {
-        let outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
-        let mut encoded = Vec::new();
-        let size = data.len() as u64;
-        encoded.extend_from_slice(&size.to_le_bytes());
-        bao_tree::io::sync::encode_ranges_validated(data, &outboard, ranges, &mut encoded)?;
-        Ok((outboard.root.into(), encoded))
-    }
 
     pub fn round_up_request(size: u64, ranges: &ChunkRanges) -> ChunkRanges {
         let last_chunk = ChunkNum::chunks(size);

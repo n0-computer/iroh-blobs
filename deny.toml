@@ -39,3 +39,8 @@ name = "ring"
 [[licenses.clarify.license-files]]
 hash = 3171872035
 path = "LICENSE"
+
+[sources]
+allow-git = [
+    "https://github.com/n0-computer/iroh",
+]

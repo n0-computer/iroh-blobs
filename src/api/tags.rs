@@ -107,21 +107,28 @@ impl Tags {
         self.list_with_opts(ListOptions::hash_seq()).await
     }
 
-    /// Deletes a tag.
-    pub async fn delete_with_opts(&self, options: DeleteOptions) -> super::RequestResult<()> {
+    /// Deletes a tag, with full control over options. All other delete methods
+    /// wrap this.
+    ///
+    /// Returns the number of tags actually removed. Attempting to delete a non-existent tag will *not* fail.
+    pub async fn delete_with_opts(&self, options: DeleteOptions) -> super::RequestResult<u64> {
         trace!("{:?}", options);
-        self.client.rpc(options).await??;
-        Ok(())
+        let deleted = self.client.rpc(options).await??;
+        Ok(deleted)
     }
 
     /// Deletes a tag.
-    pub async fn delete(&self, name: impl AsRef<[u8]>) -> super::RequestResult<()> {
+    ///
+    /// Returns the number of tags actually removed. Attempting to delete a non-existent tag will *not* fail.
+    pub async fn delete(&self, name: impl AsRef<[u8]>) -> super::RequestResult<u64> {
         self.delete_with_opts(DeleteOptions::single(name.as_ref()))
             .await
     }
 
     /// Deletes a range of tags.
-    pub async fn delete_range<R, E>(&self, range: R) -> super::RequestResult<()>
+    ///
+    /// Returns the number of tags actually removed. Attempting to delete a non-existent tag will *not* fail.
+    pub async fn delete_range<R, E>(&self, range: R) -> super::RequestResult<u64>
     where
         R: RangeBounds<E>,
         E: AsRef<[u8]>,
@@ -130,13 +137,17 @@ impl Tags {
     }
 
     /// Delete all tags with the given prefix.
-    pub async fn delete_prefix(&self, prefix: impl AsRef<[u8]>) -> super::RequestResult<()> {
+    ///
+    /// Returns the number of tags actually removed. Attempting to delete a non-existent tag will *not* fail.
+    pub async fn delete_prefix(&self, prefix: impl AsRef<[u8]>) -> super::RequestResult<u64> {
         self.delete_with_opts(DeleteOptions::prefix(prefix.as_ref()))
             .await
     }
 
     /// Delete all tags. Use with care. After this, all data will be garbage collected.
-    pub async fn delete_all(&self) -> super::RequestResult<()> {
+    ///
+    /// Returns the number of tags actually removed. Attempting to delete a non-existent tag will *not* fail.
+    pub async fn delete_all(&self) -> super::RequestResult<u64> {
         self.delete_with_opts(DeleteOptions {
             from: None,
             to: None,

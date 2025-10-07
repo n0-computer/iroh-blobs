@@ -240,12 +240,9 @@ pub async fn run_gc(store: Store, config: GcConfig) {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self},
-        path::Path,
-    };
+    use std::io::{self};
 
-    use bao_tree::{io::EncodeError, ChunkNum};
+    use bao_tree::io::EncodeError;
     use range_collections::RangeSet2;
     use testresult::TestResult;
 
@@ -253,7 +250,6 @@ mod tests {
     use crate::{
         api::{blobs::AddBytesOptions, ExportBaoError, RequestError, Store},
         hashseq::HashSeq,
-        store::fs::{options::PathOptions, tests::create_n0_bao},
         BlobFormat,
     };
 
@@ -266,6 +262,7 @@ mod tests {
         let et = blobs.add_slice("e").temp_tag().await?;
         let ft = blobs.add_slice("f").temp_tag().await?;
         let gt = blobs.add_slice("g").temp_tag().await?;
+        let ht = blobs.add_slice("h").with_named_tag("h").await?;
         let a = *at.hash();
         let b = *bt.hash();
         let c = *ct.hash();
@@ -273,6 +270,7 @@ mod tests {
         let e = *et.hash();
         let f = *ft.hash();
         let g = *gt.hash();
+        let h = ht.hash;
         store.tags().set("c", *ct.hash_and_format()).await?;
         let dehs = [d, e].into_iter().collect::<HashSeq>();
         let hehs = blobs
@@ -292,6 +290,7 @@ mod tests {
         store.tags().set("fg", *fghs.hash_and_format()).await?;
         drop(fghs);
         drop(bt);
+        store.tags().delete("h").await?;
         let mut live = HashSet::new();
         gc_run_once(store, &mut live).await?;
         // a is protected because we keep the temp tag
@@ -313,12 +312,19 @@ mod tests {
         assert!(store.has(f).await?);
         assert!(live.contains(&g));
         assert!(store.has(g).await?);
+        // h is not protected because we deleted the tag before gc ran
+        assert!(!live.contains(&h));
+        assert!(!store.has(h).await?);
         drop(at);
         drop(hehs);
         Ok(())
     }
 
-    async fn gc_file_delete(path: &Path, store: &Store) -> TestResult<()> {
+    #[cfg(feature = "fs-store")]
+    async fn gc_file_delete(path: &std::path::Path, store: &Store) -> TestResult<()> {
+        use bao_tree::ChunkNum;
+
+        use crate::store::{fs::options::PathOptions, util::tests::create_n0_bao};
         let mut live = HashSet::new();
         let options = PathOptions::new(&path.join("db"));
         // create a large complete file and check that the data and outboard files are deleted by gc
@@ -366,6 +372,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn gc_smoke_fs() -> TestResult {
         tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
@@ -385,6 +392,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "fs-store")]
     async fn gc_check_deletion_fs() -> TestResult {
         tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;

@@ -118,7 +118,7 @@ pub enum Request {
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
-    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
+    #[rpc(tx = oneshot::Sender<super::Result<u64>>)]
     DeleteTags(DeleteTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     RenameTag(RenameTagRequest),
