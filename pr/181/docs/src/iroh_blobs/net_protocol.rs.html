@@ -7,7 +7,7 @@
 <a href=#7 id=7 data-nosnippet>7</a>//! ```rust
 <a href=#8 id=8 data-nosnippet>8</a>//! # async fn example() -&gt; anyhow::Result&lt;()&gt; {
 <a href=#9 id=9 data-nosnippet>9</a>//! use iroh::{protocol::Router, Endpoint};
-<a href=#10 id=10 data-nosnippet>10</a>//! use iroh_blobs::{store, BlobsProtocol};
+<a href=#10 id=10 data-nosnippet>10</a>//! use iroh_blobs::{store, ticket::BlobTicket, BlobsProtocol};
 <a href=#11 id=11 data-nosnippet>11</a>//!
 <a href=#12 id=12 data-nosnippet>12</a>//! // create a store
 <a href=#13 id=13 data-nosnippet>13</a>//! let store = store::fs::FsStore::load("blobs").await?;
@@ -17,19 +17,19 @@
 <a href=#17 id=17 data-nosnippet>17</a>//!
 <a href=#18 id=18 data-nosnippet>18</a>//! // create an iroh endpoint
 <a href=#19 id=19 data-nosnippet>19</a>//! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-<a href=#20 id=20 data-nosnippet>20</a>//!
-<a href=#21 id=21 data-nosnippet>21</a>//! // create a blobs protocol handler
-<a href=#22 id=22 data-nosnippet>22</a>//! let blobs = BlobsProtocol::new(&amp;store, None);
-<a href=#23 id=23 data-nosnippet>23</a>//!
-<a href=#24 id=24 data-nosnippet>24</a>//! // create a router and add the blobs protocol handler
-<a href=#25 id=25 data-nosnippet>25</a>//! let router = Router::builder(endpoint)
-<a href=#26 id=26 data-nosnippet>26</a>//!     .accept(iroh_blobs::ALPN, blobs.clone())
-<a href=#27 id=27 data-nosnippet>27</a>//!     .spawn();
-<a href=#28 id=28 data-nosnippet>28</a>//!
-<a href=#29 id=29 data-nosnippet>29</a>//! endpoint.online().await;
-<a href=#30 id=30 data-nosnippet>30</a>//! let addr = endpoint.node_addr().initialized().await;
+<a href=#20 id=20 data-nosnippet>20</a>//! endpoint.online().await;
+<a href=#21 id=21 data-nosnippet>21</a>//! let addr = endpoint.node_addr();
+<a href=#22 id=22 data-nosnippet>22</a>//!
+<a href=#23 id=23 data-nosnippet>23</a>//! // create a blobs protocol handler
+<a href=#24 id=24 data-nosnippet>24</a>//! let blobs = BlobsProtocol::new(&amp;store, None);
+<a href=#25 id=25 data-nosnippet>25</a>//!
+<a href=#26 id=26 data-nosnippet>26</a>//! // create a router and add the blobs protocol handler
+<a href=#27 id=27 data-nosnippet>27</a>//! let router = Router::builder(endpoint)
+<a href=#28 id=28 data-nosnippet>28</a>//!     .accept(iroh_blobs::ALPN, blobs)
+<a href=#29 id=29 data-nosnippet>29</a>//!     .spawn();
+<a href=#30 id=30 data-nosnippet>30</a>//!
 <a href=#31 id=31 data-nosnippet>31</a>//! // this data is now globally available using the ticket
-<a href=#32 id=32 data-nosnippet>32</a>//! let ticket = BlobTicket::new(addr, t.hash, t.format).await?;
+<a href=#32 id=32 data-nosnippet>32</a>//! let ticket = BlobTicket::new(addr, t.hash, t.format);
 <a href=#33 id=33 data-nosnippet>33</a>//! println!("ticket: {}", ticket);
 <a href=#34 id=34 data-nosnippet>34</a>//!
 <a href=#35 id=35 data-nosnippet>35</a>//! // wait for control-c to exit
@@ -50,14 +50,14 @@
 <a href=#50 id=50 data-nosnippet>50</a>
 <a href=#51 id=51 data-nosnippet>51</a><span class="attr">#[derive(Debug)]
 <a href=#52 id=52 data-nosnippet>52</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BlobsInner {
-<a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) store: Store,
-<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) events: EventSender,
+<a href=#53 id=53 data-nosnippet>53</a>    store: Store,
+<a href=#54 id=54 data-nosnippet>54</a>    events: EventSender,
 <a href=#55 id=55 data-nosnippet>55</a>}
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a><span class="doccomment">/// A protocol handler for the blobs protocol.
 <a href=#58 id=58 data-nosnippet>58</a></span><span class="attr">#[derive(Debug, Clone)]
 <a href=#59 id=59 data-nosnippet>59</a></span><span class="kw">pub struct </span>BlobsProtocol {
-<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) inner: Arc&lt;BlobsInner&gt;,
+<a href=#60 id=60 data-nosnippet>60</a>    inner: Arc&lt;BlobsInner&gt;,
 <a href=#61 id=61 data-nosnippet>61</a>}
 <a href=#62 id=62 data-nosnippet>62</a>
 <a href=#63 id=63 data-nosnippet>63</a><span class="kw">impl </span>Deref <span class="kw">for </span>BlobsProtocol {

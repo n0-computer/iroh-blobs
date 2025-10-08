@@ -157,7 +157,7 @@
 <a href=#157 id=157 data-nosnippet>157</a><span class="doccomment">/// Create a 16 byte unique ID.
 <a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">fn </span>new_uuid() -&gt; [u8; <span class="number">16</span>] {
 <a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">use </span>rand::RngCore;
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::thread_rng();
+<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::rng();
 <a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">let </span><span class="kw-2">mut </span>bytes = [<span class="number">0u8</span>; <span class="number">16</span>];
 <a href=#162 id=162 data-nosnippet>162</a>    rng.fill_bytes(<span class="kw-2">&amp;mut </span>bytes);
 <a href=#163 id=163 data-nosnippet>163</a>    bytes

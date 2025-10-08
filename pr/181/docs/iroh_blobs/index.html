@@ -29,7 +29,7 @@
 <p>Here is a basic example of how to set up <code>iroh-blobs</code> with <code>iroh</code>:</p>
 
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iroh::{protocol::Router, Endpoint};
-<span class="kw">use </span>iroh_blobs::{store::mem::MemStore, BlobsProtocol};
+<span class="kw">use </span>iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
 
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
@@ -39,17 +39,18 @@
 
     <span class="comment">// create a protocol handler using an in-memory blob store.
     </span><span class="kw">let </span>store = MemStore::new();
-    <span class="kw">let </span>blobs = BlobsProtocol::new(<span class="kw-2">&amp;</span>store, <span class="prelude-val">None</span>);
+    <span class="kw">let </span>tag = store.add_slice(<span class="string">b"Hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+  
+    <span class="kw">let _ </span>= endpoint.online().<span class="kw">await</span>;
+    <span class="kw">let </span>addr = endpoint.node_addr();
+    <span class="kw">let </span>ticket = BlobTicket::new(addr, tag.hash, tag.format);
 
     <span class="comment">// build the router
-    </span><span class="kw">let </span>router = Router::builder(endpoint)
-        .accept(iroh_blobs::ALPN, blobs.clone())
+    </span><span class="kw">let </span>blobs = BlobsProtocol::new(<span class="kw-2">&amp;</span>store, <span class="prelude-val">None</span>);
+    <span class="kw">let </span>router = Router::builder(endpoint)
+        .accept(iroh_blobs::ALPN, blobs)
         .spawn();
 
-    <span class="kw">let </span>tag = blobs.add_slice(<span class="string">b"Hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="kw">let _ </span>= endpoint.online().<span class="kw">await</span>;
-    <span class="kw">let </span>addr = endpoint.node_addr().initialized().<span class="kw">await</span>;
-    <span class="kw">let </span>ticket = BlobTicket::new(addr, tag.hash, tag.format);
     <span class="macro">println!</span>(<span class="string">"We are now serving {}"</span>, ticket);
 
     <span class="comment">// wait for control-c

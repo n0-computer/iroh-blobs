@@ -176,7 +176,7 @@
 <a href=#176 id=176 data-nosnippet>176</a>
 <a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">fn </span>make_ticket() -&gt; BlobTicket {
 <a href=#178 id=178 data-nosnippet>178</a>        <span class="kw">let </span>hash = Hash::new(<span class="string">b"hi there"</span>);
-<a href=#179 id=179 data-nosnippet>179</a>        <span class="kw">let </span>peer = SecretKey::generate(rand::thread_rng()).public();
+<a href=#179 id=179 data-nosnippet>179</a>        <span class="kw">let </span>peer = SecretKey::generate(<span class="kw-2">&amp;mut </span>rand::rng()).public();
 <a href=#180 id=180 data-nosnippet>180</a>        <span class="kw">let </span>addr = SocketAddr::from_str(<span class="string">"127.0.0.1:1234"</span>).unwrap();
 <a href=#181 id=181 data-nosnippet>181</a>        <span class="kw">let </span>relay_url = <span class="prelude-val">None</span>;
 <a href=#182 id=182 data-nosnippet>182</a>        BlobTicket {

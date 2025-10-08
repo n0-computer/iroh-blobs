@@ -596,8 +596,8 @@
 <a href=#596 id=596 data-nosnippet>596</a>            .alpns(<span class="macro">vec!</span>[ECHO_ALPN.to_vec()])
 <a href=#597 id=597 data-nosnippet>597</a>            .bind()
 <a href=#598 id=598 data-nosnippet>598</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#599 id=599 data-nosnippet>599</a>        endpoint.home_relay().initialized().<span class="kw">await</span>;
-<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span>addr = endpoint.node_addr().initialized().<span class="kw">await</span>;
+<a href=#599 id=599 data-nosnippet>599</a>        endpoint.online().<span class="kw">await</span>;
+<a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span>addr = endpoint.node_addr();
 <a href=#601 id=601 data-nosnippet>601</a>        <span class="kw">let </span>router = iroh::protocol::Router::builder(endpoint)
 <a href=#602 id=602 data-nosnippet>602</a>            .accept(ECHO_ALPN, Echo)
 <a href=#603 id=603 data-nosnippet>603</a>            .spawn();
