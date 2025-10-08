@@ -435,7 +435,7 @@ pub async fn add_test_hash_seq(
     for size in sizes {
         tts.push(batch.add_bytes(test_data(size)).await?);
     }
-    let hash_seq = tts.iter().map(|tt| *tt.hash()).collect::<HashSeq>();
+    let hash_seq = tts.iter().map(|tt| tt.hash()).collect::<HashSeq>();
     let root = batch
         .add_bytes_with_opts((hash_seq, BlobFormat::HashSeq))
         .with_named_tag("hs")
@@ -461,7 +461,7 @@ pub async fn add_test_hash_seq_incomplete(
             blobs.import_bao_bytes(hash, ranges, bao).await?;
         }
     }
-    let hash_seq = tts.iter().map(|tt| *tt.hash()).collect::<HashSeq>();
+    let hash_seq = tts.iter().map(|tt| tt.hash()).collect::<HashSeq>();
     let hash_seq_bytes = Bytes::from(hash_seq);
     let ranges = present(0);
     let (root, bao) = create_n0_bao(&hash_seq_bytes, &ranges)?;
@@ -673,7 +673,7 @@ async fn node_smoke_mem() -> TestResult<()> {
 
 async fn node_smoke(store: &Store) -> TestResult<()> {
     let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
-    let hash = *tt.hash();
+    let hash = tt.hash();
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(store, None);
     let r1 = Router::builder(endpoint)
@@ -701,7 +701,7 @@ async fn test_export_chunk() -> TestResult {
     for size in [1024 * 18 + 1] {
         let data = vec![0u8; size];
         let tt = store.add_slice(&data).temp_tag().await?;
-        let hash = *tt.hash();
+        let hash = tt.hash();
         let c = blobs.export_chunk(hash, 0).await;
         println!("{c:?}");
         let c = blobs.export_chunk(hash, 1000000).await;

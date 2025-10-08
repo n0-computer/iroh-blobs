@@ -80,14 +80,14 @@ impl Node {
 
         let collection_items = collection_items
             .iter()
-            .map(|(name, tag)| (name.to_string(), *tag.hash()))
+            .map(|(name, tag)| (name.to_string(), tag.hash()))
             .collect::<Vec<_>>();
 
         let collection = Collection::from_iter(collection_items);
 
         let tt = collection.store(&self.store).await?;
-        self.store.tags().create(*tt.hash_and_format()).await?;
-        Ok(*tt.hash())
+        self.store.tags().create(tt.hash_and_format()).await?;
+        Ok(tt.hash())
     }
 
     /// retrieve an entire collection from a given hash and provider

@@ -656,9 +656,9 @@ impl<'a> AddProgress<'a> {
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
-        let haf = *tt.hash_and_format();
+        let haf = tt.hash_and_format();
         let tags = Tags::ref_from_sender(&blobs.client);
-        tags.set(name, *tt.hash_and_format()).await?;
+        tags.set(name, haf).await?;
         drop(tt);
         Ok(haf)
     }
@@ -666,10 +666,10 @@ impl<'a> AddProgress<'a> {
     pub async fn with_tag(self) -> RequestResult<TagInfo> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
-        let hash = *tt.hash();
+        let hash = tt.hash();
         let format = tt.format();
         let tags = Tags::ref_from_sender(&blobs.client);
-        let name = tags.create(*tt.hash_and_format()).await?;
+        let name = tags.create(tt.hash_and_format()).await?;
         drop(tt);
         Ok(TagInfo { name, hash, format })
     }

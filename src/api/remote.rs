@@ -1088,7 +1088,7 @@ mod tests {
         let store = FsStore::load(td.path().join("blobs.db")).await?;
         let blobs = store.blobs();
         let tt = blobs.add_slice(b"test").temp_tag().await?;
-        let hash = *tt.hash();
+        let hash = tt.hash();
         let info = store.remote().local(hash).await?;
         assert_eq!(info.bitfield.ranges, ChunkRanges::all());
         assert_eq!(info.local_bytes(), 4);

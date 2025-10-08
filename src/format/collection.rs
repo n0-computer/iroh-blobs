@@ -191,7 +191,7 @@ impl Collection {
         let (links, meta) = self.into_parts();
         let meta_bytes = postcard::to_stdvec(&meta)?;
         let meta_tag = db.add_bytes(meta_bytes).temp_tag().await?;
-        let links_bytes = std::iter::once(*meta_tag.hash())
+        let links_bytes = std::iter::once(meta_tag.hash())
             .chain(links)
             .collect::<HashSeq>();
         let links_tag = db

@@ -162,14 +162,14 @@ async fn main() -> anyhow::Result<()> {
         let expires_at = SystemTime::now()
             .checked_add(Duration::from_secs(10))
             .unwrap();
-        create_expiring_tag(&store, &[*a.hash(), *b.hash()], "expiring", expires_at).await?;
+        create_expiring_tag(&store, &[a.hash(), b.hash()], "expiring", expires_at).await?;
 
         // add a single blob and tag it with an expiry date 60 seconds in the future
         let c = batch.add_bytes("blob 3".as_bytes()).await?;
         let expires_at = SystemTime::now()
             .checked_add(Duration::from_secs(60))
             .unwrap();
-        create_expiring_tag(&store, &[*c.hash()], "expiring", expires_at).await?;
+        create_expiring_tag(&store, &[c.hash()], "expiring", expires_at).await?;
         // batch goes out of scope, so data is only protected by the tags we created
     }
 
