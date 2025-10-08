@@ -7,7 +7,7 @@
 //! ```rust
 //! # async fn example() -> anyhow::Result<()> {
 //! use iroh::{protocol::Router, Endpoint};
-//! use iroh_blobs::{store, BlobsProtocol};
+//! use iroh_blobs::{store, ticket::BlobTicket, BlobsProtocol};
 //!
 //! // create a store
 //! let store = store::fs::FsStore::load("blobs").await?;
@@ -17,19 +17,19 @@
 //!
 //! // create an iroh endpoint
 //! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+//! endpoint.online().await;
+//! let addr = endpoint.node_addr();
 //!
 //! // create a blobs protocol handler
 //! let blobs = BlobsProtocol::new(&store, None);
 //!
 //! // create a router and add the blobs protocol handler
 //! let router = Router::builder(endpoint)
-//!     .accept(iroh_blobs::ALPN, blobs.clone())
+//!     .accept(iroh_blobs::ALPN, blobs)
 //!     .spawn();
 //!
-//! endpoint.online().await;
-//! let addr = endpoint.node_addr().initialized().await;
 //! // this data is now globally available using the ticket
-//! let ticket = BlobTicket::new(addr, t.hash, t.format).await?;
+//! let ticket = BlobTicket::new(addr, t.hash, t.format);
 //! println!("ticket: {}", ticket);
 //!
 //! // wait for control-c to exit

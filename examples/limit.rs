@@ -21,7 +21,7 @@ use std::{
 use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
-use iroh::{protocol::Router, NodeAddr, NodeId, SecretKey, Watcher};
+use iroh::{protocol::Router, NodeAddr, NodeId, SecretKey};
 use iroh_blobs::{
     provider::events::{
         AbortReason, ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode,
@@ -31,7 +31,7 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
-use rand::thread_rng;
+use rand::rng;
 
 use crate::common::get_or_generate_secret_key;
 
@@ -255,7 +255,7 @@ async fn main() -> Result<()> {
             let mut allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
             if secrets > 0 {
                 println!("Generating {secrets} new secret keys for allowed nodes:");
-                let mut rand = thread_rng();
+                let mut rand = rng();
                 for _ in 0..secrets {
                     let secret = SecretKey::generate(&mut rand);
                     let public = secret.public();
@@ -357,8 +357,8 @@ async fn setup(store: MemStore, events: EventSender) -> Result<(Router, NodeAddr
         .secret_key(secret)
         .bind()
         .await?;
-    let _ = endpoint.home_relay().initialized().await;
-    let addr = endpoint.node_addr().initialized().await;
+    endpoint.online().await;
+    let addr = endpoint.node_addr();
     let blobs = BlobsProtocol::new(&store, Some(events));
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs)

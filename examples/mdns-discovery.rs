@@ -87,7 +87,7 @@ async fn accept(path: &Path) -> Result<()> {
 }
 
 async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result<()> {
-    let key = SecretKey::generate(rand::rngs::OsRng);
+    let key = SecretKey::generate(&mut rand::rng());
     // todo: disable discovery publishing once https://github.com/n0-computer/iroh/issues/3401 is implemented
     let discovery = MdnsDiscovery::builder();
 

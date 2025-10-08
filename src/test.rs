@@ -17,7 +17,7 @@ pub async fn create_random_blobs<R: rand::Rng>(
 ) -> anyhow::Result<Vec<TagInfo>> {
     // generate sizes and seeds, non-parrallelized so it is deterministic
     let sizes = (0..num_blobs)
-        .map(|n| (blob_size(n, &mut rand), rand.r#gen::<u64>()))
+        .map(|n| (blob_size(n, &mut rand), rand.random::<u64>()))
         .collect::<Vec<_>>();
     // generate random data and add it to the store
     let infos = stream::iter(sizes)
@@ -45,7 +45,7 @@ pub async fn add_hash_sequences<R: rand::Rng>(
             let size = seq_size(n, &mut rand);
             let hs = (0..size)
                 .map(|_| {
-                    let j = rand.gen_range(0..tags.len());
+                    let j = rand.random_range(0..tags.len());
                     tags[j].hash
                 })
                 .collect::<HashSeq>();

@@ -157,7 +157,7 @@ const MAX_EXTERNAL_PATHS: usize = 8;
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
     use rand::RngCore;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut bytes = [0u8; 16];
     rng.fill_bytes(&mut bytes);
     bytes

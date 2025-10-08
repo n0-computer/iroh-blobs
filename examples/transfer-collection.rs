@@ -8,9 +8,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{
-    discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeAddr, Watcher,
-};
+use iroh::{discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeAddr};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -54,7 +52,8 @@ impl Node {
     // get address of this node. Has the side effect of waiting for the node
     // to be online & ready to accept connections
     async fn node_addr(&self) -> Result<NodeAddr> {
-        let addr = self.router.endpoint().node_addr().initialized().await;
+        self.router.endpoint().online().await;
+        let addr = self.router.endpoint().node_addr();
         Ok(addr)
     }
 
