@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
     // We initialize an in-memory backing store for iroh-blobs
     let store = MemStore::new();
     // Then we initialize a struct that can accept blobs requests over iroh connections
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let blobs = BlobsProtocol::new(&store, None);
 
     // Grab all passed in arguments, the first one is the binary itself, so we skip it.
     let args: Vec<String> = std::env::args().skip(1).collect();

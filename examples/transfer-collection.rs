@@ -8,9 +8,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{
-    discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeAddr, Watcher,
-};
+use iroh::{discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeAddr};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -38,7 +36,7 @@ impl Node {
 
         // this BlobsProtocol accepts connections from other nodes and serves blobs from the store
         // we pass None to skip subscribing to request events
-        let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+        let blobs = BlobsProtocol::new(&store, None);
         // Routers group one or more protocols together to accept connections from other nodes,
         // here we're only using one, but could add more in a real world use case as needed
         let router = Router::builder(endpoint)
@@ -54,7 +52,8 @@ impl Node {
     // get address of this node. Has the side effect of waiting for the node
     // to be online & ready to accept connections
     async fn node_addr(&self) -> Result<NodeAddr> {
-        let addr = self.router.endpoint().node_addr().initialized().await;
+        self.router.endpoint().online().await;
+        let addr = self.router.endpoint().node_addr();
         Ok(addr)
     }
 
@@ -80,14 +79,14 @@ impl Node {
 
         let collection_items = collection_items
             .iter()
-            .map(|(name, tag)| (name.to_string(), *tag.hash()))
+            .map(|(name, tag)| (name.to_string(), tag.hash()))
             .collect::<Vec<_>>();
 
         let collection = Collection::from_iter(collection_items);
 
         let tt = collection.store(&self.store).await?;
-        self.store.tags().create(*tt.hash_and_format()).await?;
-        Ok(*tt.hash())
+        self.store.tags().create(tt.hash_and_format()).await?;
+        Ok(tt.hash())
     }
 
     /// retrieve an entire collection from a given hash and provider

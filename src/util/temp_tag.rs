@@ -98,13 +98,8 @@ impl TempTag {
     }
 
     /// The hash of the pinned item
-    pub fn inner(&self) -> &HashAndFormat {
-        &self.inner
-    }
-
-    /// The hash of the pinned item
-    pub fn hash(&self) -> &Hash {
-        &self.inner.hash
+    pub fn hash(&self) -> Hash {
+        self.inner.hash
     }
 
     /// The format of the pinned item
@@ -113,8 +108,8 @@ impl TempTag {
     }
 
     /// The hash and format of the pinned item
-    pub fn hash_and_format(&self) -> &HashAndFormat {
-        &self.inner
+    pub fn hash_and_format(&self) -> HashAndFormat {
+        self.inner
     }
 
     /// Keep the item alive until the end of the process

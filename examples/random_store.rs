@@ -2,7 +2,7 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iroh::{SecretKey, Watcher};
+use iroh::{discovery::static_provider::StaticProvider, SecretKey};
 use iroh_base::ticket::NodeTicket;
 use iroh_blobs::{
     api::downloader::Shuffled,
@@ -93,7 +93,7 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
         SecretKey::from_str(&secret).context("Invalid secret key format")
     } else {
         // Generate a new random key
-        let secret_key = SecretKey::generate(&mut rand::thread_rng());
+        let secret_key = SecretKey::generate(&mut rand::rng());
         let secret_key_str = hex::encode(secret_key.to_bytes());
         println!("Generated new random secret key");
         println!("To reuse this key, set the IROH_SECRET={secret_key_str}");
@@ -204,12 +204,12 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     println!("Using store at: {}", path.display());
     let mut rng = match args.common.seed {
         Some(seed) => StdRng::seed_from_u64(seed),
-        None => StdRng::from_entropy(),
+        None => StdRng::from_rng(&mut rand::rng()),
     };
     let blobs = create_random_blobs(
         &store,
         args.num_blobs,
-        |_, rand| rand.gen_range(1..=args.blob_size),
+        |_, rand| rand.random_range(1..=args.blob_size),
         &mut rng,
     )
     .await?;
@@ -217,7 +217,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         &store,
         &blobs,
         args.hash_seqs,
-        |_, rand| rand.gen_range(1..=args.hash_seq_size),
+        |_, rand| rand.random_range(1..=args.hash_seq_size),
         &mut rng,
     )
     .await?;
@@ -238,11 +238,11 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         .bind()
         .await?;
     let (dump_task, events_tx) = dump_provider_events(args.allow_push);
-    let blobs = iroh_blobs::BlobsProtocol::new(&store, endpoint.clone(), Some(events_tx));
+    let blobs = iroh_blobs::BlobsProtocol::new(&store, Some(events_tx));
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();
-    let addr = router.endpoint().node_addr().initialized().await;
+    let addr = router.endpoint().node_addr();
     let ticket = NodeTicket::from(addr.clone());
     println!("Node address: {addr:?}");
     println!("ticket:\n{ticket}");
@@ -265,10 +265,14 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| tempdir.as_ref().unwrap().path().to_path_buf());
     let store = FsStore::load(&path).await?;
     println!("Using store at: {}", path.display());
-    let endpoint = iroh::Endpoint::builder().bind().await?;
+    let sp = StaticProvider::new();
+    let endpoint = iroh::Endpoint::builder()
+        .discovery(sp.clone())
+        .bind()
+        .await?;
     let downloader = store.downloader(&endpoint);
     for ticket in &args.nodes {
-        endpoint.add_node_addr(ticket.node_addr().clone())?;
+        sp.add_node_info(ticket.node_addr().clone());
     }
     let nodes = args
         .nodes

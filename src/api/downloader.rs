@@ -515,7 +515,7 @@ impl Shuffled {
 impl ContentDiscovery for Shuffled {
     fn find_providers(&self, _: HashAndFormat) -> n0_future::stream::Boxed<NodeId> {
         let mut nodes = self.nodes.clone();
-        nodes.shuffle(&mut rand::thread_rng());
+        nodes.shuffle(&mut rand::rng());
         n0_future::stream::iter(nodes).boxed()
     }
 }
@@ -526,7 +526,6 @@ mod tests {
     use std::ops::Deref;
 
     use bao_tree::ChunkRanges;
-    use iroh::Watcher;
     use n0_future::StreamExt;
     use testresult::TestResult;
 
@@ -544,18 +543,18 @@ mod tests {
     #[ignore = "todo"]
     async fn downloader_get_many_smoke() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
-        let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
-        let (r2, store2, _) = node_test_setup_fs(testdir.path().join("b")).await?;
-        let (r3, store3, _) = node_test_setup_fs(testdir.path().join("c")).await?;
+        let (r1, store1, _, _) = node_test_setup_fs(testdir.path().join("a")).await?;
+        let (r2, store2, _, _) = node_test_setup_fs(testdir.path().join("b")).await?;
+        let (r3, store3, _, sp3) = node_test_setup_fs(testdir.path().join("c")).await?;
         let tt1 = store1.add_slice("hello world").await?;
         let tt2 = store2.add_slice("hello world 2").await?;
-        let node1_addr = r1.endpoint().node_addr().initialized().await;
+        let node1_addr = r1.endpoint().node_addr();
         let node1_id = node1_addr.node_id;
-        let node2_addr = r2.endpoint().node_addr().initialized().await;
+        let node2_addr = r2.endpoint().node_addr();
         let node2_id = node2_addr.node_id;
         let swarm = Downloader::new(&store3, r3.endpoint());
-        r3.endpoint().add_node_addr(node1_addr.clone())?;
-        r3.endpoint().add_node_addr(node2_addr.clone())?;
+        sp3.add_node_info(node1_addr.clone());
+        sp3.add_node_info(node2_addr.clone());
         let request = GetManyRequest::builder()
             .hash(tt1.hash, ChunkRanges::all())
             .hash(tt2.hash, ChunkRanges::all())
@@ -574,9 +573,9 @@ mod tests {
     async fn downloader_get_smoke() -> TestResult<()> {
         // tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
-        let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
-        let (r2, store2, _) = node_test_setup_fs(testdir.path().join("b")).await?;
-        let (r3, store3, _) = node_test_setup_fs(testdir.path().join("c")).await?;
+        let (r1, store1, _, _) = node_test_setup_fs(testdir.path().join("a")).await?;
+        let (r2, store2, _, _) = node_test_setup_fs(testdir.path().join("b")).await?;
+        let (r3, store3, _, sp3) = node_test_setup_fs(testdir.path().join("c")).await?;
         let tt1 = store1.add_slice(vec![1; 10000000]).await?;
         let tt2 = store2.add_slice(vec![2; 10000000]).await?;
         let hs = [tt1.hash, tt2.hash].into_iter().collect::<HashSeq>();
@@ -586,13 +585,13 @@ mod tests {
                 format: crate::BlobFormat::HashSeq,
             })
             .await?;
-        let node1_addr = r1.endpoint().node_addr().initialized().await;
+        let node1_addr = r1.endpoint().node_addr();
         let node1_id = node1_addr.node_id;
-        let node2_addr = r2.endpoint().node_addr().initialized().await;
+        let node2_addr = r2.endpoint().node_addr();
         let node2_id = node2_addr.node_id;
         let swarm = Downloader::new(&store3, r3.endpoint());
-        r3.endpoint().add_node_addr(node1_addr.clone())?;
-        r3.endpoint().add_node_addr(node2_addr.clone())?;
+        sp3.add_node_info(node1_addr.clone());
+        sp3.add_node_info(node2_addr.clone());
         let request = GetRequest::builder()
             .root(ChunkRanges::all())
             .next(ChunkRanges::all())
@@ -641,9 +640,9 @@ mod tests {
     #[tokio::test]
     async fn downloader_get_all() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
-        let (r1, store1, _) = node_test_setup_fs(testdir.path().join("a")).await?;
-        let (r2, store2, _) = node_test_setup_fs(testdir.path().join("b")).await?;
-        let (r3, store3, _) = node_test_setup_fs(testdir.path().join("c")).await?;
+        let (r1, store1, _, _) = node_test_setup_fs(testdir.path().join("a")).await?;
+        let (r2, store2, _, _) = node_test_setup_fs(testdir.path().join("b")).await?;
+        let (r3, store3, _, sp3) = node_test_setup_fs(testdir.path().join("c")).await?;
         let tt1 = store1.add_slice(vec![1; 10000000]).await?;
         let tt2 = store2.add_slice(vec![2; 10000000]).await?;
         let hs = [tt1.hash, tt2.hash].into_iter().collect::<HashSeq>();
@@ -653,13 +652,13 @@ mod tests {
                 format: crate::BlobFormat::HashSeq,
             })
             .await?;
-        let node1_addr = r1.endpoint().node_addr().initialized().await;
+        let node1_addr = r1.endpoint().node_addr();
         let node1_id = node1_addr.node_id;
-        let node2_addr = r2.endpoint().node_addr().initialized().await;
+        let node2_addr = r2.endpoint().node_addr();
         let node2_id = node2_addr.node_id;
         let swarm = Downloader::new(&store3, r3.endpoint());
-        r3.endpoint().add_node_addr(node1_addr.clone())?;
-        r3.endpoint().add_node_addr(node2_addr.clone())?;
+        sp3.add_node_info(node1_addr.clone());
+        sp3.add_node_info(node2_addr.clone());
         let request = GetRequest::all(root.hash);
         let mut progress = swarm
             .download_with_opts(DownloadOptions::new(

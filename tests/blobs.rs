@@ -69,7 +69,7 @@ async fn blobs_smoke(path: &Path, blobs: &Blobs) -> TestResult<()> {
                 break;
             }
         }
-        let actual_hash = res.as_ref().map(|x| *x.hash());
+        let actual_hash = res.as_ref().map(|x| x.hash());
         let expected_hash = Hash::new(&expected);
         assert_eq!(actual_hash, Some(expected_hash));
     }

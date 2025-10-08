@@ -263,15 +263,15 @@ mod tests {
         let ft = blobs.add_slice("f").temp_tag().await?;
         let gt = blobs.add_slice("g").temp_tag().await?;
         let ht = blobs.add_slice("h").with_named_tag("h").await?;
-        let a = *at.hash();
-        let b = *bt.hash();
-        let c = *ct.hash();
-        let d = *dt.hash();
-        let e = *et.hash();
-        let f = *ft.hash();
-        let g = *gt.hash();
+        let a = at.hash();
+        let b = bt.hash();
+        let c = ct.hash();
+        let d = dt.hash();
+        let e = et.hash();
+        let f = ft.hash();
+        let g = gt.hash();
         let h = ht.hash;
-        store.tags().set("c", *ct.hash_and_format()).await?;
+        store.tags().set("c", ct.hash_and_format()).await?;
         let dehs = [d, e].into_iter().collect::<HashSeq>();
         let hehs = blobs
             .add_bytes_with_opts(AddBytesOptions {
@@ -287,7 +287,7 @@ mod tests {
             })
             .temp_tag()
             .await?;
-        store.tags().set("fg", *fghs.hash_and_format()).await?;
+        store.tags().set("fg", fghs.hash_and_format()).await?;
         drop(fghs);
         drop(bt);
         store.tags().delete("h").await?;
@@ -335,11 +335,11 @@ mod tests {
                 .temp_tag()
                 .await?;
             let ah = a.hash();
-            let data_path = options.data_path(ah);
-            let outboard_path = options.outboard_path(ah);
+            let data_path = options.data_path(&ah);
+            let outboard_path = options.outboard_path(&ah);
             assert!(data_path.exists());
             assert!(outboard_path.exists());
-            assert!(store.has(*ah).await?);
+            assert!(store.has(ah).await?);
             drop(a);
             gc_run_once(store, &mut live).await?;
             assert!(!data_path.exists());
@@ -410,7 +410,7 @@ mod tests {
 
     async fn gc_check_deletion(store: &Store) -> TestResult {
         let temp_tag = store.add_bytes(b"foo".to_vec()).temp_tag().await?;
-        let hash = *temp_tag.hash();
+        let hash = temp_tag.hash();
         assert_eq!(store.get_bytes(hash).await?.as_ref(), b"foo");
         drop(temp_tag);
         let mut live = HashSet::new();

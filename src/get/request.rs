@@ -323,7 +323,7 @@ pub fn random_hash_seq_ranges(sizes: &[u64], mut rng: impl Rng) -> ChunkRangesSe
         .iter()
         .map(|size| ChunkNum::full_chunks(*size).0)
         .sum::<u64>();
-    let random_chunk = rng.gen_range(0..total_chunks);
+    let random_chunk = rng.random_range(0..total_chunks);
     let mut remaining = random_chunk;
     let mut ranges = vec![];
     ranges.push(ChunkRanges::empty());

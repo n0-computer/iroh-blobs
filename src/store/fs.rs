@@ -157,7 +157,7 @@ const MAX_EXTERNAL_PATHS: usize = 8;
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
     use rand::RngCore;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut bytes = [0u8; 16];
     rng.fill_bytes(&mut bytes);
     bytes
@@ -1602,7 +1602,7 @@ pub mod tests {
             let stream = bytes_to_stream(expected.clone(), 1023);
             let obs = store.observe(expected_hash);
             let tt = store.add_stream(stream).await.temp_tag().await?;
-            assert_eq!(expected_hash, *tt.hash());
+            assert_eq!(expected_hash, tt.hash());
             // we must at some point see completion, otherwise the test will hang
             obs.await_completion().await?;
             let actual = store.get_bytes(expected_hash).await?;
@@ -2043,8 +2043,8 @@ pub mod tests {
             .await?
             .collect::<HashSet<_>>()
             .await;
-        assert!(tts.contains(tt1.hash_and_format()));
-        assert!(tts.contains(tt2.hash_and_format()));
+        assert!(tts.contains(&tt1.hash_and_format()));
+        assert!(tts.contains(&tt2.hash_and_format()));
         drop(batch);
         store.sync_db().await?;
         store.wait_idle().await?;
@@ -2055,8 +2055,8 @@ pub mod tests {
             .collect::<HashSet<_>>()
             .await;
         // temp tag went out of scope, so it does not work anymore
-        assert!(!tts.contains(tt1.hash_and_format()));
-        assert!(!tts.contains(tt2.hash_and_format()));
+        assert!(!tts.contains(&tt1.hash_and_format()));
+        assert!(!tts.contains(&tt2.hash_and_format()));
         drop(tt1);
         drop(tt2);
         Ok(())
@@ -2089,29 +2089,29 @@ pub mod tests {
             let data = vec![0u8; size];
             let data = Bytes::from(data);
             let tt = store.add_bytes(data.clone()).temp_tag().await?;
-            data_by_hash.insert(*tt.hash(), data);
+            data_by_hash.insert(tt.hash(), data);
             hashes.push(tt);
         }
         store.sync_db().await?;
         for tt in &hashes {
-            let hash = *tt.hash();
+            let hash = tt.hash();
             let path = testdir.path().join(format!("{hash}.txt"));
             store.export(hash, path).await?;
         }
         for tt in &hashes {
             let hash = tt.hash();
             let data = store
-                .export_bao(*hash, ChunkRanges::all())
+                .export_bao(hash, ChunkRanges::all())
                 .data_to_vec()
                 .await
                 .unwrap();
-            assert_eq!(data, data_by_hash[hash].to_vec());
+            assert_eq!(data, data_by_hash[&hash].to_vec());
             let bao = store
-                .export_bao(*hash, ChunkRanges::all())
+                .export_bao(hash, ChunkRanges::all())
                 .bao_to_vec()
                 .await
                 .unwrap();
-            bao_by_hash.insert(*hash, bao);
+            bao_by_hash.insert(hash, bao);
         }
         store.dump().await?;
 

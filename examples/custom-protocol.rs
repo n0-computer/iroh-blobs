@@ -100,7 +100,7 @@ async fn listen(text: Vec<String>) -> Result<()> {
         proto.insert_and_index(text).await?;
     }
     // Build the iroh-blobs protocol handler, which is used to download blobs.
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let blobs = BlobsProtocol::new(&store, None);
 
     // create a router that handles both our custom protocol and the iroh-blobs protocol.
     let node = Router::builder(endpoint)

@@ -68,7 +68,7 @@ async fn accept(path: &Path) -> Result<()> {
         .await?;
     let builder = Router::builder(endpoint.clone());
     let store = MemStore::new();
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let blobs = BlobsProtocol::new(&store, None);
     let builder = builder.accept(iroh_blobs::ALPN, blobs.clone());
     let node = builder.spawn();
 
@@ -87,7 +87,7 @@ async fn accept(path: &Path) -> Result<()> {
 }
 
 async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result<()> {
-    let key = SecretKey::generate(rand::rngs::OsRng);
+    let key = SecretKey::generate(&mut rand::rng());
     // todo: disable discovery publishing once https://github.com/n0-computer/iroh/issues/3401 is implemented
     let discovery = MdnsDiscovery::builder();
 

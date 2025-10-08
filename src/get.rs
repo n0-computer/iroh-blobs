@@ -633,8 +633,7 @@ pub mod fsm {
     ///
     /// This is similar to [`bao_tree::io::DecodeError`], but takes into account
     /// that we are reading from a [`RecvStream`], so read errors will be
-    /// propagated as [`DecodeError::Read`], containing a [`ReadError`].
-    /// This carries more concrete information about the error than an [`io::Error`].
+    /// propagated as [`DecodeError::Read`], containing a [`io::Error`].
     ///
     /// When the provider finds that it does not have a chunk that we requested,
     /// or that the chunk is invalid, it will stop sending data without producing
@@ -646,11 +645,6 @@ pub mod fsm {
     /// variants indicate that the provider has sent us invalid data. A well-behaved
     /// provider should never do this, so this is an indication that the provider is
     /// not behaving correctly.
-    ///
-    /// The [`DecodeError::DecodeIo`] variant is just a fallback for any other io error that
-    /// is not actually a [`DecodeError::Read`].
-    ///
-    /// [`ReadError`]: endpoint::ReadError
     #[common_fields({
         backtrace: Option<Backtrace>,
         #[snafu(implicit)]

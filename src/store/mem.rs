@@ -1087,7 +1087,7 @@ mod tests {
     async fn smoke() -> TestResult<()> {
         let store = MemStore::new();
         let tt = store.add_bytes(vec![0u8; 1024 * 64]).temp_tag().await?;
-        let hash = *tt.hash();
+        let hash = tt.hash();
         println!("hash: {hash:?}");
         let mut stream = store.export_bao(hash, ChunkRanges::all()).stream();
         while let Some(item) = stream.next().await {
