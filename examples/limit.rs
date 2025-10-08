@@ -359,7 +359,7 @@ async fn setup(store: MemStore, events: EventSender) -> Result<(Router, NodeAddr
         .await?;
     let _ = endpoint.home_relay().initialized().await;
     let addr = endpoint.node_addr().initialized().await;
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(events));
+    let blobs = BlobsProtocol::new(&store, Some(events));
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();

@@ -41,16 +41,14 @@ use std::{fmt::Debug, ops::Deref, sync::Arc};
 use iroh::{
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler},
-    Endpoint, Watcher,
 };
 use tracing::error;
 
-use crate::{api::Store, provider::events::EventSender, ticket::BlobTicket, HashAndFormat};
+use crate::{api::Store, provider::events::EventSender};
 
 #[derive(Debug)]
 pub(crate) struct BlobsInner {
     pub(crate) store: Store,
-    pub(crate) endpoint: Endpoint,
     pub(crate) events: EventSender,
 }
 
@@ -69,11 +67,10 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
-    pub fn new(store: &Store, endpoint: Endpoint, events: Option<EventSender>) -> Self {
+    pub fn new(store: &Store, events: Option<EventSender>) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
-                endpoint,
                 events: events.unwrap_or(EventSender::DEFAULT),
             }),
         }
@@ -81,21 +78,6 @@ impl BlobsProtocol {
 
     pub fn store(&self) -> &Store {
         &self.inner.store
-    }
-
-    pub fn endpoint(&self) -> &Endpoint {
-        &self.inner.endpoint
-    }
-
-    /// Create a ticket for content on this node.
-    ///
-    /// Note that this does not check whether the content is partially or fully available. It is
-    /// just a convenience method to create a ticket from content and the address of this node.
-    pub async fn ticket(&self, content: impl Into<HashAndFormat>) -> anyhow::Result<BlobTicket> {
-        let content = content.into();
-        let addr = self.inner.endpoint.node_addr().initialized().await;
-        let ticket = BlobTicket::new(addr, content.hash, content.format);
-        Ok(ticket)
     }
 }
 

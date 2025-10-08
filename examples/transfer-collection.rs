@@ -38,7 +38,7 @@ impl Node {
 
         // this BlobsProtocol accepts connections from other nodes and serves blobs from the store
         // we pass None to skip subscribing to request events
-        let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+        let blobs = BlobsProtocol::new(&store, None);
         // Routers group one or more protocols together to accept connections from other nodes,
         // here we're only using one, but could add more in a real world use case as needed
         let router = Router::builder(endpoint)
