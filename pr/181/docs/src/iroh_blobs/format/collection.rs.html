@@ -191,7 +191,7 @@
 <a href=#191 id=191 data-nosnippet>191</a>        <span class="kw">let </span>(links, meta) = <span class="self">self</span>.into_parts();
 <a href=#192 id=192 data-nosnippet>192</a>        <span class="kw">let </span>meta_bytes = postcard::to_stdvec(<span class="kw-2">&amp;</span>meta)<span class="question-mark">?</span>;
 <a href=#193 id=193 data-nosnippet>193</a>        <span class="kw">let </span>meta_tag = db.add_bytes(meta_bytes).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#194 id=194 data-nosnippet>194</a>        <span class="kw">let </span>links_bytes = std::iter::once(<span class="kw-2">*</span>meta_tag.hash())
+<a href=#194 id=194 data-nosnippet>194</a>        <span class="kw">let </span>links_bytes = std::iter::once(meta_tag.hash())
 <a href=#195 id=195 data-nosnippet>195</a>            .chain(links)
 <a href=#196 id=196 data-nosnippet>196</a>            .collect::&lt;HashSeq&gt;();
 <a href=#197 id=197 data-nosnippet>197</a>        <span class="kw">let </span>links_tag = db

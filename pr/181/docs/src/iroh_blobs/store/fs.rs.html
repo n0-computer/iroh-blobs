@@ -1602,7 +1602,7 @@
 <a href=#1602 id=1602 data-nosnippet>1602</a>            <span class="kw">let </span>stream = bytes_to_stream(expected.clone(), <span class="number">1023</span>);
 <a href=#1603 id=1603 data-nosnippet>1603</a>            <span class="kw">let </span>obs = store.observe(expected_hash);
 <a href=#1604 id=1604 data-nosnippet>1604</a>            <span class="kw">let </span>tt = store.add_stream(stream).<span class="kw">await</span>.temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1605 id=1605 data-nosnippet>1605</a>            <span class="macro">assert_eq!</span>(expected_hash, <span class="kw-2">*</span>tt.hash());
+<a href=#1605 id=1605 data-nosnippet>1605</a>            <span class="macro">assert_eq!</span>(expected_hash, tt.hash());
 <a href=#1606 id=1606 data-nosnippet>1606</a>            <span class="comment">// we must at some point see completion, otherwise the test will hang
 <a href=#1607 id=1607 data-nosnippet>1607</a>            </span>obs.await_completion().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#1608 id=1608 data-nosnippet>1608</a>            <span class="kw">let </span>actual = store.get_bytes(expected_hash).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -2043,8 +2043,8 @@
 <a href=#2043 id=2043 data-nosnippet>2043</a>            .<span class="kw">await</span><span class="question-mark">?
 <a href=#2044 id=2044 data-nosnippet>2044</a>            </span>.collect::&lt;HashSet&lt;<span class="kw">_</span>&gt;&gt;()
 <a href=#2045 id=2045 data-nosnippet>2045</a>            .<span class="kw">await</span>;
-<a href=#2046 id=2046 data-nosnippet>2046</a>        <span class="macro">assert!</span>(tts.contains(tt1.hash_and_format()));
-<a href=#2047 id=2047 data-nosnippet>2047</a>        <span class="macro">assert!</span>(tts.contains(tt2.hash_and_format()));
+<a href=#2046 id=2046 data-nosnippet>2046</a>        <span class="macro">assert!</span>(tts.contains(<span class="kw-2">&amp;</span>tt1.hash_and_format()));
+<a href=#2047 id=2047 data-nosnippet>2047</a>        <span class="macro">assert!</span>(tts.contains(<span class="kw-2">&amp;</span>tt2.hash_and_format()));
 <a href=#2048 id=2048 data-nosnippet>2048</a>        drop(batch);
 <a href=#2049 id=2049 data-nosnippet>2049</a>        store.sync_db().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#2050 id=2050 data-nosnippet>2050</a>        store.wait_idle().<span class="kw">await</span><span class="question-mark">?</span>;
@@ -2055,8 +2055,8 @@
 <a href=#2055 id=2055 data-nosnippet>2055</a>            </span>.collect::&lt;HashSet&lt;<span class="kw">_</span>&gt;&gt;()
 <a href=#2056 id=2056 data-nosnippet>2056</a>            .<span class="kw">await</span>;
 <a href=#2057 id=2057 data-nosnippet>2057</a>        <span class="comment">// temp tag went out of scope, so it does not work anymore
-<a href=#2058 id=2058 data-nosnippet>2058</a>        </span><span class="macro">assert!</span>(!tts.contains(tt1.hash_and_format()));
-<a href=#2059 id=2059 data-nosnippet>2059</a>        <span class="macro">assert!</span>(!tts.contains(tt2.hash_and_format()));
+<a href=#2058 id=2058 data-nosnippet>2058</a>        </span><span class="macro">assert!</span>(!tts.contains(<span class="kw-2">&amp;</span>tt1.hash_and_format()));
+<a href=#2059 id=2059 data-nosnippet>2059</a>        <span class="macro">assert!</span>(!tts.contains(<span class="kw-2">&amp;</span>tt2.hash_and_format()));
 <a href=#2060 id=2060 data-nosnippet>2060</a>        drop(tt1);
 <a href=#2061 id=2061 data-nosnippet>2061</a>        drop(tt2);
 <a href=#2062 id=2062 data-nosnippet>2062</a>        <span class="prelude-val">Ok</span>(())
@@ -2089,29 +2089,29 @@
 <a href=#2089 id=2089 data-nosnippet>2089</a>            <span class="kw">let </span>data = <span class="macro">vec!</span>[<span class="number">0u8</span>; size];
 <a href=#2090 id=2090 data-nosnippet>2090</a>            <span class="kw">let </span>data = Bytes::from(data);
 <a href=#2091 id=2091 data-nosnippet>2091</a>            <span class="kw">let </span>tt = store.add_bytes(data.clone()).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2092 id=2092 data-nosnippet>2092</a>            data_by_hash.insert(<span class="kw-2">*</span>tt.hash(), data);
+<a href=#2092 id=2092 data-nosnippet>2092</a>            data_by_hash.insert(tt.hash(), data);
 <a href=#2093 id=2093 data-nosnippet>2093</a>            hashes.push(tt);
 <a href=#2094 id=2094 data-nosnippet>2094</a>        }
 <a href=#2095 id=2095 data-nosnippet>2095</a>        store.sync_db().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#2096 id=2096 data-nosnippet>2096</a>        <span class="kw">for </span>tt <span class="kw">in </span><span class="kw-2">&amp;</span>hashes {
-<a href=#2097 id=2097 data-nosnippet>2097</a>            <span class="kw">let </span>hash = <span class="kw-2">*</span>tt.hash();
+<a href=#2097 id=2097 data-nosnippet>2097</a>            <span class="kw">let </span>hash = tt.hash();
 <a href=#2098 id=2098 data-nosnippet>2098</a>            <span class="kw">let </span>path = testdir.path().join(<span class="macro">format!</span>(<span class="string">"{hash}.txt"</span>));
 <a href=#2099 id=2099 data-nosnippet>2099</a>            store.export(hash, path).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#2100 id=2100 data-nosnippet>2100</a>        }
 <a href=#2101 id=2101 data-nosnippet>2101</a>        <span class="kw">for </span>tt <span class="kw">in </span><span class="kw-2">&amp;</span>hashes {
 <a href=#2102 id=2102 data-nosnippet>2102</a>            <span class="kw">let </span>hash = tt.hash();
 <a href=#2103 id=2103 data-nosnippet>2103</a>            <span class="kw">let </span>data = store
-<a href=#2104 id=2104 data-nosnippet>2104</a>                .export_bao(<span class="kw-2">*</span>hash, ChunkRanges::all())
+<a href=#2104 id=2104 data-nosnippet>2104</a>                .export_bao(hash, ChunkRanges::all())
 <a href=#2105 id=2105 data-nosnippet>2105</a>                .data_to_vec()
 <a href=#2106 id=2106 data-nosnippet>2106</a>                .<span class="kw">await
 <a href=#2107 id=2107 data-nosnippet>2107</a>                </span>.unwrap();
-<a href=#2108 id=2108 data-nosnippet>2108</a>            <span class="macro">assert_eq!</span>(data, data_by_hash[hash].to_vec());
+<a href=#2108 id=2108 data-nosnippet>2108</a>            <span class="macro">assert_eq!</span>(data, data_by_hash[<span class="kw-2">&amp;</span>hash].to_vec());
 <a href=#2109 id=2109 data-nosnippet>2109</a>            <span class="kw">let </span>bao = store
-<a href=#2110 id=2110 data-nosnippet>2110</a>                .export_bao(<span class="kw-2">*</span>hash, ChunkRanges::all())
+<a href=#2110 id=2110 data-nosnippet>2110</a>                .export_bao(hash, ChunkRanges::all())
 <a href=#2111 id=2111 data-nosnippet>2111</a>                .bao_to_vec()
 <a href=#2112 id=2112 data-nosnippet>2112</a>                .<span class="kw">await
 <a href=#2113 id=2113 data-nosnippet>2113</a>                </span>.unwrap();
-<a href=#2114 id=2114 data-nosnippet>2114</a>            bao_by_hash.insert(<span class="kw-2">*</span>hash, bao);
+<a href=#2114 id=2114 data-nosnippet>2114</a>            bao_by_hash.insert(hash, bao);
 <a href=#2115 id=2115 data-nosnippet>2115</a>        }
 <a href=#2116 id=2116 data-nosnippet>2116</a>        store.dump().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#2117 id=2117 data-nosnippet>2117</a>

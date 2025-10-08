@@ -263,15 +263,15 @@
 <a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>ft = blobs.add_slice(<span class="string">"f"</span>).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>gt = blobs.add_slice(<span class="string">"g"</span>).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>ht = blobs.add_slice(<span class="string">"h"</span>).with_named_tag(<span class="string">"h"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>a = <span class="kw-2">*</span>at.hash();
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>b = <span class="kw-2">*</span>bt.hash();
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>c = <span class="kw-2">*</span>ct.hash();
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>d = <span class="kw-2">*</span>dt.hash();
-<a href=#270 id=270 data-nosnippet>270</a>        <span class="kw">let </span>e = <span class="kw-2">*</span>et.hash();
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="kw">let </span>f = <span class="kw-2">*</span>ft.hash();
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">let </span>g = <span class="kw-2">*</span>gt.hash();
+<a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>a = at.hash();
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>b = bt.hash();
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>c = ct.hash();
+<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>d = dt.hash();
+<a href=#270 id=270 data-nosnippet>270</a>        <span class="kw">let </span>e = et.hash();
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="kw">let </span>f = ft.hash();
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">let </span>g = gt.hash();
 <a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">let </span>h = ht.hash;
-<a href=#274 id=274 data-nosnippet>274</a>        store.tags().set(<span class="string">"c"</span>, <span class="kw-2">*</span>ct.hash_and_format()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#274 id=274 data-nosnippet>274</a>        store.tags().set(<span class="string">"c"</span>, ct.hash_and_format()).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#275 id=275 data-nosnippet>275</a>        <span class="kw">let </span>dehs = [d, e].into_iter().collect::&lt;HashSeq&gt;();
 <a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">let </span>hehs = blobs
 <a href=#277 id=277 data-nosnippet>277</a>            .add_bytes_with_opts(AddBytesOptions {
@@ -287,7 +287,7 @@
 <a href=#287 id=287 data-nosnippet>287</a>            })
 <a href=#288 id=288 data-nosnippet>288</a>            .temp_tag()
 <a href=#289 id=289 data-nosnippet>289</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#290 id=290 data-nosnippet>290</a>        store.tags().set(<span class="string">"fg"</span>, <span class="kw-2">*</span>fghs.hash_and_format()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#290 id=290 data-nosnippet>290</a>        store.tags().set(<span class="string">"fg"</span>, fghs.hash_and_format()).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#291 id=291 data-nosnippet>291</a>        drop(fghs);
 <a href=#292 id=292 data-nosnippet>292</a>        drop(bt);
 <a href=#293 id=293 data-nosnippet>293</a>        store.tags().delete(<span class="string">"h"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -335,11 +335,11 @@
 <a href=#335 id=335 data-nosnippet>335</a>                .temp_tag()
 <a href=#336 id=336 data-nosnippet>336</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#337 id=337 data-nosnippet>337</a>            <span class="kw">let </span>ah = a.hash();
-<a href=#338 id=338 data-nosnippet>338</a>            <span class="kw">let </span>data_path = options.data_path(ah);
-<a href=#339 id=339 data-nosnippet>339</a>            <span class="kw">let </span>outboard_path = options.outboard_path(ah);
+<a href=#338 id=338 data-nosnippet>338</a>            <span class="kw">let </span>data_path = options.data_path(<span class="kw-2">&amp;</span>ah);
+<a href=#339 id=339 data-nosnippet>339</a>            <span class="kw">let </span>outboard_path = options.outboard_path(<span class="kw-2">&amp;</span>ah);
 <a href=#340 id=340 data-nosnippet>340</a>            <span class="macro">assert!</span>(data_path.exists());
 <a href=#341 id=341 data-nosnippet>341</a>            <span class="macro">assert!</span>(outboard_path.exists());
-<a href=#342 id=342 data-nosnippet>342</a>            <span class="macro">assert!</span>(store.has(<span class="kw-2">*</span>ah).<span class="kw">await</span><span class="question-mark">?</span>);
+<a href=#342 id=342 data-nosnippet>342</a>            <span class="macro">assert!</span>(store.has(ah).<span class="kw">await</span><span class="question-mark">?</span>);
 <a href=#343 id=343 data-nosnippet>343</a>            drop(a);
 <a href=#344 id=344 data-nosnippet>344</a>            gc_run_once(store, <span class="kw-2">&amp;mut </span>live).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#345 id=345 data-nosnippet>345</a>            <span class="macro">assert!</span>(!data_path.exists());
@@ -410,7 +410,7 @@
 <a href=#410 id=410 data-nosnippet>410</a>
 <a href=#411 id=411 data-nosnippet>411</a>    <span class="kw">async fn </span>gc_check_deletion(store: <span class="kw-2">&amp;</span>Store) -&gt; TestResult {
 <a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">let </span>temp_tag = store.add_bytes(<span class="string">b"foo"</span>.to_vec()).temp_tag().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span>hash = <span class="kw-2">*</span>temp_tag.hash();
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span>hash = temp_tag.hash();
 <a href=#414 id=414 data-nosnippet>414</a>        <span class="macro">assert_eq!</span>(store.get_bytes(hash).<span class="kw">await</span><span class="question-mark">?</span>.as_ref(), <span class="string">b"foo"</span>);
 <a href=#415 id=415 data-nosnippet>415</a>        drop(temp_tag);
 <a href=#416 id=416 data-nosnippet>416</a>        <span class="kw">let </span><span class="kw-2">mut </span>live = HashSet::new();
