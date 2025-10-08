@@ -50,14 +50,14 @@ use crate::{api::Store, provider::events::EventSender};
 
 #[derive(Debug)]
 pub(crate) struct BlobsInner {
-    pub(crate) store: Store,
-    pub(crate) events: EventSender,
+    store: Store,
+    events: EventSender,
 }
 
 /// A protocol handler for the blobs protocol.
 #[derive(Debug, Clone)]
 pub struct BlobsProtocol {
-    pub(crate) inner: Arc<BlobsInner>,
+    inner: Arc<BlobsInner>,
 }
 
 impl Deref for BlobsProtocol {
