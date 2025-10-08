@@ -138,8 +138,16 @@ impl From<AbortReason> for ProgressError {
     }
 }
 
-impl From<irpc::channel::RecvError> for ProgressError {
-    fn from(value: irpc::channel::RecvError) -> Self {
+impl From<irpc::channel::mpsc::RecvError> for ProgressError {
+    fn from(value: irpc::channel::mpsc::RecvError) -> Self {
+        ProgressError::Internal {
+            source: value.into(),
+        }
+    }
+}
+
+impl From<irpc::channel::oneshot::RecvError> for ProgressError {
+    fn from(value: irpc::channel::oneshot::RecvError) -> Self {
         ProgressError::Internal {
             source: value.into(),
         }

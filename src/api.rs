@@ -70,8 +70,8 @@ impl From<io::Error> for RequestError {
     }
 }
 
-impl From<irpc::channel::RecvError> for RequestError {
-    fn from(value: irpc::channel::RecvError) -> Self {
+impl From<irpc::channel::mpsc::RecvError> for RequestError {
+    fn from(value: irpc::channel::mpsc::RecvError) -> Self {
         RpcSnafu.into_error(value.into())
     }
 }
@@ -89,8 +89,14 @@ pub type RequestResult<T> = std::result::Result<T, RequestError>;
 pub enum ExportBaoError {
     #[snafu(display("send error: {source}"))]
     Send { source: irpc::channel::SendError },
-    #[snafu(display("recv error: {source}"))]
-    Recv { source: irpc::channel::RecvError },
+    #[snafu(display("mpsc recv error: {source}"))]
+    MpscRecv {
+        source: irpc::channel::mpsc::RecvError,
+    },
+    #[snafu(display("oneshot recv error: {source}"))]
+    OneshotRecv {
+        source: irpc::channel::oneshot::RecvError,
+    },
     #[snafu(display("request error: {source}"))]
     Request { source: irpc::RequestError },
     #[snafu(display("io error: {source}"))]
@@ -105,7 +111,8 @@ impl From<ExportBaoError> for Error {
     fn from(e: ExportBaoError) -> Self {
         match e {
             ExportBaoError::Send { source, .. } => Self::Io(source.into()),
-            ExportBaoError::Recv { source, .. } => Self::Io(source.into()),
+            ExportBaoError::MpscRecv { source, .. } => Self::Io(source.into()),
+            ExportBaoError::OneshotRecv { source, .. } => Self::Io(source.into()),
             ExportBaoError::Request { source, .. } => Self::Io(source.into()),
             ExportBaoError::ExportBaoIo { source, .. } => Self::Io(source),
             ExportBaoError::ExportBaoInner { source, .. } => Self::Io(source.into()),
@@ -117,7 +124,8 @@ impl From<ExportBaoError> for Error {
 impl From<irpc::Error> for ExportBaoError {
     fn from(e: irpc::Error) -> Self {
         match e {
-            irpc::Error::Recv(e) => RecvSnafu.into_error(e),
+            irpc::Error::MpscRecv(e) => MpscRecvSnafu.into_error(e),
+            irpc::Error::OneshotRecv(e) => OneshotRecvSnafu.into_error(e),
             irpc::Error::Send(e) => SendSnafu.into_error(e),
             irpc::Error::Request(e) => RequestSnafu.into_error(e),
             irpc::Error::Write(e) => ExportBaoIoSnafu.into_error(e.into()),
@@ -131,9 +139,15 @@ impl From<io::Error> for ExportBaoError {
     }
 }
 
-impl From<irpc::channel::RecvError> for ExportBaoError {
-    fn from(value: irpc::channel::RecvError) -> Self {
-        RecvSnafu.into_error(value)
+impl From<irpc::channel::mpsc::RecvError> for ExportBaoError {
+    fn from(value: irpc::channel::mpsc::RecvError) -> Self {
+        MpscRecvSnafu.into_error(value)
+    }
+}
+
+impl From<irpc::channel::oneshot::RecvError> for ExportBaoError {
+    fn from(value: irpc::channel::oneshot::RecvError) -> Self {
+        OneshotRecvSnafu.into_error(value)
     }
 }
 
@@ -200,8 +214,8 @@ impl From<RequestError> for Error {
     }
 }
 
-impl From<irpc::channel::RecvError> for Error {
-    fn from(e: irpc::channel::RecvError) -> Self {
+impl From<irpc::channel::mpsc::RecvError> for Error {
+    fn from(e: irpc::channel::mpsc::RecvError) -> Self {
         Self::Io(e.into())
     }
 }

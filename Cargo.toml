@@ -41,7 +41,7 @@ self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.92"
 irpc = { version = "0.8.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
-iroh-metrics = { version = "0.35" }
+iroh-metrics = { version = "0.36" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 
@@ -72,4 +72,4 @@ fs-store = ["dep:redb", "dep:reflink-copy"]
 [patch.crates-io]
 iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
 iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-0-93" }

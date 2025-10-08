@@ -1761,7 +1761,7 @@ dependencies = [
  "igd-next",
  "instant",
  "iroh-base",
- "iroh-metrics 0.36.1",
+ "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
  "iroh-quinn-udp",
@@ -1839,7 +1839,7 @@ dependencies = [
  "iroh",
  "iroh-base",
  "iroh-io",
- "iroh-metrics 0.35.0",
+ "iroh-metrics",
  "iroh-quinn",
  "iroh-test",
  "irpc",
@@ -1885,43 +1885,17 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8922c169f1b84d39d325c02ef1bbe1419d4de6e35f0403462b3c7e60cc19634"
-dependencies = [
- "iroh-metrics-derive 0.2.0",
- "itoa",
- "postcard",
- "serde",
- "snafu",
- "tracing",
-]
-
-[[package]]
-name = "iroh-metrics"
 version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "090161e84532a0cb78ab13e70abb882b769ec67cf5a2d2dcea39bd002e1f7172"
 dependencies = [
- "iroh-metrics-derive 0.3.0",
+ "iroh-metrics-derive",
  "itoa",
  "postcard",
  "ryu",
  "serde",
  "snafu",
  "tracing",
-]
-
-[[package]]
-name = "iroh-metrics-derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d12f5c45c4ed2436302a4e03cad9a0ad34b2962ad0c5791e1019c0ee30eeb09"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.104",
 ]
 
 [[package]]
@@ -2008,7 +1982,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "iroh-base",
- "iroh-metrics 0.36.1",
+ "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
  "lru 0.16.1",
@@ -2055,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.8.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#2cdc1a0d6524fcde3645f960964b7ddbc2ba8aa4"
+source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-0-93#e6905093e971de2e3480fb55ddf146bfdc495796"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2077,7 +2051,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.6.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#2cdc1a0d6524fcde3645f960964b7ddbc2ba8aa4"
+source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-0-93#e6905093e971de2e3480fb55ddf146bfdc495796"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2870,7 +2844,7 @@ dependencies = [
  "futures-util",
  "hyper-util",
  "igd-next",
- "iroh-metrics 0.36.1",
+ "iroh-metrics",
  "libc",
  "nested_enum_utils",
  "netwatch",
