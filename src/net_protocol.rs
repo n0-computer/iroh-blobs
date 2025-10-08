@@ -19,15 +19,17 @@
 //! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 //!
 //! // create a blobs protocol handler
-//! let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+//! let blobs = BlobsProtocol::new(&store, None);
 //!
 //! // create a router and add the blobs protocol handler
 //! let router = Router::builder(endpoint)
 //!     .accept(iroh_blobs::ALPN, blobs.clone())
 //!     .spawn();
 //!
+//! endpoint.online().await;
+//! let addr = endpoint.node_addr().initialized().await;
 //! // this data is now globally available using the ticket
-//! let ticket = blobs.ticket(t).await?;
+//! let ticket = BlobTicket::new(addr, t.hash, t.format).await?;
 //! println!("ticket: {}", ticket);
 //!
 //! // wait for control-c to exit

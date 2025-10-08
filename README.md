@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let blobs = BlobsProtocol::new(&store, None);
 
     // build the router
     let router = Router::builder(endpoint)
@@ -52,7 +52,10 @@ async fn main() -> anyhow::Result<()> {
         .spawn();
 
     let tag = blobs.add_slice(b"Hello world").await?;
-    println!("We are now serving {}", blobs.ticket(tag).await?);
+    let _ = endpoint.online().await;
+    let addr = endpoint.node_addr().initialized().await;
+    let ticket = BlobTicket::new(addr, tag.hash, tag.format);
+    println!("We are now serving {}", ticket);
 
     // wait for control-c
     tokio::signal::ctrl_c().await;
