@@ -2055,8 +2055,7 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "092c0b20697bbc7de4839eebcb49be975cc09221021626d301eea55fc10bfeb7"
+source = "git+https://github.com/n0-computer/irpc.git?branch=main#2cdc1a0d6524fcde3645f960964b7ddbc2ba8aa4"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2078,8 +2077,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "209d38d83c0f7043916e90de2d3a8d01035db3a2f49ea7d5fb41b8f43e889924"
+source = "git+https://github.com/n0-computer/irpc.git?branch=main#2cdc1a0d6524fcde3645f960964b7ddbc2ba8aa4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4744,7 +4742,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
