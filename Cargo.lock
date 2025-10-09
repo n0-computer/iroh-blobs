@@ -1741,8 +1741,9 @@ dependencies = [
 
 [[package]]
 name = "iroh"
-version = "0.92.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b6c60d39ca2234fbe5fa45812d6733a2ba96fad2"
+version = "0.93.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50369f3db3f3fbc2cc14fc1baab2f3ee16e0abd89eca0b814258d02a6a13040c"
 dependencies = [
  "aead",
  "backon",
@@ -1802,8 +1803,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.92.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b6c60d39ca2234fbe5fa45812d6733a2ba96fad2"
+version = "0.93.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "929fbe14046dfb01b41ccccaa5b476549924daa54438518bda11a9ab1598b2a9"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1967,8 +1969,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.92.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#b6c60d39ca2234fbe5fa45812d6733a2ba96fad2"
+version = "0.93.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffbc49e535c2cf410d19f82d46dac2b3d0bff1763759a28cd1c67870085f2fc4"
 dependencies = [
  "blake3",
  "bytes",
@@ -2028,8 +2031,9 @@ dependencies = [
 
 [[package]]
 name = "irpc"
-version = "0.8.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-0-93#e6905093e971de2e3480fb55ddf146bfdc495796"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e3fc4aa2bc2c1002655fab4254390f016f8b9bb65390600f9d8b11f9bdac76d"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2050,8 +2054,9 @@ dependencies = [
 
 [[package]]
 name = "irpc-derive"
-version = "0.6.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-0-93#e6905093e971de2e3480fb55ddf146bfdc495796"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f5706d47257e3f40b9e7dbc1934942b5792cc6a8670b7dda8856c2f5709cf98"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4716,7 +4721,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
