@@ -68,3 +68,8 @@ hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
