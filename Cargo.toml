@@ -73,10 +73,6 @@ default = ["hide-proto-docs", "fs-store", "rpc"]
 fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs"]
 rpc = ["dep:quinn", "irpc/rpc", "irpc/quinn_endpoint_setup"]
 
-[patch.crates-io]
-irpc = { git = "https://github.com/n0-computer/irpc", branch = "Frando/varint-feature" }
-bao-tree = { git = "https://github.com/n0-computer/bao-tree.git", branch = "Frando/wasm" }
-
 [[example]]
 name = "expiring-tags"
 required-features = ["fs-store"]
@@ -84,3 +80,7 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
+
+[patch.crates-io]
+irpc = { git = "https://github.com/n0-computer/irpc", branch = "main" }
+bao-tree = { git = "https://github.com/n0-computer/bao-tree", branch = "main" }
