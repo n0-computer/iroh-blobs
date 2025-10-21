@@ -120,7 +120,7 @@ impl MemStore {
 
     pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
-        tokio::spawn(
+        n0_future::task::spawn(
             Actor {
                 commands: receiver,
                 tasks: JoinSet::new(),
@@ -139,7 +139,7 @@ impl MemStore {
 
         let store = Self::from_sender(sender.into());
         if let Some(gc_config) = opts.gc_config {
-            tokio::spawn(run_gc(store.deref().clone(), gc_config));
+            n0_future::task::spawn(run_gc(store.deref().clone(), gc_config));
         }
 
         store
@@ -1107,7 +1107,7 @@ mod tests {
 
         let store2 = MemStore::new();
         let mut or = store2.observe(hash).stream().await?;
-        tokio::spawn(async move {
+        n0_future::task::spawn(async move {
             while let Some(event) = or.next().await {
                 println!("event: {event:?}");
             }

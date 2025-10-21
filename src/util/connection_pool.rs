@@ -263,7 +263,7 @@ impl Context {
                         break;
                     }
                     // set the idle timer
-                    idle_timer.as_mut().set_future(tokio::time::sleep(context.options.idle_timeout));
+                    idle_timer.as_mut().set_future(n0_future::time::sleep(context.options.idle_timeout));
                 }
 
                 // Idle timeout - request shutdown
@@ -420,7 +420,7 @@ impl ConnectionPool {
         let (actor, tx) = Actor::new(endpoint, alpn, options);
 
         // Spawn the main actor
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
 
         Self { tx }
     }
@@ -710,7 +710,7 @@ mod tests {
             assert_eq!(cid1, cid2);
             connection_ids.insert(id, cid1);
         }
-        tokio::time::sleep(Duration::from_millis(1000)).await;
+        n0_future::time::sleep(Duration::from_millis(1000)).await;
         for id in &ids {
             let cid1 = *connection_ids.get(id).expect("Connection ID not found");
             let (cid2, res) = client.echo(*id, msg.clone()).await??;
@@ -842,7 +842,7 @@ mod tests {
         let conn = pool.get_or_connect(ids[0]).await?;
         let cid1 = conn.stable_id();
         conn.close(0u32.into(), b"test");
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        n0_future::time::sleep(Duration::from_millis(500)).await;
         let conn = pool.get_or_connect(ids[0]).await?;
         let cid2 = conn.stable_id();
         assert_ne!(cid1, cid2);

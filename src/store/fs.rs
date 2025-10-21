@@ -1561,7 +1561,7 @@ pub mod tests {
             let ranges = ChunkRanges::all();
             let (hash, bao) = create_n0_bao(&data, &ranges)?;
             let obs = store.observe(hash);
-            let task = tokio::spawn(async move {
+            let task = n0_future::task::spawn(async move {
                 obs.await_completion().await?;
                 api::Result::Ok(())
             });

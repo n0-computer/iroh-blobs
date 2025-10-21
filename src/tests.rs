@@ -264,7 +264,7 @@ async fn two_nodes_observe(
     let mut stream = store2
         .remote()
         .observe(conn.clone(), ObserveRequest::new(hash));
-    let remote_observe_task = tokio::spawn(async move {
+    let remote_observe_task = n0_future::task::spawn(async move {
         let mut current = Bitfield::empty();
         while let Some(item) = stream.next().await {
             current = current.combine(item?);

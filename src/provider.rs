@@ -308,7 +308,7 @@ pub async fn handle_connection(
         while let Ok(pair) = StreamPair::accept(&connection, progress.clone()).await {
             let span = debug_span!("stream", stream_id = %pair.stream_id());
             let store = store.clone();
-            tokio::spawn(handle_stream(pair, store).instrument(span));
+            n0_future::task::spawn(handle_stream(pair, store).instrument(span));
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })

@@ -342,7 +342,7 @@ impl Downloader {
     pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
         let actor = DownloaderActor::new(store.clone(), endpoint.clone());
-        tokio::spawn(actor.run(rx));
+        n0_future::task::spawn(actor.run(rx));
         Self { client: tx.into() }
     }
 

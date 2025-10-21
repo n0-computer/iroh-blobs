@@ -369,7 +369,7 @@ impl ReadonlyMemStore {
         }
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let actor = Actor::new(receiver, entries);
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
         let local = irpc::LocalSender::from(sender);
         Self {
             client: local.into(),
