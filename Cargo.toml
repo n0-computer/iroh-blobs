@@ -18,7 +18,7 @@ bytes = { version = "1", features = ["serde"] }
 derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debug", "display", "deref", "deref_mut"] }
 futures-lite = "2.6.0"
 quinn = { package = "iroh-quinn", version = "0.14.0" }
-n0-future = "0.2.0"
+n0-future = "0.3.0"
 n0-snafu = "0.2.2"
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
@@ -36,11 +36,12 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.93"
+iroh = "0.94"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.93"
-irpc = { version = "0.9.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+iroh-base = "0.94"
+iroh-tickets = "0.1"
+irpc = { version = "0.10.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.36" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -59,7 +60,7 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.93", features = ["discovery-local-network"]}
+iroh = { version = "0.94", features = ["discovery-local-network"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 
@@ -68,8 +69,3 @@ hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
-
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
-iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }

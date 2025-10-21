@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Starting download.");
 
             downloader
-                .download(ticket.hash(), Some(ticket.addr().endpoint_id))
+                .download(ticket.hash(), Some(ticket.addr().id))
                 .await?;
 
             println!("Finished download.");

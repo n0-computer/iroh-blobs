@@ -549,9 +549,9 @@ mod tests {
         let tt1 = store1.add_slice("hello world").await?;
         let tt2 = store2.add_slice("hello world 2").await?;
         let node1_addr = r1.endpoint().addr();
-        let node1_id = node1_addr.endpoint_id;
+        let node1_id = node1_addr.id;
         let node2_addr = r2.endpoint().addr();
-        let node2_id = node2_addr.endpoint_id;
+        let node2_id = node2_addr.id;
         let swarm = Downloader::new(&store3, r3.endpoint());
         sp3.add_endpoint_info(node1_addr.clone());
         sp3.add_endpoint_info(node2_addr.clone());
@@ -586,9 +586,9 @@ mod tests {
             })
             .await?;
         let node1_addr = r1.endpoint().addr();
-        let node1_id = node1_addr.endpoint_id;
+        let node1_id = node1_addr.id;
         let node2_addr = r2.endpoint().addr();
-        let node2_id = node2_addr.endpoint_id;
+        let node2_id = node2_addr.id;
         let swarm = Downloader::new(&store3, r3.endpoint());
         sp3.add_endpoint_info(node1_addr.clone());
         sp3.add_endpoint_info(node2_addr.clone());
@@ -653,9 +653,9 @@ mod tests {
             })
             .await?;
         let node1_addr = r1.endpoint().addr();
-        let node1_id = node1_addr.endpoint_id;
+        let node1_id = node1_addr.id;
         let node2_addr = r2.endpoint().addr();
-        let node2_id = node2_addr.endpoint_id;
+        let node2_id = node2_addr.id;
         let swarm = Downloader::new(&store3, r3.endpoint());
         sp3.add_endpoint_info(node1_addr.clone());
         sp3.add_endpoint_info(node2_addr.clone());

@@ -3,7 +3,6 @@ use std::{env, path::PathBuf, str::FromStr};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use iroh::{discovery::static_provider::StaticProvider, SecretKey};
-use iroh_base::ticket::EndpointTicket;
 use iroh_blobs::{
     api::downloader::Shuffled,
     provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
@@ -11,6 +10,7 @@ use iroh_blobs::{
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
 };
+use iroh_tickets::endpoint::EndpointTicket;
 use irpc::RpcMessage;
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -277,7 +277,7 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
     let nodes = args
         .nodes
         .iter()
-        .map(|ticket| ticket.endpoint_addr().endpoint_id)
+        .map(|ticket| ticket.endpoint_addr().id)
         .collect::<Vec<_>>();
     for content in args.content {
         let mut progress = downloader

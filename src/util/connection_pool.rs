@@ -545,7 +545,7 @@ mod tests {
         discovery::static_provider::StaticProvider,
         endpoint::{Connection, ConnectionType},
         protocol::{AcceptError, ProtocolHandler, Router},
-        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, Watcher,
+        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
     };
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
     use n0_snafu::ResultExt;
@@ -616,7 +616,7 @@ mod tests {
             .await;
         let res: Vec<(EndpointAddr, Router)> = res.into_iter().collect::<TestResult<Vec<_>>>()?;
         let (addrs, routers): (Vec<_>, Vec<_>) = res.into_iter().unzip();
-        let ids = addrs.iter().map(|a| a.endpoint_id).collect::<Vec<_>>();
+        let ids = addrs.iter().map(|a| a.id).collect::<Vec<_>>();
         let discovery = StaticProvider::from_endpoint_info(addrs);
         Ok((ids, routers, discovery))
     }
@@ -679,9 +679,8 @@ mod tests {
             let non_listening = SecretKey::from_bytes(&[0; 32]).public();
             // make up fake node info
             discovery.add_endpoint_info(EndpointAddr {
-                endpoint_id: non_listening,
-                relay_url: None,
-                direct_addresses: vec!["127.0.0.1:12121".parse().unwrap()]
+                id: non_listening,
+                addrs: vec![TransportAddr::Ip("127.0.0.1:12121".parse().unwrap())]
                     .into_iter()
                     .collect(),
             });

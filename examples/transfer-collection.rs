@@ -94,7 +94,7 @@ impl Node {
     /// retrieve an entire collection from a given hash and provider
     async fn get_collection(&self, hash: Hash, provider: EndpointAddr) -> Result<()> {
         let req = HashAndFormat::hash_seq(hash);
-        let addrs = Shuffled::new(vec![provider.endpoint_id]);
+        let addrs = Shuffled::new(vec![provider.id]);
         self.store
             .downloader(self.router.endpoint())
             .download(req, addrs)

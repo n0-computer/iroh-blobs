@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 use anyhow::Result;
 use iroh::{EndpointAddr, EndpointId, RelayUrl};
-use iroh_base::ticket::{self, Ticket};
+use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
 
 use crate::{BlobFormat, Hash, HashAndFormat};
@@ -67,10 +67,10 @@ impl Ticket for BlobTicket {
     fn to_bytes(&self) -> Vec<u8> {
         let data = TicketWireFormat::Variant0(Variant0BlobTicket {
             node: Variant0NodeAddr {
-                endpoint_id: self.addr.endpoint_id,
+                endpoint_id: self.addr.id,
                 info: Variant0AddrInfo {
-                    relay_url: self.addr.relay_url.clone(),
-                    direct_addresses: self.addr.direct_addresses.clone(),
+                    relay_url: self.addr.relay_urls().next().cloned(),
+                    direct_addresses: self.addr.ip_addrs().cloned().collect(),
                 },
             },
             format: self.format,
@@ -79,23 +79,22 @@ impl Ticket for BlobTicket {
         postcard::to_stdvec(&data).expect("postcard serialization failed")
     }
 
-    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ticket::ParseError> {
+    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ParseError> {
         let res: TicketWireFormat = postcard::from_bytes(bytes)?;
         let TicketWireFormat::Variant0(Variant0BlobTicket { node, format, hash }) = res;
-        Ok(Self {
-            addr: EndpointAddr {
-                endpoint_id: node.endpoint_id,
-                relay_url: node.info.relay_url,
-                direct_addresses: node.info.direct_addresses,
-            },
-            format,
-            hash,
-        })
+        let mut addr = EndpointAddr::new(node.endpoint_id);
+        if let Some(relay_url) = node.info.relay_url {
+            addr = addr.with_relay_url(relay_url);
+        }
+        for ip_addr in node.info.direct_addresses {
+            addr = addr.with_ip_addr(ip_addr);
+        }
+        Ok(Self { addr, format, hash })
     }
 }
 
 impl FromStr for BlobTicket {
-    type Err = ticket::ParseError;
+    type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ticket::deserialize(s)
@@ -173,7 +172,7 @@ impl<'de> Deserialize<'de> for BlobTicket {
 mod tests {
     use std::net::SocketAddr;
 
-    use iroh::{PublicKey, SecretKey};
+    use iroh::{PublicKey, SecretKey, TransportAddr};
     use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     use super::*;
@@ -182,10 +181,9 @@ mod tests {
         let hash = Hash::new(b"hi there");
         let peer = SecretKey::generate(&mut rand::rng()).public();
         let addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
-        let relay_url = None;
         BlobTicket {
             hash,
-            addr: EndpointAddr::from_parts(peer, relay_url, [addr]),
+            addr: EndpointAddr::from_parts(peer, [TransportAddr::Ip(addr)]),
             format: BlobFormat::HashSeq,
         }
     }
@@ -211,12 +209,12 @@ mod tests {
         let hash =
             Hash::from_str("0b84d358e4c8be6c38626b2182ff575818ba6bd3f4b90464994be14cb354a072")
                 .unwrap();
-        let node_id =
+        let endpoint_id =
             PublicKey::from_str("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
                 .unwrap();
 
         let ticket = BlobTicket {
-            addr: EndpointAddr::from_parts(node_id, None, []),
+            addr: EndpointAddr::new(endpoint_id),
             format: BlobFormat::Raw,
             hash,
         };
