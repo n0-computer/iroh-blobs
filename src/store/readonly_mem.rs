@@ -26,7 +26,7 @@ use irpc::channel::mpsc;
 use n0_future::future::{self, yield_now};
 use range_collections::range_set::RangeSetRange;
 use ref_cast::RefCast;
-use tokio::task::{JoinError, JoinSet};
+use n0_future::task::{JoinError, JoinSet};
 
 use super::util::BaoTreeSender;
 use crate::{

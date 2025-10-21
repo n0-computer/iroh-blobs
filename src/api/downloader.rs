@@ -13,7 +13,7 @@ use irpc::{channel::mpsc, rpc_requests};
 use n0_future::{future, stream, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
-use tokio::task::JoinSet;
+use n0_future::task::JoinSet;
 use tracing::instrument::Instrument;
 
 use super::Store;
@@ -42,7 +42,7 @@ struct DownloaderActor {
     store: Store,
     pool: ConnectionPool,
     tasks: JoinSet<()>,
-    running: HashSet<tokio::task::Id>,
+    running: HashSet<n0_future::task::Id>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

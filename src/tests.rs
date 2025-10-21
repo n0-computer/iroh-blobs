@@ -344,7 +344,7 @@ fn event_handler(
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
     let (events_tx, mut events_rx) = EventSender::channel(16, EventMask::ALL_READONLY);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
-    let task = AbortOnDropHandle::new(tokio::task::spawn(async move {
+    let task = AbortOnDropHandle::new(n0_future::task::spawn(async move {
         while let Some(event) = events_rx.recv().await {
             match event {
                 ProviderMessage::ClientConnected(msg) => {
@@ -358,7 +358,7 @@ fn event_handler(
                 ProviderMessage::PushRequestReceived(mut msg) => {
                     msg.tx.send(Ok(())).await.ok();
                     let count_tx = count_tx.clone();
-                    tokio::task::spawn(async move {
+                    n0_future::task::spawn(async move {
                         while let Ok(Some(update)) = msg.rx.recv().await {
                             if let RequestUpdate::Completed(_) = update {
                                 count_tx.send_modify(|x| *x += 1);
