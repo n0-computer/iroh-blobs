@@ -67,7 +67,7 @@ irpc = { version = "0.9.0", features = ["rpc", "quinn_endpoint_setup", "spans", 
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
-fs-store = ["dep:redb", "dep:reflink-copy"]
+fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs"]
 rpc = ["dep:quinn", "irpc/rpc", "irpc/quinn_endpoint_setup"]
 
 [patch.crates-io]
