@@ -585,7 +585,7 @@
 <a href=#585 id=585 data-nosnippet>585</a>}
 <a href=#586 id=586 data-nosnippet>586</a>
 <a href=#587 id=587 data-nosnippet>587</a><span class="kw">mod </span>proto {
-<a href=#588 id=588 data-nosnippet>588</a>    <span class="kw">use </span>iroh::NodeId;
+<a href=#588 id=588 data-nosnippet>588</a>    <span class="kw">use </span>iroh::EndpointId;
 <a href=#589 id=589 data-nosnippet>589</a>    <span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#590 id=590 data-nosnippet>590</a>
 <a href=#591 id=591 data-nosnippet>591</a>    <span class="kw">use crate</span>::{provider::TransferStats, Hash};
@@ -593,7 +593,7 @@
 <a href=#593 id=593 data-nosnippet>593</a>    <span class="attr">#[derive(Debug, Serialize, Deserialize)]
 <a href=#594 id=594 data-nosnippet>594</a>    </span><span class="kw">pub struct </span>ClientConnected {
 <a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">pub </span>connection_id: u64,
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="kw">pub </span>node_id: <span class="prelude-ty">Option</span>&lt;NodeId&gt;,
+<a href=#596 id=596 data-nosnippet>596</a>        <span class="kw">pub </span>endpoint_id: <span class="prelude-ty">Option</span>&lt;EndpointId&gt;,
 <a href=#597 id=597 data-nosnippet>597</a>    }
 <a href=#598 id=598 data-nosnippet>598</a>
 <a href=#599 id=599 data-nosnippet>599</a>    <span class="attr">#[derive(Debug, Serialize, Deserialize)]
