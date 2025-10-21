@@ -584,7 +584,7 @@ pub enum ProviderProto {
 }
 
 mod proto {
-    use iroh::NodeId;
+    use iroh::EndpointId;
     use serde::{Deserialize, Serialize};
 
     use crate::{provider::TransferStats, Hash};
@@ -592,7 +592,7 @@ mod proto {
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ClientConnected {
         pub connection_id: u64,
-        pub node_id: Option<NodeId>,
+        pub endpoint_id: Option<EndpointId>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]

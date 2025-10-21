@@ -27,7 +27,7 @@ use crate::common::get_or_generate_secret_key;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub enum Args {
-    /// Limit requests by node id
+    /// Limit requests by endpoint id
     Provide {
         /// Path for files to add.
         path: PathBuf,
@@ -160,7 +160,7 @@ impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
             .events
             .client_connected(|| ClientConnected {
                 connection_id,
-                node_id: connection.remote_node_id().ok(),
+                endpoint_id: connection.remote_id().ok(),
             })
             .await
         {
@@ -184,11 +184,7 @@ async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
     let secret = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
-        .secret_key(secret)
-        .discovery_n0()
-        .bind()
-        .await?;
+    let endpoint = iroh::Endpoint::builder().secret_key(secret).bind().await?;
     let compression = lz4::Compression;
     match args {
         Args::Provide { path } => {
@@ -198,7 +194,7 @@ async fn main() -> Result<()> {
             let router = iroh::protocol::Router::builder(endpoint.clone())
                 .accept(lz4::Compression::ALPN, blobs)
                 .spawn();
-            let ticket = BlobTicket::new(endpoint.node_id().into(), tag.hash, tag.format);
+            let ticket = BlobTicket::new(endpoint.id().into(), tag.hash, tag.format);
             println!("Serving blob with hash {}", tag.hash);
             println!("Ticket: {ticket}");
             println!("Node is running. Press Ctrl-C to exit.");
@@ -209,7 +205,7 @@ async fn main() -> Result<()> {
         Args::Get { ticket, target } => {
             let store = MemStore::new();
             let conn = endpoint
-                .connect(ticket.node_addr().clone(), lz4::Compression::ALPN)
+                .connect(ticket.addr().clone(), lz4::Compression::ALPN)
                 .await?;
             let connection_id = conn.stable_id() as u64;
             let (send, recv) = conn.open_bi().await?;

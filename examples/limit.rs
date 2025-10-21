@@ -1,4 +1,4 @@
-/// Example how to limit blob requests by hash and node id, and to add
+/// Example how to limit blob requests by hash and endpoint id, and to add
 /// throttling or limiting the maximum number of connections.
 ///
 /// Limiting is done via a fn that returns an EventSender and internally
@@ -21,7 +21,7 @@ use std::{
 use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
-use iroh::{protocol::Router, NodeAddr, NodeId, SecretKey};
+use iroh::{protocol::Router, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::{
     provider::events::{
         AbortReason, ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode,
@@ -38,14 +38,14 @@ use crate::common::get_or_generate_secret_key;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub enum Args {
-    /// Limit requests by node id
-    ByNodeId {
+    /// Limit requests by endpoint id
+    ByEndpointId {
         /// Path for files to add.
         paths: Vec<PathBuf>,
         #[clap(long("allow"))]
-        /// Nodes that are allowed to download content.
-        allowed_nodes: Vec<NodeId>,
-        /// Number of secrets to generate for allowed node ids.
+        /// Endpoints that are allowed to download content.
+        allowed_endpoints: Vec<EndpointId>,
+        /// Number of secrets to generate for allowed endpoint ids.
         #[clap(long, default_value_t = 1)]
         secrets: usize,
     },
@@ -77,7 +77,7 @@ pub enum Args {
     },
 }
 
-fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
+fn limit_by_node_id(allowed_nodes: HashSet<EndpointId>) -> EventSender {
     let mask = EventMask {
         // We want a request for each incoming connection so we can accept
         // or reject them. We don't need any other events.
@@ -88,17 +88,17 @@ fn limit_by_node_id(allowed_nodes: HashSet<NodeId>) -> EventSender {
     n0_future::task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let ProviderMessage::ClientConnected(msg) = msg {
-                let res = match msg.node_id {
-                    Some(node_id) if allowed_nodes.contains(&node_id) => {
-                        println!("Client connected: {node_id}");
+                let res: std::result::Result<(), AbortReason> = match msg.endpoint_id {
+                    Some(endpoint_id) if allowed_nodes.contains(&endpoint_id) => {
+                        println!("Client connected: {endpoint_id}");
                         Ok(())
                     }
-                    Some(node_id) => {
-                        println!("Client rejected: {node_id}");
+                    Some(endpoint_id) => {
+                        println!("Client rejected: {endpoint_id}");
                         Err(AbortReason::Permission)
                     }
                     None => {
-                        println!("Client rejected: no node id");
+                        println!("Client rejected: no endpoint id");
                         Err(AbortReason::Permission)
                     }
                 };
@@ -206,7 +206,7 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
             match msg {
                 ProviderMessage::ClientConnected(msg) => {
                     let connection_id = msg.connection_id;
-                    let node_id = msg.node_id;
+                    let node_id = msg.endpoint_id;
                     let res = if let Ok(n) = requests.inc() {
                         println!("Accepting connection {n}, node_id {node_id:?}, connection_id {connection_id}");
                         Ok(())
@@ -231,15 +231,11 @@ async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
     let secret = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
-        .secret_key(secret)
-        .discovery_n0()
-        .bind()
-        .await?;
+    let endpoint = iroh::Endpoint::builder().secret_key(secret).bind().await?;
     match args {
         Args::Get { ticket } => {
             let connection = endpoint
-                .connect(ticket.node_addr().clone(), iroh_blobs::ALPN)
+                .connect(ticket.addr().clone(), iroh_blobs::ALPN)
                 .await?;
             let (data, stats) = iroh_blobs::get::request::get_blob(connection, ticket.hash())
                 .bytes_and_stats()
@@ -247,26 +243,26 @@ async fn main() -> Result<()> {
             println!("Downloaded {} bytes", data.len());
             println!("Stats: {stats:?}");
         }
-        Args::ByNodeId {
+        Args::ByEndpointId {
             paths,
-            allowed_nodes,
+            allowed_endpoints,
             secrets,
         } => {
-            let mut allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
+            let mut allowed_endpoints = allowed_endpoints.into_iter().collect::<HashSet<_>>();
             if secrets > 0 {
-                println!("Generating {secrets} new secret keys for allowed nodes:");
+                println!("Generating {secrets} new secret keys for allowed endpoints:");
                 let mut rand = rng();
                 for _ in 0..secrets {
                     let secret = SecretKey::generate(&mut rand);
                     let public = secret.public();
-                    allowed_nodes.insert(public);
+                    allowed_endpoints.insert(public);
                     println!("IROH_SECRET={}", hex::encode(secret.to_bytes()));
                 }
             }
 
             let store = MemStore::new();
             let hashes = add_paths(&store, paths).await?;
-            let events = limit_by_node_id(allowed_nodes.clone());
+            let events = limit_by_node_id(allowed_endpoints.clone());
             let (router, addr) = setup(store, events).await?;
 
             for (path, hash) in hashes {
@@ -274,9 +270,9 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket}", path.display());
             }
             println!();
-            println!("Node id: {}\n", router.endpoint().node_id());
-            for id in &allowed_nodes {
-                println!("Allowed node: {id}");
+            println!("Endpoint id: {}\n", router.endpoint().id());
+            for id in &allowed_endpoints {
+                println!("Allowed endpoint: {id}");
             }
 
             tokio::signal::ctrl_c().await?;
@@ -350,15 +346,11 @@ async fn add_paths(store: &MemStore, paths: Vec<PathBuf>) -> Result<HashMap<Path
     Ok(hashes)
 }
 
-async fn setup(store: MemStore, events: EventSender) -> Result<(Router, NodeAddr)> {
+async fn setup(store: MemStore, events: EventSender) -> Result<(Router, EndpointAddr)> {
     let secret = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
-        .discovery_n0()
-        .secret_key(secret)
-        .bind()
-        .await?;
+    let endpoint = iroh::Endpoint::builder().secret_key(secret).bind().await?;
     endpoint.online().await;
-    let addr = endpoint.node_addr();
+    let addr = endpoint.addr();
     let blobs = BlobsProtocol::new(&store, Some(events));
     let router = Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs)

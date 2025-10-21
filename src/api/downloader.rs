@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::bail;
 use genawaiter::sync::Gen;
-use iroh::{Endpoint, NodeId};
+use iroh::{Endpoint, EndpointId};
 use irpc::{channel::mpsc, rpc_requests};
 use n0_future::{future, stream, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
@@ -50,11 +50,11 @@ pub enum DownloadProgressItem {
     #[serde(skip)]
     Error(anyhow::Error),
     TryProvider {
-        id: NodeId,
+        id: EndpointId,
         request: Arc<GetRequest>,
     },
     ProviderFailed {
-        id: NodeId,
+        id: EndpointId,
         request: Arc<GetRequest>,
     },
     PartComplete {
@@ -244,7 +244,7 @@ impl SupportedRequest for HashAndFormat {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddProviderRequest {
     pub hash: Hash,
-    pub providers: Vec<NodeId>,
+    pub providers: Vec<EndpointId>,
 }
 
 #[derive(Debug)]
@@ -486,16 +486,16 @@ async fn execute_get(
 
 /// Trait for pluggable content discovery strategies.
 pub trait ContentDiscovery: Debug + Send + Sync + 'static {
-    fn find_providers(&self, hash: HashAndFormat) -> n0_future::stream::Boxed<NodeId>;
+    fn find_providers(&self, hash: HashAndFormat) -> n0_future::stream::Boxed<EndpointId>;
 }
 
 impl<C, I> ContentDiscovery for C
 where
     C: Debug + Clone + IntoIterator<Item = I> + Send + Sync + 'static,
     C::IntoIter: Send + Sync + 'static,
-    I: Into<NodeId> + Send + Sync + 'static,
+    I: Into<EndpointId> + Send + Sync + 'static,
 {
-    fn find_providers(&self, _: HashAndFormat) -> n0_future::stream::Boxed<NodeId> {
+    fn find_providers(&self, _: HashAndFormat) -> n0_future::stream::Boxed<EndpointId> {
         let providers = self.clone();
         n0_future::stream::iter(providers.into_iter().map(Into::into)).boxed()
     }
@@ -503,17 +503,17 @@ where
 
 #[derive(derive_more::Debug)]
 pub struct Shuffled {
-    nodes: Vec<NodeId>,
+    nodes: Vec<EndpointId>,
 }
 
 impl Shuffled {
-    pub fn new(nodes: Vec<NodeId>) -> Self {
+    pub fn new(nodes: Vec<EndpointId>) -> Self {
         Self { nodes }
     }
 }
 
 impl ContentDiscovery for Shuffled {
-    fn find_providers(&self, _: HashAndFormat) -> n0_future::stream::Boxed<NodeId> {
+    fn find_providers(&self, _: HashAndFormat) -> n0_future::stream::Boxed<EndpointId> {
         let mut nodes = self.nodes.clone();
         nodes.shuffle(&mut rand::rng());
         n0_future::stream::iter(nodes).boxed()
@@ -548,13 +548,13 @@ mod tests {
         let (r3, store3, _, sp3) = node_test_setup_fs(testdir.path().join("c")).await?;
         let tt1 = store1.add_slice("hello world").await?;
         let tt2 = store2.add_slice("hello world 2").await?;
-        let node1_addr = r1.endpoint().node_addr();
-        let node1_id = node1_addr.node_id;
-        let node2_addr = r2.endpoint().node_addr();
-        let node2_id = node2_addr.node_id;
+        let node1_addr = r1.endpoint().addr();
+        let node1_id = node1_addr.id;
+        let node2_addr = r2.endpoint().addr();
+        let node2_id = node2_addr.id;
         let swarm = Downloader::new(&store3, r3.endpoint());
-        sp3.add_node_info(node1_addr.clone());
-        sp3.add_node_info(node2_addr.clone());
+        sp3.add_endpoint_info(node1_addr.clone());
+        sp3.add_endpoint_info(node2_addr.clone());
         let request = GetManyRequest::builder()
             .hash(tt1.hash, ChunkRanges::all())
             .hash(tt2.hash, ChunkRanges::all())
@@ -585,13 +585,13 @@ mod tests {
                 format: crate::BlobFormat::HashSeq,
             })
             .await?;
-        let node1_addr = r1.endpoint().node_addr();
-        let node1_id = node1_addr.node_id;
-        let node2_addr = r2.endpoint().node_addr();
-        let node2_id = node2_addr.node_id;
+        let node1_addr = r1.endpoint().addr();
+        let node1_id = node1_addr.id;
+        let node2_addr = r2.endpoint().addr();
+        let node2_id = node2_addr.id;
         let swarm = Downloader::new(&store3, r3.endpoint());
-        sp3.add_node_info(node1_addr.clone());
-        sp3.add_node_info(node2_addr.clone());
+        sp3.add_endpoint_info(node1_addr.clone());
+        sp3.add_endpoint_info(node2_addr.clone());
         let request = GetRequest::builder()
             .root(ChunkRanges::all())
             .next(ChunkRanges::all())
@@ -652,13 +652,13 @@ mod tests {
                 format: crate::BlobFormat::HashSeq,
             })
             .await?;
-        let node1_addr = r1.endpoint().node_addr();
-        let node1_id = node1_addr.node_id;
-        let node2_addr = r2.endpoint().node_addr();
-        let node2_id = node2_addr.node_id;
+        let node1_addr = r1.endpoint().addr();
+        let node1_id = node1_addr.id;
+        let node2_addr = r2.endpoint().addr();
+        let node2_id = node2_addr.id;
         let swarm = Downloader::new(&store3, r3.endpoint());
-        sp3.add_node_info(node1_addr.clone());
-        sp3.add_node_info(node2_addr.clone());
+        sp3.add_endpoint_info(node1_addr.clone());
+        sp3.add_endpoint_info(node2_addr.clone());
         let request = GetRequest::all(root.hash);
         let mut progress = swarm
             .download_with_opts(DownloadOptions::new(

@@ -7,7 +7,7 @@ use iroh_blobs::{store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
 async fn main() -> anyhow::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::bind().await?;
 
     // We initialize an in-memory backing store for iroh-blobs
     let store = MemStore::new();
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
             // and allows us to control when/if it gets garbage-collected
             let tag = store.blobs().add_path(abs_path).await?;
 
-            let node_id = endpoint.node_id();
+            let node_id = endpoint.id();
             let ticket = BlobTicket::new(node_id.into(), tag.hash, tag.format);
 
             println!("File hashed. Fetch this file by running:");
@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Starting download.");
 
             downloader
-                .download(ticket.hash(), Some(ticket.node_addr().node_id))
+                .download(ticket.hash(), Some(ticket.addr().id))
                 .await?;
 
             println!("Finished download.");

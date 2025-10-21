@@ -17,13 +17,13 @@
 //!
 //!     cargo run --example custom-protocol -- listen "hello-world" "foo-bar" "hello-moon"
 //!
-//! This spawns an iroh nodes with three blobs. It will print the node's node id.
+//! This spawns an iroh node with three blobs. It will print the node's endpoint id.
 //!
 //! In another terminal, run
 //!
-//!     cargo run --example custom-protocol -- query <node-id> hello
+//!     cargo run --example custom-protocol -- query <endpoint-id> hello
 //!
-//! Replace <node-id> with the node id from above. This will connect to the listening node with our
+//! Replace <endpoint-id> with the endpoint id from above. This will connect to the listening node with our
 //! custom protocol and query for the string `hello`. The listening node will return a list of
 //! blob hashes that contain `hello`. We will then download all these blobs with iroh-blobs,
 //! and then print a list of the hashes with their content.
@@ -46,7 +46,7 @@ use iroh::{
     discovery::pkarr::PkarrResolver,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, NodeId,
+    Endpoint, EndpointId,
 };
 use iroh_blobs::{api::Store, store::mem::MemStore, BlobsProtocol, Hash};
 mod common;
@@ -67,8 +67,8 @@ pub enum Command {
     },
     /// Query a remote node for data and print the results.
     Query {
-        /// The node id of the node we want to query.
-        node_id: NodeId,
+        /// The endpoint id of the node we want to query.
+        endpoint_id: EndpointId,
         /// The text we want to match.
         query: String,
     },
@@ -81,17 +81,13 @@ pub enum Command {
 const ALPN: &[u8] = b"iroh-example/text-search/0";
 
 async fn listen(text: Vec<String>) -> Result<()> {
-    // allow the user to provide a secret so we can have a stable node id.
+    // allow the user to provide a secret so we can have a stable endpoint id.
     // This is only needed for the listen side.
     let secret_key = get_or_generate_secret_key()?;
     // Use an in-memory store for this example. You would use a persistent store in production code.
     let store = MemStore::new();
     // Create an endpoint with the secret key and discovery publishing to the n0 dns server enabled.
-    let endpoint = Endpoint::builder()
-        .secret_key(secret_key)
-        .discovery_n0()
-        .bind()
-        .await?;
+    let endpoint = Endpoint::builder().secret_key(secret_key).bind().await?;
     // Build our custom protocol handler. The `builder` exposes access to various subsystems in the
     // iroh node. In our case, we need a blobs client and the endpoint.
     let proto = BlobSearch::new(&store);
@@ -108,9 +104,9 @@ async fn listen(text: Vec<String>) -> Result<()> {
         .accept(iroh_blobs::ALPN, blobs.clone())
         .spawn();
 
-    // Print our node id, so clients know how to connect to us.
-    let node_id = node.endpoint().node_id();
-    println!("our node id: {node_id}");
+    // Print our endpoint id, so clients know how to connect to us.
+    let node_id = node.endpoint().id();
+    println!("our endpoint id: {node_id}");
 
     // Wait for Ctrl-C to be pressed.
     tokio::signal::ctrl_c().await?;
@@ -118,20 +114,20 @@ async fn listen(text: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-async fn query(node_id: NodeId, query: String) -> Result<()> {
+async fn query(endpoint_id: EndpointId, query: String) -> Result<()> {
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
     let store = MemStore::new();
     // Create an endpoint with a random secret key and no discovery publishing.
     // For a client we just need discovery resolution via the n0 dns server, which
     // the PkarrResolver provides.
-    let endpoint = Endpoint::builder()
-        .add_discovery(PkarrResolver::n0_dns())
+    let endpoint = Endpoint::empty_builder(iroh::RelayMode::Default)
+        .discovery(PkarrResolver::n0_dns())
         .bind()
         .await?;
     // Query the remote node.
     // This will send the query over our custom protocol, read hashes on the reply stream,
     // and download each hash over iroh-blobs.
-    let hashes = query_remote(&endpoint, &store, node_id, &query).await?;
+    let hashes = query_remote(&endpoint, &store, endpoint_id, &query).await?;
 
     // Print out our query results.
     for hash in hashes {
@@ -157,10 +153,10 @@ async fn main() -> Result<()> {
             listen(text).await?;
         }
         Command::Query {
-            node_id,
+            endpoint_id,
             query: query_text,
         } => {
-            query(node_id, query_text).await?;
+            query(endpoint_id, query_text).await?;
         }
     }
 
@@ -180,8 +176,8 @@ impl ProtocolHandler for BlobSearch {
     /// the connection lasts.
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         let this = self.clone();
-        // We can get the remote's node id from the connection.
-        let node_id = connection.remote_node_id()?;
+        // We can get the remote's endpoint id from the connection.
+        let node_id = connection.remote_id()?;
         println!("accepted connection from {node_id}");
 
         // Our protocol is a simple request-response protocol, so we expect the
@@ -269,14 +265,14 @@ impl BlobSearch {
 pub async fn query_remote(
     endpoint: &Endpoint,
     store: &Store,
-    node_id: NodeId,
+    endpoint_id: EndpointId,
     query: &str,
 ) -> Result<Vec<Hash>> {
     // Establish a connection to our node.
-    // We use the default node discovery in iroh, so we can connect by node id without
+    // We use the default node discovery in iroh, so we can connect by endpoint id without
     // providing further information.
-    let conn = endpoint.connect(node_id, ALPN).await?;
-    let blobs_conn = endpoint.connect(node_id, iroh_blobs::ALPN).await?;
+    let conn = endpoint.connect(endpoint_id, ALPN).await?;
+    let blobs_conn = endpoint.connect(endpoint_id, iroh_blobs::ALPN).await?;
 
     // Open a bi-directional in our connection.
     let (mut send, mut recv) = conn.open_bi().await?;
