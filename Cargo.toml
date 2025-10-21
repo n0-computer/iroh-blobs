@@ -13,7 +13,7 @@ rust-version = "1.85"
 
 [dependencies]
 anyhow = "1.0.95"
-bao-tree = { version = "0.15.1", features = ["experimental-mixed", "tokio_fsm", "validate", "serde"], default-features = false }
+bao-tree = { version = "0.15.1", features = ["experimental-mixed", "tokio_fsm", "validate", "serde"], default-features = false, git = "https://github.com/n0-computer/bao-tree", branch = "main" }
 bytes = { version = "1", features = ["serde"] }
 derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debug", "display", "deref", "deref_mut"] }
 futures-lite = "2.6.0"
@@ -40,7 +40,7 @@ self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.94"
 iroh-tickets = "0.1"
-irpc = { version = "0.10.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
+irpc = { version = "0.10.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false, git = "https://github.com/n0-computer/irpc", branch = "main" }
 iroh-metrics = { version = "0.36" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -81,6 +81,3 @@ required-features = ["fs-store"]
 name = "random_store"
 required-features = ["fs-store"]
 
-[patch.crates-io]
-irpc = { git = "https://github.com/n0-computer/irpc", branch = "main" }
-bao-tree = { git = "https://github.com/n0-computer/bao-tree", branch = "main" }
