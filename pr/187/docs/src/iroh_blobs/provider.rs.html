@@ -308,7 +308,7 @@
 <a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">while let </span><span class="prelude-val">Ok</span>(pair) = StreamPair::accept(<span class="kw-2">&amp;</span>connection, progress.clone()).<span class="kw">await </span>{
 <a href=#309 id=309 data-nosnippet>309</a>            <span class="kw">let </span>span = <span class="macro">debug_span!</span>(<span class="string">"stream"</span>, stream_id = %pair.stream_id());
 <a href=#310 id=310 data-nosnippet>310</a>            <span class="kw">let </span>store = store.clone();
-<a href=#311 id=311 data-nosnippet>311</a>            tokio::spawn(handle_stream(pair, store).instrument(span));
+<a href=#311 id=311 data-nosnippet>311</a>            n0_future::task::spawn(handle_stream(pair, store).instrument(span));
 <a href=#312 id=312 data-nosnippet>312</a>        }
 <a href=#313 id=313 data-nosnippet>313</a>        progress
 <a href=#314 id=314 data-nosnippet>314</a>            .connection_closed(|| ConnectionClosed { connection_id })

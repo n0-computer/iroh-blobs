@@ -1561,7 +1561,7 @@
 <a href=#1561 id=1561 data-nosnippet>1561</a>            <span class="kw">let </span>ranges = ChunkRanges::all();
 <a href=#1562 id=1562 data-nosnippet>1562</a>            <span class="kw">let </span>(hash, bao) = create_n0_bao(<span class="kw-2">&amp;</span>data, <span class="kw-2">&amp;</span>ranges)<span class="question-mark">?</span>;
 <a href=#1563 id=1563 data-nosnippet>1563</a>            <span class="kw">let </span>obs = store.observe(hash);
-<a href=#1564 id=1564 data-nosnippet>1564</a>            <span class="kw">let </span>task = tokio::spawn(<span class="kw">async move </span>{
+<a href=#1564 id=1564 data-nosnippet>1564</a>            <span class="kw">let </span>task = n0_future::task::spawn(<span class="kw">async move </span>{
 <a href=#1565 id=1565 data-nosnippet>1565</a>                obs.await_completion().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#1566 id=1566 data-nosnippet>1566</a>                api::Result::Ok(())
 <a href=#1567 id=1567 data-nosnippet>1567</a>            });

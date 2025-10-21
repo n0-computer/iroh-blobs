@@ -263,7 +263,7 @@
 <a href=#263 id=263 data-nosnippet>263</a>                        </span><span class="kw">break</span>;
 <a href=#264 id=264 data-nosnippet>264</a>                    }
 <a href=#265 id=265 data-nosnippet>265</a>                    <span class="comment">// set the idle timer
-<a href=#266 id=266 data-nosnippet>266</a>                    </span>idle_timer.as_mut().set_future(tokio::time::sleep(context.options.idle_timeout));
+<a href=#266 id=266 data-nosnippet>266</a>                    </span>idle_timer.as_mut().set_future(n0_future::time::sleep(context.options.idle_timeout));
 <a href=#267 id=267 data-nosnippet>267</a>                }
 <a href=#268 id=268 data-nosnippet>268</a>
 <a href=#269 id=269 data-nosnippet>269</a>                <span class="comment">// Idle timeout - request shutdown
@@ -420,7 +420,7 @@
 <a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>(actor, tx) = Actor::new(endpoint, alpn, options);
 <a href=#421 id=421 data-nosnippet>421</a>
 <a href=#422 id=422 data-nosnippet>422</a>        <span class="comment">// Spawn the main actor
-<a href=#423 id=423 data-nosnippet>423</a>        </span>tokio::spawn(actor.run());
+<a href=#423 id=423 data-nosnippet>423</a>        </span>n0_future::task::spawn(actor.run());
 <a href=#424 id=424 data-nosnippet>424</a>
 <a href=#425 id=425 data-nosnippet>425</a>        <span class="self">Self </span>{ tx }
 <a href=#426 id=426 data-nosnippet>426</a>    }
@@ -710,7 +710,7 @@
 <a href=#710 id=710 data-nosnippet>710</a>            <span class="macro">assert_eq!</span>(cid1, cid2);
 <a href=#711 id=711 data-nosnippet>711</a>            connection_ids.insert(id, cid1);
 <a href=#712 id=712 data-nosnippet>712</a>        }
-<a href=#713 id=713 data-nosnippet>713</a>        tokio::time::sleep(Duration::from_millis(<span class="number">1000</span>)).<span class="kw">await</span>;
+<a href=#713 id=713 data-nosnippet>713</a>        n0_future::time::sleep(Duration::from_millis(<span class="number">1000</span>)).<span class="kw">await</span>;
 <a href=#714 id=714 data-nosnippet>714</a>        <span class="kw">for </span>id <span class="kw">in </span><span class="kw-2">&amp;</span>ids {
 <a href=#715 id=715 data-nosnippet>715</a>            <span class="kw">let </span>cid1 = <span class="kw-2">*</span>connection_ids.get(id).expect(<span class="string">"Connection ID not found"</span>);
 <a href=#716 id=716 data-nosnippet>716</a>            <span class="kw">let </span>(cid2, res) = client.echo(<span class="kw-2">*</span>id, msg.clone()).<span class="kw">await</span><span class="question-mark">??</span>;
@@ -842,7 +842,7 @@
 <a href=#842 id=842 data-nosnippet>842</a>        <span class="kw">let </span>conn = pool.get_or_connect(ids[<span class="number">0</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#843 id=843 data-nosnippet>843</a>        <span class="kw">let </span>cid1 = conn.stable_id();
 <a href=#844 id=844 data-nosnippet>844</a>        conn.close(<span class="number">0u32</span>.into(), <span class="string">b"test"</span>);
-<a href=#845 id=845 data-nosnippet>845</a>        tokio::time::sleep(Duration::from_millis(<span class="number">500</span>)).<span class="kw">await</span>;
+<a href=#845 id=845 data-nosnippet>845</a>        n0_future::time::sleep(Duration::from_millis(<span class="number">500</span>)).<span class="kw">await</span>;
 <a href=#846 id=846 data-nosnippet>846</a>        <span class="kw">let </span>conn = pool.get_or_connect(ids[<span class="number">0</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">let </span>cid2 = conn.stable_id();
 <a href=#848 id=848 data-nosnippet>848</a>        <span class="macro">assert_ne!</span>(cid1, cid2);

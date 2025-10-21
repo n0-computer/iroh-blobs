@@ -369,7 +369,7 @@
 <a href=#369 id=369 data-nosnippet>369</a>        }
 <a href=#370 id=370 data-nosnippet>370</a>        <span class="kw">let </span>(sender, receiver) = tokio::sync::mpsc::channel(<span class="number">1</span>);
 <a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">let </span>actor = Actor::new(receiver, entries);
-<a href=#372 id=372 data-nosnippet>372</a>        tokio::spawn(actor.run());
+<a href=#372 id=372 data-nosnippet>372</a>        n0_future::task::spawn(actor.run());
 <a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>local = irpc::LocalSender::from(sender);
 <a href=#374 id=374 data-nosnippet>374</a>        <span class="self">Self </span>{
 <a href=#375 id=375 data-nosnippet>375</a>            client: local.into(),

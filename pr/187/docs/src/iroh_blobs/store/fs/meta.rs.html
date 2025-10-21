@@ -766,7 +766,7 @@
 <a href=#766 id=766 data-nosnippet>766</a>                    <span class="self">self</span>.cmds.push_back(cmd.into()).ok();
 <a href=#767 id=767 data-nosnippet>767</a>                    <span class="kw">let </span>tx = db.begin_read().context(TransactionSnafu)<span class="question-mark">?</span>;
 <a href=#768 id=768 data-nosnippet>768</a>                    <span class="kw">let </span>tables = ReadOnlyTables::new(<span class="kw-2">&amp;</span>tx).context(TableSnafu)<span class="question-mark">?</span>;
-<a href=#769 id=769 data-nosnippet>769</a>                    <span class="kw">let </span>timeout = tokio::time::sleep(<span class="self">self</span>.options.max_read_duration);
+<a href=#769 id=769 data-nosnippet>769</a>                    <span class="kw">let </span>timeout = n0_future::time::sleep(<span class="self">self</span>.options.max_read_duration);
 <a href=#770 id=770 data-nosnippet>770</a>                    <span class="macro">pin!</span>(timeout);
 <a href=#771 id=771 data-nosnippet>771</a>                    <span class="kw">let </span><span class="kw-2">mut </span>n = <span class="number">0</span>;
 <a href=#772 id=772 data-nosnippet>772</a>                    <span class="kw">while let </span><span class="prelude-val">Some</span>(cmd) = <span class="self">self</span>.cmds.extract(Command::read_only, <span class="kw-2">&amp;mut </span>timeout).<span class="kw">await
@@ -784,7 +784,7 @@
 <a href=#784 id=784 data-nosnippet>784</a>                    <span class="kw">let </span>ftx = <span class="self">self</span>.ds.begin_write();
 <a href=#785 id=785 data-nosnippet>785</a>                    <span class="kw">let </span>tx = db.begin_write().context(TransactionSnafu)<span class="question-mark">?</span>;
 <a href=#786 id=786 data-nosnippet>786</a>                    <span class="kw">let </span><span class="kw-2">mut </span>tables = Tables::new(<span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>ftx).context(TableSnafu)<span class="question-mark">?</span>;
-<a href=#787 id=787 data-nosnippet>787</a>                    <span class="kw">let </span>timeout = tokio::time::sleep(<span class="self">self</span>.options.max_read_duration);
+<a href=#787 id=787 data-nosnippet>787</a>                    <span class="kw">let </span>timeout = n0_future::time::sleep(<span class="self">self</span>.options.max_read_duration);
 <a href=#788 id=788 data-nosnippet>788</a>                    <span class="macro">pin!</span>(timeout);
 <a href=#789 id=789 data-nosnippet>789</a>                    <span class="kw">let </span><span class="kw-2">mut </span>n = <span class="number">0</span>;
 <a href=#790 id=790 data-nosnippet>790</a>                    <span class="kw">while let </span><span class="prelude-val">Some</span>(cmd) = <span class="self">self

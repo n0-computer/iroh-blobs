@@ -120,7 +120,7 @@
 <a href=#120 id=120 data-nosnippet>120</a>
 <a href=#121 id=121 data-nosnippet>121</a>    <span class="kw">pub fn </span>new_with_opts(opts: Options) -&gt; <span class="self">Self </span>{
 <a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">let </span>(sender, receiver) = tokio::sync::mpsc::channel(<span class="number">32</span>);
-<a href=#123 id=123 data-nosnippet>123</a>        tokio::spawn(
+<a href=#123 id=123 data-nosnippet>123</a>        n0_future::task::spawn(
 <a href=#124 id=124 data-nosnippet>124</a>            Actor {
 <a href=#125 id=125 data-nosnippet>125</a>                commands: receiver,
 <a href=#126 id=126 data-nosnippet>126</a>                tasks: JoinSet::new(),
@@ -139,7 +139,7 @@
 <a href=#139 id=139 data-nosnippet>139</a>
 <a href=#140 id=140 data-nosnippet>140</a>        <span class="kw">let </span>store = <span class="self">Self</span>::from_sender(sender.into());
 <a href=#141 id=141 data-nosnippet>141</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(gc_config) = opts.gc_config {
-<a href=#142 id=142 data-nosnippet>142</a>            tokio::spawn(run_gc(store.deref().clone(), gc_config));
+<a href=#142 id=142 data-nosnippet>142</a>            n0_future::task::spawn(run_gc(store.deref().clone(), gc_config));
 <a href=#143 id=143 data-nosnippet>143</a>        }
 <a href=#144 id=144 data-nosnippet>144</a>
 <a href=#145 id=145 data-nosnippet>145</a>        store
@@ -1107,7 +1107,7 @@
 <a href=#1107 id=1107 data-nosnippet>1107</a>
 <a href=#1108 id=1108 data-nosnippet>1108</a>        <span class="kw">let </span>store2 = MemStore::new();
 <a href=#1109 id=1109 data-nosnippet>1109</a>        <span class="kw">let </span><span class="kw-2">mut </span>or = store2.observe(hash).stream().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1110 id=1110 data-nosnippet>1110</a>        tokio::spawn(<span class="kw">async move </span>{
+<a href=#1110 id=1110 data-nosnippet>1110</a>        n0_future::task::spawn(<span class="kw">async move </span>{
 <a href=#1111 id=1111 data-nosnippet>1111</a>            <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = or.next().<span class="kw">await </span>{
 <a href=#1112 id=1112 data-nosnippet>1112</a>                <span class="macro">println!</span>(<span class="string">"event: {event:?}"</span>);
 <a href=#1113 id=1113 data-nosnippet>1113</a>            }
