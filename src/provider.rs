@@ -3,18 +3,13 @@
 //! Note that while using this API directly is fine, the standard way
 //! to provide data is to just register a [`crate::BlobsProtocol`] protocol
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
-use std::{
-    fmt::Debug,
-    future::Future,
-    io,
-    time::{Duration, Instant},
-};
+use std::{fmt::Debug, future::Future, io, time::Duration};
 
 use anyhow::Result;
 use bao_tree::ChunkRanges;
 use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
-use n0_future::StreamExt;
+use n0_future::{time::Instant, StreamExt};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use tokio::select;
