@@ -40,14 +40,14 @@ use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
 async fn main() -> anyhow::Result<()> {
     // create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::bind().await?;
 
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();
     let tag = store.add_slice(b"Hello world").await?;
   
     let _ = endpoint.online().await;
-    let addr = endpoint.node_addr();
+    let addr = endpoint.addr();
     let ticket = BlobTicket::new(addr, tag.hash, tag.format);
 
     // build the router

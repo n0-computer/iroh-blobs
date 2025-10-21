@@ -40,8 +40,8 @@ pub enum Commands {
     /// Get the node_id and hash string from a node running accept in the local network
     /// Download the content from that node.
     Connect {
-        /// Node ID of a node on the local network
-        node_id: PublicKey,
+        /// Endpoint ID of a node on the local network
+        endpoint_id: PublicKey,
         /// Hash of content you want to download from the node
         hash: Hash,
         /// save the content to a file
@@ -60,9 +60,9 @@ async fn accept(path: &Path) -> Result<()> {
 
     println!("Starting iroh node with mdns discovery...");
     // create a new node
-    let endpoint = Endpoint::builder()
+    let endpoint = Endpoint::empty_builder(RelayMode::Default)
         .secret_key(key)
-        .add_discovery(MdnsDiscovery::builder())
+        .discovery(MdnsDiscovery::builder())
         .relay_mode(RelayMode::Disabled)
         .bind()
         .await?;
@@ -80,7 +80,7 @@ async fn accept(path: &Path) -> Result<()> {
     let absolute = path.canonicalize()?;
     println!("Adding {} as {}...", path.display(), absolute.display());
     let tag = store.add_path(absolute).await?;
-    println!("To fetch the blob:\n\tcargo run --example mdns-discovery --features examples -- connect {} {} -o [FILE_PATH]", node.endpoint().node_id(), tag.hash);
+    println!("To fetch the blob:\n\tcargo run --example mdns-discovery --features examples -- connect {} {} -o [FILE_PATH]", node.endpoint().id(), tag.hash);
     tokio::signal::ctrl_c().await?;
     node.shutdown().await?;
     Ok(())
@@ -93,15 +93,14 @@ async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result
 
     println!("Starting iroh node with mdns discovery...");
     // create a new node
-    let endpoint = Endpoint::builder()
+    let endpoint = Endpoint::empty_builder(RelayMode::Disabled)
         .secret_key(key)
-        .add_discovery(discovery)
-        .relay_mode(RelayMode::Disabled)
+        .discovery(discovery)
         .bind()
         .await?;
     let store = MemStore::new();
 
-    println!("NodeID: {}", endpoint.node_id());
+    println!("NodeID: {}", endpoint.id());
     let conn = endpoint.connect(node_id, iroh_blobs::ALPN).await?;
     let stats = store.remote().fetch(conn, hash).await?;
     println!(
@@ -136,8 +135,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Accept { path } => {
             accept(path).await?;
         }
-        Commands::Connect { node_id, hash, out } => {
-            connect(*node_id, *hash, out.clone()).await?;
+        Commands::Connect {
+            endpoint_id,
+            hash,
+            out,
+        } => {
+            connect(*endpoint_id, *hash, out.clone()).await?;
         }
     }
     Ok(())

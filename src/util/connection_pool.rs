@@ -21,7 +21,7 @@ use std::{
 
 use iroh::{
     endpoint::{ConnectError, Connection},
-    Endpoint, NodeId,
+    Endpoint, EndpointId,
 };
 use n0_future::{
     future::{self},
@@ -151,12 +151,12 @@ pub enum ConnectionPoolError {
 
 enum ActorMessage {
     RequestRef(RequestRef),
-    ConnectionIdle { id: NodeId },
-    ConnectionShutdown { id: NodeId },
+    ConnectionIdle { id: EndpointId },
+    ConnectionShutdown { id: EndpointId },
 }
 
 struct RequestRef {
-    id: NodeId,
+    id: EndpointId,
     tx: oneshot::Sender<Result<ConnectionRef, PoolConnectError>>,
 }
 
@@ -170,7 +170,7 @@ struct Context {
 impl Context {
     async fn run_connection_actor(
         self: Arc<Self>,
-        node_id: NodeId,
+        node_id: EndpointId,
         mut rx: mpsc::Receiver<RequestRef>,
     ) {
         let context = self;
@@ -286,11 +286,11 @@ impl Context {
 
 struct Actor {
     rx: mpsc::Receiver<ActorMessage>,
-    connections: HashMap<NodeId, mpsc::Sender<RequestRef>>,
+    connections: HashMap<EndpointId, mpsc::Sender<RequestRef>>,
     context: Arc<Context>,
     // idle set (most recent last)
     // todo: use a better data structure if this becomes a performance issue
-    idle: VecDeque<NodeId>,
+    idle: VecDeque<EndpointId>,
     // per connection tasks
     tasks: FuturesUnordered<future::Boxed<()>>,
 }
@@ -319,20 +319,20 @@ impl Actor {
         )
     }
 
-    fn add_idle(&mut self, id: NodeId) {
+    fn add_idle(&mut self, id: EndpointId) {
         self.remove_idle(id);
         self.idle.push_back(id);
     }
 
-    fn remove_idle(&mut self, id: NodeId) {
+    fn remove_idle(&mut self, id: EndpointId) {
         self.idle.retain(|&x| x != id);
     }
 
-    fn pop_oldest_idle(&mut self) -> Option<NodeId> {
+    fn pop_oldest_idle(&mut self) -> Option<EndpointId> {
         self.idle.pop_front()
     }
 
-    fn remove_connection(&mut self, id: NodeId) {
+    fn remove_connection(&mut self, id: EndpointId) {
         self.connections.remove(&id);
         self.remove_idle(id);
     }
@@ -431,7 +431,7 @@ impl ConnectionPool {
     /// with either an error or a connection.
     pub async fn get_or_connect(
         &self,
-        id: NodeId,
+        id: EndpointId,
     ) -> std::result::Result<ConnectionRef, PoolConnectError> {
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -445,7 +445,7 @@ impl ConnectionPool {
     ///
     /// This will finish pending tasks and close the connection. New tasks will
     /// get a new connection if they are submitted after this call
-    pub async fn close(&self, id: NodeId) -> std::result::Result<(), ConnectionPoolError> {
+    pub async fn close(&self, id: EndpointId) -> std::result::Result<(), ConnectionPoolError> {
         self.tx
             .send(ActorMessage::ConnectionShutdown { id })
             .await
@@ -456,7 +456,10 @@ impl ConnectionPool {
     /// Notify the connection pool that a connection is idle.
     ///
     /// Should only be called from connection handlers.
-    pub(crate) async fn idle(&self, id: NodeId) -> std::result::Result<(), ConnectionPoolError> {
+    pub(crate) async fn idle(
+        &self,
+        id: EndpointId,
+    ) -> std::result::Result<(), ConnectionPoolError> {
         self.tx
             .send(ActorMessage::ConnectionIdle { id })
             .await
@@ -540,7 +543,7 @@ mod tests {
         discovery::static_provider::StaticProvider,
         endpoint::{Connection, ConnectionType},
         protocol::{AcceptError, ProtocolHandler, Router},
-        Endpoint, NodeAddr, NodeId, SecretKey, Watcher,
+        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
     };
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
     use n0_snafu::ResultExt;
@@ -558,7 +561,7 @@ mod tests {
     impl ProtocolHandler for Echo {
         async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
             let conn_id = connection.stable_id();
-            let id = connection.remote_node_id().map_err(AcceptError::from_err)?;
+            let id = connection.remote_id().map_err(AcceptError::from_err)?;
             trace!(%id, %conn_id, "Accepting echo connection");
             loop {
                 match connection.accept_bi().await {
@@ -579,7 +582,7 @@ mod tests {
 
     async fn echo_client(conn: &Connection, text: &[u8]) -> n0_snafu::Result<Vec<u8>> {
         let conn_id = conn.stable_id();
-        let id = conn.remote_node_id().e()?;
+        let id = conn.remote_id().e()?;
         trace!(%id, %conn_id, "Sending echo request");
         let (mut send, mut recv) = conn.open_bi().await.e()?;
         send.write_all(text).await.e()?;
@@ -589,13 +592,13 @@ mod tests {
         Ok(response)
     }
 
-    async fn echo_server() -> TestResult<(NodeAddr, Router)> {
+    async fn echo_server() -> TestResult<(EndpointAddr, Router)> {
         let endpoint = iroh::Endpoint::builder()
             .alpns(vec![ECHO_ALPN.to_vec()])
             .bind()
             .await?;
         endpoint.online().await;
-        let addr = endpoint.node_addr();
+        let addr = endpoint.addr();
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(ECHO_ALPN, Echo)
             .spawn();
@@ -603,16 +606,16 @@ mod tests {
         Ok((addr, router))
     }
 
-    async fn echo_servers(n: usize) -> TestResult<(Vec<NodeId>, Vec<Router>, StaticProvider)> {
+    async fn echo_servers(n: usize) -> TestResult<(Vec<EndpointId>, Vec<Router>, StaticProvider)> {
         let res = stream::iter(0..n)
             .map(|_| echo_server())
             .buffered_unordered(16)
             .collect::<Vec<_>>()
             .await;
-        let res: Vec<(NodeAddr, Router)> = res.into_iter().collect::<TestResult<Vec<_>>>()?;
+        let res: Vec<(EndpointAddr, Router)> = res.into_iter().collect::<TestResult<Vec<_>>>()?;
         let (addrs, routers): (Vec<_>, Vec<_>) = res.into_iter().unzip();
-        let ids = addrs.iter().map(|a| a.node_id).collect::<Vec<_>>();
-        let discovery = StaticProvider::from_node_info(addrs);
+        let ids = addrs.iter().map(|a| a.id).collect::<Vec<_>>();
+        let discovery = StaticProvider::from_endpoint_info(addrs);
         Ok((ids, routers, discovery))
     }
 
@@ -640,7 +643,7 @@ mod tests {
     impl EchoClient {
         async fn echo(
             &self,
-            id: NodeId,
+            id: EndpointId,
             text: Vec<u8>,
         ) -> Result<Result<(usize, Vec<u8>), n0_snafu::Error>, PoolConnectError> {
             let conn = self.pool.get_or_connect(id).await?;
@@ -657,7 +660,7 @@ mod tests {
     async fn connection_pool_errors() -> TestResult<()> {
         // set up static discovery for all addrs
         let discovery = StaticProvider::new();
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery.clone())
             .bind()
             .await?;
@@ -667,16 +670,15 @@ mod tests {
             let non_existing = SecretKey::from_bytes(&[0; 32]).public();
             let res = client.echo(non_existing, b"Hello, world!".to_vec()).await;
             // trying to connect to a non-existing id will fail with ConnectError
-            // because we don't have any information about the node
+            // because we don't have any information about the endpoint.
             assert!(matches!(res, Err(PoolConnectError::ConnectError { .. })));
         }
         {
             let non_listening = SecretKey::from_bytes(&[0; 32]).public();
             // make up fake node info
-            discovery.add_node_info(NodeAddr {
-                node_id: non_listening,
-                relay_url: None,
-                direct_addresses: vec!["127.0.0.1:12121".parse().unwrap()]
+            discovery.add_endpoint_info(EndpointAddr {
+                id: non_listening,
+                addrs: vec![TransportAddr::Ip("127.0.0.1:12121".parse().unwrap())]
                     .into_iter()
                     .collect(),
             });
@@ -693,8 +695,8 @@ mod tests {
     async fn connection_pool_smoke() -> TestResult<()> {
         let n = 32;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        // build a client endpoint that can resolve all the node ids
-        let endpoint = iroh::Endpoint::builder()
+        // build a client endpoint that can resolve all the endpoint ids
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery.clone())
             .bind()
             .await?;
@@ -728,8 +730,8 @@ mod tests {
     async fn connection_pool_idle() -> TestResult<()> {
         let n = 32;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        // build a client endpoint that can resolve all the node ids
-        let endpoint = iroh::Endpoint::builder()
+        // build a client endpoint that can resolve all the endpoint ids
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery.clone())
             .bind()
             .await?;
@@ -760,7 +762,7 @@ mod tests {
     async fn on_connected_error() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery)
             .bind()
             .await?;
@@ -790,13 +792,13 @@ mod tests {
     async fn on_connected_direct() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery)
             .bind()
             .await?;
         let on_connected = |ep: Endpoint, conn: Connection| async move {
-            let Ok(id) = conn.remote_node_id() else {
-                return Err(io::Error::other("unable to get node id"));
+            let Ok(id) = conn.remote_id() else {
+                return Err(io::Error::other("unable to get endpoint id"));
             };
             let Some(watcher) = ep.conn_type(id) else {
                 return Err(io::Error::other("unable to get conn_type watcher"));
@@ -833,7 +835,7 @@ mod tests {
     async fn watch_close() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery)
             .bind()
             .await?;

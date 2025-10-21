@@ -2,8 +2,8 @@
 use std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 use anyhow::Result;
-use iroh::{NodeAddr, NodeId, RelayUrl};
-use iroh_base::ticket::{self, Ticket};
+use iroh::{EndpointAddr, EndpointId, RelayUrl};
+use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
 
 use crate::{BlobFormat, Hash, HashAndFormat};
@@ -15,7 +15,7 @@ use crate::{BlobFormat, Hash, HashAndFormat};
 #[display("{}", Ticket::serialize(self))]
 pub struct BlobTicket {
     /// The provider to get a file from.
-    node: NodeAddr,
+    addr: EndpointAddr,
     /// The format of the blob.
     format: BlobFormat,
     /// The hash to retrieve.
@@ -51,7 +51,7 @@ struct Variant0BlobTicket {
 
 #[derive(Serialize, Deserialize)]
 struct Variant0NodeAddr {
-    node_id: NodeId,
+    endpoint_id: EndpointId,
     info: Variant0AddrInfo,
 }
 
@@ -67,10 +67,10 @@ impl Ticket for BlobTicket {
     fn to_bytes(&self) -> Vec<u8> {
         let data = TicketWireFormat::Variant0(Variant0BlobTicket {
             node: Variant0NodeAddr {
-                node_id: self.node.node_id,
+                endpoint_id: self.addr.id,
                 info: Variant0AddrInfo {
-                    relay_url: self.node.relay_url.clone(),
-                    direct_addresses: self.node.direct_addresses.clone(),
+                    relay_url: self.addr.relay_urls().next().cloned(),
+                    direct_addresses: self.addr.ip_addrs().cloned().collect(),
                 },
             },
             format: self.format,
@@ -79,23 +79,22 @@ impl Ticket for BlobTicket {
         postcard::to_stdvec(&data).expect("postcard serialization failed")
     }
 
-    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ticket::ParseError> {
+    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ParseError> {
         let res: TicketWireFormat = postcard::from_bytes(bytes)?;
         let TicketWireFormat::Variant0(Variant0BlobTicket { node, format, hash }) = res;
-        Ok(Self {
-            node: NodeAddr {
-                node_id: node.node_id,
-                relay_url: node.info.relay_url,
-                direct_addresses: node.info.direct_addresses,
-            },
-            format,
-            hash,
-        })
+        let mut addr = EndpointAddr::new(node.endpoint_id);
+        if let Some(relay_url) = node.info.relay_url {
+            addr = addr.with_relay_url(relay_url);
+        }
+        for ip_addr in node.info.direct_addresses {
+            addr = addr.with_ip_addr(ip_addr);
+        }
+        Ok(Self { addr, format, hash })
     }
 }
 
 impl FromStr for BlobTicket {
-    type Err = ticket::ParseError;
+    type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ticket::deserialize(s)
@@ -104,8 +103,8 @@ impl FromStr for BlobTicket {
 
 impl BlobTicket {
     /// Creates a new ticket.
-    pub fn new(node: NodeAddr, hash: Hash, format: BlobFormat) -> Self {
-        Self { hash, format, node }
+    pub fn new(addr: EndpointAddr, hash: Hash, format: BlobFormat) -> Self {
+        Self { hash, format, addr }
     }
 
     /// The hash of the item this ticket can retrieve.
@@ -113,9 +112,9 @@ impl BlobTicket {
         self.hash
     }
 
-    /// The [`NodeAddr`] of the provider for this ticket.
-    pub fn node_addr(&self) -> &NodeAddr {
-        &self.node
+    /// The [`EndpointAddr`] of the provider for this ticket.
+    pub fn addr(&self) -> &EndpointAddr {
+        &self.addr
     }
 
     /// The [`BlobFormat`] for this ticket.
@@ -136,9 +135,9 @@ impl BlobTicket {
     }
 
     /// Get the contents of the ticket, consuming it.
-    pub fn into_parts(self) -> (NodeAddr, Hash, BlobFormat) {
-        let BlobTicket { node, hash, format } = self;
-        (node, hash, format)
+    pub fn into_parts(self) -> (EndpointAddr, Hash, BlobFormat) {
+        let BlobTicket { addr, hash, format } = self;
+        (addr, hash, format)
     }
 }
 
@@ -147,7 +146,11 @@ impl Serialize for BlobTicket {
         if serializer.is_human_readable() {
             serializer.serialize_str(&self.to_string())
         } else {
-            let BlobTicket { node, format, hash } = self;
+            let BlobTicket {
+                addr: node,
+                format,
+                hash,
+            } = self;
             (node, format, hash).serialize(serializer)
         }
     }
@@ -169,7 +172,7 @@ impl<'de> Deserialize<'de> for BlobTicket {
 mod tests {
     use std::net::SocketAddr;
 
-    use iroh::{PublicKey, SecretKey};
+    use iroh::{PublicKey, SecretKey, TransportAddr};
     use iroh_test::{assert_eq_hex, hexdump::parse_hexdump};
 
     use super::*;
@@ -178,10 +181,9 @@ mod tests {
         let hash = Hash::new(b"hi there");
         let peer = SecretKey::generate(&mut rand::rng()).public();
         let addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
-        let relay_url = None;
         BlobTicket {
             hash,
-            node: NodeAddr::from_parts(peer, relay_url, [addr]),
+            addr: EndpointAddr::from_parts(peer, [TransportAddr::Ip(addr)]),
             format: BlobFormat::HashSeq,
         }
     }
@@ -207,12 +209,12 @@ mod tests {
         let hash =
             Hash::from_str("0b84d358e4c8be6c38626b2182ff575818ba6bd3f4b90464994be14cb354a072")
                 .unwrap();
-        let node_id =
+        let endpoint_id =
             PublicKey::from_str("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
                 .unwrap();
 
         let ticket = BlobTicket {
-            node: NodeAddr::from_parts(node_id, None, []),
+            addr: EndpointAddr::new(endpoint_id),
             format: BlobFormat::Raw,
             hash,
         };
@@ -223,7 +225,7 @@ mod tests {
             .unwrap();
         let expected = parse_hexdump("
             00 # discriminator for variant 0
-            ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6 # node id, 32 bytes, see above
+            ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6 # endpoint id, 32 bytes, see above
             00 # relay url
             00 # number of addresses (0)
             00 # format (raw)

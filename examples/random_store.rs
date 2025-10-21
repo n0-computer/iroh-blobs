@@ -3,7 +3,6 @@ use std::{env, path::PathBuf, str::FromStr};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use iroh::{discovery::static_provider::StaticProvider, SecretKey};
-use iroh_base::ticket::NodeTicket;
 use iroh_blobs::{
     api::downloader::Shuffled,
     provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
@@ -11,6 +10,7 @@ use iroh_blobs::{
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
 };
+use iroh_tickets::endpoint::EndpointTicket;
 use irpc::RpcMessage;
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -80,7 +80,7 @@ pub struct RequestArgs {
     pub content: Vec<HashAndFormat>,
 
     /// Nodes to request from
-    pub nodes: Vec<NodeTicket>,
+    pub nodes: Vec<EndpointTicket>,
 
     /// Split large requests
     #[arg(long, default_value_t = false)]
@@ -242,8 +242,8 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();
-    let addr = router.endpoint().node_addr();
-    let ticket = NodeTicket::from(addr.clone());
+    let addr = router.endpoint().addr();
+    let ticket = EndpointTicket::from(addr.clone());
     println!("Node address: {addr:?}");
     println!("ticket:\n{ticket}");
     ctrl_c().await?;
@@ -272,12 +272,12 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
         .await?;
     let downloader = store.downloader(&endpoint);
     for ticket in &args.nodes {
-        sp.add_node_info(ticket.node_addr().clone());
+        sp.add_endpoint_info(ticket.endpoint_addr().clone());
     }
     let nodes = args
         .nodes
         .iter()
-        .map(|ticket| ticket.node_addr().node_id)
+        .map(|ticket| ticket.endpoint_addr().id)
         .collect::<Vec<_>>();
     for content in args.content {
         let mut progress = downloader
