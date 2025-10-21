@@ -1845,7 +1845,7 @@ dependencies = [
  "iroh-quinn",
  "iroh-test",
  "irpc",
- "n0-future 0.2.0",
+ "n0-future 0.3.0",
  "n0-snafu",
  "nested_enum_utils",
  "postcard",
@@ -2286,9 +2286,9 @@ dependencies = [
 
 [[package]]
 name = "n0-future"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89d7dd42bd0114c9daa9c4f2255d692a73bba45767ec32cf62892af6fe5d31f6"
+checksum = "439e746b307c1fd0c08771c3cafcd1746c3ccdb0d9c7b859d3caded366b6da76"
 dependencies = [
  "cfg_aliases",
  "derive_more 1.0.0",
