@@ -44,7 +44,7 @@ use anyhow::Result;
 use clap::Parser;
 use iroh::{
     discovery::pkarr::PkarrResolver,
-    endpoint::{presets, Connection},
+    endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointId,
 };
@@ -87,11 +87,7 @@ async fn listen(text: Vec<String>) -> Result<()> {
     // Use an in-memory store for this example. You would use a persistent store in production code.
     let store = MemStore::new();
     // Create an endpoint with the secret key and discovery publishing to the n0 dns server enabled.
-    let endpoint = Endpoint::builder()
-        .secret_key(secret_key)
-        .preset(presets::N0)
-        .bind()
-        .await?;
+    let endpoint = Endpoint::builder().secret_key(secret_key).bind().await?;
     // Build our custom protocol handler. The `builder` exposes access to various subsystems in the
     // iroh node. In our case, we need a blobs client and the endpoint.
     let proto = BlobSearch::new(&store);
@@ -124,7 +120,10 @@ async fn query(endpoint_id: EndpointId, query: String) -> Result<()> {
     // Create an endpoint with a random secret key and no discovery publishing.
     // For a client we just need discovery resolution via the n0 dns server, which
     // the PkarrResolver provides.
-    let endpoint = Endpoint::builder().preset(presets::N0).bind().await?;
+    let endpoint = Endpoint::empty_builder(iroh::RelayMode::Default)
+        .discovery(PkarrResolver::n0_dns())
+        .bind()
+        .await?;
     // Query the remote node.
     // This will send the query over our custom protocol, read hashes on the reply stream,
     // and download each hash over iroh-blobs.

@@ -21,7 +21,7 @@ use std::{
 use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
-use iroh::{endpoint::presets, protocol::Router, EndpointAddr, EndpointId, SecretKey};
+use iroh::{protocol::Router, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::{
     provider::events::{
         AbortReason, ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode,
@@ -231,11 +231,7 @@ async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
     let secret = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
-        .secret_key(secret)
-        .preset(presets::N0)
-        .bind()
-        .await?;
+    let endpoint = iroh::Endpoint::builder().secret_key(secret).bind().await?;
     match args {
         Args::Get { ticket } => {
             let connection = endpoint
@@ -352,11 +348,7 @@ async fn add_paths(store: &MemStore, paths: Vec<PathBuf>) -> Result<HashMap<Path
 
 async fn setup(store: MemStore, events: EventSender) -> Result<(Router, EndpointAddr)> {
     let secret = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
-        .preset(presets::N0)
-        .secret_key(secret)
-        .bind()
-        .await?;
+    let endpoint = iroh::Endpoint::builder().secret_key(secret).bind().await?;
     endpoint.online().await;
     let addr = endpoint.addr();
     let blobs = BlobsProtocol::new(&store, Some(events));

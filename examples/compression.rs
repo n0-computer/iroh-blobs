@@ -8,7 +8,7 @@ use std::{fmt::Debug, path::PathBuf};
 use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
-use iroh::{endpoint::presets, protocol::ProtocolHandler};
+use iroh::protocol::ProtocolHandler;
 use iroh_blobs::{
     api::Store,
     get::StreamPair,
@@ -184,11 +184,7 @@ async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
     let secret = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
-        .secret_key(secret)
-        .preset(presets::N0)
-        .bind()
-        .await?;
+    let endpoint = iroh::Endpoint::builder().secret_key(secret).bind().await?;
     let compression = lz4::Compression;
     match args {
         Args::Provide { path } => {

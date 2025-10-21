@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use iroh::{endpoint::presets, protocol::Router, Endpoint};
+use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
-    let endpoint = Endpoint::builder().preset(presets::N0).bind().await?;
+    let endpoint = Endpoint::builder().bind().await?;
 
     // We initialize an in-memory backing store for iroh-blobs
     let store = MemStore::new();

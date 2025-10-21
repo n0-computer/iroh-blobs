@@ -136,7 +136,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Accept { path } => {
             accept(path).await?;
         }
-        Commands::Connect { endpoint_id, hash, out } => {
+        Commands::Connect {
+            endpoint_id,
+            hash,
+            out,
+        } => {
             connect(*endpoint_id, *hash, out.clone()).await?;
         }
     }
