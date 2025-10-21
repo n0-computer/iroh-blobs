@@ -549,9 +549,9 @@
 <a href=#549 id=549 data-nosnippet>549</a>        <span class="kw">let </span>tt1 = store1.add_slice(<span class="string">"hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#550 id=550 data-nosnippet>550</a>        <span class="kw">let </span>tt2 = store2.add_slice(<span class="string">"hello world 2"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#551 id=551 data-nosnippet>551</a>        <span class="kw">let </span>node1_addr = r1.endpoint().addr();
-<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw">let </span>node1_id = node1_addr.endpoint_id;
+<a href=#552 id=552 data-nosnippet>552</a>        <span class="kw">let </span>node1_id = node1_addr.id;
 <a href=#553 id=553 data-nosnippet>553</a>        <span class="kw">let </span>node2_addr = r2.endpoint().addr();
-<a href=#554 id=554 data-nosnippet>554</a>        <span class="kw">let </span>node2_id = node2_addr.endpoint_id;
+<a href=#554 id=554 data-nosnippet>554</a>        <span class="kw">let </span>node2_id = node2_addr.id;
 <a href=#555 id=555 data-nosnippet>555</a>        <span class="kw">let </span>swarm = Downloader::new(<span class="kw-2">&amp;</span>store3, r3.endpoint());
 <a href=#556 id=556 data-nosnippet>556</a>        sp3.add_endpoint_info(node1_addr.clone());
 <a href=#557 id=557 data-nosnippet>557</a>        sp3.add_endpoint_info(node2_addr.clone());
@@ -586,9 +586,9 @@
 <a href=#586 id=586 data-nosnippet>586</a>            })
 <a href=#587 id=587 data-nosnippet>587</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#588 id=588 data-nosnippet>588</a>        <span class="kw">let </span>node1_addr = r1.endpoint().addr();
-<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">let </span>node1_id = node1_addr.endpoint_id;
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">let </span>node1_id = node1_addr.id;
 <a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">let </span>node2_addr = r2.endpoint().addr();
-<a href=#591 id=591 data-nosnippet>591</a>        <span class="kw">let </span>node2_id = node2_addr.endpoint_id;
+<a href=#591 id=591 data-nosnippet>591</a>        <span class="kw">let </span>node2_id = node2_addr.id;
 <a href=#592 id=592 data-nosnippet>592</a>        <span class="kw">let </span>swarm = Downloader::new(<span class="kw-2">&amp;</span>store3, r3.endpoint());
 <a href=#593 id=593 data-nosnippet>593</a>        sp3.add_endpoint_info(node1_addr.clone());
 <a href=#594 id=594 data-nosnippet>594</a>        sp3.add_endpoint_info(node2_addr.clone());
@@ -653,9 +653,9 @@
 <a href=#653 id=653 data-nosnippet>653</a>            })
 <a href=#654 id=654 data-nosnippet>654</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#655 id=655 data-nosnippet>655</a>        <span class="kw">let </span>node1_addr = r1.endpoint().addr();
-<a href=#656 id=656 data-nosnippet>656</a>        <span class="kw">let </span>node1_id = node1_addr.endpoint_id;
+<a href=#656 id=656 data-nosnippet>656</a>        <span class="kw">let </span>node1_id = node1_addr.id;
 <a href=#657 id=657 data-nosnippet>657</a>        <span class="kw">let </span>node2_addr = r2.endpoint().addr();
-<a href=#658 id=658 data-nosnippet>658</a>        <span class="kw">let </span>node2_id = node2_addr.endpoint_id;
+<a href=#658 id=658 data-nosnippet>658</a>        <span class="kw">let </span>node2_id = node2_addr.id;
 <a href=#659 id=659 data-nosnippet>659</a>        <span class="kw">let </span>swarm = Downloader::new(<span class="kw-2">&amp;</span>store3, r3.endpoint());
 <a href=#660 id=660 data-nosnippet>660</a>        sp3.add_endpoint_info(node1_addr.clone());
 <a href=#661 id=661 data-nosnippet>661</a>        sp3.add_endpoint_info(node2_addr.clone());
