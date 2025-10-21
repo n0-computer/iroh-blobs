@@ -298,7 +298,7 @@ pub async fn handle_connection(
         if let Err(cause) = progress
             .client_connected(|| ClientConnected {
                 connection_id,
-                node_id: connection.remote_node_id().ok(),
+                endpoint_id: connection.remote_id().ok(),
             })
             .await
         {

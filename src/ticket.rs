@@ -2,7 +2,7 @@
 use std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
 use anyhow::Result;
-use iroh::{NodeAddr, NodeId, RelayUrl};
+use iroh::{EndpointAddr, EndpointId, RelayUrl};
 use iroh_base::ticket::{self, Ticket};
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ use crate::{BlobFormat, Hash, HashAndFormat};
 #[display("{}", Ticket::serialize(self))]
 pub struct BlobTicket {
     /// The provider to get a file from.
-    node: NodeAddr,
+    addr: EndpointAddr,
     /// The format of the blob.
     format: BlobFormat,
     /// The hash to retrieve.
@@ -51,7 +51,7 @@ struct Variant0BlobTicket {
 
 #[derive(Serialize, Deserialize)]
 struct Variant0NodeAddr {
-    node_id: NodeId,
+    endpoint_id: EndpointId,
     info: Variant0AddrInfo,
 }
 
@@ -67,10 +67,10 @@ impl Ticket for BlobTicket {
     fn to_bytes(&self) -> Vec<u8> {
         let data = TicketWireFormat::Variant0(Variant0BlobTicket {
             node: Variant0NodeAddr {
-                node_id: self.node.node_id,
+                endpoint_id: self.addr.endpoint_id,
                 info: Variant0AddrInfo {
-                    relay_url: self.node.relay_url.clone(),
-                    direct_addresses: self.node.direct_addresses.clone(),
+                    relay_url: self.addr.relay_url.clone(),
+                    direct_addresses: self.addr.direct_addresses.clone(),
                 },
             },
             format: self.format,
@@ -83,8 +83,8 @@ impl Ticket for BlobTicket {
         let res: TicketWireFormat = postcard::from_bytes(bytes)?;
         let TicketWireFormat::Variant0(Variant0BlobTicket { node, format, hash }) = res;
         Ok(Self {
-            node: NodeAddr {
-                node_id: node.node_id,
+            addr: EndpointAddr {
+                endpoint_id: node.endpoint_id,
                 relay_url: node.info.relay_url,
                 direct_addresses: node.info.direct_addresses,
             },
@@ -104,8 +104,8 @@ impl FromStr for BlobTicket {
 
 impl BlobTicket {
     /// Creates a new ticket.
-    pub fn new(node: NodeAddr, hash: Hash, format: BlobFormat) -> Self {
-        Self { hash, format, node }
+    pub fn new(addr: EndpointAddr, hash: Hash, format: BlobFormat) -> Self {
+        Self { hash, format, addr }
     }
 
     /// The hash of the item this ticket can retrieve.
@@ -113,9 +113,9 @@ impl BlobTicket {
         self.hash
     }
 
-    /// The [`NodeAddr`] of the provider for this ticket.
-    pub fn node_addr(&self) -> &NodeAddr {
-        &self.node
+    /// The [`EndpointAddr`] of the provider for this ticket.
+    pub fn addr(&self) -> &EndpointAddr {
+        &self.addr
     }
 
     /// The [`BlobFormat`] for this ticket.
@@ -136,9 +136,9 @@ impl BlobTicket {
     }
 
     /// Get the contents of the ticket, consuming it.
-    pub fn into_parts(self) -> (NodeAddr, Hash, BlobFormat) {
-        let BlobTicket { node, hash, format } = self;
-        (node, hash, format)
+    pub fn into_parts(self) -> (EndpointAddr, Hash, BlobFormat) {
+        let BlobTicket { addr, hash, format } = self;
+        (addr, hash, format)
     }
 }
 
@@ -147,7 +147,11 @@ impl Serialize for BlobTicket {
         if serializer.is_human_readable() {
             serializer.serialize_str(&self.to_string())
         } else {
-            let BlobTicket { node, format, hash } = self;
+            let BlobTicket {
+                addr: node,
+                format,
+                hash,
+            } = self;
             (node, format, hash).serialize(serializer)
         }
     }
@@ -181,7 +185,7 @@ mod tests {
         let relay_url = None;
         BlobTicket {
             hash,
-            node: NodeAddr::from_parts(peer, relay_url, [addr]),
+            addr: EndpointAddr::from_parts(peer, relay_url, [addr]),
             format: BlobFormat::HashSeq,
         }
     }
@@ -212,7 +216,7 @@ mod tests {
                 .unwrap();
 
         let ticket = BlobTicket {
-            node: NodeAddr::from_parts(node_id, None, []),
+            addr: EndpointAddr::from_parts(node_id, None, []),
             format: BlobFormat::Raw,
             hash,
         };
@@ -223,7 +227,7 @@ mod tests {
             .unwrap();
         let expected = parse_hexdump("
             00 # discriminator for variant 0
-            ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6 # node id, 32 bytes, see above
+            ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6 # endpoint id, 32 bytes, see above
             00 # relay url
             00 # number of addresses (0)
             00 # format (raw)

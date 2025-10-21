@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         "This example only supports raw blobs."
     );
     let connection = endpoint
-        .connect(ticket.node_addr().node_id, iroh_blobs::ALPN)
+        .connect(ticket.addr().endpoint_id, iroh_blobs::ALPN)
         .await?;
     let mut progress = iroh_blobs::get::request::get_blob(connection, ticket.hash());
     let stats = if cli.progress {

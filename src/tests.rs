@@ -2,7 +2,10 @@ use std::{collections::HashSet, io, ops::Range, path::PathBuf};
 
 use bao_tree::ChunkRanges;
 use bytes::Bytes;
-use iroh::{discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeId};
+use iroh::{
+    discovery::static_provider::StaticProvider, endpoint::presets, protocol::Router, Endpoint,
+    EndpointId,
+};
 use irpc::RpcMessage;
 use n0_future::{task::AbortOnDropHandle, StreamExt};
 use tempfile::TempDir;
@@ -226,7 +229,7 @@ async fn two_nodes_get_blobs(
     for size in sizes {
         tts.push(store1.add_bytes(test_data(size)).await?);
     }
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
     for size in sizes {
         let hash = Hash::new(test_data(size));
@@ -259,7 +262,7 @@ async fn two_nodes_observe(
     let size = 1024 * 1024 * 8 + 1;
     let data = test_data(size);
     let (hash, bao) = create_n0_bao(&data, &ChunkRanges::all())?;
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
     let mut stream = store2
         .remote()
@@ -308,7 +311,7 @@ async fn two_nodes_get_many(
         tts.push(store1.add_bytes(test_data(size)).await?);
     }
     let hashes = tts.iter().map(|tt| tt.hash).collect::<Vec<_>>();
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
     store2
         .remote()
@@ -339,7 +342,7 @@ async fn two_nodes_get_many_mem() -> TestResult<()> {
 }
 
 fn event_handler(
-    allowed_nodes: impl IntoIterator<Item = NodeId>,
+    allowed_nodes: impl IntoIterator<Item = EndpointId>,
 ) -> (EventSender, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
     let (events_tx, mut events_rx) = EventSender::channel(16, EventMask::ALL_READONLY);
@@ -348,8 +351,8 @@ fn event_handler(
         while let Some(event) = events_rx.recv().await {
             match event {
                 ProviderMessage::ClientConnected(msg) => {
-                    let res = match msg.node_id {
-                        Some(node_id) if allowed_nodes.contains(&node_id) => Ok(()),
+                    let res = match msg.endpoint_id {
+                        Some(endpoint_id) if allowed_nodes.contains(&endpoint_id) => Ok(()),
                         Some(_) => Err(AbortReason::Permission),
                         None => Err(AbortReason::Permission),
                     };
@@ -385,7 +388,7 @@ async fn two_nodes_push_blobs(
     for size in sizes {
         tts.push(store1.add_bytes(test_data(size)).await?);
     }
-    let addr2 = r2.endpoint().node_addr();
+    let addr2 = r2.endpoint().addr();
     let conn = r1.endpoint().connect(addr2, crate::ALPN).await?;
     for size in sizes {
         let hash = Hash::new(test_data(size));
@@ -411,11 +414,11 @@ async fn two_nodes_push_blobs_fs() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let (r1, store1, _, sp1) = node_test_setup_fs(testdir.path().join("a")).await?;
-    let (events_tx, count_rx, _task) = event_handler([r1.endpoint().node_id()]);
+    let (events_tx, count_rx, _task) = event_handler([r1.endpoint().id()]);
     let (r2, store2, _, sp2) =
         node_test_setup_with_events_fs(testdir.path().join("b"), events_tx).await?;
-    sp1.add_node_info(r2.endpoint().node_addr());
-    sp2.add_node_info(r1.endpoint().node_addr());
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
 }
 
@@ -423,10 +426,10 @@ async fn two_nodes_push_blobs_fs() -> TestResult<()> {
 async fn two_nodes_push_blobs_mem() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (r1, store1, sp1) = node_test_setup_mem().await?;
-    let (events_tx, count_rx, _task) = event_handler([r1.endpoint().node_id()]);
+    let (events_tx, count_rx, _task) = event_handler([r1.endpoint().id()]);
     let (r2, store2, sp2) = node_test_setup_with_events_mem(events_tx).await?;
-    sp1.add_node_info(r2.endpoint().node_addr());
-    sp2.add_node_info(r1.endpoint().node_addr());
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
 }
 
@@ -532,20 +535,20 @@ async fn two_node_test_setup_fs() -> TestResult<(
     let db2_path = testdir.path().join("db2");
     let (r1, store1, p1, sp1) = node_test_setup_fs(db1_path).await?;
     let (r2, store2, p2, sp2) = node_test_setup_fs(db2_path).await?;
-    sp1.add_node_info(r2.endpoint().node_addr());
-    sp2.add_node_info(r1.endpoint().node_addr());
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     Ok((testdir, (r1, store1, p1), (r2, store2, p2)))
 }
 
 /// Sets up two nodes with a router and a blob store each.
 ///
 /// Note that this does not configure discovery, so nodes will only find each other
-/// with full node addresses, not just node ids!
+/// with full node addresses, not just endpoint ids!
 async fn two_node_test_setup_mem() -> TestResult<((Router, MemStore), (Router, MemStore))> {
     let (r1, store1, sp1) = node_test_setup_mem().await?;
     let (r2, store2, sp2) = node_test_setup_mem().await?;
-    sp1.add_node_info(r2.endpoint().node_addr());
-    sp2.add_node_info(r1.endpoint().node_addr());
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     Ok(((r1, store1), (r2, store2)))
 }
 
@@ -555,7 +558,7 @@ async fn two_nodes_hash_seq(
     r2: Router,
     store2: &Store,
 ) -> TestResult<()> {
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     let sizes = INTERESTING_SIZES;
     let root = add_test_hash_seq(store1, sizes).await?;
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
@@ -583,7 +586,7 @@ async fn two_nodes_hash_seq_mem() -> TestResult<()> {
 async fn two_nodes_hash_seq_progress() -> TestResult<()> {
     tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     let sizes = INTERESTING_SIZES;
     let root = add_test_hash_seq(&store1, sizes).await?;
     let conn = r2.endpoint().connect(addr1, crate::ALPN).await?;
@@ -612,14 +615,14 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     let hash_seq = tts.iter().map(|x| x.hash).collect::<HashSeq>();
     let root_tt = store.add_bytes(hash_seq).await?;
     let root = root_tt.hash;
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::builder().preset(presets::N0).bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint2 = Endpoint::builder().preset(presets::N0).bind().await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     let (hs, sizes) = get::request::get_hash_seq_and_sizes(&conn, &root, 1024, None).await?;
     println!("hash seq: {hs:?}");
@@ -643,14 +646,14 @@ async fn node_serve_blobs() -> TestResult<()> {
     for size in sizes {
         tts.push(store.add_bytes(test_data(size)).await?);
     }
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::builder().preset(presets::N0).bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint2 = Endpoint::builder().preset(presets::N0).bind().await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     for size in sizes {
         let expected = test_data(size);
@@ -683,14 +686,14 @@ async fn node_smoke_mem() -> TestResult<()> {
 async fn node_smoke(store: &Store) -> TestResult<()> {
     let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
     let hash = tt.hash();
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::builder().preset(presets::N0).bind().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
-    let addr1 = r1.endpoint().node_addr();
+    let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint2 = Endpoint::builder().preset(presets::N0).bind().await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     let (size, stats) = get::request::get_unverified_size(&conn, &hash).await?;
     info!("size: {} stats: {:?}", size, stats);

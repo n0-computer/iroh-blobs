@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{discovery::static_provider::StaticProvider, protocol::Router, Endpoint, NodeAddr};
+use iroh::{discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -27,10 +27,7 @@ struct Node {
 
 impl Node {
     async fn new(disc: &StaticProvider) -> Result<Self> {
-        let endpoint = Endpoint::builder()
-            .add_discovery(disc.clone())
-            .bind()
-            .await?;
+        let endpoint = Endpoint::builder().discovery(disc.clone()).bind().await?;
 
         let store = MemStore::new();
 
@@ -51,9 +48,9 @@ impl Node {
 
     // get address of this node. Has the side effect of waiting for the node
     // to be online & ready to accept connections
-    async fn node_addr(&self) -> Result<NodeAddr> {
+    async fn node_addr(&self) -> Result<EndpointAddr> {
         self.router.endpoint().online().await;
-        let addr = self.router.endpoint().node_addr();
+        let addr = self.router.endpoint().addr();
         Ok(addr)
     }
 
@@ -90,9 +87,9 @@ impl Node {
     }
 
     /// retrieve an entire collection from a given hash and provider
-    async fn get_collection(&self, hash: Hash, provider: NodeAddr) -> Result<()> {
+    async fn get_collection(&self, hash: Hash, provider: EndpointAddr) -> Result<()> {
         let req = HashAndFormat::hash_seq(hash);
-        let addrs = Shuffled::new(vec![provider.node_id]);
+        let addrs = Shuffled::new(vec![provider.endpoint_id]);
         self.store
             .downloader(self.router.endpoint())
             .download(req, addrs)
@@ -124,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
     let recv_node = Node::new(&disc).await?;
 
     // add the send node to the discovery provider so the recv node can find it
-    disc.add_node_info(send_node_addr.clone());
+    disc.add_endpoint_info(send_node_addr.clone());
     // fetch the collection and all contents
     recv_node.get_collection(hash, send_node_addr).await?;
 
