@@ -545,7 +545,7 @@ mod tests {
         discovery::static_provider::StaticProvider,
         endpoint::{Connection, ConnectionType},
         protocol::{AcceptError, ProtocolHandler, Router},
-        Endpoint, EndpointAddr, EndpointId, SecretKey, Watcher,
+        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, Watcher,
     };
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
     use n0_snafu::ResultExt;
@@ -662,7 +662,7 @@ mod tests {
     async fn connection_pool_errors() -> TestResult<()> {
         // set up static discovery for all addrs
         let discovery = StaticProvider::new();
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery.clone())
             .bind()
             .await?;
@@ -699,7 +699,7 @@ mod tests {
         let n = 32;
         let (ids, routers, discovery) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the endpoint ids
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery.clone())
             .bind()
             .await?;
@@ -734,7 +734,7 @@ mod tests {
         let n = 32;
         let (ids, routers, discovery) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the endpoint ids
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery.clone())
             .bind()
             .await?;
@@ -765,7 +765,7 @@ mod tests {
     async fn on_connected_error() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery)
             .bind()
             .await?;
@@ -795,7 +795,7 @@ mod tests {
     async fn on_connected_direct() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery)
             .bind()
             .await?;
@@ -838,7 +838,7 @@ mod tests {
     async fn watch_close() -> TestResult<()> {
         let n = 1;
         let (ids, routers, discovery) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::builder()
+        let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
             .discovery(discovery)
             .bind()
             .await?;

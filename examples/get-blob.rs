@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     setup_logging();
     let cli = Cli::parse();
     let ticket = cli.ticket;
-    let endpoint = iroh::Endpoint::builder()
+    let endpoint = iroh::Endpoint::empty_builder(iroh::RelayMode::Default)
         .discovery(PkarrResolver::n0_dns())
         .bind()
         .await?;

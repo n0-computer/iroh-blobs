@@ -7,7 +7,7 @@ use iroh_blobs::{store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
 async fn main() -> anyhow::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
-    let endpoint = Endpoint::builder().bind().await?;
+    let endpoint = Endpoint::bind().await?;
 
     // We initialize an in-memory backing store for iroh-blobs
     let store = MemStore::new();

@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr};
+use iroh::{
+    discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr, RelayMode,
+};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -27,7 +29,10 @@ struct Node {
 
 impl Node {
     async fn new(disc: &StaticProvider) -> Result<Self> {
-        let endpoint = Endpoint::builder().discovery(disc.clone()).bind().await?;
+        let endpoint = Endpoint::empty_builder(RelayMode::Default)
+            .discovery(disc.clone())
+            .bind()
+            .await?;
 
         let store = MemStore::new();
 
@@ -102,7 +107,7 @@ impl Node {
 async fn main() -> anyhow::Result<()> {
     // create a local provider for nodes to discover each other.
     // outside of a development environment, production apps would
-    // use `Endpoint::builder().discovery_n0()` or a similar method
+    // use `Endpoint::bind()` or a similar method
     let disc = StaticProvider::new();
 
     // create a sending node

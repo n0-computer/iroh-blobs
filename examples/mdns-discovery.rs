@@ -60,7 +60,7 @@ async fn accept(path: &Path) -> Result<()> {
 
     println!("Starting iroh node with mdns discovery...");
     // create a new node
-    let endpoint = Endpoint::builder()
+    let endpoint = Endpoint::empty_builder(RelayMode::Default)
         .secret_key(key)
         .discovery(MdnsDiscovery::builder())
         .relay_mode(RelayMode::Disabled)
@@ -93,10 +93,9 @@ async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result
 
     println!("Starting iroh node with mdns discovery...");
     // create a new node
-    let endpoint = Endpoint::builder()
+    let endpoint = Endpoint::empty_builder(RelayMode::Disabled)
         .secret_key(key)
         .discovery(discovery)
-        .relay_mode(RelayMode::Disabled)
         .bind()
         .await?;
     let store = MemStore::new();
