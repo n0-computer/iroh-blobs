@@ -61,7 +61,6 @@ atomic_refcell = "0.1.13"
 iroh = { version = "0.93", features = ["discovery-local-network"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
-irpc = { version = "0.9.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 
 [features]
 hide-proto-docs = []
