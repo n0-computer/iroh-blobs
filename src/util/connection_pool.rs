@@ -32,7 +32,6 @@ use tokio::sync::{
     mpsc::{self, error::SendError as TokioSendError},
     oneshot, Notify,
 };
-use tokio_util::time::FutureExt as TimeFutureExt;
 use tracing::{debug, error, info, trace};
 
 pub type OnConnected =
@@ -194,8 +193,7 @@ impl Context {
         };
 
         // Connect to the node
-        let state = conn_fut
-            .timeout(context.options.connect_timeout)
+        let state = n0_future::time::timeout(context.options.connect_timeout, conn_fut)
             .await
             .map_err(|_| PoolConnectError::Timeout)
             .and_then(|r| r);

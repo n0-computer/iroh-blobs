@@ -12,10 +12,9 @@ use std::{
 
 use anyhow::Result;
 use bao_tree::ChunkRanges;
-use iroh::endpoint::{self, VarInt};
+use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_future::StreamExt;
-use quinn::ConnectionError;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use tokio::select;

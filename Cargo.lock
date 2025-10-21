@@ -259,8 +259,7 @@ dependencies = [
 [[package]]
 name = "bao-tree"
 version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff16d65e48353db458be63ee395c03028f24564fd48668389bd65fd945f5ac36"
+source = "git+https://github.com/n0-computer/bao-tree.git?branch=Frando%2Fwasm#7f361d01f780353eb826b5c08ae6a494c380cad6"
 dependencies = [
  "blake3",
  "bytes",
@@ -1502,7 +1501,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -1830,6 +1829,7 @@ dependencies = [
  "atomic_refcell",
  "bao-tree",
  "bytes",
+ "cfg_aliases",
  "chrono",
  "clap",
  "concat_const",
@@ -1865,7 +1865,6 @@ dependencies = [
  "test-strategy",
  "testresult",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "tracing-test",
@@ -1964,7 +1963,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2032,6 +2031,7 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.9.0"
+source = "git+https://github.com/n0-computer/irpc?branch=Frando%2Fvarint-feature#1bb4dbd41ce191c42b4fa1530eba4598fa30e12f"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2053,6 +2053,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.7.0"
+source = "git+https://github.com/n0-computer/irpc?branch=Frando%2Fvarint-feature#1bb4dbd41ce191c42b4fa1530eba4598fa30e12f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2866,8 +2867,7 @@ dependencies = [
 [[package]]
 name = "positioned-io"
 version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8078ce4d22da5e8f57324d985cc9befe40c49ab0507a192d6be9e59584495c9"
+source = "git+https://github.com/Frando/positioned-io?branch=Frando%2Fwasm#113f8f53cfb3fa295cba84a8b8cf33c91ad6d481"
 dependencies = [
  "libc",
  "winapi",
@@ -3084,7 +3084,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3441,7 +3441,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4017,7 +4017,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4203,12 +4203,10 @@ checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-util",
  "hashbrown",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 

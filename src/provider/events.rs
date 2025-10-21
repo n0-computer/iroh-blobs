@@ -1,5 +1,6 @@
 use std::{fmt::Debug, io, ops::Deref};
 
+use iroh::endpoint::VarInt;
 use irpc::{
     channel::{mpsc, none::NoSender, oneshot},
     rpc_requests, Channels, WithChannels,
@@ -106,11 +107,11 @@ impl From<ProgressError> for io::Error {
 }
 
 pub trait HasErrorCode {
-    fn code(&self) -> quinn::VarInt;
+    fn code(&self) -> VarInt;
 }
 
 impl HasErrorCode for ProgressError {
-    fn code(&self) -> quinn::VarInt {
+    fn code(&self) -> VarInt {
         match self {
             ProgressError::Limit => ERR_LIMIT,
             ProgressError::Permission => ERR_PERMISSION,

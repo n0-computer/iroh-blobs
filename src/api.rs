@@ -308,8 +308,9 @@ impl Store {
     /// Listen on a quinn endpoint for incoming rpc connections.
     #[cfg(feature = "rpc")]
     pub async fn listen(self, endpoint: quinn::Endpoint) {
-        use self::proto::Request;
         use irpc::rpc::RemoteService;
+
+        use self::proto::Request;
         let local = self.client.as_local().unwrap().clone();
         let handler = Request::remote_handler(local);
         irpc::rpc::listen::<Request>(endpoint, handler).await

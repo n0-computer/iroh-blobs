@@ -32,7 +32,6 @@ use irpc::channel::mpsc;
 use n0_future::future::yield_now;
 use range_collections::range_set::RangeSetRange;
 use tokio::{
-    io::AsyncReadExt,
     sync::watch,
     task::{JoinError, JoinSet},
 };
@@ -755,8 +754,18 @@ async fn import_byte_stream(
     import_bytes(res.into(), scope, format, tx).await
 }
 
-#[instrument(skip_all, fields(path = %cmd.path.display()))]
+#[cfg(wasm_browser)]
 async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+    let _: ImportPathRequest = cmd.inner;
+    Err(anyhow::anyhow!(
+        "import_path is not supported in the browser"
+    ))
+}
+
+#[instrument(skip_all, fields(path = %cmd.path.display()))]
+#[cfg(not(wasm_browser))]
+async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+    use tokio::io::AsyncReadExt;
     let ImportPathMsg {
         inner:
             ImportPathRequest {
