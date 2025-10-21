@@ -36,11 +36,11 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.93"
+iroh = { version = "0.93", default-features = false }
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.93"
-irpc = { version = "0.9.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+irpc = { version = "0.9.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
 iroh-metrics = { version = "0.36" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -62,9 +62,15 @@ atomic_refcell = "0.1.13"
 iroh = { version = "0.93", features = ["discovery-local-network"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
+irpc = { version = "0.9.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 
 [features]
 hide-proto-docs = []
 metrics = []
-default = ["hide-proto-docs", "fs-store"]
+default = ["hide-proto-docs", "fs-store", "rpc"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
+rpc = ["irpc/rpc", "irpc/quinn_endpoint_setup"]
+
+[patch.crates-io]
+# irpc = { git = "https://github.com/n0-computer/irpc", branch = "Frando/varint-feature" }
+irpc = { path = "../irpc" }

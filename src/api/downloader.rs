@@ -31,7 +31,7 @@ pub struct Downloader {
     client: irpc::Client<SwarmProtocol>,
 }
 
-#[rpc_requests(message = SwarmMsg, alias = "Msg")]
+#[rpc_requests(message = SwarmMsg, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 enum SwarmProtocol {
     #[rpc(tx = mpsc::Sender<DownloadProgressItem>)]

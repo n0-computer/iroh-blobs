@@ -531,7 +531,7 @@ impl EventSender {
     }
 }
 
-#[rpc_requests(message = ProviderMessage)]
+#[rpc_requests(message = ProviderMessage, rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ProviderProto {
     /// A new client connected to the provider.
@@ -705,9 +705,14 @@ mod irpc_ext {
                             .map_err(irpc::Error::from)?;
                         Ok(req_tx)
                     }
+                    #[cfg(feature = "rpc")]
                     irpc::Request::Remote(remote) => {
                         let (s, _) = remote.write(msg).await?;
                         Ok(s.into())
+                    }
+                    #[cfg(not(feature = "rpc"))]
+                    irpc::Request::Remote(_) => {
+                        unreachable!()
                     }
                 }
             }
