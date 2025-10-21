@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let tag = store.add_slice(b"Hello world").await?;
   
     let _ = endpoint.online().await;
-    let addr = endpoint.node_addr();
+    let addr = endpoint.addr();
     let ticket = BlobTicket::new(addr, tag.hash, tag.format);
 
     // build the router

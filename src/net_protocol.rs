@@ -18,7 +18,7 @@
 //! // create an iroh endpoint
 //! let endpoint = Endpoint::bind().await?;
 //! endpoint.online().await;
-//! let addr = endpoint.node_addr();
+//! let addr = endpoint.addr();
 //!
 //! // create a blobs protocol handler
 //! let blobs = BlobsProtocol::new(&store, None);
