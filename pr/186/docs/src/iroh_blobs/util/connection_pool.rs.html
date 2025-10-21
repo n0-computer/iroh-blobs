@@ -545,7 +545,7 @@
 <a href=#545 id=545 data-nosnippet>545</a>        discovery::static_provider::StaticProvider,
 <a href=#546 id=546 data-nosnippet>546</a>        endpoint::{Connection, ConnectionType},
 <a href=#547 id=547 data-nosnippet>547</a>        protocol::{AcceptError, ProtocolHandler, Router},
-<a href=#548 id=548 data-nosnippet>548</a>        Endpoint, EndpointAddr, EndpointId, SecretKey, Watcher,
+<a href=#548 id=548 data-nosnippet>548</a>        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, Watcher,
 <a href=#549 id=549 data-nosnippet>549</a>    };
 <a href=#550 id=550 data-nosnippet>550</a>    <span class="kw">use </span>n0_future::{io, stream, BufferedStreamExt, StreamExt};
 <a href=#551 id=551 data-nosnippet>551</a>    <span class="kw">use </span>n0_snafu::ResultExt;
@@ -662,7 +662,7 @@
 <a href=#662 id=662 data-nosnippet>662</a>    </span><span class="kw">async fn </span>connection_pool_errors() -&gt; TestResult&lt;()&gt; {
 <a href=#663 id=663 data-nosnippet>663</a>        <span class="comment">// set up static discovery for all addrs
 <a href=#664 id=664 data-nosnippet>664</a>        </span><span class="kw">let </span>discovery = StaticProvider::new();
-<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::builder()
+<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
 <a href=#666 id=666 data-nosnippet>666</a>            .discovery(discovery.clone())
 <a href=#667 id=667 data-nosnippet>667</a>            .bind()
 <a href=#668 id=668 data-nosnippet>668</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -699,7 +699,7 @@
 <a href=#699 id=699 data-nosnippet>699</a>        <span class="kw">let </span>n = <span class="number">32</span>;
 <a href=#700 id=700 data-nosnippet>700</a>        <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#701 id=701 data-nosnippet>701</a>        <span class="comment">// build a client endpoint that can resolve all the endpoint ids
-<a href=#702 id=702 data-nosnippet>702</a>        </span><span class="kw">let </span>endpoint = iroh::Endpoint::builder()
+<a href=#702 id=702 data-nosnippet>702</a>        </span><span class="kw">let </span>endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
 <a href=#703 id=703 data-nosnippet>703</a>            .discovery(discovery.clone())
 <a href=#704 id=704 data-nosnippet>704</a>            .bind()
 <a href=#705 id=705 data-nosnippet>705</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -734,7 +734,7 @@
 <a href=#734 id=734 data-nosnippet>734</a>        <span class="kw">let </span>n = <span class="number">32</span>;
 <a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#736 id=736 data-nosnippet>736</a>        <span class="comment">// build a client endpoint that can resolve all the endpoint ids
-<a href=#737 id=737 data-nosnippet>737</a>        </span><span class="kw">let </span>endpoint = iroh::Endpoint::builder()
+<a href=#737 id=737 data-nosnippet>737</a>        </span><span class="kw">let </span>endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
 <a href=#738 id=738 data-nosnippet>738</a>            .discovery(discovery.clone())
 <a href=#739 id=739 data-nosnippet>739</a>            .bind()
 <a href=#740 id=740 data-nosnippet>740</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -765,7 +765,7 @@
 <a href=#765 id=765 data-nosnippet>765</a>    </span><span class="kw">async fn </span>on_connected_error() -&gt; TestResult&lt;()&gt; {
 <a href=#766 id=766 data-nosnippet>766</a>        <span class="kw">let </span>n = <span class="number">1</span>;
 <a href=#767 id=767 data-nosnippet>767</a>        <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::builder()
+<a href=#768 id=768 data-nosnippet>768</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
 <a href=#769 id=769 data-nosnippet>769</a>            .discovery(discovery)
 <a href=#770 id=770 data-nosnippet>770</a>            .bind()
 <a href=#771 id=771 data-nosnippet>771</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -795,7 +795,7 @@
 <a href=#795 id=795 data-nosnippet>795</a>    </span><span class="kw">async fn </span>on_connected_direct() -&gt; TestResult&lt;()&gt; {
 <a href=#796 id=796 data-nosnippet>796</a>        <span class="kw">let </span>n = <span class="number">1</span>;
 <a href=#797 id=797 data-nosnippet>797</a>        <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#798 id=798 data-nosnippet>798</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::builder()
+<a href=#798 id=798 data-nosnippet>798</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
 <a href=#799 id=799 data-nosnippet>799</a>            .discovery(discovery)
 <a href=#800 id=800 data-nosnippet>800</a>            .bind()
 <a href=#801 id=801 data-nosnippet>801</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
@@ -838,7 +838,7 @@
 <a href=#838 id=838 data-nosnippet>838</a>    </span><span class="kw">async fn </span>watch_close() -&gt; TestResult&lt;()&gt; {
 <a href=#839 id=839 data-nosnippet>839</a>        <span class="kw">let </span>n = <span class="number">1</span>;
 <a href=#840 id=840 data-nosnippet>840</a>        <span class="kw">let </span>(ids, routers, discovery) = echo_servers(n).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#841 id=841 data-nosnippet>841</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::builder()
+<a href=#841 id=841 data-nosnippet>841</a>        <span class="kw">let </span>endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
 <a href=#842 id=842 data-nosnippet>842</a>            .discovery(discovery)
 <a href=#843 id=843 data-nosnippet>843</a>            .bind()
 <a href=#844 id=844 data-nosnippet>844</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
