@@ -259,7 +259,7 @@ dependencies = [
 [[package]]
 name = "bao-tree"
 version = "0.15.1"
-source = "git+https://github.com/n0-computer/bao-tree.git?branch=Frando%2Fwasm#7f361d01f780353eb826b5c08ae6a494c380cad6"
+source = "git+https://github.com/n0-computer/bao-tree.git?branch=Frando%2Fwasm#800607243583126d06237a582049f606386d787a"
 dependencies = [
  "blake3",
  "bytes",
@@ -1501,7 +1501,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -1963,7 +1963,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2866,8 +2866,9 @@ dependencies = [
 
 [[package]]
 name = "positioned-io"
-version = "0.3.4"
-source = "git+https://github.com/Frando/positioned-io?branch=Frando%2Fwasm#113f8f53cfb3fa295cba84a8b8cf33c91ad6d481"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ec4b80060f033312b99b6874025d9503d2af87aef2dd4c516e253fbfcdada7"
 dependencies = [
  "libc",
  "winapi",
@@ -3084,7 +3085,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3441,7 +3442,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4017,7 +4018,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4715,7 +4716,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
