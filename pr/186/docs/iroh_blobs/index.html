@@ -42,7 +42,7 @@
     <span class="kw">let </span>tag = store.add_slice(<span class="string">b"Hello world"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
   
     <span class="kw">let _ </span>= endpoint.online().<span class="kw">await</span>;
-    <span class="kw">let </span>addr = endpoint.node_addr();
+    <span class="kw">let </span>addr = endpoint.addr();
     <span class="kw">let </span>ticket = BlobTicket::new(addr, tag.hash, tag.format);
 
     <span class="comment">// build the router
