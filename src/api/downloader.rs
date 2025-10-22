@@ -10,10 +10,9 @@ use anyhow::bail;
 use genawaiter::sync::Gen;
 use iroh::{Endpoint, EndpointId};
 use irpc::{channel::mpsc, rpc_requests};
-use n0_future::{future, stream, BufferedStreamExt, Stream, StreamExt};
+use n0_future::{future, stream, task::JoinSet, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
-use tokio::task::JoinSet;
 use tracing::instrument::Instrument;
 
 use super::Store;
@@ -31,7 +30,7 @@ pub struct Downloader {
     client: irpc::Client<SwarmProtocol>,
 }
 
-#[rpc_requests(message = SwarmMsg, alias = "Msg")]
+#[rpc_requests(message = SwarmMsg, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 enum SwarmProtocol {
     #[rpc(tx = mpsc::Sender<DownloadProgressItem>)]
@@ -42,7 +41,7 @@ struct DownloaderActor {
     store: Store,
     pool: ConnectionPool,
     tasks: JoinSet<()>,
-    running: HashSet<tokio::task::Id>,
+    running: HashSet<n0_future::task::Id>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -342,7 +341,7 @@ impl Downloader {
     pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
         let actor = DownloaderActor::new(store.clone(), endpoint.clone());
-        tokio::spawn(actor.run(rx));
+        n0_future::task::spawn(actor.run(rx));
         Self { client: tx.into() }
     }
 

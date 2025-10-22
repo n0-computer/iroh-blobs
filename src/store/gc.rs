@@ -221,7 +221,7 @@ pub async fn run_gc(store: Store, config: GcConfig) {
     let mut live = HashSet::new();
     loop {
         live.clear();
-        tokio::time::sleep(config.interval).await;
+        n0_future::time::sleep(config.interval).await;
         if let Some(ref cb) = config.add_protected {
             match (cb)(&mut live).await {
                 ProtectOutcome::Continue => {}

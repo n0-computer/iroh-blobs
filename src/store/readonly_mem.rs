@@ -23,10 +23,12 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_future::future::{self, yield_now};
+use n0_future::{
+    future::{self, yield_now},
+    task::{JoinError, JoinSet},
+};
 use range_collections::range_set::RangeSetRange;
 use ref_cast::RefCast;
-use tokio::task::{JoinError, JoinSet};
 
 use super::util::BaoTreeSender;
 use crate::{
@@ -369,7 +371,7 @@ impl ReadonlyMemStore {
         }
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let actor = Actor::new(receiver, entries);
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
         let local = irpc::LocalSender::from(sender);
         Self {
             client: local.into(),

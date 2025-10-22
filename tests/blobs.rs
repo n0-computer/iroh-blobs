@@ -109,7 +109,7 @@ async fn blobs_smoke_fs_rpc() -> TestResult {
     let client = irpc::util::make_client_endpoint(unspecified, &[cert.as_ref()])?;
     let td = tempfile::tempdir()?;
     let store = FsStore::load(td.path().join("a")).await?;
-    tokio::spawn(store.deref().clone().listen(server.clone()));
+    n0_future::task::spawn(store.deref().clone().listen(server.clone()));
     let api = Store::connect(client, server.local_addr()?);
     blobs_smoke(td.path(), api.blobs()).await?;
     api.shutdown().await?;

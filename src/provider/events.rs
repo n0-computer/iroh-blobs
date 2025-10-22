@@ -1,5 +1,6 @@
 use std::{fmt::Debug, io, ops::Deref};
 
+use iroh::endpoint::VarInt;
 use irpc::{
     channel::{mpsc, none::NoSender, oneshot},
     rpc_requests, Channels, WithChannels,
@@ -106,11 +107,11 @@ impl From<ProgressError> for io::Error {
 }
 
 pub trait HasErrorCode {
-    fn code(&self) -> quinn::VarInt;
+    fn code(&self) -> VarInt;
 }
 
 impl HasErrorCode for ProgressError {
-    fn code(&self) -> quinn::VarInt {
+    fn code(&self) -> VarInt {
         match self {
             ProgressError::Limit => ERR_LIMIT,
             ProgressError::Permission => ERR_PERMISSION,
@@ -531,7 +532,7 @@ impl EventSender {
     }
 }
 
-#[rpc_requests(message = ProviderMessage)]
+#[rpc_requests(message = ProviderMessage, rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ProviderProto {
     /// A new client connected to the provider.
@@ -705,9 +706,14 @@ mod irpc_ext {
                             .map_err(irpc::Error::from)?;
                         Ok(req_tx)
                     }
+                    #[cfg(feature = "rpc")]
                     irpc::Request::Remote(remote) => {
                         let (s, _) = remote.write(msg).await?;
                         Ok(s.into())
+                    }
+                    #[cfg(not(feature = "rpc"))]
+                    irpc::Request::Remote(_) => {
+                        unreachable!()
                     }
                 }
             }

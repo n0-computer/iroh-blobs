@@ -259,8 +259,7 @@ dependencies = [
 [[package]]
 name = "bao-tree"
 version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff16d65e48353db458be63ee395c03028f24564fd48668389bd65fd945f5ac36"
+source = "git+https://github.com/n0-computer/bao-tree?branch=main#109ce557ec3feafb29a4702a0d1d195b1d52a706"
 dependencies = [
  "blake3",
  "bytes",
@@ -1692,6 +1691,7 @@ dependencies = [
  "atomic_refcell",
  "bao-tree",
  "bytes",
+ "cfg_aliases",
  "chrono",
  "clap",
  "concat_const",
@@ -1728,7 +1728,6 @@ dependencies = [
  "test-strategy",
  "testresult",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "tracing-test",
@@ -1910,8 +1909,7 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52cf44fdb253f2a3e22e5ecfa8efa466929f8b7cdd4fc0f958f655406e8cdab6"
+source = "git+https://github.com/n0-computer/irpc?branch=main#83c9dcbfe000f016e9a77419472a8b717036d5c8"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -1933,8 +1931,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "969df6effc474e714fb7e738eb9859aa22f40dc2280cadeab245817075c7f273"
+source = "git+https://github.com/n0-computer/irpc?branch=main#83c9dcbfe000f016e9a77419472a8b717036d5c8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2579,9 +2576,9 @@ dependencies = [
 
 [[package]]
 name = "positioned-io"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8078ce4d22da5e8f57324d985cc9befe40c49ab0507a192d6be9e59584495c9"
+checksum = "d4ec4b80060f033312b99b6874025d9503d2af87aef2dd4c516e253fbfcdada7"
 dependencies = [
  "libc",
  "winapi",
@@ -3814,12 +3811,10 @@ checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-util",
  "hashbrown",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 
@@ -4295,7 +4290,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

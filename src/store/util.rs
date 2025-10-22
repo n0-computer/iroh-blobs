@@ -1,8 +1,9 @@
-use std::{borrow::Borrow, fmt, time::SystemTime};
+use std::{borrow::Borrow, fmt};
 
 use bao_tree::io::mixed::EncodedItem;
 use bytes::Bytes;
 use derive_more::{From, Into};
+use n0_future::time::SystemTime;
 
 mod sparse_mem_file;
 use irpc::channel::mpsc;
@@ -68,6 +69,13 @@ impl fmt::Display for Tag {
 impl Tag {
     /// Create a new tag that does not exist yet.
     pub fn auto(time: SystemTime, exists: impl Fn(&[u8]) -> bool) -> Self {
+        // On wasm, SystemTime is web_time::SystemTime, but we need a std system time
+        // to convert to chrono.
+        // TODO: Upstream to n0-future or expose SystemTimeExt on wasm
+        #[cfg(wasm_browser)]
+        let time = std::time::SystemTime::UNIX_EPOCH
+            + time.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+
         let now = chrono::DateTime::<chrono::Utc>::from(time);
         let mut i = 0;
         loop {

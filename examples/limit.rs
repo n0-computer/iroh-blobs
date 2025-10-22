@@ -156,7 +156,7 @@ fn throttle(delay_ms: u64) -> EventSender {
                     );
                     // we could compute the delay from the size of the data to have a fixed rate.
                     // but the size is almost always 16 KiB (16 chunks).
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    n0_future::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     msg.tx.send(Ok(())).await.ok();
                 });
             }

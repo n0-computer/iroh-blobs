@@ -122,17 +122,17 @@ async fn print_store_info(store: &Store) -> anyhow::Result<()> {
 }
 
 async fn info_task(store: Store) -> anyhow::Result<()> {
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    n0_future::time::sleep(Duration::from_secs(1)).await;
     loop {
         print_store_info(&store).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
 async fn delete_expired_tags_task(store: Store, prefix: &str) -> anyhow::Result<()> {
     loop {
         delete_expired_tags(&store, prefix, false).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
