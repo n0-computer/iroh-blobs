@@ -10,10 +10,9 @@ use anyhow::bail;
 use genawaiter::sync::Gen;
 use iroh::{Endpoint, EndpointId};
 use irpc::{channel::mpsc, rpc_requests};
-use n0_future::{future, stream, BufferedStreamExt, Stream, StreamExt};
+use n0_future::{future, stream, task::JoinSet, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
-use n0_future::task::JoinSet;
 use tracing::instrument::Instrument;
 
 use super::Store;
