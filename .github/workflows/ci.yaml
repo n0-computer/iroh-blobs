@@ -307,7 +307,7 @@ jobs:
           tool: wasm-bindgen,wasm-pack
 
       - name: wasm32 build
-        run: cargo build --target wasm32-unknown-unknown
+        run: cargo build --target wasm32-unknown-unknown --no-default-features
 
       # If the Wasm file contains any 'import "env"' declarations, then
       # some non-Wasm-compatible code made it into the final code.
