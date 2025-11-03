@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{meta::raw_outboard_size, temp_name};
-pub use crate::store::gc::{GcConfig, ProtectCb, ProtectOutcome};
+use crate::store::gc::GcConfig;
 use crate::Hash;
 
 /// Options for directories used by the file store.
