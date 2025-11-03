@@ -17,7 +17,10 @@ use futures_lite::StreamExt;
 use iroh_blobs::{
     api::{blobs::AddBytesOptions, Store, Tag},
     hashseq::HashSeq,
-    store::fs::options::{BatchOptions, GcConfig, InlineOptions, Options, PathOptions},
+    store::{
+        fs::options::{BatchOptions, InlineOptions, Options, PathOptions},
+        GcConfig,
+    },
     BlobFormat, Hash,
 };
 use tokio::signal::ctrl_c;
