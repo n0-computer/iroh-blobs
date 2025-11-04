@@ -1680,7 +1680,6 @@ dependencies = [
 name = "iroh-blobs"
 version = "0.96.0"
 dependencies = [
- "anyhow",
  "arrayvec",
  "async-compression",
  "atomic_refcell",

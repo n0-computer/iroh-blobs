@@ -12,7 +12,6 @@ keywords = ["hashing", "quic", "blake3", "streaming"]
 rust-version = "1.85"
 
 [dependencies]
-anyhow = "1.0.95"
 bao-tree = { version = "0.15.1", features = ["experimental-mixed", "tokio_fsm", "validate", "serde"], default-features = false }
 bytes = { version = "1", features = ["serde"] }
 derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debug", "display", "deref", "deref_mut"] }
