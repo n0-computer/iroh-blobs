@@ -5,7 +5,7 @@ use irpc::{
     rpc_requests, Channels, WithChannels,
 };
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
+use n0_error::stack_error;
 
 use crate::{
     protocol::{
@@ -85,22 +85,22 @@ pub enum AbortReason {
 }
 
 /// Errors that can occur when sending progress updates.
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta)]
 pub enum ProgressError {
-    Limit,
-    Permission,
-    #[snafu(transparent)]
-    Internal {
-        source: irpc::Error,
-    },
+    #[error("limit")]
+    Limit {},
+    #[error("permission")]
+    Permission {},
+    #[error(transparent)]
+    Internal { source: irpc::Error },
 }
 
 impl From<ProgressError> for io::Error {
     fn from(value: ProgressError) -> Self {
         match value {
-            ProgressError::Limit => io::ErrorKind::QuotaExceeded.into(),
-            ProgressError::Permission => io::ErrorKind::PermissionDenied.into(),
-            ProgressError::Internal { source } => source.into(),
+            ProgressError::Limit { .. } => io::ErrorKind::QuotaExceeded.into(),
+            ProgressError::Permission { .. } => io::ErrorKind::PermissionDenied.into(),
+            ProgressError::Internal { source, .. } => source.into(),
         }
     }
 }
@@ -112,8 +112,8 @@ pub trait HasErrorCode {
 impl HasErrorCode for ProgressError {
     fn code(&self) -> quinn::VarInt {
         match self {
-            ProgressError::Limit => ERR_LIMIT,
-            ProgressError::Permission => ERR_PERMISSION,
+            ProgressError::Limit { .. } => ERR_LIMIT,
+            ProgressError::Permission { .. } => ERR_PERMISSION,
             ProgressError::Internal { .. } => ERR_INTERNAL,
         }
     }
@@ -122,8 +122,8 @@ impl HasErrorCode for ProgressError {
 impl ProgressError {
     pub fn reason(&self) -> &'static [u8] {
         match self {
-            ProgressError::Limit => b"limit",
-            ProgressError::Permission => b"permission",
+            ProgressError::Limit { .. } => b"limit",
+            ProgressError::Permission { .. } => b"permission",
             ProgressError::Internal { .. } => b"internal",
         }
     }
@@ -132,33 +132,27 @@ impl ProgressError {
 impl From<AbortReason> for ProgressError {
     fn from(value: AbortReason) -> Self {
         match value {
-            AbortReason::RateLimited => ProgressError::Limit,
-            AbortReason::Permission => ProgressError::Permission,
+            AbortReason::RateLimited => n0_error::e!(ProgressError::Limit),
+            AbortReason::Permission => n0_error::e!(ProgressError::Permission),
         }
     }
 }
 
 impl From<irpc::channel::mpsc::RecvError> for ProgressError {
     fn from(value: irpc::channel::mpsc::RecvError) -> Self {
-        ProgressError::Internal {
-            source: value.into(),
-        }
+        n0_error::e!(ProgressError::Internal, value.into())
     }
 }
 
 impl From<irpc::channel::oneshot::RecvError> for ProgressError {
     fn from(value: irpc::channel::oneshot::RecvError) -> Self {
-        ProgressError::Internal {
-            source: value.into(),
-        }
+        n0_error::e!(ProgressError::Internal, value.into())
     }
 }
 
 impl From<irpc::channel::SendError> for ProgressError {
     fn from(value: irpc::channel::SendError) -> Self {
-        ProgressError::Internal {
-            source: value.into(),
-        }
+        n0_error::e!(ProgressError::Internal, value.into())
     }
 }
 

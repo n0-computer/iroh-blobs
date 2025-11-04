@@ -734,7 +734,7 @@ impl HashSpecificCommand for ExportPathMsg {
             _ => unreachable!(),
         };
         self.tx
-            .send(ExportProgressItem::Error(api::Error::Io(err)))
+            .send(ExportProgressItem::Error(api::Error::from(err)))
             .await
             .ok();
     }
@@ -766,7 +766,7 @@ impl HashSpecificCommand for ExportRangesMsg {
             _ => unreachable!(),
         };
         self.tx
-            .send(ExportRangesItem::Error(api::Error::Io(err)))
+            .send(ExportRangesItem::Error(api::Error::from(err)))
             .await
             .ok();
     }
@@ -781,7 +781,7 @@ impl HashSpecificCommand for ImportBaoMsg {
             SpawnArg::Dead => io::Error::other("entity is dead"),
             _ => unreachable!(),
         };
-        self.tx.send(Err(api::Error::Io(err))).await.ok();
+        self.tx.send(Err(api::Error::from(err))).await.ok();
     }
 }
 impl HashSpecific for (TempTag, ImportEntryMsg) {

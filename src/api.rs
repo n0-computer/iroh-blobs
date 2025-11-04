@@ -17,12 +17,12 @@ use std::{io, net::SocketAddr, ops::Deref};
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
 use irpc::rpc::{listen, RemoteService};
-use n0_snafu::SpanTrace;
+use n0_error::e;
+use n0_error::stack_error;
 use nested_enum_utils::common_fields;
 use proto::{Request, ShutdownRequest, SyncDbRequest};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use snafu::{Backtrace, IntoError, Snafu};
 use tags::Tags;
 
 pub mod blobs;
@@ -35,75 +35,71 @@ pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
 pub(crate) type ApiClient = irpc::Client<proto::Request>;
 
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta)]
 pub enum RequestError {
     /// Request failed due to rpc error.
-    #[snafu(display("rpc error: {source}"))]
+    #[error("rpc error: {source}")]
     Rpc { source: irpc::Error },
     /// Request failed due an actual error.
-    #[snafu(display("inner error: {source}"))]
-    Inner { source: Error },
+    #[error("inner error: {source}")]
+    Inner { #[error(std_err)] source: Error },
 }
 
 impl From<irpc::Error> for RequestError {
     fn from(value: irpc::Error) -> Self {
-        RpcSnafu.into_error(value)
+        e!(RequestError::Rpc, value)
     }
 }
 
 impl From<Error> for RequestError {
     fn from(value: Error) -> Self {
-        InnerSnafu.into_error(value)
+        e!(RequestError::Inner, value)
     }
 }
 
 impl From<io::Error> for RequestError {
     fn from(value: io::Error) -> Self {
-        InnerSnafu.into_error(value.into())
+        e!(RequestError::Inner, value.into())
     }
 }
 
 impl From<irpc::channel::mpsc::RecvError> for RequestError {
     fn from(value: irpc::channel::mpsc::RecvError) -> Self {
-        RpcSnafu.into_error(value.into())
+        e!(RequestError::Rpc, value.into())
     }
 }
 
 pub type RequestResult<T> = std::result::Result<T, RequestError>;
 
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum ExportBaoError {
-    #[snafu(display("send error: {source}"))]
+    #[error("send error")]
     Send { source: irpc::channel::SendError },
-    #[snafu(display("mpsc recv error: {source}"))]
+    #[error("mpsc recv error")]
     MpscRecv {
         source: irpc::channel::mpsc::RecvError,
     },
-    #[snafu(display("oneshot recv error: {source}"))]
+    #[error("oneshot recv error")]
     OneshotRecv {
         source: irpc::channel::oneshot::RecvError,
     },
-    #[snafu(display("request error: {source}"))]
+    #[error("request error")]
     Request { source: irpc::RequestError },
-    #[snafu(display("io error: {source}"))]
-    ExportBaoIo { source: io::Error },
-    #[snafu(display("encode error: {source}"))]
-    ExportBaoInner { source: bao_tree::io::EncodeError },
-    #[snafu(display("client error: {source}"))]
+    #[error("io error")]
+    ExportBaoIo {
+        #[error(std_err)]
+        source: io::Error,
+    },
+    #[error("encode error")]
+    ExportBaoInner {
+        #[error(std_err)]
+        source: bao_tree::io::EncodeError,
+    },
+    #[error("client error")]
     ClientError { source: ProgressError },
 }
 
@@ -124,54 +120,12 @@ impl From<ExportBaoError> for Error {
 impl From<irpc::Error> for ExportBaoError {
     fn from(e: irpc::Error) -> Self {
         match e {
-            irpc::Error::MpscRecv(e) => MpscRecvSnafu.into_error(e),
-            irpc::Error::OneshotRecv(e) => OneshotRecvSnafu.into_error(e),
-            irpc::Error::Send(e) => SendSnafu.into_error(e),
-            irpc::Error::Request(e) => RequestSnafu.into_error(e),
-            irpc::Error::Write(e) => ExportBaoIoSnafu.into_error(e.into()),
+            irpc::Error::MpscRecv { source: e, .. } => e!(ExportBaoError::MpscRecv, e),
+            irpc::Error::OneshotRecv { source: e, .. } => e!(ExportBaoError::OneshotRecv, e),
+            irpc::Error::Send { source: e, .. } => e!(ExportBaoError::Send, e),
+            irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
+            irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
-    }
-}
-
-impl From<io::Error> for ExportBaoError {
-    fn from(value: io::Error) -> Self {
-        ExportBaoIoSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::channel::mpsc::RecvError> for ExportBaoError {
-    fn from(value: irpc::channel::mpsc::RecvError) -> Self {
-        MpscRecvSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::channel::oneshot::RecvError> for ExportBaoError {
-    fn from(value: irpc::channel::oneshot::RecvError) -> Self {
-        OneshotRecvSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::channel::SendError> for ExportBaoError {
-    fn from(value: irpc::channel::SendError) -> Self {
-        SendSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::RequestError> for ExportBaoError {
-    fn from(value: irpc::RequestError) -> Self {
-        RequestSnafu.into_error(value)
-    }
-}
-
-impl From<bao_tree::io::EncodeError> for ExportBaoError {
-    fn from(value: bao_tree::io::EncodeError) -> Self {
-        ExportBaoInnerSnafu.into_error(value)
-    }
-}
-
-impl From<ProgressError> for ExportBaoError {
-    fn from(value: ProgressError) -> Self {
-        ClientSnafu.into_error(value)
     }
 }
 
@@ -196,13 +150,11 @@ impl Error {
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         Self::Io(io::Error::other(msg.into()))
-    }
+}
 }
 
 impl From<irpc::Error> for Error {
-    fn from(e: irpc::Error) -> Self {
-        Self::Io(e.into())
-    }
+    fn from(e: irpc::Error) -> Self { Self::Io(e.into()) }
 }
 
 impl From<RequestError> for Error {
@@ -215,27 +167,19 @@ impl From<RequestError> for Error {
 }
 
 impl From<irpc::channel::mpsc::RecvError> for Error {
-    fn from(e: irpc::channel::mpsc::RecvError) -> Self {
-        Self::Io(e.into())
-    }
+    fn from(e: irpc::channel::mpsc::RecvError) -> Self { Self::Io(e.into()) }
 }
 
 impl From<irpc::rpc::WriteError> for Error {
-    fn from(e: irpc::rpc::WriteError) -> Self {
-        Self::Io(e.into())
-    }
+    fn from(e: irpc::rpc::WriteError) -> Self { Self::Io(e.into()) }
 }
 
 impl From<irpc::RequestError> for Error {
-    fn from(e: irpc::RequestError) -> Self {
-        Self::Io(e.into())
-    }
+    fn from(e: irpc::RequestError) -> Self { Self::Io(e.into()) }
 }
 
 impl From<irpc::channel::SendError> for Error {
-    fn from(e: irpc::channel::SendError) -> Self {
-        Self::Io(e.into())
-    }
+    fn from(e: irpc::channel::SendError) -> Self { Self::Io(e.into()) }
 }
 
 impl std::error::Error for Error {
@@ -253,6 +197,10 @@ impl From<EncodeError> for Error {
             _ => Self::other(value),
         }
     }
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self { Self::Io(e) }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

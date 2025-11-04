@@ -17,7 +17,7 @@ use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_future::StreamExt;
 use quinn::ConnectionError;
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
+use n0_error::stack_error;
 use tokio::select;
 use tracing::{debug, debug_span, Instrument};
 
@@ -388,15 +388,14 @@ pub async fn handle_stream<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
-#[derive(Debug, Snafu)]
-#[snafu(module)]
+#[stack_error(derive, add_meta, std_sources)]
 pub enum HandleGetError {
-    #[snafu(transparent)]
-    ExportBao {
-        source: ExportBaoError,
-    },
-    InvalidHashSeq,
-    InvalidOffset,
+    #[error(transparent)]
+    ExportBao { #[error(std_err)] source: ExportBaoError },
+    #[error("Invalid hash sequence")]
+    InvalidHashSeq {},
+    #[error("Invalid offset")]
+    InvalidOffset {},
 }
 
 impl HasErrorCode for HandleGetError {
@@ -404,9 +403,10 @@ impl HasErrorCode for HandleGetError {
         match self {
             HandleGetError::ExportBao {
                 source: ExportBaoError::ClientError { source, .. },
+                ..
             } => source.code(),
-            HandleGetError::InvalidHashSeq => ERR_INTERNAL,
-            HandleGetError::InvalidOffset => ERR_INTERNAL,
+            HandleGetError::InvalidHashSeq { .. } => ERR_INTERNAL,
+            HandleGetError::InvalidOffset { .. } => ERR_INTERNAL,
             _ => ERR_INTERNAL,
         }
     }
@@ -471,10 +471,10 @@ pub async fn handle_get<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, std_sources)]
 pub enum HandleGetManyError {
-    #[snafu(transparent)]
-    ExportBao { source: ExportBaoError },
+    #[error(transparent)]
+    ExportBao { #[error(std_err)] source: ExportBaoError },
 }
 
 impl HasErrorCode for HandleGetManyError {
@@ -482,6 +482,7 @@ impl HasErrorCode for HandleGetManyError {
         match self {
             Self::ExportBao {
                 source: ExportBaoError::ClientError { source, .. },
+                ..
             } => source.code(),
             _ => ERR_INTERNAL,
         }
@@ -519,19 +520,16 @@ pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, std_sources)]
 pub enum HandlePushError {
-    #[snafu(transparent)]
-    ExportBao {
-        source: ExportBaoError,
-    },
+    #[error(transparent)]
+    ExportBao { #[error(std_err)] source: ExportBaoError },
 
-    InvalidHashSeq,
+    #[error("Invalid hash sequence")]
+    InvalidHashSeq {},
 
-    #[snafu(transparent)]
-    Request {
-        source: RequestError,
-    },
+    #[error(transparent)]
+    Request { #[error(std_err)] source: RequestError },
 }
 
 impl HasErrorCode for HandlePushError {
@@ -539,6 +537,7 @@ impl HasErrorCode for HandlePushError {
         match self {
             Self::ExportBao {
                 source: ExportBaoError::ClientError { source, .. },
+                ..
             } => source.code(),
             _ => ERR_INTERNAL,
         }
@@ -608,14 +607,13 @@ pub(crate) async fn send_blob<W: SendStream>(
         .await
 }
 
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, std_sources)]
 pub enum HandleObserveError {
-    ObserveStreamClosed,
+    #[error("observe stream closed")]
+    ObserveStreamClosed {},
 
-    #[snafu(transparent)]
-    RemoteClosed {
-        source: io::Error,
-    },
+    #[error(transparent)]
+    RemoteClosed { #[error(std_err)] source: io::Error },
 }
 
 impl HasErrorCode for HandleObserveError {

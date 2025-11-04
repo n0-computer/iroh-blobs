@@ -446,7 +446,7 @@ pub(crate) mod sink {
             self.0
                 .send(value)
                 .await
-                .map_err(|_| irpc::channel::SendError::ReceiverClosed)
+                .map_err(|_| n0_error::e!(irpc::channel::SendError::ReceiverClosed))
         }
     }
 

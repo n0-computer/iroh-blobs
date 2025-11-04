@@ -27,7 +27,7 @@ use n0_future::{
     future::{self},
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
 };
-use snafu::Snafu;
+use n0_error::stack_error;
 use tokio::sync::{
     mpsc::{self, error::SendError as TokioSendError},
     oneshot, Notify,
@@ -109,45 +109,41 @@ impl ConnectionRef {
 ///
 /// This includes the normal iroh connection errors as well as pool specific
 /// errors such as timeouts and connection limits.
-#[derive(Debug, Clone, Snafu)]
-#[snafu(module)]
+#[stack_error(derive, add_meta)]
 pub enum PoolConnectError {
     /// Connection pool is shut down
-    Shutdown,
+    #[error("Connection pool is shut down")]
+    Shutdown {},
     /// Timeout during connect
-    Timeout,
+    #[error("Timeout during connect")] 
+    Timeout {},
     /// Too many connections
-    TooManyConnections,
+    #[error("Too many connections")]
+    TooManyConnections {},
     /// Error during connect
-    ConnectError { source: Arc<ConnectError> },
+    #[error(transparent)]
+    ConnectError { source: ConnectError },
     /// Error during on_connect callback
-    OnConnectError { source: Arc<io::Error> },
+    #[error(transparent)]
+    OnConnectError { #[error(std_err)] source: io::Error },
 }
 
 impl From<ConnectError> for PoolConnectError {
-    fn from(e: ConnectError) -> Self {
-        PoolConnectError::ConnectError {
-            source: Arc::new(e),
-        }
-    }
+    fn from(e: ConnectError) -> Self { n0_error::e!(PoolConnectError::ConnectError, e) }
 }
 
 impl From<io::Error> for PoolConnectError {
-    fn from(e: io::Error) -> Self {
-        PoolConnectError::OnConnectError {
-            source: Arc::new(e),
-        }
-    }
+    fn from(e: io::Error) -> Self { n0_error::e!(PoolConnectError::OnConnectError, e) }
 }
 
 /// Error when calling a fn on the [`ConnectionPool`].
 ///
 /// The only thing that can go wrong is that the connection pool is shut down.
-#[derive(Debug, Snafu)]
-#[snafu(module)]
+#[stack_error(derive, add_meta)]
 pub enum ConnectionPoolError {
     /// The connection pool has been shut down
-    Shutdown,
+    #[error("The connection pool has been shut down")]
+    Shutdown {},
 }
 
 enum ActorMessage {
@@ -362,7 +358,9 @@ impl Actor {
                         trace!("removing oldest idle connection {}", idle);
                         self.connections.remove(&idle);
                     } else {
-                        msg.tx.send(Err(PoolConnectError::TooManyConnections)).ok();
+                        msg.tx
+                            .send(Err(n0_error::e!(PoolConnectError::TooManyConnections)))
+                            .ok();
                         return;
                     }
                 }
@@ -439,8 +437,8 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::RequestRef(RequestRef { id, tx }))
             .await
-            .map_err(|_| PoolConnectError::Shutdown)?;
-        rx.await.map_err(|_| PoolConnectError::Shutdown)?
+            .map_err(|_| n0_error::e!(PoolConnectError::Shutdown))?;
+        rx.await.map_err(|_| n0_error::e!(PoolConnectError::Shutdown))?
     }
 
     /// Close an existing connection, if it exists
@@ -451,7 +449,7 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::ConnectionShutdown { id })
             .await
-            .map_err(|_| ConnectionPoolError::Shutdown)?;
+            .map_err(|_| n0_error::e!(ConnectionPoolError::Shutdown))?;
         Ok(())
     }
 
@@ -465,7 +463,7 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::ConnectionIdle { id })
             .await
-            .map_err(|_| ConnectionPoolError::Shutdown)?;
+            .map_err(|_| n0_error::e!(ConnectionPoolError::Shutdown))?;
         Ok(())
     }
 }

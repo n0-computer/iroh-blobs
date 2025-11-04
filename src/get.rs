@@ -39,7 +39,6 @@ use crate::{
 
 mod error;
 pub mod request;
-pub(crate) use error::get_error;
 pub use error::{GetError, GetResult};
 
 type DefaultReader = iroh::endpoint::RecvStream;
@@ -121,7 +120,7 @@ pub mod fsm {
 
     use super::*;
     use crate::{
-        get::get_error::BadRequestSnafu,
+        
         protocol::{
             GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
         },
@@ -158,7 +157,7 @@ pub mod fsm {
             .map_err(|e| OpenSnafu.into_error(e.into()))?;
         let request = Request::GetMany(request);
         let request_bytes = postcard::to_stdvec(&request)
-            .map_err(|source| BadRequestSnafu.into_error(source.into()))?;
+            .map_err(|source| n0_error::e!(GetError::BadRequest, source.into()))?;
         writer
             .send_bytes(request_bytes.into())
             .await

@@ -1702,6 +1702,7 @@ dependencies = [
  "iroh-test",
  "iroh-tickets",
  "irpc",
+ "n0-error",
  "n0-future",
  "n0-snafu",
  "nested_enum_utils",

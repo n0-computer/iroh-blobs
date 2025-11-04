@@ -1069,7 +1069,7 @@ impl BaoFileStorageSubscriber {
         tokio::select! {
             _ = tx.closed() => {
                 // the sender is closed, we are done
-                Err(irpc::channel::SendError::ReceiverClosed.into())
+                Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into())
             }
             e = self.receiver.changed() => Ok(e?),
         }

@@ -2,54 +2,33 @@
 use std::io;
 
 use iroh::endpoint::{ConnectionError, ReadError, VarInt, WriteError};
-use n0_snafu::SpanTrace;
+use n0_error::stack_error;
 use nested_enum_utils::common_fields;
-use snafu::{Backtrace, Snafu};
+use n0_error::e;
 
 use crate::get::fsm::{
     AtBlobHeaderNextError, AtClosingNextError, ConnectedNextError, DecodeError, InitialNextError,
 };
 
 /// Failures for a get operation
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
-#[derive(Debug, Snafu)]
-#[snafu(visibility(pub(crate)))]
-#[snafu(module)]
+#[stack_error(derive, add_meta)]
 pub enum GetError {
-    #[snafu(transparent)]
-    InitialNext {
-        source: InitialNextError,
-    },
-    #[snafu(transparent)]
-    ConnectedNext {
-        source: ConnectedNextError,
-    },
-    #[snafu(transparent)]
-    AtBlobHeaderNext {
-        source: AtBlobHeaderNextError,
-    },
-    #[snafu(transparent)]
-    Decode {
-        source: DecodeError,
-    },
-    #[snafu(transparent)]
-    IrpcSend {
-        source: irpc::channel::SendError,
-    },
-    #[snafu(transparent)]
-    AtClosingNext {
-        source: AtClosingNextError,
-    },
-    LocalFailure {
-        source: anyhow::Error,
-    },
-    BadRequest {
-        source: anyhow::Error,
-    },
+    #[error(transparent)]
+    InitialNext { #[error(std_err)] source: InitialNextError },
+    #[error(transparent)]
+    ConnectedNext { #[error(std_err)] source: ConnectedNextError },
+    #[error(transparent)]
+    AtBlobHeaderNext { #[error(std_err)] source: AtBlobHeaderNextError },
+    #[error(transparent)]
+    Decode { #[error(std_err)] source: DecodeError },
+    #[error(transparent)]
+    IrpcSend { #[error(std_err)] source: irpc::channel::SendError },
+    #[error(transparent)]
+    AtClosingNext { #[error(std_err)] source: AtClosingNextError },
+    #[error("local failure: {source}")]
+    LocalFailure { #[error(std_err)] source: anyhow::Error },
+    #[error("bad request: {source}")]
+    BadRequest { #[error(std_err)] source: anyhow::Error },
 }
 
 impl GetError {

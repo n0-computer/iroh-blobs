@@ -20,12 +20,11 @@ use iroh::endpoint::Connection;
 use n0_future::{Stream, StreamExt};
 use nested_enum_utils::enum_conversions;
 use rand::Rng;
-use snafu::IntoError;
+use n0_error::e;
 use tokio::sync::mpsc;
 
 use super::{fsm, GetError, GetResult, Stats};
 use crate::{
-    get::get_error::{BadRequestSnafu, LocalFailureSnafu},
     hashseq::HashSeq,
     protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest},
     Hash, HashAndFormat,
@@ -58,7 +57,7 @@ impl GetBlobResult {
         let mut parts = Vec::new();
         let stats = loop {
             let Some(item) = self.next().await else {
-                return Err(LocalFailureSnafu.into_error(anyhow::anyhow!("unexpected end")));
+                return Err(e!(GetError::LocalFailure, anyhow::anyhow!("unexpected end")));
             };
             match item {
                 GetBlobItem::Item(item) => {
@@ -238,11 +237,11 @@ pub async fn get_hash_seq_and_sizes(
     let (at_blob_content, size) = at_start_root.next().await?;
     // check the size to avoid parsing a maliciously large hash seq
     if size > max_size {
-        return Err(BadRequestSnafu.into_error(anyhow::anyhow!("size too large")));
+        return Err(e!(GetError::BadRequest, anyhow::anyhow!("size too large")));
     }
     let (mut curr, hash_seq) = at_blob_content.concatenate_into_vec().await?;
-    let hash_seq =
-        HashSeq::try_from(Bytes::from(hash_seq)).map_err(|e| BadRequestSnafu.into_error(e))?;
+    let hash_seq = HashSeq::try_from(Bytes::from(hash_seq))
+        .map_err(|e| e!(GetError::BadRequest, e.into()))?;
     let mut sizes = Vec::with_capacity(hash_seq.len());
     let closing = loop {
         match curr.next() {

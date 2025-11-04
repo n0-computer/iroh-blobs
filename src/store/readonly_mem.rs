@@ -94,7 +94,7 @@ impl Actor {
     async fn handle_command(&mut self, cmd: Command) -> Option<irpc::channel::oneshot::Sender<()>> {
         match cmd {
             Command::ImportBao(ImportBaoMsg { tx, .. }) => {
-                tx.send(Err(api::Error::Io(io::Error::other(
+                tx.send(Err(api::Error::from(io::Error::other(
                     "import not supported",
                 ))))
                 .await
