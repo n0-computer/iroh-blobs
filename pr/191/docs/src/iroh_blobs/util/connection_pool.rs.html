@@ -553,8 +553,8 @@
 <a href=#553 id=553 data-nosnippet>553</a>        protocol::{AcceptError, ProtocolHandler, Router},
 <a href=#554 id=554 data-nosnippet>554</a>        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
 <a href=#555 id=555 data-nosnippet>555</a>    };
-<a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">use </span>n0_future::{io, stream, BufferedStreamExt, StreamExt};
-<a href=#557 id=557 data-nosnippet>557</a>    <span class="kw">use </span>n0_snafu::ResultExt;
+<a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">use </span>n0_error::{AnyError, <span class="prelude-ty">Result</span>, StdResultExt};
+<a href=#557 id=557 data-nosnippet>557</a>    <span class="kw">use </span>n0_future::{io, stream, BufferedStreamExt, StreamExt};
 <a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">use </span>testresult::TestResult;
 <a href=#559 id=559 data-nosnippet>559</a>    <span class="kw">use </span>tracing::trace;
 <a href=#560 id=560 data-nosnippet>560</a>
@@ -588,14 +588,14 @@
 <a href=#588 id=588 data-nosnippet>588</a>        }
 <a href=#589 id=589 data-nosnippet>589</a>    }
 <a href=#590 id=590 data-nosnippet>590</a>
-<a href=#591 id=591 data-nosnippet>591</a>    <span class="kw">async fn </span>echo_client(conn: <span class="kw-2">&amp;</span>Connection, text: <span class="kw-2">&amp;</span>[u8]) -&gt; n0_snafu::Result&lt;Vec&lt;u8&gt;&gt; {
+<a href=#591 id=591 data-nosnippet>591</a>    <span class="kw">async fn </span>echo_client(conn: <span class="kw-2">&amp;</span>Connection, text: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;&gt; {
 <a href=#592 id=592 data-nosnippet>592</a>        <span class="kw">let </span>conn_id = conn.stable_id();
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">let </span>id = conn.remote_id().e()<span class="question-mark">?</span>;
+<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">let </span>id = conn.remote_id().anyerr()<span class="question-mark">?</span>;
 <a href=#594 id=594 data-nosnippet>594</a>        <span class="macro">trace!</span>(%id, %conn_id, <span class="string">"Sending echo request"</span>);
-<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>send, <span class="kw-2">mut </span>recv) = conn.open_bi().<span class="kw">await</span>.e()<span class="question-mark">?</span>;
-<a href=#596 id=596 data-nosnippet>596</a>        send.write_all(text).<span class="kw">await</span>.e()<span class="question-mark">?</span>;
-<a href=#597 id=597 data-nosnippet>597</a>        send.finish().e()<span class="question-mark">?</span>;
-<a href=#598 id=598 data-nosnippet>598</a>        <span class="kw">let </span>response = recv.read_to_end(<span class="number">1000</span>).<span class="kw">await</span>.e()<span class="question-mark">?</span>;
+<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">let </span>(<span class="kw-2">mut </span>send, <span class="kw-2">mut </span>recv) = conn.open_bi().<span class="kw">await</span>.anyerr()<span class="question-mark">?</span>;
+<a href=#596 id=596 data-nosnippet>596</a>        send.write_all(text).<span class="kw">await</span>.anyerr()<span class="question-mark">?</span>;
+<a href=#597 id=597 data-nosnippet>597</a>        send.finish().anyerr()<span class="question-mark">?</span>;
+<a href=#598 id=598 data-nosnippet>598</a>        <span class="kw">let </span>response = recv.read_to_end(<span class="number">1000</span>).<span class="kw">await</span>.anyerr()<span class="question-mark">?</span>;
 <a href=#599 id=599 data-nosnippet>599</a>        <span class="macro">trace!</span>(%id, %conn_id, <span class="string">"Received echo response"</span>);
 <a href=#600 id=600 data-nosnippet>600</a>        <span class="prelude-val">Ok</span>(response)
 <a href=#601 id=601 data-nosnippet>601</a>    }
@@ -653,7 +653,7 @@
 <a href=#653 id=653 data-nosnippet>653</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#654 id=654 data-nosnippet>654</a>            id: EndpointId,
 <a href=#655 id=655 data-nosnippet>655</a>            text: Vec&lt;u8&gt;,
-<a href=#656 id=656 data-nosnippet>656</a>        ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Result</span>&lt;(usize, Vec&lt;u8&gt;), n0_snafu::Error&gt;, PoolConnectError&gt; {
+<a href=#656 id=656 data-nosnippet>656</a>        ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Result</span>&lt;(usize, Vec&lt;u8&gt;), AnyError&gt;, PoolConnectError&gt; {
 <a href=#657 id=657 data-nosnippet>657</a>            <span class="kw">let </span>conn = <span class="self">self</span>.pool.get_or_connect(id).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#658 id=658 data-nosnippet>658</a>            <span class="kw">let </span>id = conn.stable_id();
 <a href=#659 id=659 data-nosnippet>659</a>            <span class="kw">match </span>echo_client(<span class="kw-2">&amp;</span>conn, <span class="kw-2">&amp;</span>text).<span class="kw">await </span>{
