@@ -18,7 +18,7 @@ use iroh::{
     discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
 };
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, Hash};
-use n0_error::{ensure, Result, StdResultExt};
+use n0_error::{ensure_any, Result, StdResultExt};
 
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};
@@ -109,7 +109,7 @@ async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result
     );
     if let Some(path) = out {
         let absolute = std::env::current_dir()?.join(&path);
-        ensure!(!absolute.is_dir(), "output must not be a directory");
+        ensure_any!(!absolute.is_dir(), "output must not be a directory");
         println!(
             "exporting {hash} to {} -> {}",
             path.display(),

@@ -5,7 +5,7 @@ use clap::Parser;
 use common::setup_logging;
 use iroh::discovery::pkarr::PkarrResolver;
 use iroh_blobs::{get::request::GetBlobItem, ticket::BlobTicket, BlobFormat};
-use n0_error::bail_any;
+use n0_error::{bail_any, ensure_any};
 use n0_future::StreamExt;
 use tokio::io::AsyncWriteExt;
 
@@ -34,7 +34,7 @@ async fn main() -> n0_error::Result<()> {
         .discovery(PkarrResolver::n0_dns())
         .bind()
         .await?;
-    n0_error::ensure!(
+    ensure_any!(
         ticket.format() == BlobFormat::Raw,
         "This example only supports raw blobs."
     );

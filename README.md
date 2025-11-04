@@ -35,9 +35,10 @@ Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 ```rust,no_run
 use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
+use n0_error::{Result, StdResultExt};
 
 #[tokio::main]
-async fn main() -> n0_error::Result<()> {
+async fn main() -> Result<()> {
     // create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
     let endpoint = Endpoint::bind().await?;
@@ -45,7 +46,7 @@ async fn main() -> n0_error::Result<()> {
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();
     let tag = store.add_slice(b"Hello world").await?;
-  
+
     let _ = endpoint.online().await;
     let addr = endpoint.addr();
     let ticket = BlobTicket::new(addr, tag.hash, tag.format);
@@ -62,7 +63,7 @@ async fn main() -> n0_error::Result<()> {
     tokio::signal::ctrl_c().await;
 
     // clean shutdown of router and store
-    router.shutdown().await?;
+    router.shutdown().await.anyerr()?;
     Ok(())
 }
 ```
