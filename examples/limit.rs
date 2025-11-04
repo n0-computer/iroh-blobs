@@ -18,7 +18,6 @@ use std::{
     },
 };
 
-use n0_error::Result;
 use clap::Parser;
 use common::setup_logging;
 use iroh::{protocol::Router, EndpointAddr, EndpointId, SecretKey};
@@ -31,6 +30,7 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
+use n0_error::{Result, StdResultExt};
 use rand::rng;
 
 use crate::common::get_or_generate_secret_key;
@@ -276,7 +276,7 @@ async fn main() -> Result<()> {
             }
 
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await?;
+            router.shutdown().await.anyerr()?;
         }
         Args::ByHash { paths } => {
             let store = MemStore::new();
@@ -304,7 +304,7 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket} ({permitted})", path.display());
             }
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await?;
+            router.shutdown().await.anyerr()?;
         }
         Args::Throttle { paths, delay_ms } => {
             let store = MemStore::new();
@@ -316,7 +316,7 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket}", path.display());
             }
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await?;
+            router.shutdown().await.anyerr()?;
         }
         Args::MaxConnections {
             paths,
@@ -331,7 +331,7 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket}", path.display());
             }
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await?;
+            router.shutdown().await.anyerr()?;
         }
     }
     Ok(())

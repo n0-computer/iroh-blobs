@@ -553,8 +553,8 @@ mod tests {
         protocol::{AcceptError, ProtocolHandler, Router},
         Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
     };
+    use n0_error::{AnyError, Result, StdResultExt};
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
-    use n0_snafu::ResultExt;
     use testresult::TestResult;
     use tracing::trace;
 
@@ -588,14 +588,14 @@ mod tests {
         }
     }
 
-    async fn echo_client(conn: &Connection, text: &[u8]) -> n0_snafu::Result<Vec<u8>> {
+    async fn echo_client(conn: &Connection, text: &[u8]) -> Result<Vec<u8>> {
         let conn_id = conn.stable_id();
-        let id = conn.remote_id().e()?;
+        let id = conn.remote_id().anyerr()?;
         trace!(%id, %conn_id, "Sending echo request");
-        let (mut send, mut recv) = conn.open_bi().await.e()?;
-        send.write_all(text).await.e()?;
-        send.finish().e()?;
-        let response = recv.read_to_end(1000).await.e()?;
+        let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
+        send.write_all(text).await.anyerr()?;
+        send.finish().anyerr()?;
+        let response = recv.read_to_end(1000).await.anyerr()?;
         trace!(%id, %conn_id, "Received echo response");
         Ok(response)
     }
@@ -653,7 +653,7 @@ mod tests {
             &self,
             id: EndpointId,
             text: Vec<u8>,
-        ) -> Result<Result<(usize, Vec<u8>), n0_snafu::Error>, PoolConnectError> {
+        ) -> Result<Result<(usize, Vec<u8>), AnyError>, PoolConnectError> {
             let conn = self.pool.get_or_connect(id).await?;
             let id = conn.stable_id();
             match echo_client(&conn, &text).await {

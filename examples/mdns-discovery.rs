@@ -13,12 +13,12 @@
 //! Run that command on another machine in the same local network, replacing [FILE_PATH] to the path on which you want to save the transferred content.
 use std::path::{Path, PathBuf};
 
-use n0_error::{ensure, Result};
 use clap::{Parser, Subcommand};
 use iroh::{
     discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
 };
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, Hash};
+use n0_error::{ensure, Result, StdResultExt};
 
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};
@@ -74,7 +74,7 @@ async fn accept(path: &Path) -> Result<()> {
 
     if !path.is_file() {
         println!("Content must be a file.");
-        node.shutdown().await?;
+        node.shutdown().await.anyerr()?;
         return Ok(());
     }
     let absolute = path.canonicalize()?;
@@ -82,7 +82,7 @@ async fn accept(path: &Path) -> Result<()> {
     let tag = store.add_path(absolute).await?;
     println!("To fetch the blob:\n\tcargo run --example mdns-discovery --features examples -- connect {} {} -o [FILE_PATH]", node.endpoint().id(), tag.hash);
     tokio::signal::ctrl_c().await?;
-    node.shutdown().await?;
+    node.shutdown().await.anyerr()?;
     Ok(())
 }
 

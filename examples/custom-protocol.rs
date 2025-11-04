@@ -40,7 +40,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use n0_error::Result;
 use clap::Parser;
 use iroh::{
     discovery::pkarr::PkarrResolver,
@@ -49,6 +48,7 @@ use iroh::{
     Endpoint, EndpointId,
 };
 use iroh_blobs::{api::Store, store::mem::MemStore, BlobsProtocol, Hash};
+use n0_error::{anyerr, Result, StdResultExt};
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};
 
@@ -110,7 +110,7 @@ async fn listen(text: Vec<String>) -> Result<()> {
 
     // Wait for Ctrl-C to be pressed.
     tokio::signal::ctrl_c().await?;
-    node.shutdown().await?;
+    node.shutdown().await.anyerr()?;
     Ok(())
 }
 
@@ -275,14 +275,14 @@ pub async fn query_remote(
     let blobs_conn = endpoint.connect(endpoint_id, iroh_blobs::ALPN).await?;
 
     // Open a bi-directional in our connection.
-    let (mut send, mut recv) = conn.open_bi().await?;
+    let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
 
     // Send our query.
-    send.write_all(query.as_bytes()).await?;
+    send.write_all(query.as_bytes()).await.anyerr()?;
 
     // Finish the send stream, signalling that no further data will be sent.
     // This makes the `read_to_end` call on the accepting side terminate.
-    send.finish()?;
+    send.finish().anyerr()?;
 
     // In this example, we simply collect all results into a vector.
     // For real protocols, you'd usually want to return a stream of results instead.
@@ -298,7 +298,7 @@ pub async fn query_remote(
             // so in this case we break our loop.
             Err(iroh::endpoint::ReadExactError::FinishedEarly(_)) => break,
             // Other errors are connection errors, so we bail.
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(anyerr!(err)),
             Ok(_) => {}
         };
         // Upcast the raw bytes to the `Hash` type.
@@ -315,7 +315,7 @@ pub async fn query_remote(
 /// Read a blob from the local blob store and print it to STDOUT.
 async fn read_and_print(store: &Store, hash: Hash) -> Result<()> {
     let content = store.get_bytes(hash).await?;
-    let message = String::from_utf8(content.to_vec())?;
+    let message = String::from_utf8(content.to_vec()).anyerr()?;
     println!("{}: {message}", hash.fmt_short());
     Ok(())
 }

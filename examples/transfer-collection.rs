@@ -7,7 +7,6 @@
 //!  $ cargo run --example transfer-collection
 use std::collections::HashMap;
 
-use n0_error::{Context, Result};
 use iroh::{
     discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr, RelayMode,
 };
@@ -17,6 +16,7 @@ use iroh_blobs::{
     store::mem::MemStore,
     BlobsProtocol, Hash, HashAndFormat,
 };
+use n0_error::{Result, StackResultExt};
 
 /// Node is something you'd define in your application. It can contain whatever
 /// shared state you'd want to couple with network operations.

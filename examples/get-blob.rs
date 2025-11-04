@@ -5,6 +5,7 @@ use clap::Parser;
 use common::setup_logging;
 use iroh::discovery::pkarr::PkarrResolver;
 use iroh_blobs::{get::request::GetBlobItem, ticket::BlobTicket, BlobFormat};
+use n0_error::bail_any;
 use n0_future::StreamExt;
 use tokio::io::AsyncWriteExt;
 
@@ -54,10 +55,10 @@ async fn main() -> n0_error::Result<()> {
                     break stats;
                 }
                 Some(GetBlobItem::Error(err)) => {
-                    n0_error::bail!("Error while streaming blob: {err}");
+                    bail_any!(err, "Error while streaming blob");
                 }
                 None => {
-                    n0_error::bail!("Stream ended unexpectedly.");
+                    bail_any!("Stream ended unexpectedly.");
                 }
             }
         }

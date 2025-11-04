@@ -1,6 +1,5 @@
 use std::{env, path::PathBuf, str::FromStr};
 
-use n0_error::{Context, Result};
 use clap::{Parser, Subcommand};
 use iroh::{discovery::static_provider::StaticProvider, SecretKey};
 use iroh_blobs::{
@@ -12,6 +11,7 @@ use iroh_blobs::{
 };
 use iroh_tickets::endpoint::EndpointTicket;
 use irpc::RpcMessage;
+use n0_error::{Result, StackResultExt, StdResultExt};
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::signal::ctrl_c;
@@ -247,7 +247,7 @@ async fn provide(args: ProvideArgs) -> n0_error::Result<()> {
     println!("Node address: {addr:?}");
     println!("ticket:\n{ticket}");
     ctrl_c().await?;
-    router.shutdown().await?;
+    router.shutdown().await.anyerr()?;
     dump_task.abort();
     Ok(())
 }
