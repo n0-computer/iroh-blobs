@@ -1,0 +1,255 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Protocol for transferring content-addressed blobs over `iroh` p2p QUIC connections."><title>iroh_blobs::protocol - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-e56847b5.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0-nightly (4082d6a3f 2025-09-27)" data-channel="nightly" data-search-js="search-e256b49e.js" data-stringdex-js="stringdex-061df703.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module protocol</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../iroh_blobs/index.html">iroh_<wbr>blobs</a><span class="version">0.96.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module protocol</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#participants" title="Participants">Participants</a></li><li><a href="#goals" title="Goals">Goals</a></li><li><a href="#non-goals" title="Non-goals">Non-goals</a></li><li><a href="#requests" title="Requests">Requests</a><ul><li><a href="#getter-defined-requests" title="Getter defined requests">Getter defined requests</a></li><li><a href="#provider-defined-requests" title="Provider defined requests">Provider defined requests</a></li><li><a href="#specifying-the-required-data" title="Specifying the required data">Specifying the required data</a></li></ul></li><li><a href="#responses" title="Responses">Responses</a></li><li><a href="#requesting-multiple-unrelated-blobs" title="Requesting multiple unrelated blobs">Requesting multiple unrelated blobs</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#constants" title="Constants">Constants</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#types" title="Type Aliases">Type Aliases</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate iroh_<wbr>blobs</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">iroh_blobs</a></div><h1>Module <span>protocol</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/iroh_blobs/protocol.rs.html#1-1072">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Protocol for transferring content-addressed blobs over [<code>iroh</code>] p2p QUIC connections.</p>
+<h2 id="participants"><a class="doc-anchor" href="#participants">§</a>Participants</h2>
+<p>The protocol is a request/response protocol with two parties, a <em>provider</em> that
+serves blobs and a <em>getter</em> that requests blobs.</p>
+<h2 id="goals"><a class="doc-anchor" href="#goals">§</a>Goals</h2>
+<ul>
+<li>
+<p>Be paranoid about data integrity.</p>
+<p>Data integrity is considered more important than performance. Data will be validated both on
+the provider and getter side. A well behaved provider will never send invalid data. Responses
+to range requests contain sufficient information to validate the data.</p>
+<p>Note: Validation using blake3 is extremely fast, so in almost all scenarios the validation
+will not be the bottleneck even if we validate both on the provider and getter side.</p>
+</li>
+<li>
+<p>Do not limit the size of blobs or collections.</p>
+<p>Blobs can be of arbitrary size, up to terabytes. Likewise, collections can contain an
+arbitrary number of links. A well behaved implementation will not require the entire blob or
+collection to be in memory at once.</p>
+</li>
+<li>
+<p>Be efficient when transferring large blobs, including range requests.</p>
+<p>It is possible to request entire blobs or ranges of blobs, where the minimum granularity is a
+chunk group of 16KiB or 16 blake3 chunks. The worst case overhead when doing range requests
+is about two chunk groups per range.</p>
+</li>
+<li>
+<p>Be efficient when transferring multiple tiny blobs.</p>
+<p>For tiny blobs the overhead of sending the blob hashes and the round-trip time for each blob
+would be prohibitive.</p>
+</li>
+</ul>
+<p>To avoid roundtrips, the protocol allows grouping multiple blobs into <em>collections</em>.
+The semantic meaning of a collection is up to the application. For the purpose
+of this protocol, a collection is just a grouping of related blobs.</p>
+<h2 id="non-goals"><a class="doc-anchor" href="#non-goals">§</a>Non-goals</h2>
+<ul>
+<li>
+<p>Do not attempt to be generic in terms of the used hash function.</p>
+<p>The protocol makes extensive use of the <a href="https://crates.io/crates/blake3">blake3</a> hash
+function and it’s special properties such as blake3 verified streaming.</p>
+</li>
+<li>
+<p>Do not support graph traversal.</p>
+<p>The protocol only supports collections that directly contain blobs. If you have deeply nested
+graph data, you will need to either do multiple requests or flatten the graph into a single
+temporary collection.</p>
+</li>
+<li>
+<p>Do not support discovery.</p>
+<p>The protocol does not yet have a discovery mechanism for asking the provider what ranges are
+available for a given blob. Currently you have to have some out-of-band knowledge about what
+node has data for a given hash, or you can just try to retrieve the data and see if it is
+available.</p>
+</li>
+</ul>
+<p>A discovery protocol is planned in the future though.</p>
+<h2 id="requests"><a class="doc-anchor" href="#requests">§</a>Requests</h2><h3 id="getter-defined-requests"><a class="doc-anchor" href="#getter-defined-requests">§</a>Getter defined requests</h3>
+<p>In this case the getter knows the hash of the blob it wants to retrieve and
+whether it wants to retrieve a single blob or a collection.</p>
+<p>The getter needs to define exactly what it wants to retrieve and send the
+request to the provider.</p>
+<p>The provider will then respond with the bao encoded bytes for the requested
+data and then close the connection. It will immediately close the connection
+in case some data is not available or invalid.</p>
+<h3 id="provider-defined-requests"><a class="doc-anchor" href="#provider-defined-requests">§</a>Provider defined requests</h3>
+<p>In this case the getter sends a blob to the provider. This blob can contain
+some kind of query. The exact details of the query are up to the application.</p>
+<p>The provider evaluates the query and responds with a serialized request in
+the same format as the getter defined requests, followed by the bao encoded
+data. From then on the protocol is the same as for getter defined requests.</p>
+<h3 id="specifying-the-required-data"><a class="doc-anchor" href="#specifying-the-required-data">§</a>Specifying the required data</h3>
+<p>A <a href="struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest"><code>GetRequest</code></a> contains a hash and a specification of what data related to
+that hash is required. The specification is using a <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> which
+has a compact representation on the wire but is otherwise identical to a
+sequence of sets of ranges.</p>
+<p>In the following, we describe how the <a href="struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest"><code>GetRequest</code></a> is to be created for
+different common scenarios.</p>
+<p>Under the hood, this is using the <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> type, but the most
+convenient way to create a <a href="struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest"><code>GetRequest</code></a> is to use the builder API.</p>
+<p>Ranges are always given in terms of 1024 byte blake3 chunks, <em>not</em> in terms
+of bytes or chunk groups. The reason for this is that chunks are the fundamental
+unit of hashing in BLAKE3. Addressing anything smaller than a chunk is not
+possible, and combining multiple chunks is merely an optimization to reduce
+metadata overhead.</p>
+<h4 id="individual-blobs"><a class="doc-anchor" href="#individual-blobs">§</a>Individual blobs</h4>
+<p>In the easiest case, the getter just wants to retrieve a single blob. In this
+case, the getter specifies <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> that contains a single element.
+This element is the set of all chunks to indicate that we
+want the entire blob, no matter how many chunks it has.</p>
+<p>Since this is a very common case, there is a convenience method
+<a href="struct.GetRequest.html#method.blob" title="associated function iroh_blobs::protocol::GetRequest::blob"><code>GetRequest::blob</code></a> that only requires the hash of the blob.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::blob(hash);</code></pre></div><h4 id="ranges-of-blobs"><a class="doc-anchor" href="#ranges-of-blobs">§</a>Ranges of blobs</h4>
+<p>In this case, we have a (possibly large) blob and we want to retrieve only
+some ranges of chunks. This is useful in similar cases as HTTP range requests.</p>
+<p>We still need just a single element in the <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a>, since we are
+still only interested in a single blob. However, this element contains all
+the chunk ranges we want to retrieve.</p>
+<p>For example, if we want to retrieve chunks 0-10 of a blob, we would
+create a <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> like this:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .root(ChunkRanges::chunks(..<span class="number">10</span>))
+    .build(hash);</code></pre></div>
+<p>While not that common, it is also possible to request multiple ranges of a
+single blob. For example, if we want to retrieve chunks <code>0-10</code> and <code>100-110</code>
+of a large file, we would create a <a href="struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest"><code>GetRequest</code></a> like this:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .root(ChunkRanges::chunks(..<span class="number">10</span>) | ChunkRanges::chunks(<span class="number">100</span>..<span class="number">110</span>))
+    .build(hash);</code></pre></div>
+<p>This is all great, but in most cases we are not interested in chunks but
+in bytes. The <a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a> type has a constructor that allows providing
+byte ranges instead of chunk ranges. These will be rounded up to the
+nearest chunk.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .root(ChunkRanges::bytes(..<span class="number">1000</span>) | ChunkRanges::bytes(<span class="number">10000</span>..<span class="number">11000</span>))
+    .build(hash);</code></pre></div>
+<p>There are also methods to request a single chunk or a single byte offset,
+as well as a special constructor for the last chunk of a blob.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .root(ChunkRanges::offset(<span class="number">1</span>) | ChunkRanges::last_chunk())
+    .build(hash);</code></pre></div>
+<p>To specify chunk ranges, we use the <a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a> type alias.
+This is actually the <a href="range_collections::range_set::RangeSet"><code>RangeSet</code></a> type from the
+<a href="https://crates.io/crates/range_collections">range_collections</a> crate. This
+type supports efficient boolean operations on sets of non-overlapping ranges.</p>
+<p>The <a href="range_collections::range_set::RangeSet2"><code>RangeSet2</code></a> type is a type alias for <a href="range_collections::range_set::RangeSet"><code>RangeSet</code></a> that can store up to
+2 boundaries without allocating. This is sufficient for most use cases.</p>
+<h4 id="hash-sequences"><a class="doc-anchor" href="#hash-sequences">§</a>Hash sequences</h4>
+<p>In this case the provider has a hash sequence that refers multiple blobs.
+We want to retrieve all blobs in the hash sequence.</p>
+<p>When used for hash sequences, the first element of a <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> refers
+to the hash seq itself, and all subsequent elements refer to the blobs
+in the hash seq. When a <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> specifies ranges for more than
+one blob, the provider will interpret this as a request for a hash seq.</p>
+<p>One thing to note is that we might not yet know how many blobs are in the
+hash sequence. Therefore, it is not possible to download an entire hash seq
+by just specifying [<code>ChunkRanges::all()</code>] for all children.</p>
+<p>Instead, <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> allows defining infinite sequences of range sets.
+The <a href="struct.ChunkRangesSeq.html#method.all" title="associated function iroh_blobs::protocol::ChunkRangesSeq::all"><code>ChunkRangesSeq::all()</code></a> method returns a <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> that, when iterated
+over, will yield [<code>ChunkRanges::all()</code>] forever.</p>
+<p>So a get request to download a hash sequence blob and all its children
+would look like this:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .root(ChunkRanges::all())
+    .build_open(hash); <span class="comment">// repeats the last range forever</span></code></pre></div>
+<p>Downloading an entire hash seq is also a very common case, so there is a
+convenience method <a href="struct.GetRequest.html#method.all" title="associated function iroh_blobs::protocol::GetRequest::all"><code>GetRequest::all</code></a> that only requires the hash of the
+hash sequence blob.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::all(hash);</code></pre></div><h4 id="parts-of-hash-sequences"><a class="doc-anchor" href="#parts-of-hash-sequences">§</a>Parts of hash sequences</h4>
+<p>The most complex common case is when we have retrieved a hash seq and
+it’s children, but were interrupted before we could retrieve all children.</p>
+<p>In this case we need to specify the hash seq we want to retrieve, but
+exclude the children and parts of children that we already have.</p>
+<p>For example, if we have a hash with 3 children, and we already have
+the first child and the first 1000000 chunks of the second child.</p>
+<p>We would create a <a href="struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest"><code>GetRequest</code></a> like this:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .child(<span class="number">1</span>, ChunkRanges::chunks(<span class="number">1000000</span>..)) <span class="comment">// we don't need the first child;
+    </span>.next(ChunkRanges::all()) <span class="comment">// we need the second child and all subsequent children completely
+    </span>.build_open(hash);</code></pre></div><h4 id="requesting-chunks-for-each-child"><a class="doc-anchor" href="#requesting-chunks-for-each-child">§</a>Requesting chunks for each child</h4>
+<p>The ChunkRangesSeq allows some scenarios that are not covered above. E.g. you
+might want to request a hash seq and the first chunk of each child blob to
+do something like mime type detection.</p>
+<p>You do not know how many children the collection has, so you need to use
+an infinite sequence.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .root(ChunkRanges::all())
+    .next(ChunkRanges::chunk(<span class="number">1</span>)) <span class="comment">// the first chunk of each child)
+    </span>.build_open(hash);</code></pre></div><h4 id="requesting-a-single-child"><a class="doc-anchor" href="#requesting-a-single-child">§</a>Requesting a single child</h4>
+<p>It is of course possible to request a single child of a collection. E.g.
+the following would download the second child of a collection:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::builder()
+    .child(<span class="number">1</span>, ChunkRanges::all()) <span class="comment">// we need the second child completely
+    </span>.build(hash);</code></pre></div>
+<p>However, if you already have the collection, you might as well locally
+look up the hash of the child and request it directly.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>request = GetRequest::blob(child_hash);</code></pre></div><h4 id="why-chunkranges-and-chunkrangesseq"><a class="doc-anchor" href="#why-chunkranges-and-chunkrangesseq">§</a>Why ChunkRanges and ChunkRangesSeq?</h4>
+<p>You might wonder why we have <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a>, when a simple
+sequence of <a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a> might also do.</p>
+<p>The <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> type exist to provide an efficient
+representation of the request on the wire. In the wire encoding of <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a>,
+<a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a> are encoded alternating intervals of selected and non-selected chunks.
+This results in smaller numbers that will result in fewer bytes on the wire when using
+the <a href="https://crates.io/crates/postcard">postcard</a> encoding format that uses variable
+length integers.</p>
+<p>Likewise, the <a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> type
+does run length encoding to remove repeating elements. It also allows infinite
+sequences of <a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a> to be encoded, unlike a simple sequence of
+<a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a>s.</p>
+<p><a href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq"><code>ChunkRangesSeq</code></a> should be efficient even in case of very fragmented availability
+of chunks, like a download from multiple providers that was frequently interrupted.</p>
+<h2 id="responses"><a class="doc-anchor" href="#responses">§</a>Responses</h2>
+<p>The response stream contains the bao encoded bytes for the requested data.
+The data will be sent in the order in which it was requested, so ascending
+chunks for each blob, and blobs in the order in which they appear in the
+hash seq.</p>
+<p>For details on the bao encoding, see the <a href="https://github.com/oconnor663/bao/blob/master/docs/spec.md">bao specification</a>
+and the <a href="https://crates.io/crates/bao-tree">bao-tree</a> crate. The bao-tree crate
+is identical to the bao crate, except that it allows combining multiple BLAKE3
+chunks to chunk groups for efficiency.</p>
+<p>For a complete response, the chunks are guaranteed to completely cover the
+requested ranges.</p>
+<p>Reasons for not retrieving a complete response are two-fold:</p>
+<ul>
+<li>
+<p>the connection to the provider was interrupted, or the provider encountered
+an internal error. In this case the provider will close the entire quinn connection.</p>
+</li>
+<li>
+<p>the provider does not have the requested data, or discovered on send that the
+requested data is not valid.</p>
+</li>
+</ul>
+<p>In this case the provider will close just the stream used to send the response.
+The exact location of the missing data can be retrieved from the error.</p>
+<h2 id="requesting-multiple-unrelated-blobs"><a class="doc-anchor" href="#requesting-multiple-unrelated-blobs">§</a>Requesting multiple unrelated blobs</h2>
+<p>Let’s say you don’t have a hash sequence on the provider side, but you
+nevertheless want to request multiple unrelated blobs in a single request.</p>
+<p>For this, there is the <a href="struct.GetManyRequest.html" title="struct iroh_blobs::protocol::GetManyRequest"><code>GetManyRequest</code></a> type, which also comes with a
+builder API.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>GetManyRequest::builder()
+    .hash(hash1, ChunkRanges::all())
+    .hash(hash2, ChunkRanges::all())
+    .build();</code></pre></div>
+<p>If you accidentally or intentionally request ranges for the same hash
+multiple times, they will be merged into a single <a href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges"><code>ChunkRanges</code></a>.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>GetManyRequest::builder()
+    .hash(hash1, ChunkRanges::chunk(<span class="number">1</span>))
+    .hash(hash2, ChunkRanges::all())
+    .hash(hash1, ChunkRanges::last_chunk())
+    .build();</code></pre></div>
+<p>This is mostly useful for requesting multiple tiny blobs in a single request.
+For large or even medium sized blobs, multiple requests are not expensive.
+Multiple requests just create multiple streams on the same connection,
+which is <em>very</em> cheap in QUIC.</p>
+<p>In case nodes are permanently exchanging data, it is somewhat valuable to
+keep a connection open and reuse it for multiple requests. However, creating
+a new connection is also very cheap, so you would only do this to optimize
+a large existing system that has demonstrated performance issues.</p>
+<p>If in doubt, just use multiple requests and multiple connections.</p>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="builder/index.html" title="mod iroh_blobs::protocol::builder">builder</a></dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.ChunkRangesSeq.html" title="struct iroh_blobs::protocol::ChunkRangesSeq">Chunk<wbr>Ranges<wbr>Seq</a></dt><dt><a class="struct" href="struct.GetManyRequest.html" title="struct iroh_blobs::protocol::GetManyRequest">GetMany<wbr>Request</a></dt><dd>A GetMany request is a request to get multiple blobs via a single request.</dd><dt><a class="struct" href="struct.GetRequest.html" title="struct iroh_blobs::protocol::GetRequest">GetRequest</a></dt><dd>A get request</dd><dt><a class="struct" href="struct.NonEmptyRequestRangeSpecIter.html" title="struct iroh_blobs::protocol::NonEmptyRequestRangeSpecIter">NonEmpty<wbr>Request<wbr>Range<wbr>Spec<wbr>Iter</a></dt><dd>An iterator over blobs in the sequence with a non-empty range specs.</dd><dt><a class="struct" href="struct.ObserveItem.html" title="struct iroh_blobs::protocol::ObserveItem">Observe<wbr>Item</a></dt><dt><a class="struct" href="struct.ObserveRequest.html" title="struct iroh_blobs::protocol::ObserveRequest">Observe<wbr>Request</a></dt><dd>A request to observe a raw blob bitfield.</dd><dt><a class="struct" href="struct.PushRequest.html" title="struct iroh_blobs::protocol::PushRequest">Push<wbr>Request</a></dt><dd>A push request contains a description of what to push, but will be followed
+by the data to push.</dd><dt><a class="struct" href="struct.RangeSpec.html" title="struct iroh_blobs::protocol::RangeSpec">Range<wbr>Spec</a></dt><dd>A chunk range specification as a sequence of chunk offsets.</dd><dt><a class="struct" href="struct.UnknownErrorCode.html" title="struct iroh_blobs::protocol::UnknownErrorCode">Unknown<wbr>Error<wbr>Code</a></dt><dd>Unknown error_code, can not be converted into <a href="enum.Closed.html" title="enum iroh_blobs::protocol::Closed"><code>Closed</code></a>.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.Closed.html" title="enum iroh_blobs::protocol::Closed">Closed</a></dt><dd>Reasons to close connections or stop streams.</dd><dt><a class="enum" href="enum.Request.html" title="enum iroh_blobs::protocol::Request">Request</a></dt><dd>A request to the provider</dd><dt><a class="enum" href="enum.RequestType.html" title="enum iroh_blobs::protocol::RequestType">Request<wbr>Type</a></dt><dd>This must contain the request types in the same order as the full requests</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.ALPN.html" title="constant iroh_blobs::protocol::ALPN">ALPN</a></dt><dd>The ALPN used with quic for the iroh blobs protocol.</dd><dt><a class="constant" href="constant.ERR_INTERNAL.html" title="constant iroh_blobs::protocol::ERR_INTERNAL">ERR_<wbr>INTERNAL</a></dt><dd>Error code for when a request is aborted due to internal error</dd><dt><a class="constant" href="constant.ERR_LIMIT.html" title="constant iroh_blobs::protocol::ERR_LIMIT">ERR_<wbr>LIMIT</a></dt><dd>Error code for when a request is aborted due to a rate limit</dd><dt><a class="constant" href="constant.ERR_PERMISSION.html" title="constant iroh_blobs::protocol::ERR_PERMISSION">ERR_<wbr>PERMISSION</a></dt><dd>Error code for a permission error</dd><dt><a class="constant" href="constant.MAX_MESSAGE_SIZE.html" title="constant iroh_blobs::protocol::MAX_MESSAGE_SIZE">MAX_<wbr>MESSAGE_<wbr>SIZE</a></dt><dd>Maximum message size is limited to 100MiB for now.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.ChunkRangesExt.html" title="trait iroh_blobs::protocol::ChunkRangesExt">Chunk<wbr>Ranges<wbr>Ext</a></dt></dl><h2 id="types" class="section-header">Type Aliases<a href="#types" class="anchor">§</a></h2><dl class="item-table"><dt><a class="type" href="type.ChunkRanges.html" title="type iroh_blobs::protocol::ChunkRanges">Chunk<wbr>Ranges</a></dt><dd>A set of chunk ranges</dd></dl></section></div></main></body></html>
