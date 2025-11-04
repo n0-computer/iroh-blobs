@@ -2,8 +2,7 @@
 use std::io;
 
 use iroh::endpoint::{ConnectionError, ReadError, VarInt, WriteError};
-use n0_error::stack_error;
-use n0_error::AnyError;
+use n0_error::{stack_error, AnyError};
 
 use crate::get::fsm::{
     AtBlobHeaderNextError, AtClosingNextError, ConnectedNextError, DecodeError, InitialNextError,
