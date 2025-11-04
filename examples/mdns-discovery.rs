@@ -13,7 +13,7 @@
 //! Run that command on another machine in the same local network, replacing [FILE_PATH] to the path on which you want to save the transferred content.
 use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Result};
+use n0_error::{ensure, Result};
 use clap::{Parser, Subcommand};
 use iroh::{
     discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
@@ -127,7 +127,7 @@ async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> n0_error::Result<()> {
     setup_logging();
     let cli = Cli::parse();
 

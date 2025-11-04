@@ -5,7 +5,7 @@
 mod common;
 use std::{fmt::Debug, path::PathBuf};
 
-use anyhow::Result;
+use n0_error::Result;
 use clap::Parser;
 use common::setup_logging;
 use iroh::protocol::ProtocolHandler;

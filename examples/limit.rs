@@ -18,7 +18,7 @@ use std::{
     },
 };
 
-use anyhow::Result;
+use n0_error::Result;
 use clap::Parser;
 use common::setup_logging;
 use iroh::{protocol::Router, EndpointAddr, EndpointId, SecretKey};

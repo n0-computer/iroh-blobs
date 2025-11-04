@@ -15,11 +15,10 @@ use bao_tree::{
 use genawaiter::sync::{Co, Gen};
 use iroh::endpoint::Connection;
 use irpc::util::{AsyncReadVarintExt, WriteVarintExt};
+use n0_error::{e, AnyError, StdResultExt};
+use n0_error::{stack_error, Result};
 use n0_future::{io, Stream, StreamExt};
-use n0_error::stack_error;
-use nested_enum_utils::common_fields;
 use ref_cast::RefCast;
-use n0_error::{e, StdResultExt};
 use tracing::{debug, trace};
 
 use super::blobs::{Bitfield, ExportBaoOptions};
@@ -123,7 +122,10 @@ impl GetProgress {
 
     pub async fn complete(self) -> GetResult<Stats> {
         just_result(self.stream()).await.unwrap_or_else(|| {
-            Err(e!(GetError::LocalFailure, anyhow::anyhow!("stream closed without result")))
+            Err(e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("stream closed without result")
+            ))
         })
     }
 }
@@ -135,11 +137,11 @@ pub enum PushProgressItem {
     /// The request was completed.
     Done(Stats),
     /// The request was closed, but not completed.
-    Error(anyhow::Error),
+    Error(AnyError),
 }
 
-impl From<anyhow::Result<Stats>> for PushProgressItem {
-    fn from(res: anyhow::Result<Stats>) -> Self {
+impl From<Result<Stats>> for PushProgressItem {
+    fn from(res: Result<Stats>) -> Self {
         match res {
             Ok(stats) => Self::Done(stats),
             Err(e) => Self::Error(e),
@@ -147,7 +149,7 @@ impl From<anyhow::Result<Stats>> for PushProgressItem {
     }
 }
 
-impl TryFrom<PushProgressItem> for anyhow::Result<Stats> {
+impl TryFrom<PushProgressItem> for Result<Stats> {
     type Error = &'static str;
 
     fn try_from(item: PushProgressItem) -> Result<Self, Self::Error> {
@@ -165,7 +167,7 @@ pub struct PushProgress {
 }
 
 impl IntoFuture for PushProgress {
-    type Output = anyhow::Result<Stats>;
+    type Output = Result<Stats>;
     type IntoFuture = n0_future::boxed::BoxFuture<Self::Output>;
 
     fn into_future(self) -> n0_future::boxed::BoxFuture<Self::Output> {
@@ -178,10 +180,10 @@ impl PushProgress {
         into_stream(self.rx, self.fut)
     }
 
-    pub async fn complete(self) -> anyhow::Result<Stats> {
+    pub async fn complete(self) -> Result<Stats> {
         just_result(self.stream())
             .await
-            .unwrap_or_else(|| Err(anyhow::anyhow!("stream closed without result")))
+            .unwrap_or_else(|| Err(n0_error::anyerr!("stream closed without result")))
     }
 }
 
@@ -440,7 +442,7 @@ impl Remote {
     pub async fn local_for_request(
         &self,
         request: impl Into<Arc<GetRequest>>,
-    ) -> anyhow::Result<LocalInfo> {
+    ) -> Result<LocalInfo> {
         let request = request.into();
         let root = request.hash;
         let bitfield = self.store().observe(root).await?;
@@ -493,7 +495,7 @@ impl Remote {
     }
 
     /// Get the local info for a given blob or hash sequence, at the present time.
-    pub async fn local(&self, content: impl Into<HashAndFormat>) -> anyhow::Result<LocalInfo> {
+    pub async fn local(&self, content: impl Into<HashAndFormat>) -> Result<LocalInfo> {
         let request = GetRequest::from(content.into());
         self.local_for_request(request).await
     }
@@ -535,7 +537,7 @@ impl Remote {
         let local = self
             .local(content)
             .await
-            .map_err(|e: anyhow::Error| e!(GetError::LocalFailure, e))?;
+            .map_err(|e| e!(GetError::LocalFailure, e))?;
         if local.is_complete() {
             return Ok(Default::default());
         }
@@ -598,16 +600,16 @@ impl Remote {
         conn: Connection,
         request: PushRequest,
         progress: impl Sink<u64, Error = irpc::channel::SendError>,
-    ) -> anyhow::Result<Stats> {
+    ) -> Result<Stats> {
         let hash = request.hash;
         debug!(%hash, "pushing");
-        let (mut send, mut recv) = conn.open_bi().await?;
+        let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
         let mut context = StreamContext {
             payload_bytes_sent: 0,
             sender: progress,
         };
         // we are not going to need this!
-        recv.stop(0u32.into())?;
+        recv.stop(0u32.into()).anyerr()?;
         // write the request. Unlike for reading, we can just serialize it sync using postcard.
         let request = write_push_request(request, &mut send).await?;
         let mut request_ranges = request.ranges.iter_infinite();
@@ -621,7 +623,7 @@ impl Remote {
         }
         if request.ranges.is_blob() {
             // we are done
-            send.finish()?;
+            send.finish().anyerr()?;
             return Ok(Default::default());
         }
         let hash_seq = self.store().get_bytes(root).await?;
@@ -636,7 +638,7 @@ impl Remote {
                     .await?;
             }
         }
-        send.finish()?;
+        send.finish().anyerr()?;
         Ok(Default::default())
     }
 
@@ -680,7 +682,10 @@ impl Remote {
         let store = self.store();
         let root = request.hash;
         let conn = conn.open_stream_pair().await.map_err(|e| {
-            e!(GetError::LocalFailure, anyhow::anyhow!("failed to open stream pair: {e}"))
+            e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("failed to open stream pair: {e}")
+            )
         })?;
         // I am cloning the connection, but it's fine because the original connection or ConnectionRef stays alive
         // for the duration of the operation.
@@ -818,25 +823,43 @@ impl Remote {
 pub enum ExecuteError {
     /// Network or IO operation failed.
     #[error("Unable to open bidi stream")]
-    Connection { source: iroh::endpoint::ConnectionError },
+    Connection {
+        #[error(std_err)]
+        source: iroh::endpoint::ConnectionError,
+    },
     #[error("Unable to read from the remote")]
-    Read { source: iroh::endpoint::ReadError },
+    Read {
+        #[error(std_err)]
+        source: iroh::endpoint::ReadError,
+    },
     #[error("Error sending the request")]
-    Send { source: crate::get::fsm::ConnectedNextError },
+    Send {
+        #[error(std_err)]
+        source: crate::get::fsm::ConnectedNextError,
+    },
     #[error("Unable to read size")]
-    Size { source: crate::get::fsm::AtBlobHeaderNextError },
+    Size {
+        #[error(std_err)]
+        source: crate::get::fsm::AtBlobHeaderNextError,
+    },
     #[error("Error while decoding the data")]
-    Decode { source: crate::get::fsm::DecodeError },
+    Decode {
+        #[error(std_err)]
+        source: crate::get::fsm::DecodeError,
+    },
     #[error("Internal error while reading the hash sequence")]
     ExportBao { source: api::ExportBaoError },
     #[error("Hash sequence has an invalid length")]
-    InvalidHashSeq { #[error(std_err)] source: anyhow::Error },
+    InvalidHashSeq { source: AnyError },
     #[error("Internal error importing the data")]
     ImportBao { source: crate::api::RequestError },
     #[error("Error sending download progress - receiver closed")]
     SendDownloadProgress { source: irpc::channel::SendError },
     #[error("Internal error importing the data")]
-    MpscSend { #[error(std_err)] source: tokio::sync::mpsc::error::SendError<BaoContentItem> },
+    MpscSend {
+        #[error(std_err)]
+        source: tokio::sync::mpsc::error::SendError<BaoContentItem>,
+    },
 }
 
 pub trait GetStreamPair: Send + 'static {
@@ -880,7 +903,10 @@ async fn get_blob_ranges_impl<R: RecvStream>(
             let end = content.drain().await.map_err(|e| e!(GetError::Decode, e))?;
             Ok(end)
         } else {
-            Err(e!(GetError::Decode, DecodeError::leaf_hash_mismatch(ChunkNum(0))))
+            Err(e!(
+                GetError::Decode,
+                DecodeError::leaf_hash_mismatch(ChunkNum(0))
+            ))
         };
     };
     let buffer_size = get_buffer_size(size);
@@ -898,7 +924,8 @@ async fn get_blob_ranges_impl<R: RecvStream>(
                         .send(next.stats().payload_bytes_read)
                         .await
                         .map_err(|e| e!(GetError::LocalFailure, e.into()))?;
-                    handle.tx
+                    handle
+                        .tx
                         .send(item)
                         .await
                         .map_err(|e| e!(GetError::IrpcSend, e))?;
@@ -913,7 +940,10 @@ async fn get_blob_ranges_impl<R: RecvStream>(
     };
     let complete = async move {
         handle.rx.await.map_err(|e| {
-            e!(GetError::LocalFailure, anyhow::anyhow!("error reading from import stream: {e}"))
+            e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("error reading from import stream: {e}")
+            )
         })
     };
     let (_, end) = tokio::try_join!(complete, write)?;
@@ -936,7 +966,7 @@ pub(crate) struct HashSeqChunk {
 }
 
 impl TryFrom<Leaf> for HashSeqChunk {
-    type Error = anyhow::Error;
+    type Error = AnyError;
 
     fn try_from(leaf: Leaf) -> Result<Self, Self::Error> {
         let offset = leaf.offset;
@@ -983,7 +1013,7 @@ impl LazyHashSeq {
     }
 
     #[allow(dead_code)]
-    pub async fn get_from_offset(&mut self, offset: u64) -> anyhow::Result<Option<Hash>> {
+    pub async fn get_from_offset(&mut self, offset: u64) -> Result<Option<Hash>> {
         if offset == 0 {
             Ok(Some(self.hash))
         } else {
@@ -992,7 +1022,7 @@ impl LazyHashSeq {
     }
 
     #[allow(dead_code)]
-    pub async fn get(&mut self, child_offset: u64) -> anyhow::Result<Option<Hash>> {
+    pub async fn get(&mut self, child_offset: u64) -> Result<Option<Hash>> {
         // check if we have the hash in the current chunk
         if let Some(chunk) = &self.current_chunk {
             if let Some(hash) = chunk.get(child_offset) {
@@ -1015,7 +1045,7 @@ impl LazyHashSeq {
 async fn write_push_request(
     request: PushRequest,
     stream: &mut impl SendStream,
-) -> anyhow::Result<PushRequest> {
+) -> Result<PushRequest> {
     let mut request_bytes = Vec::new();
     request_bytes.push(RequestType::Push as u8);
     request_bytes.write_length_prefixed(&request).unwrap();

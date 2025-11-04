@@ -25,7 +25,7 @@ pub struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> n0_error::Result<()> {
     setup_logging();
     let cli = Cli::parse();
     let ticket = cli.ticket;
@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
         .discovery(PkarrResolver::n0_dns())
         .bind()
         .await?;
-    anyhow::ensure!(
+    n0_error::ensure!(
         ticket.format() == BlobFormat::Raw,
         "This example only supports raw blobs."
     );
@@ -54,10 +54,10 @@ async fn main() -> anyhow::Result<()> {
                     break stats;
                 }
                 Some(GetBlobItem::Error(err)) => {
-                    anyhow::bail!("Error while streaming blob: {err}");
+                    n0_error::bail!("Error while streaming blob: {err}");
                 }
                 None => {
-                    anyhow::bail!("Stream ended unexpectedly.");
+                    n0_error::bail!("Stream ended unexpectedly.");
                 }
             }
         }

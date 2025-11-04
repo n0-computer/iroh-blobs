@@ -3,8 +3,7 @@ use std::io;
 
 use iroh::endpoint::{ConnectionError, ReadError, VarInt, WriteError};
 use n0_error::stack_error;
-use nested_enum_utils::common_fields;
-use n0_error::e;
+use n0_error::AnyError;
 
 use crate::get::fsm::{
     AtBlobHeaderNextError, AtClosingNextError, ConnectedNextError, DecodeError, InitialNextError,
@@ -14,21 +13,39 @@ use crate::get::fsm::{
 #[stack_error(derive, add_meta)]
 pub enum GetError {
     #[error(transparent)]
-    InitialNext { #[error(std_err)] source: InitialNextError },
+    InitialNext {
+        #[error(from)]
+        source: InitialNextError,
+    },
     #[error(transparent)]
-    ConnectedNext { #[error(std_err)] source: ConnectedNextError },
+    ConnectedNext {
+        #[error(from)]
+        source: ConnectedNextError,
+    },
     #[error(transparent)]
-    AtBlobHeaderNext { #[error(std_err)] source: AtBlobHeaderNextError },
+    AtBlobHeaderNext {
+        #[error(from)]
+        source: AtBlobHeaderNextError,
+    },
     #[error(transparent)]
-    Decode { #[error(std_err)] source: DecodeError },
+    Decode {
+        #[error(from)]
+        source: DecodeError,
+    },
     #[error(transparent)]
-    IrpcSend { #[error(std_err)] source: irpc::channel::SendError },
+    IrpcSend {
+        #[error(from)]
+        source: irpc::channel::SendError,
+    },
     #[error(transparent)]
-    AtClosingNext { #[error(std_err)] source: AtClosingNextError },
-    #[error("local failure: {source}")]
-    LocalFailure { #[error(std_err)] source: anyhow::Error },
-    #[error("bad request: {source}")]
-    BadRequest { #[error(std_err)] source: anyhow::Error },
+    AtClosingNext {
+        #[error(from)]
+        source: AtClosingNextError,
+    },
+    #[error("local failure")]
+    LocalFailure { source: AnyError },
+    #[error("bad request")]
+    BadRequest { source: AnyError },
 }
 
 impl GetError {

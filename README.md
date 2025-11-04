@@ -37,7 +37,7 @@ use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> n0_error::Result<()> {
     // create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
     let endpoint = Endpoint::bind().await?;

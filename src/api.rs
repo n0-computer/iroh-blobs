@@ -19,7 +19,6 @@ use iroh::Endpoint;
 use irpc::rpc::{listen, RemoteService};
 use n0_error::e;
 use n0_error::stack_error;
-use nested_enum_utils::common_fields;
 use proto::{Request, ShutdownRequest, SyncDbRequest};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
@@ -44,7 +43,10 @@ pub enum RequestError {
     Rpc { source: irpc::Error },
     /// Request failed due an actual error.
     #[error("inner error: {source}")]
-    Inner { #[error(std_err)] source: Error },
+    Inner {
+        #[error(std_err)]
+        source: Error,
+    },
 }
 
 impl From<irpc::Error> for RequestError {
@@ -79,7 +81,7 @@ pub type RequestResult<T> = std::result::Result<T, RequestError>;
 pub enum ExportBaoError {
     #[error("send error")]
     Send { source: irpc::channel::SendError },
-    #[error("mpsc recv error")]
+    #[error("mpsc recv e api.acp.pro-channelsrror")]
     MpscRecv {
         source: irpc::channel::mpsc::RecvError,
     },
@@ -131,10 +133,11 @@ impl From<irpc::Error> for ExportBaoError {
 
 pub type ExportBaoResult<T> = std::result::Result<T, ExportBaoError>;
 
-#[derive(Debug, derive_more::Display, derive_more::From, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+#[stack_error(derive, std_sources, from_sources)]
 pub enum Error {
     #[serde(with = "crate::util::serde::io_error_serde")]
-    Io(io::Error),
+    Io(#[error(source)] io::Error),
 }
 
 impl Error {
@@ -150,11 +153,13 @@ impl Error {
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         Self::Io(io::Error::other(msg.into()))
-}
+    }
 }
 
 impl From<irpc::Error> for Error {
-    fn from(e: irpc::Error) -> Self { Self::Io(e.into()) }
+    fn from(e: irpc::Error) -> Self {
+        Self::Io(e.into())
+    }
 }
 
 impl From<RequestError> for Error {
@@ -167,26 +172,26 @@ impl From<RequestError> for Error {
 }
 
 impl From<irpc::channel::mpsc::RecvError> for Error {
-    fn from(e: irpc::channel::mpsc::RecvError) -> Self { Self::Io(e.into()) }
+    fn from(e: irpc::channel::mpsc::RecvError) -> Self {
+        Self::Io(e.into())
+    }
 }
 
 impl From<irpc::rpc::WriteError> for Error {
-    fn from(e: irpc::rpc::WriteError) -> Self { Self::Io(e.into()) }
+    fn from(e: irpc::rpc::WriteError) -> Self {
+        Self::Io(e.into())
+    }
 }
 
 impl From<irpc::RequestError> for Error {
-    fn from(e: irpc::RequestError) -> Self { Self::Io(e.into()) }
+    fn from(e: irpc::RequestError) -> Self {
+        Self::Io(e.into())
+    }
 }
 
 impl From<irpc::channel::SendError> for Error {
-    fn from(e: irpc::channel::SendError) -> Self { Self::Io(e.into()) }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Io(e) => Some(e),
-        }
+    fn from(e: irpc::channel::SendError) -> Self {
+        Self::Io(e.into())
     }
 }
 
@@ -197,10 +202,6 @@ impl From<EncodeError> for Error {
             _ => Self::other(value),
         }
     }
-}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self { Self::Io(e) }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

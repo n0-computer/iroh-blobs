@@ -7,7 +7,7 @@
 //!  $ cargo run --example transfer-collection
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use n0_error::{Context, Result};
 use iroh::{
     discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr, RelayMode,
 };
@@ -104,7 +104,7 @@ impl Node {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> n0_error::Result<()> {
     // create a local provider for nodes to discover each other.
     // outside of a development environment, production apps would
     // use `Endpoint::bind()` or a similar method

@@ -4,7 +4,7 @@ use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> n0_error::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
     let endpoint = Endpoint::bind().await?;

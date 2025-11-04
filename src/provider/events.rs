@@ -4,8 +4,8 @@ use irpc::{
     channel::{mpsc, none::NoSender, oneshot},
     rpc_requests, Channels, WithChannels,
 };
+use n0_error::{e, stack_error};
 use serde::{Deserialize, Serialize};
-use n0_error::stack_error;
 
 use crate::{
     protocol::{
@@ -85,7 +85,7 @@ pub enum AbortReason {
 }
 
 /// Errors that can occur when sending progress updates.
-#[stack_error(derive, add_meta)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum ProgressError {
     #[error("limit")]
     Limit {},
@@ -501,7 +501,7 @@ impl EventSender {
                     RequestUpdates::Active(tx)
                 }
                 RequestMode::Disabled => {
-                    return Err(ProgressError::Permission);
+                    return Err(e!(ProgressError::Permission));
                 }
                 _ => RequestUpdates::None,
             },

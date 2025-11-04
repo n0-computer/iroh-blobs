@@ -94,6 +94,7 @@ use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use meta::list_blobs;
+use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
@@ -638,7 +639,7 @@ impl Actor {
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         trace!(
             "creating data directory: {}",
             options.path.data_path.display()
@@ -1388,7 +1389,7 @@ async fn copy_with_progress<T: CopyProgress>(
 
 impl FsStore {
     /// Load or create a new store.
-    pub async fn load(root: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub async fn load(root: impl AsRef<Path>) -> Result<Self> {
         let path = root.as_ref();
         let db_path = path.join("blobs.db");
         let options = Options::new(path);
@@ -1396,7 +1397,7 @@ impl FsStore {
     }
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
-    pub async fn load_with_opts(db_path: PathBuf, options: Options) -> anyhow::Result<FsStore> {
+    pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
         let rt = tokio::runtime::Builder::new_multi_thread()
             .thread_name_fn(|| {
@@ -1420,7 +1421,8 @@ impl FsStore {
                 fs_commands_tx.clone(),
                 Arc::new(options),
             ))
-            .await??;
+            .await
+            .anyerr()??;
         handle.spawn(actor.run());
         let store = FsStore::new(commands_tx.into(), fs_commands_tx);
         if let Some(config) = gc_config {
@@ -1476,7 +1478,7 @@ impl FsStore {
         }
     }
 
-    pub async fn dump(&self) -> anyhow::Result<()> {
+    pub async fn dump(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.db
             .send(
@@ -1486,8 +1488,9 @@ impl FsStore {
                 }
                 .into(),
             )
-            .await?;
-        rx.await??;
+            .await
+            .anyerr()?;
+        rx.await.anyerr()??;
         Ok(())
     }
 }
@@ -1541,7 +1544,7 @@ pub mod tests {
     fn create_n0_bao_full(
         data: &[u8],
         ranges: &ChunkRanges,
-    ) -> anyhow::Result<(Hash, ChunkRanges, Vec<u8>)> {
+    ) -> n0_error::Result<(Hash, ChunkRanges, Vec<u8>)> {
         let ranges = round_up_request(data.len() as u64, ranges);
         let (hash, encoded) = create_n0_bao(data, &ranges)?;
         Ok((hash, ranges, encoded))

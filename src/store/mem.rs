@@ -29,6 +29,7 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use irpc::channel::mpsc;
+use n0_error::{Result, StdResultExt};
 use n0_future::future::yield_now;
 use range_collections::range_set::RangeSetRange;
 use tokio::{
@@ -106,7 +107,7 @@ impl Default for MemStore {
 #[derive(derive_more::From)]
 enum TaskResult {
     Unit(()),
-    Import(anyhow::Result<ImportEntry>),
+    Import(Result<ImportEntry>),
     Scope(Scope),
 }
 
@@ -446,7 +447,7 @@ impl Actor {
         tx.send(tt).await.ok();
     }
 
-    async fn finish_import(&mut self, res: anyhow::Result<ImportEntry>) {
+    async fn finish_import(&mut self, res: Result<ImportEntry>) {
         let import_data = match res {
             Ok(entry) => entry,
             Err(e) => {
@@ -710,7 +711,7 @@ async fn import_bytes(
     scope: Scope,
     format: BlobFormat,
     tx: mpsc::Sender<AddProgressItem>,
-) -> anyhow::Result<ImportEntry> {
+) -> Result<ImportEntry> {
     tx.send(AddProgressItem::Size(data.len() as u64)).await?;
     tx.send(AddProgressItem::CopyDone).await?;
     let outboard = PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE);
@@ -728,7 +729,7 @@ async fn import_byte_stream(
     format: BlobFormat,
     mut rx: mpsc::Receiver<ImportByteStreamUpdate>,
     tx: mpsc::Sender<AddProgressItem>,
-) -> anyhow::Result<ImportEntry> {
+) -> Result<ImportEntry> {
     let mut res = Vec::new();
     loop {
         match rx.recv().await {
@@ -756,7 +757,7 @@ async fn import_byte_stream(
 }
 
 #[instrument(skip_all, fields(path = %cmd.path.display()))]
-async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+async fn import_path(cmd: ImportPathMsg) -> Result<ImportEntry> {
     let ImportPathMsg {
         inner:
             ImportPathRequest {
@@ -1035,7 +1036,7 @@ impl BaoFileStorageSubscriber {
     /// Forward observed *values* to the given sender
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
-    pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> anyhow::Result<()> {
+    pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
         let value = self.receiver.borrow().bitfield();
         tx.send(value).await?;
         loop {
@@ -1049,7 +1050,7 @@ impl BaoFileStorageSubscriber {
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
     #[allow(dead_code)]
-    pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> anyhow::Result<()> {
+    pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
         let value = self.receiver.borrow().bitfield();
         let mut old = value.clone();
         tx.send(value).await?;
@@ -1065,13 +1066,13 @@ impl BaoFileStorageSubscriber {
         }
     }
 
-    async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> anyhow::Result<()> {
+    async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> Result<()> {
         tokio::select! {
             _ = tx.closed() => {
                 // the sender is closed, we are done
                 Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into())
             }
-            e = self.receiver.changed() => Ok(e?),
+            e = self.receiver.changed() => Ok(e.anyerr()?),
         }
     }
 }

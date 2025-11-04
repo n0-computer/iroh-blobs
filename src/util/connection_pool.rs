@@ -23,11 +23,11 @@ use iroh::{
     endpoint::{ConnectError, Connection},
     Endpoint, EndpointId,
 };
+use n0_error::{e, stack_error};
 use n0_future::{
     future::{self},
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
 };
-use n0_error::stack_error;
 use tokio::sync::{
     mpsc::{self, error::SendError as TokioSendError},
     oneshot, Notify,
@@ -110,30 +110,38 @@ impl ConnectionRef {
 /// This includes the normal iroh connection errors as well as pool specific
 /// errors such as timeouts and connection limits.
 #[stack_error(derive, add_meta)]
+#[derive(Clone)]
 pub enum PoolConnectError {
     /// Connection pool is shut down
     #[error("Connection pool is shut down")]
     Shutdown {},
     /// Timeout during connect
-    #[error("Timeout during connect")] 
+    #[error("Timeout during connect")]
     Timeout {},
     /// Too many connections
     #[error("Too many connections")]
     TooManyConnections {},
     /// Error during connect
     #[error(transparent)]
-    ConnectError { source: ConnectError },
+    ConnectError { source: Arc<ConnectError> },
     /// Error during on_connect callback
     #[error(transparent)]
-    OnConnectError { #[error(std_err)] source: io::Error },
+    OnConnectError {
+        #[error(std_err)]
+        source: Arc<io::Error>,
+    },
 }
 
 impl From<ConnectError> for PoolConnectError {
-    fn from(e: ConnectError) -> Self { n0_error::e!(PoolConnectError::ConnectError, e) }
+    fn from(e: ConnectError) -> Self {
+        e!(PoolConnectError::ConnectError, Arc::new(e))
+    }
 }
 
 impl From<io::Error> for PoolConnectError {
-    fn from(e: io::Error) -> Self { n0_error::e!(PoolConnectError::OnConnectError, e) }
+    fn from(e: io::Error) -> Self {
+        e!(PoolConnectError::OnConnectError, Arc::new(e))
+    }
 }
 
 /// Error when calling a fn on the [`ConnectionPool`].
@@ -193,7 +201,7 @@ impl Context {
         let state = conn_fut
             .timeout(context.options.connect_timeout)
             .await
-            .map_err(|_| PoolConnectError::Timeout)
+            .map_err(|_| e!(PoolConnectError::Timeout))
             .and_then(|r| r);
         let conn_close = match &state {
             Ok(conn) => {
@@ -359,7 +367,7 @@ impl Actor {
                         self.connections.remove(&idle);
                     } else {
                         msg.tx
-                            .send(Err(n0_error::e!(PoolConnectError::TooManyConnections)))
+                            .send(Err(e!(PoolConnectError::TooManyConnections)))
                             .ok();
                         return;
                     }
@@ -437,8 +445,8 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::RequestRef(RequestRef { id, tx }))
             .await
-            .map_err(|_| n0_error::e!(PoolConnectError::Shutdown))?;
-        rx.await.map_err(|_| n0_error::e!(PoolConnectError::Shutdown))?
+            .map_err(|_| e!(PoolConnectError::Shutdown))?;
+        rx.await.map_err(|_| e!(PoolConnectError::Shutdown))?
     }
 
     /// Close an existing connection, if it exists
@@ -449,7 +457,7 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::ConnectionShutdown { id })
             .await
-            .map_err(|_| n0_error::e!(ConnectionPoolError::Shutdown))?;
+            .map_err(|_| e!(ConnectionPoolError::Shutdown))?;
         Ok(())
     }
 
@@ -463,7 +471,7 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::ConnectionIdle { id })
             .await
-            .map_err(|_| n0_error::e!(ConnectionPoolError::Shutdown))?;
+            .map_err(|_| e!(ConnectionPoolError::Shutdown))?;
         Ok(())
     }
 }
@@ -685,7 +693,7 @@ mod tests {
             // trying to connect to an id for which we have info, but the other
             // end is not listening, will lead to a timeout.
             let res = client.echo(non_listening, b"Hello, world!".to_vec()).await;
-            assert!(matches!(res, Err(PoolConnectError::Timeout)));
+            assert!(matches!(res, Err(PoolConnectError::Timeout { .. })));
         }
         Ok(())
     }

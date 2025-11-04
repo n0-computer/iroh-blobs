@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, str::FromStr};
 
-use anyhow::{Context, Result};
+use n0_error::{Context, Result};
 use clap::{Parser, Subcommand};
 use iroh::{discovery::static_provider::StaticProvider, SecretKey};
 use iroh_blobs::{
@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
+async fn provide(args: ProvideArgs) -> n0_error::Result<()> {
     println!("{args:?}");
     let tempdir = if args.common.path.is_none() {
         Some(tempfile::tempdir_in(".").context("Failed to create temporary directory")?)
@@ -252,7 +252,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn request(args: RequestArgs) -> anyhow::Result<()> {
+async fn request(args: RequestArgs) -> n0_error::Result<()> {
     println!("{args:?}");
     let tempdir = if args.common.path.is_none() {
         Some(tempfile::tempdir_in(".").context("Failed to create temporary directory")?)

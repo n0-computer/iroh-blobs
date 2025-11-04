@@ -21,13 +21,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
-use n0_snafu::SpanTrace;
-use nested_enum_utils::common_fields;
+use n0_error::Result;
 use serde::{Deserialize, Serialize};
-use snafu::{Backtrace, IntoError, ResultExt, Snafu};
 use tracing::{debug, error};
 
 use crate::{
@@ -117,10 +114,10 @@ pub mod fsm {
     use derive_more::From;
     use iroh::endpoint::Connection;
     use iroh_io::AsyncSliceWriter;
+    use n0_error::{e, stack_error, AnyError};
 
     use super::*;
     use crate::{
-        
         protocol::{
             GetManyRequest, GetRequest, NonEmptyRequestRangeSpecIter, Request, MAX_MESSAGE_SIZE,
         },
@@ -154,14 +151,14 @@ pub mod fsm {
         let (mut writer, reader) = connection
             .open_bi()
             .await
-            .map_err(|e| OpenSnafu.into_error(e.into()))?;
+            .map_err(|e| e!(InitialNextError::Open, e.into()))?;
         let request = Request::GetMany(request);
         let request_bytes = postcard::to_stdvec(&request)
-            .map_err(|source| n0_error::e!(GetError::BadRequest, source.into()))?;
+            .map_err(|source| e!(GetError::BadRequest, AnyError::from_std(source)))?;
         writer
             .send_bytes(request_bytes.into())
             .await
-            .context(connected_next_error::WriteSnafu)?;
+            .map_err(|source| e!(ConnectedNextError::Write, source))?;
         let Request::GetMany(request) = request else {
             unreachable!();
         };
@@ -245,7 +242,7 @@ pub mod fsm {
                 .connection
                 .open_bi()
                 .await
-                .map_err(|e| OpenSnafu.into_error(e.into()))?;
+                .map_err(|e| e!(InitialNextError::Open, e.into()))?;
             Ok(AtConnected {
                 start,
                 reader,
@@ -256,17 +253,14 @@ pub mod fsm {
         }
     }
 
-    /// Error that you can get from [`AtConnected::next`]
-    #[common_fields({
-        backtrace: Option<Backtrace>,
-        #[snafu(implicit)]
-        span_trace: SpanTrace,
-    })]
-    #[allow(missing_docs)]
-    #[derive(Debug, Snafu)]
-    #[non_exhaustive]
+    /// Error that you can get from [`AtInitial::next`]
+    #[stack_error(derive, add_meta, from_sources)]
     pub enum InitialNextError {
-        Open { source: io::Error },
+        #[error("open: {source}")]
+        Open {
+            #[error(std_err)]
+            source: io::Error,
+        },
     }
 
     /// State of the get response machine after the handshake has been sent
@@ -291,25 +285,23 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtConnected::next`]
-    #[common_fields({
-        backtrace: Option<Backtrace>,
-        #[snafu(implicit)]
-        span_trace: SpanTrace,
-    })]
-    #[allow(missing_docs)]
-    #[derive(Debug, Snafu)]
-    #[snafu(module)]
-    #[non_exhaustive]
+    #[stack_error(derive, add_meta)]
     pub enum ConnectedNextError {
         /// Error when serializing the request
-        #[snafu(display("postcard ser: {source}"))]
-        PostcardSer { source: postcard::Error },
+        #[error("postcard ser: {source}")]
+        PostcardSer {
+            #[error(std_err)]
+            source: postcard::Error,
+        },
         /// The serialized request is too long to be sent
-        #[snafu(display("request too big"))]
+        #[error("request too big")]
         RequestTooBig {},
         /// Error when writing the request to the [`SendStream`].
-        #[snafu(display("write: {source}"))]
-        Write { source: io::Error },
+        #[error("write: {source}")]
+        Write {
+            #[error(std_err)]
+            source: io::Error,
+        },
     }
 
     impl<R: RecvStream, W: SendStream> AtConnected<R, W> {
@@ -348,14 +340,14 @@ pub mod fsm {
                 debug!("sending request");
                 let wrapped = Request::Get(request);
                 let request_bytes = postcard::to_stdvec(&wrapped)
-                    .context(connected_next_error::PostcardSerSnafu)?;
+                    .map_err(|source| e!(ConnectedNextError::PostcardSer, source))?;
                 let Request::Get(x) = wrapped else {
                     unreachable!();
                 };
                 request = x;
 
                 if request_bytes.len() > MAX_MESSAGE_SIZE {
-                    return Err(connected_next_error::RequestTooBigSnafu.build());
+                    return Err(e!(ConnectedNextError::RequestTooBig));
                 }
 
                 // write the request itself
@@ -363,11 +355,11 @@ pub mod fsm {
                 writer
                     .send_bytes(request_bytes.into())
                     .await
-                    .context(connected_next_error::WriteSnafu)?;
+                    .map_err(|source| e!(ConnectedNextError::Write, source))?;
                 writer
                     .sync()
                     .await
-                    .context(connected_next_error::WriteSnafu)?;
+                    .map_err(|source| e!(ConnectedNextError::Write, source))?;
                 len
             };
 
@@ -501,23 +493,19 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtBlobHeader::next`]
-    #[common_fields({
-        backtrace: Option<Backtrace>,
-        #[snafu(implicit)]
-        span_trace: SpanTrace,
-    })]
-    #[non_exhaustive]
-    #[derive(Debug, Snafu)]
-    #[snafu(module)]
+    #[stack_error(derive, add_meta)]
     pub enum AtBlobHeaderNextError {
         /// Eof when reading the size header
         ///
         /// This indicates that the provider does not have the requested data.
-        #[snafu(display("not found"))]
+        #[error("not found")]
         NotFound {},
         /// Generic io error
-        #[snafu(display("io: {source}"))]
-        Read { source: io::Error },
+        #[error("io: {source}")]
+        Read {
+            #[error(std_err)]
+            source: io::Error,
+        },
     }
 
     impl From<AtBlobHeaderNextError> for io::Error {
@@ -537,9 +525,9 @@ pub mod fsm {
             let mut size = [0; 8];
             self.reader.recv_exact(&mut size).await.map_err(|cause| {
                 if cause.kind() == io::ErrorKind::UnexpectedEof {
-                    at_blob_header_next_error::NotFoundSnafu.build()
+                    e!(AtBlobHeaderNextError::NotFound)
                 } else {
-                    at_blob_header_next_error::ReadSnafu.into_error(cause)
+                    e!(AtBlobHeaderNextError::Read, cause)
                 }
             })?;
             self.misc.other_bytes_read += 8;
@@ -644,51 +632,49 @@ pub mod fsm {
     /// variants indicate that the provider has sent us invalid data. A well-behaved
     /// provider should never do this, so this is an indication that the provider is
     /// not behaving correctly.
-    #[common_fields({
-        backtrace: Option<Backtrace>,
-        #[snafu(implicit)]
-        span_trace: SpanTrace,
-    })]
     #[non_exhaustive]
-    #[derive(Debug, Snafu)]
-    #[snafu(module)]
+    #[stack_error(derive, add_meta)]
     pub enum DecodeError {
         /// A chunk was not found or invalid, so the provider stopped sending data
-        #[snafu(display("not found"))]
+        #[error("not found")]
         ChunkNotFound {},
         /// A parent was not found or invalid, so the provider stopped sending data
-        #[snafu(display("parent not found {node:?}"))]
+        #[error("parent not found {node:?}")]
         ParentNotFound { node: TreeNode },
         /// A parent was not found or invalid, so the provider stopped sending data
-        #[snafu(display("chunk not found {num}"))]
+        #[error("chunk not found {num}")]
         LeafNotFound { num: ChunkNum },
         /// The hash of a parent did not match the expected hash
-        #[snafu(display("parent hash mismatch: {node:?}"))]
+        #[error("parent hash mismatch: {node:?}")]
         ParentHashMismatch { node: TreeNode },
         /// The hash of a leaf did not match the expected hash
-        #[snafu(display("leaf hash mismatch: {num}"))]
+        #[error("leaf hash mismatch: {num}")]
         LeafHashMismatch { num: ChunkNum },
         /// Error when reading from the stream
-        #[snafu(display("read: {source}"))]
-        Read { source: io::Error },
+        #[error("read: {source}")]
+        Read {
+            #[error(std_err)]
+            source: io::Error,
+        },
         /// A generic io error
-        #[snafu(display("io: {source}"))]
-        Write { source: io::Error },
+        #[error("io: {source}")]
+        Write {
+            #[error(std_err)]
+            source: io::Error,
+        },
     }
 
     impl DecodeError {
         pub(crate) fn leaf_hash_mismatch(num: ChunkNum) -> Self {
-            decode_error::LeafHashMismatchSnafu { num }.build()
+            e!(DecodeError::LeafHashMismatch { num })
         }
     }
 
     impl From<AtBlobHeaderNextError> for DecodeError {
         fn from(cause: AtBlobHeaderNextError) -> Self {
             match cause {
-                AtBlobHeaderNextError::NotFound { .. } => decode_error::ChunkNotFoundSnafu.build(),
-                AtBlobHeaderNextError::Read { source, .. } => {
-                    decode_error::ReadSnafu.into_error(source)
-                }
+                AtBlobHeaderNextError::NotFound { .. } => e!(DecodeError::ChunkNotFound),
+                AtBlobHeaderNextError::Read { source, .. } => e!(DecodeError::Read, source),
             }
         }
     }
@@ -713,18 +699,18 @@ pub mod fsm {
         fn from(value: bao_tree::io::DecodeError) -> Self {
             match value {
                 bao_tree::io::DecodeError::ParentNotFound(node) => {
-                    decode_error::ParentNotFoundSnafu { node }.build()
+                    e!(DecodeError::ParentNotFound { node })
                 }
                 bao_tree::io::DecodeError::LeafNotFound(num) => {
-                    decode_error::LeafNotFoundSnafu { num }.build()
+                    e!(DecodeError::LeafNotFound { num })
                 }
                 bao_tree::io::DecodeError::ParentHashMismatch(node) => {
-                    decode_error::ParentHashMismatchSnafu { node }.build()
+                    e!(DecodeError::ParentHashMismatch { node })
                 }
                 bao_tree::io::DecodeError::LeafHashMismatch(num) => {
-                    decode_error::LeafHashMismatchSnafu { num }.build()
+                    e!(DecodeError::LeafHashMismatch { num })
                 }
-                bao_tree::io::DecodeError::Io(cause) => decode_error::ReadSnafu.into_error(cause),
+                bao_tree::io::DecodeError::Io(cause) => e!(DecodeError::Read, cause),
             }
         }
     }
@@ -854,13 +840,13 @@ pub mod fsm {
                                     outboard
                                         .save(parent.node, &parent.pair)
                                         .await
-                                        .map_err(|e| decode_error::WriteSnafu.into_error(e))?;
+                                        .map_err(|e| e!(DecodeError::Write, e))?;
                                 }
                             }
                             BaoContentItem::Leaf(leaf) => {
                                 data.write_bytes_at(leaf.offset, leaf.data)
                                     .await
-                                    .map_err(|e| decode_error::WriteSnafu.into_error(e))?;
+                                    .map_err(|e| e!(DecodeError::Write, e))?;
                             }
                         }
                     }
@@ -886,7 +872,7 @@ pub mod fsm {
                             BaoContentItem::Leaf(leaf) => {
                                 data.write_bytes_at(leaf.offset, leaf.data)
                                     .await
-                                    .map_err(|e| decode_error::WriteSnafu.into_error(e))?;
+                                    .map_err(|e| e!(DecodeError::Write, e))?;
                             }
                         }
                     }
@@ -971,18 +957,14 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtBlobHeader::next`]
-    #[common_fields({
-        backtrace: Option<Backtrace>,
-        #[snafu(implicit)]
-        span_trace: SpanTrace,
-    })]
-    #[non_exhaustive]
-    #[derive(Debug, Snafu)]
-    #[snafu(module)]
+    #[stack_error(derive, add_meta, from_sources)]
     pub enum AtClosingNextError {
         /// Generic io error
-        #[snafu(transparent)]
-        Read { source: io::Error },
+        #[error(transparent)]
+        Read {
+            #[error(std_err)]
+            source: io::Error,
+        },
     }
 
     #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]

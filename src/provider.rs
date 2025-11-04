@@ -10,14 +10,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
 use bao_tree::ChunkRanges;
 use iroh::endpoint::{self, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
+use n0_error::Result;
+use n0_error::{e, stack_error};
 use n0_future::StreamExt;
 use quinn::ConnectionError;
 use serde::{Deserialize, Serialize};
-use n0_error::stack_error;
 use tokio::select;
 use tracing::{debug, debug_span, Instrument};
 
@@ -376,7 +376,7 @@ async fn handle_read_result<R: RecvStream, T, E: HasErrorCode>(
 pub async fn handle_stream<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
-) -> anyhow::Result<()> {
+) -> n0_error::Result<()> {
     let request = pair.read_request().await?;
     match request {
         Request::Get(request) => handle_get(pair, store, request).await?,
@@ -388,10 +388,13 @@ pub async fn handle_stream<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
-#[stack_error(derive, add_meta, std_sources)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum HandleGetError {
     #[error(transparent)]
-    ExportBao { #[error(std_err)] source: ExportBaoError },
+    ExportBao {
+        #[error(std_err)]
+        source: ExportBaoError,
+    },
     #[error("Invalid hash sequence")]
     InvalidHashSeq {},
     #[error("Invalid offset")]
@@ -437,12 +440,12 @@ async fn handle_get_impl<W: SendStream>(
                 None => {
                     let bytes = store.get_bytes(hash).await?;
                     let hs =
-                        HashSeq::try_from(bytes).map_err(|_| HandleGetError::InvalidHashSeq)?;
+                        HashSeq::try_from(bytes).map_err(|_| e!(HandleGetError::InvalidHashSeq))?;
                     hash_seq = Some(hs);
                     hash_seq.as_ref().unwrap()
                 }
             };
-            let o = usize::try_from(offset - 1).map_err(|_| HandleGetError::InvalidOffset)?;
+            let o = usize::try_from(offset - 1).map_err(|_| e!(HandleGetError::InvalidOffset))?;
             let Some(hash) = hash_seq.get(o) else {
                 break;
             };
@@ -453,7 +456,7 @@ async fn handle_get_impl<W: SendStream>(
         .inner
         .sync()
         .await
-        .map_err(|e| HandleGetError::ExportBao { source: e.into() })?;
+        .map_err(|e| e!(HandleGetError::ExportBao, e.into()))?;
 
     Ok(())
 }
@@ -462,7 +465,7 @@ pub async fn handle_get<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
     request: GetRequest,
-) -> anyhow::Result<()> {
+) -> n0_error::Result<()> {
     let res = pair.get_request(|| request.clone()).await;
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
@@ -471,10 +474,10 @@ pub async fn handle_get<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
-#[stack_error(derive, add_meta, std_sources)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum HandleGetManyError {
     #[error(transparent)]
-    ExportBao { #[error(std_err)] source: ExportBaoError },
+    ExportBao { source: ExportBaoError },
 }
 
 impl HasErrorCode for HandleGetManyError {
@@ -511,7 +514,7 @@ pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
     request: GetManyRequest,
-) -> anyhow::Result<()> {
+) -> n0_error::Result<()> {
     let res = pair.get_many_request(|| request.clone()).await;
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
@@ -520,16 +523,16 @@ pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
-#[stack_error(derive, add_meta, std_sources)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum HandlePushError {
     #[error(transparent)]
-    ExportBao { #[error(std_err)] source: ExportBaoError },
+    ExportBao { source: ExportBaoError },
 
     #[error("Invalid hash sequence")]
     InvalidHashSeq {},
 
     #[error(transparent)]
-    Request { #[error(std_err)] source: RequestError },
+    Request { source: RequestError },
 }
 
 impl HasErrorCode for HandlePushError {
@@ -568,7 +571,7 @@ async fn handle_push_impl<R: RecvStream>(
     }
     // todo: we assume here that the hash sequence is complete. For some requests this might not be the case. We would need `LazyHashSeq` for that, but it is buggy as of now!
     let hash_seq = store.get_bytes(hash).await?;
-    let hash_seq = HashSeq::try_from(hash_seq).map_err(|_| HandlePushError::InvalidHashSeq)?;
+    let hash_seq = HashSeq::try_from(hash_seq).map_err(|_| e!(HandlePushError::InvalidHashSeq))?;
     for (child_hash, child_ranges) in hash_seq.into_iter().zip(request_ranges) {
         if child_ranges.is_empty() {
             continue;
@@ -584,7 +587,7 @@ pub async fn handle_push<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
     request: PushRequest,
-) -> anyhow::Result<()> {
+) -> n0_error::Result<()> {
     let res = pair.push_request(|| request.clone()).await;
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut reader = pair.into_reader(tracker).await?;
@@ -607,13 +610,13 @@ pub(crate) async fn send_blob<W: SendStream>(
         .await
 }
 
-#[stack_error(derive, add_meta, std_sources)]
+#[stack_error(derive, add_meta, std_sources, from_sources)]
 pub enum HandleObserveError {
     #[error("observe stream closed")]
     ObserveStreamClosed {},
 
     #[error(transparent)]
-    RemoteClosed { #[error(std_err)] source: io::Error },
+    RemoteClosed { source: io::Error },
 }
 
 impl HasErrorCode for HandleObserveError {
@@ -634,18 +637,18 @@ async fn handle_observe_impl<W: SendStream>(
         .observe(request.hash)
         .stream()
         .await
-        .map_err(|_| HandleObserveError::ObserveStreamClosed)?;
+        .map_err(|_| e!(HandleObserveError::ObserveStreamClosed))?;
     let mut old = stream
         .next()
         .await
-        .ok_or(HandleObserveError::ObserveStreamClosed)?;
+        .ok_or_else(|| e!(HandleObserveError::ObserveStreamClosed))?;
     // send the initial bitfield
     send_observe_item(writer, &old).await?;
     // send updates until the remote loses interest
     loop {
         select! {
             new = stream.next() => {
-                let new = new.ok_or(HandleObserveError::ObserveStreamClosed)?;
+                let new = new.ok_or_else(|| e!(HandleObserveError::ObserveStreamClosed))?;
                 let diff = old.diff(&new);
                 if diff.is_empty() {
                     continue;
@@ -676,7 +679,7 @@ pub async fn handle_observe<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
     request: ObserveRequest,
-) -> anyhow::Result<()> {
+) -> n0_error::Result<()> {
     let res = pair.observe_request(|| request.clone()).await;
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;

@@ -4,10 +4,9 @@ use std::{borrow::Borrow, fmt, str::FromStr};
 
 use arrayvec::ArrayString;
 use bao_tree::blake3;
-use nested_enum_utils::common_fields;
+use n0_error::{e, stack_error, StdResultExt};
 use postcard::experimental::max_size::MaxSize;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use n0_error::{e, stack_error, StdResultExt};
 
 use crate::store::util::DD;
 
@@ -143,7 +142,10 @@ pub enum HexOrBase32ParseError {
     #[error("Invalid length")]
     DecodeInvalidLength {},
     #[error("Failed to decode {source}")]
-    Decode { #[error(std_err)] source: data_encoding::DecodeError },
+    Decode {
+        #[error(std_err)]
+        source: data_encoding::DecodeError,
+    },
 }
 
 impl FromStr for Hash {
@@ -393,21 +395,23 @@ impl fmt::Display for HashAndFormat {
 }
 
 impl FromStr for HashAndFormat {
-    type Err = anyhow::Error;
+    type Err = n0_error::AnyError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.as_bytes();
         let mut hash = [0u8; 32];
         match s.len() {
             64 => {
-                hex::decode_to_slice(s, &mut hash)?;
+                hex::decode_to_slice(s, &mut hash).anyerr()?;
                 Ok(Self::raw(hash.into()))
             }
             65 if s[0].eq_ignore_ascii_case(&b's') => {
-                hex::decode_to_slice(&s[1..], &mut hash)?;
+                hex::decode_to_slice(&s[1..], &mut hash).anyerr()?;
                 Ok(Self::hash_seq(hash.into()))
             }
-            _ => anyhow::bail!("invalid hash and format"),
+            _ => {
+                n0_error::bail_any!("invalid hash and format");
+            }
         }
     }
 }

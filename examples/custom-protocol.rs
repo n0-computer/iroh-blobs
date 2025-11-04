@@ -40,7 +40,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::Result;
+use n0_error::Result;
 use clap::Parser;
 use iroh::{
     discovery::pkarr::PkarrResolver,

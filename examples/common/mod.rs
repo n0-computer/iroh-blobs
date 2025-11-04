@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use anyhow::Result;
 use iroh::SecretKey;
+use n0_error::{Result, StackResultExt};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Gets a secret key from the IROH_SECRET environment variable or generates a new random one.
@@ -8,7 +8,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 pub fn get_or_generate_secret_key() -> Result<SecretKey> {
     use std::{env, str::FromStr};
 
-    use anyhow::Context;
     if let Ok(secret) = env::var("IROH_SECRET") {
         // Parse the secret key from string
         SecretKey::from_str(&secret).context("Invalid secret key format")

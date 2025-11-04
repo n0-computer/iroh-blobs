@@ -25,6 +25,7 @@ use bytes::Bytes;
 use genawaiter::sync::Gen;
 use iroh_io::AsyncStreamWriter;
 use irpc::channel::{mpsc, oneshot};
+use n0_error::AnyError;
 use n0_future::{future, stream, Stream, StreamExt};
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
@@ -113,7 +114,7 @@ impl Blobs {
     /// use iroh_blobs::{store::mem::MemStore, api::blobs::Blobs};
     /// use tokio::io::AsyncReadExt;
     ///
-    /// # async fn example() -> anyhow::Result<()> {
+    /// # async fn example() -> n0_error::Result<()> {
     /// let store = MemStore::new();
     /// let tag = store.add_slice(b"Hello, world!").await?;
     /// let mut reader = store.reader(tag.hash);
@@ -291,7 +292,7 @@ impl Blobs {
                     sender.send(ImportByteStreamUpdate::Bytes(item?)).await?;
                 }
                 sender.send(ImportByteStreamUpdate::Done).await?;
-                anyhow::Ok(())
+                n0_error::Ok(())
             };
             let _ = tokio::join!(send, recv);
         });
@@ -972,14 +973,14 @@ impl ExportBaoProgress {
     /// to get all non-corrupted sections.
     pub fn hashes_with_index(
         self,
-    ) -> impl Stream<Item = std::result::Result<(u64, Hash), anyhow::Error>> {
+    ) -> impl Stream<Item = std::result::Result<(u64, Hash), AnyError>> {
         let mut stream = self.stream();
         Gen::new(|co| async move {
             while let Some(item) = stream.next().await {
                 let leaf = match item {
                     EncodedItem::Leaf(leaf) => leaf,
                     EncodedItem::Error(e) => {
-                        co.yield_(Err(e.into())).await;
+                        co.yield_(Err(AnyError::from_std(e))).await;
                         continue;
                     }
                     _ => continue,
@@ -1000,7 +1001,7 @@ impl ExportBaoProgress {
     }
 
     /// Same as [`Self::hashes_with_index`], but without the indexes.
-    pub fn hashes(self) -> impl Stream<Item = std::result::Result<Hash, anyhow::Error>> {
+    pub fn hashes(self) -> impl Stream<Item = std::result::Result<Hash, AnyError>> {
         self.hashes_with_index().map(|x| x.map(|(_, hash)| hash))
     }
 

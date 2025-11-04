@@ -30,7 +30,7 @@ async fn create_expiring_tag(
     hashes: &[Hash],
     prefix: &str,
     expiry: SystemTime,
-) -> anyhow::Result<()> {
+) -> n0_error::Result<()> {
     let expiry = chrono::DateTime::<chrono::Utc>::from(expiry);
     let expiry = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let tagname = format!("{prefix}-{expiry}");
@@ -53,7 +53,7 @@ async fn create_expiring_tag(
     Ok(())
 }
 
-async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> anyhow::Result<()> {
+async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> n0_error::Result<()> {
     let prefix = format!("{prefix}-");
     let now = chrono::Utc::now();
     let end = format!(
@@ -100,7 +100,7 @@ async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> anyhow:
     Ok(())
 }
 
-async fn print_store_info(store: &Store) -> anyhow::Result<()> {
+async fn print_store_info(store: &Store) -> n0_error::Result<()> {
     let now = chrono::Utc::now();
     let mut tags = store.tags().list().await?;
     println!(
@@ -121,7 +121,7 @@ async fn print_store_info(store: &Store) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn info_task(store: Store) -> anyhow::Result<()> {
+async fn info_task(store: Store) -> n0_error::Result<()> {
     tokio::time::sleep(Duration::from_secs(1)).await;
     loop {
         print_store_info(&store).await?;
@@ -129,7 +129,7 @@ async fn info_task(store: Store) -> anyhow::Result<()> {
     }
 }
 
-async fn delete_expired_tags_task(store: Store, prefix: &str) -> anyhow::Result<()> {
+async fn delete_expired_tags_task(store: Store, prefix: &str) -> n0_error::Result<()> {
     loop {
         delete_expired_tags(&store, prefix, false).await?;
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -137,7 +137,7 @@ async fn delete_expired_tags_task(store: Store, prefix: &str) -> anyhow::Result<
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> n0_error::Result<()> {
     tracing_subscriber::fmt::init();
     let path = std::env::current_dir()?.join("blobs");
     let options = Options {
