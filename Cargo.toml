@@ -42,7 +42,7 @@ genawaiter = { version = "0.99.1", features = ["futures03"] }
 iroh-base = "0.94"
 iroh-tickets = "0.1"
 irpc = { version = "0.10.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
-iroh-metrics = { version = "0.36" }
+iroh-metrics = { version = "0.37" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 
@@ -69,3 +69,9 @@ hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "matheus23/irpc-n0-error" }
+n0-error = { git = "https://github.com/n0-computer/n0-error.git", branch = "Frando/anyhow-ext" }
