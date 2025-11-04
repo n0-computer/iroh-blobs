@@ -718,7 +718,7 @@
 <a href=#718 id=718 data-nosnippet>718</a>                        .<span class="kw">await
 <a href=#719 id=719 data-nosnippet>719</a>                        </span>.map_err(|e| <span class="macro">e!</span>(GetError::LocalFailure, e.into()))<span class="question-mark">?</span>,
 <a href=#720 id=720 data-nosnippet>720</a>                )
-<a href=#721 id=721 data-nosnippet>721</a>                .map_err(|e| <span class="macro">e!</span>(GetError::BadRequest, e.into()))<span class="question-mark">?</span>;
+<a href=#721 id=721 data-nosnippet>721</a>                .map_err(|e| <span class="macro">e!</span>(GetError::BadRequest, e))<span class="question-mark">?</span>;
 <a href=#722 id=722 data-nosnippet>722</a>                <span class="comment">// let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), root);
 <a href=#723 id=723 data-nosnippet>723</a>                </span><span class="kw">loop </span>{
 <a href=#724 id=724 data-nosnippet>724</a>                    <span class="kw">let </span>at_start_child = <span class="kw">match </span>next_child {
