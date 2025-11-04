@@ -718,7 +718,7 @@ impl Remote {
                         .await
                         .map_err(|e| e!(GetError::LocalFailure, e.into()))?,
                 )
-                .map_err(|e| e!(GetError::BadRequest, e.into()))?;
+                .map_err(|e| e!(GetError::BadRequest, e))?;
                 // let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), root);
                 loop {
                     let at_start_child = match next_child {
