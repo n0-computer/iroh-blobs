@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["IROH_BLOCK_SIZE"],"mod":["fs","mem","readonly_mem"]};
+window.SIDEBAR_ITEMS = {"constant":["IROH_BLOCK_SIZE"],"enum":["ProtectOutcome"],"mod":["fs","mem","readonly_mem"],"struct":["GcConfig"],"type":["ProtectCb"]};
