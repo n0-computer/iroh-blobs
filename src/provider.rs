@@ -292,7 +292,7 @@ pub async fn handle_connection(
         if let Err(cause) = progress
             .client_connected(|| ClientConnected {
                 connection_id,
-                endpoint_id: connection.remote_id().ok(),
+                endpoint_id: Some(connection.remote_id()),
             })
             .await
         {

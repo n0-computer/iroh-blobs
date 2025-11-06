@@ -35,15 +35,16 @@ chrono = "0.4.39"
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = { version = "0.94", default-features = false }
+iroh = { version = "0.95", default-features = false }
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.94"
-iroh-tickets = "0.1"
-irpc = { version = "0.10.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
-iroh-metrics = { version = "0.36" }
+iroh-base = "0.95"
+iroh-tickets = "0.2"
+irpc = { version = "0.11.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
+iroh-metrics = { version = "0.37" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
+n0-error = "0.1.0"
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
@@ -59,7 +60,7 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.94", features = ["discovery-local-network"]}
+iroh = { version = "0.95", features = ["discovery-local-network"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 
@@ -80,6 +81,3 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
-
-[patch.crates-io]
-irpc = { git = "https://github.com/n0-computer/irpc", branch = "main" }

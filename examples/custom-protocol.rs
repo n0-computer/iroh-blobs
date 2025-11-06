@@ -177,7 +177,7 @@ impl ProtocolHandler for BlobSearch {
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         let this = self.clone();
         // We can get the remote's endpoint id from the connection.
-        let node_id = connection.remote_id()?;
+        let node_id = connection.remote_id();
         println!("accepted connection from {node_id}");
 
         // Our protocol is a simple request-response protocol, so we expect the

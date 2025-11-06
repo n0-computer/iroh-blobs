@@ -561,7 +561,7 @@ mod tests {
     impl ProtocolHandler for Echo {
         async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
             let conn_id = connection.stable_id();
-            let id = connection.remote_id().map_err(AcceptError::from_err)?;
+            let id = connection.remote_id();
             trace!(%id, %conn_id, "Accepting echo connection");
             loop {
                 match connection.accept_bi().await {
@@ -582,7 +582,7 @@ mod tests {
 
     async fn echo_client(conn: &Connection, text: &[u8]) -> n0_snafu::Result<Vec<u8>> {
         let conn_id = conn.stable_id();
-        let id = conn.remote_id().e()?;
+        let id = conn.remote_id();
         trace!(%id, %conn_id, "Sending echo request");
         let (mut send, mut recv) = conn.open_bi().await.e()?;
         send.write_all(text).await.e()?;
@@ -797,9 +797,7 @@ mod tests {
             .bind()
             .await?;
         let on_connected = |ep: Endpoint, conn: Connection| async move {
-            let Ok(id) = conn.remote_id() else {
-                return Err(io::Error::other("unable to get endpoint id"));
-            };
+            let id = conn.remote_id();
             let Some(watcher) = ep.conn_type(id) else {
                 return Err(io::Error::other("unable to get conn_type watcher"));
             };

@@ -123,12 +123,12 @@ impl From<ExportBaoError> for Error {
 impl From<irpc::Error> for ExportBaoError {
     fn from(e: irpc::Error) -> Self {
         match e {
-            irpc::Error::MpscRecv(e) => MpscRecvSnafu.into_error(e),
-            irpc::Error::OneshotRecv(e) => OneshotRecvSnafu.into_error(e),
-            irpc::Error::Send(e) => SendSnafu.into_error(e),
-            irpc::Error::Request(e) => RequestSnafu.into_error(e),
+            irpc::Error::MpscRecv { source, .. } => MpscRecvSnafu.into_error(source),
+            irpc::Error::OneshotRecv { source, .. } => OneshotRecvSnafu.into_error(source),
+            irpc::Error::Send { source, .. } => SendSnafu.into_error(source),
+            irpc::Error::Request { source, .. } => RequestSnafu.into_error(source),
             #[cfg(feature = "rpc")]
-            irpc::Error::Write(e) => ExportBaoIoSnafu.into_error(e.into()),
+            irpc::Error::Write { source, .. } => ExportBaoIoSnafu.into_error(source.into()),
         }
     }
 }

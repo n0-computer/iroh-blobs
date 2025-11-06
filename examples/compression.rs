@@ -160,7 +160,7 @@ impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
             .events
             .client_connected(|| ClientConnected {
                 connection_id,
-                endpoint_id: connection.remote_id().ok(),
+                endpoint_id: Some(connection.remote_id()),
             })
             .await
         {
