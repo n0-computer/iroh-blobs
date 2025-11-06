@@ -1078,7 +1078,7 @@
 <a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="macro">tokio::select!</span> {
 <a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="kw">_ </span>= tx.closed() =&gt; {
 <a href=#1080 id=1080 data-nosnippet>1080</a>                <span class="comment">// the sender is closed, we are done
-<a href=#1081 id=1081 data-nosnippet>1081</a>                </span><span class="prelude-val">Err</span>(irpc::channel::SendError::ReceiverClosed.into())
+<a href=#1081 id=1081 data-nosnippet>1081</a>                </span><span class="prelude-val">Err</span>(<span class="macro">n0_error::e!</span>(irpc::channel::SendError::ReceiverClosed).into())
 <a href=#1082 id=1082 data-nosnippet>1082</a>            }
 <a href=#1083 id=1083 data-nosnippet>1083</a>            e = <span class="self">self</span>.receiver.changed() =&gt; <span class="prelude-val">Ok</span>(e<span class="question-mark">?</span>),
 <a href=#1084 id=1084 data-nosnippet>1084</a>        }
