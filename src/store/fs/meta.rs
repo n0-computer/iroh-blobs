@@ -766,7 +766,7 @@ impl Actor {
                     self.cmds.push_back(cmd.into()).ok();
                     let tx = db.begin_read().context(TransactionSnafu)?;
                     let tables = ReadOnlyTables::new(&tx).context(TableSnafu)?;
-                    let timeout = tokio::time::sleep(self.options.max_read_duration);
+                    let timeout = n0_future::time::sleep(self.options.max_read_duration);
                     pin!(timeout);
                     let mut n = 0;
                     while let Some(cmd) = self.cmds.extract(Command::read_only, &mut timeout).await
@@ -784,7 +784,7 @@ impl Actor {
                     let ftx = self.ds.begin_write();
                     let tx = db.begin_write().context(TransactionSnafu)?;
                     let mut tables = Tables::new(&tx, &ftx).context(TableSnafu)?;
-                    let timeout = tokio::time::sleep(self.options.max_read_duration);
+                    let timeout = n0_future::time::sleep(self.options.max_read_duration);
                     pin!(timeout);
                     let mut n = 0;
                     while let Some(cmd) = self

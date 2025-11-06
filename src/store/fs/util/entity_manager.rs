@@ -723,7 +723,7 @@ impl<P: Params> EntityManager<P> {
             options.entity_response_inbox_size,
             options.entity_futures_initial_capacity,
         );
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
         Self(send)
     }
 

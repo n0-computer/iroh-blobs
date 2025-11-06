@@ -12,14 +12,13 @@
 //!
 //! You can also [`connect`](Store::connect) to a remote store that is listening
 //! to rpc requests.
-use std::{io, net::SocketAddr, ops::Deref};
+use std::{io, ops::Deref};
 
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
-use irpc::rpc::{listen, RemoteService};
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
-use proto::{Request, ShutdownRequest, SyncDbRequest};
+use proto::{ShutdownRequest, SyncDbRequest};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use snafu::{Backtrace, IntoError, Snafu};
@@ -124,11 +123,12 @@ impl From<ExportBaoError> for Error {
 impl From<irpc::Error> for ExportBaoError {
     fn from(e: irpc::Error) -> Self {
         match e {
-            irpc::Error::MpscRecv(e) => MpscRecvSnafu.into_error(e),
-            irpc::Error::OneshotRecv(e) => OneshotRecvSnafu.into_error(e),
-            irpc::Error::Send(e) => SendSnafu.into_error(e),
-            irpc::Error::Request(e) => RequestSnafu.into_error(e),
-            irpc::Error::Write(e) => ExportBaoIoSnafu.into_error(e.into()),
+            irpc::Error::MpscRecv { source, .. } => MpscRecvSnafu.into_error(source),
+            irpc::Error::OneshotRecv { source, .. } => OneshotRecvSnafu.into_error(source),
+            irpc::Error::Send { source, .. } => SendSnafu.into_error(source),
+            irpc::Error::Request { source, .. } => RequestSnafu.into_error(source),
+            #[cfg(feature = "rpc")]
+            irpc::Error::Write { source, .. } => ExportBaoIoSnafu.into_error(source.into()),
         }
     }
 }
@@ -220,6 +220,7 @@ impl From<irpc::channel::mpsc::RecvError> for Error {
     }
 }
 
+#[cfg(feature = "rpc")]
 impl From<irpc::rpc::WriteError> for Error {
     fn from(e: irpc::rpc::WriteError) -> Self {
         Self::Io(e.into())
@@ -298,16 +299,21 @@ impl Store {
     }
 
     /// Connect to a remote store as a rpc client.
-    pub fn connect(endpoint: quinn::Endpoint, addr: SocketAddr) -> Self {
+    #[cfg(feature = "rpc")]
+    pub fn connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::quinn(endpoint, addr);
         Store::from_sender(sender)
     }
 
     /// Listen on a quinn endpoint for incoming rpc connections.
+    #[cfg(feature = "rpc")]
     pub async fn listen(self, endpoint: quinn::Endpoint) {
+        use irpc::rpc::RemoteService;
+
+        use self::proto::Request;
         let local = self.client.as_local().unwrap().clone();
         let handler = Request::remote_handler(local);
-        listen::<Request>(endpoint, handler).await
+        irpc::rpc::listen::<Request>(endpoint, handler).await
     }
 
     pub async fn sync_db(&self) -> RequestResult<()> {
