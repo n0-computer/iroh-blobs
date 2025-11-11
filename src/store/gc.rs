@@ -134,7 +134,7 @@ fn gc_sweep<'a>(
 #[derive(derive_more::Debug, Clone)]
 pub struct GcConfig {
     /// Interval in which to run garbage collection.
-    pub interval: std::time::Duration,
+    pub interval: n0_future::time::Duration,
     /// Optional callback to manually add protected blobs.
     ///
     /// The callback is called before each garbage collection run. It gets a `&mut HashSet<Hash>`
