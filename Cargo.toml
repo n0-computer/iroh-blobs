@@ -19,7 +19,7 @@ derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debu
 futures-lite = "2.6.0"
 quinn = { package = "iroh-quinn", version = "0.14.0", optional = true }
 n0-future = "0.3.1"
-n0-snafu = "0.2.2"
+n0-snafu = { version = "0.2.2", git="https://github.com/n0-computer/n0-snafu.git", branch="b5/wasm" }
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
 snafu = "0.8.5"
@@ -31,7 +31,7 @@ hex = "0.4.3"
 serde = "1.0.217"
 postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
 data-encoding = "2.8.0"
-chrono = "0.4.39"
+chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
 nested_enum_utils = "0.2.1"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
