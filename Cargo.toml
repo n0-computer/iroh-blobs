@@ -32,12 +32,12 @@ data-encoding = "2.8.0"
 chrono = "0.4.39"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = "0.94"
+iroh = "0.95"
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.94"
+iroh-base = "0.95"
 iroh-tickets = "0.1"
-irpc = { version = "0.10.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
+irpc = { version = "0.11.0", features = ["rpc", "quinn_endpoint_setup", "spans", "stream", "derive"], default-features = false }
 iroh-metrics = { version = "0.37" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -58,9 +58,10 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.94", features = ["discovery-local-network"]}
+iroh = { version = "0.95", features = ["discovery-local-network"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
+anyhow = "1.0.100"
 
 [features]
 hide-proto-docs = []
@@ -68,8 +69,3 @@ metrics = []
 default = ["hide-proto-docs", "fs-store"]
 fs-store = ["dep:redb", "dep:reflink-copy"]
 
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "matheus23/irpc-n0-error" }
-n0-error = { git = "https://github.com/n0-computer/n0-error.git", branch = "Frando/arc-stack" }
