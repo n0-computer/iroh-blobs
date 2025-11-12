@@ -802,7 +802,7 @@ impl Actor {
                         .begin_read()
                         .map_err(|e| e!(ActorError::Transaction, e))?;
                     let tables = ReadOnlyTables::new(&tx).map_err(|e| e!(ActorError::Table, e))?;
-                    let timeout = tokio::time::sleep(self.options.max_read_duration);
+                    let timeout = n0_future::time::sleep(self.options.max_read_duration);
                     pin!(timeout);
                     let mut n = 0;
                     while let Some(cmd) = self.cmds.extract(Command::read_only, &mut timeout).await
@@ -823,7 +823,7 @@ impl Actor {
                         .map_err(|e| e!(ActorError::Transaction, e))?;
                     let mut tables =
                         Tables::new(&tx, &ftx).map_err(|e| e!(ActorError::Table, e))?;
-                    let timeout = tokio::time::sleep(self.options.max_read_duration);
+                    let timeout = n0_future::time::sleep(self.options.max_read_duration);
                     pin!(timeout);
                     let mut n = 0;
                     while let Some(cmd) = self

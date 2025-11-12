@@ -5,7 +5,6 @@ use clap::Parser;
 use common::setup_logging;
 use iroh::discovery::pkarr::PkarrResolver;
 use iroh_blobs::{get::request::GetBlobItem, ticket::BlobTicket, BlobFormat};
-use n0_error::{bail_any, ensure_any};
 use n0_future::StreamExt;
 use tokio::io::AsyncWriteExt;
 
@@ -26,7 +25,7 @@ pub struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> n0_error::Result<()> {
+async fn main() -> anyhow::Result<()> {
     setup_logging();
     let cli = Cli::parse();
     let ticket = cli.ticket;
@@ -34,7 +33,7 @@ async fn main() -> n0_error::Result<()> {
         .discovery(PkarrResolver::n0_dns())
         .bind()
         .await?;
-    ensure_any!(
+    anyhow::ensure!(
         ticket.format() == BlobFormat::Raw,
         "This example only supports raw blobs."
     );
@@ -55,10 +54,10 @@ async fn main() -> n0_error::Result<()> {
                     break stats;
                 }
                 Some(GetBlobItem::Error(err)) => {
-                    bail_any!(err, "Error while streaming blob");
+                    anyhow::bail!("Error while streaming blob: {err}");
                 }
                 None => {
-                    bail_any!("Stream ended unexpectedly.");
+                    anyhow::bail!("Stream ended unexpectedly.");
                 }
             }
         }

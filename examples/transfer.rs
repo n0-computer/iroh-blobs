@@ -2,10 +2,9 @@ use std::path::PathBuf;
 
 use iroh::{protocol::Router, Endpoint};
 use iroh_blobs::{store::mem::MemStore, ticket::BlobTicket, BlobsProtocol};
-use n0_error::StdResultExt;
 
 #[tokio::main]
-async fn main() -> n0_error::Result<()> {
+async fn main() -> anyhow::Result<()> {
     // Create an endpoint, it allows creating and accepting
     // connections in the iroh p2p world
     let endpoint = Endpoint::bind().await?;
@@ -22,7 +21,7 @@ async fn main() -> n0_error::Result<()> {
 
     match arg_refs.as_slice() {
         ["send", filename] => {
-            let filename: PathBuf = filename.parse().anyerr()?;
+            let filename: PathBuf = filename.parse()?;
             let abs_path = std::path::absolute(&filename)?;
 
             println!("Hashing file.");
@@ -50,12 +49,12 @@ async fn main() -> n0_error::Result<()> {
 
             // Gracefully shut down the node
             println!("Shutting down.");
-            router.shutdown().await.anyerr()?;
+            router.shutdown().await?;
         }
         ["receive", ticket, filename] => {
-            let filename: PathBuf = filename.parse().anyerr()?;
+            let filename: PathBuf = filename.parse()?;
             let abs_path = std::path::absolute(filename)?;
-            let ticket: BlobTicket = ticket.parse().anyerr()?;
+            let ticket: BlobTicket = ticket.parse()?;
 
             // For receiving files, we create a "downloader" that allows us to fetch files
             // from other nodes via iroh connections

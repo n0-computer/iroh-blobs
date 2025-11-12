@@ -40,6 +40,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Result;
 use clap::Parser;
 use iroh::{
     discovery::pkarr::PkarrResolver,
@@ -48,7 +49,6 @@ use iroh::{
     Endpoint, EndpointId,
 };
 use iroh_blobs::{api::Store, store::mem::MemStore, BlobsProtocol, Hash};
-use n0_error::{anyerr, Result, StdResultExt};
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};
 
@@ -110,7 +110,7 @@ async fn listen(text: Vec<String>) -> Result<()> {
 
     // Wait for Ctrl-C to be pressed.
     tokio::signal::ctrl_c().await?;
-    node.shutdown().await.anyerr()?;
+    node.shutdown().await?;
     Ok(())
 }
 
@@ -177,7 +177,7 @@ impl ProtocolHandler for BlobSearch {
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         let this = self.clone();
         // We can get the remote's endpoint id from the connection.
-        let node_id = connection.remote_id()?;
+        let node_id = connection.remote_id();
         println!("accepted connection from {node_id}");
 
         // Our protocol is a simple request-response protocol, so we expect the
@@ -275,14 +275,14 @@ pub async fn query_remote(
     let blobs_conn = endpoint.connect(endpoint_id, iroh_blobs::ALPN).await?;
 
     // Open a bi-directional in our connection.
-    let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
+    let (mut send, mut recv) = conn.open_bi().await?;
 
     // Send our query.
-    send.write_all(query.as_bytes()).await.anyerr()?;
+    send.write_all(query.as_bytes()).await?;
 
     // Finish the send stream, signalling that no further data will be sent.
     // This makes the `read_to_end` call on the accepting side terminate.
-    send.finish().anyerr()?;
+    send.finish()?;
 
     // In this example, we simply collect all results into a vector.
     // For real protocols, you'd usually want to return a stream of results instead.
@@ -298,7 +298,7 @@ pub async fn query_remote(
             // so in this case we break our loop.
             Err(iroh::endpoint::ReadExactError::FinishedEarly(_)) => break,
             // Other errors are connection errors, so we bail.
-            Err(err) => return Err(anyerr!(err)),
+            Err(err) => return Err(err.into()),
             Ok(_) => {}
         };
         // Upcast the raw bytes to the `Hash` type.
@@ -315,7 +315,7 @@ pub async fn query_remote(
 /// Read a blob from the local blob store and print it to STDOUT.
 async fn read_and_print(store: &Store, hash: Hash) -> Result<()> {
     let content = store.get_bytes(hash).await?;
-    let message = String::from_utf8(content.to_vec()).anyerr()?;
+    let message = String::from_utf8(content.to_vec())?;
     println!("{}: {message}", hash.fmt_short());
     Ok(())
 }

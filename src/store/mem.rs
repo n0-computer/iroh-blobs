@@ -14,7 +14,6 @@ use std::{
     num::NonZeroU64,
     ops::Deref,
     sync::Arc,
-    time::SystemTime,
 };
 
 use bao_tree::{
@@ -30,13 +29,13 @@ use bao_tree::{
 use bytes::Bytes;
 use irpc::channel::mpsc;
 use n0_error::{Result, StdResultExt};
-use n0_future::future::yield_now;
-use range_collections::range_set::RangeSetRange;
-use tokio::{
-    io::AsyncReadExt,
-    sync::watch,
+use n0_future::{
+    future::yield_now,
     task::{JoinError, JoinSet},
+    time::SystemTime,
 };
+use range_collections::range_set::RangeSetRange;
+use tokio::sync::watch;
 use tracing::{error, info, instrument, trace, Instrument};
 
 use super::util::{BaoTreeSender, PartialMemStorage};
@@ -122,7 +121,7 @@ impl MemStore {
 
     pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
-        tokio::spawn(
+        n0_future::task::spawn(
             Actor {
                 commands: receiver,
                 tasks: JoinSet::new(),
@@ -141,7 +140,7 @@ impl MemStore {
 
         let store = Self::from_sender(sender.into());
         if let Some(gc_config) = opts.gc_config {
-            tokio::spawn(run_gc(store.deref().clone(), gc_config));
+            n0_future::task::spawn(run_gc(store.deref().clone(), gc_config));
         }
 
         store
@@ -756,8 +755,18 @@ async fn import_byte_stream(
     import_bytes(res.into(), scope, format, tx).await
 }
 
+#[cfg(wasm_browser)]
+async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+    let _: ImportPathRequest = cmd.inner;
+    Err(anyhow::anyhow!(
+        "import_path is not supported in the browser"
+    ))
+}
+
 #[instrument(skip_all, fields(path = %cmd.path.display()))]
+#[cfg(not(wasm_browser))]
 async fn import_path(cmd: ImportPathMsg) -> Result<ImportEntry> {
+    use tokio::io::AsyncReadExt;
     let ImportPathMsg {
         inner:
             ImportPathRequest {
@@ -1099,7 +1108,7 @@ mod tests {
 
         let store2 = MemStore::new();
         let mut or = store2.observe(hash).stream().await?;
-        tokio::spawn(async move {
+        n0_future::task::spawn(async move {
             while let Some(event) = or.next().await {
                 println!("event: {event:?}");
             }

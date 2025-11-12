@@ -87,7 +87,7 @@ impl HashSpecific for CreateTagMsg {
     }
 }
 
-#[rpc_requests(message = Command, alias = "Msg")]
+#[rpc_requests(message = Command, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]

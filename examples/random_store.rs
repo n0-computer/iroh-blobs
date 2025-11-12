@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, str::FromStr};
 
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use iroh::{discovery::static_provider::StaticProvider, SecretKey};
 use iroh_blobs::{
@@ -11,7 +12,6 @@ use iroh_blobs::{
 };
 use iroh_tickets::endpoint::EndpointTicket;
 use irpc::RpcMessage;
-use n0_error::{Result, StackResultExt, StdResultExt};
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::signal::ctrl_c;
@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn provide(args: ProvideArgs) -> n0_error::Result<()> {
+async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     println!("{args:?}");
     let tempdir = if args.common.path.is_none() {
         Some(tempfile::tempdir_in(".").context("Failed to create temporary directory")?)
@@ -247,12 +247,12 @@ async fn provide(args: ProvideArgs) -> n0_error::Result<()> {
     println!("Node address: {addr:?}");
     println!("ticket:\n{ticket}");
     ctrl_c().await?;
-    router.shutdown().await.anyerr()?;
+    router.shutdown().await?;
     dump_task.abort();
     Ok(())
 }
 
-async fn request(args: RequestArgs) -> n0_error::Result<()> {
+async fn request(args: RequestArgs) -> anyhow::Result<()> {
     println!("{args:?}");
     let tempdir = if args.common.path.is_none() {
         Some(tempfile::tempdir_in(".").context("Failed to create temporary directory")?)

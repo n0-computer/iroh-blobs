@@ -7,6 +7,7 @@
 //!  $ cargo run --example transfer-collection
 use std::collections::HashMap;
 
+use anyhow::{Context, Result};
 use iroh::{
     discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr, RelayMode,
 };
@@ -16,7 +17,6 @@ use iroh_blobs::{
     store::mem::MemStore,
     BlobsProtocol, Hash, HashAndFormat,
 };
-use n0_error::{Result, StackResultExt};
 
 /// Node is something you'd define in your application. It can contain whatever
 /// shared state you'd want to couple with network operations.
@@ -104,7 +104,7 @@ impl Node {
 }
 
 #[tokio::main]
-async fn main() -> n0_error::Result<()> {
+async fn main() -> anyhow::Result<()> {
     // create a local provider for nodes to discover each other.
     // outside of a development environment, production apps would
     // use `Endpoint::bind()` or a similar method

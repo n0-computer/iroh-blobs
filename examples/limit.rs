@@ -18,6 +18,7 @@ use std::{
     },
 };
 
+use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
 use iroh::{protocol::Router, EndpointAddr, EndpointId, SecretKey};
@@ -30,7 +31,6 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
-use n0_error::{Result, StdResultExt};
 use rand::rng;
 
 use crate::common::get_or_generate_secret_key;
@@ -156,7 +156,7 @@ fn throttle(delay_ms: u64) -> EventSender {
                     );
                     // we could compute the delay from the size of the data to have a fixed rate.
                     // but the size is almost always 16 KiB (16 chunks).
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    n0_future::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     msg.tx.send(Ok(())).await.ok();
                 });
             }
@@ -276,7 +276,7 @@ async fn main() -> Result<()> {
             }
 
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await.anyerr()?;
+            router.shutdown().await?;
         }
         Args::ByHash { paths } => {
             let store = MemStore::new();
@@ -304,7 +304,7 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket} ({permitted})", path.display());
             }
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await.anyerr()?;
+            router.shutdown().await?;
         }
         Args::Throttle { paths, delay_ms } => {
             let store = MemStore::new();
@@ -316,7 +316,7 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket}", path.display());
             }
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await.anyerr()?;
+            router.shutdown().await?;
         }
         Args::MaxConnections {
             paths,
@@ -331,7 +331,7 @@ async fn main() -> Result<()> {
                 println!("{}: {ticket}", path.display());
             }
             tokio::signal::ctrl_c().await?;
-            router.shutdown().await.anyerr()?;
+            router.shutdown().await?;
         }
     }
     Ok(())

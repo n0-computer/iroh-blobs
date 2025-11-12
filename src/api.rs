@@ -12,13 +12,12 @@
 //!
 //! You can also [`connect`](Store::connect) to a remote store that is listening
 //! to rpc requests.
-use std::{io, net::SocketAddr, ops::Deref};
+use std::{io, ops::Deref};
 
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
-use irpc::rpc::{listen, RemoteService};
 use n0_error::{e, stack_error};
-use proto::{Request, ShutdownRequest, SyncDbRequest};
+use proto::{ShutdownRequest, SyncDbRequest};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use tags::Tags;
@@ -125,6 +124,7 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::OneshotRecv { source: e, .. } => e!(ExportBaoError::OneshotRecv, e),
             irpc::Error::Send { source: e, .. } => e!(ExportBaoError::Send, e),
             irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
+            #[cfg(feature = "rpc")]
             irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
     }
@@ -176,6 +176,7 @@ impl From<irpc::channel::mpsc::RecvError> for Error {
     }
 }
 
+#[cfg(feature = "rpc")]
 impl From<irpc::rpc::WriteError> for Error {
     fn from(e: irpc::rpc::WriteError) -> Self {
         Self::Io(e.into())
@@ -246,16 +247,21 @@ impl Store {
     }
 
     /// Connect to a remote store as a rpc client.
-    pub fn connect(endpoint: quinn::Endpoint, addr: SocketAddr) -> Self {
+    #[cfg(feature = "rpc")]
+    pub fn connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::quinn(endpoint, addr);
         Store::from_sender(sender)
     }
 
     /// Listen on a quinn endpoint for incoming rpc connections.
+    #[cfg(feature = "rpc")]
     pub async fn listen(self, endpoint: quinn::Endpoint) {
+        use irpc::rpc::RemoteService;
+
+        use self::proto::Request;
         let local = self.client.as_local().unwrap().clone();
         let handler = Request::remote_handler(local);
-        listen::<Request>(endpoint, handler).await
+        irpc::rpc::listen::<Request>(endpoint, handler).await
     }
 
     pub async fn sync_db(&self) -> RequestResult<()> {

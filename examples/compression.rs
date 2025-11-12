@@ -5,6 +5,7 @@
 mod common;
 use std::{fmt::Debug, path::PathBuf};
 
+use anyhow::Result;
 use clap::Parser;
 use common::setup_logging;
 use iroh::protocol::ProtocolHandler;
@@ -19,7 +20,6 @@ use iroh_blobs::{
     store::mem::MemStore,
     ticket::BlobTicket,
 };
-use n0_error::{Result, StdResultExt};
 use tracing::debug;
 
 use crate::common::get_or_generate_secret_key;
@@ -160,7 +160,7 @@ impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
             .events
             .client_connected(|| ClientConnected {
                 connection_id,
-                endpoint_id: connection.remote_id().ok(),
+                endpoint_id: Some(connection.remote_id()),
             })
             .await
         {
@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
             println!("Node is running. Press Ctrl-C to exit.");
             tokio::signal::ctrl_c().await?;
             println!("Shutting down.");
-            router.shutdown().await.anyerr()?;
+            router.shutdown().await?;
         }
         Args::Get { ticket, target } => {
             let store = MemStore::new();
@@ -208,7 +208,7 @@ async fn main() -> Result<()> {
                 .connect(ticket.addr().clone(), lz4::Compression::ALPN)
                 .await?;
             let connection_id = conn.stable_id() as u64;
-            let (send, recv) = conn.open_bi().await.anyerr()?;
+            let (send, recv) = conn.open_bi().await?;
             let send = compression.send_stream(send);
             let recv = compression.recv_stream(recv);
             let sp = StreamPair::new(connection_id, recv, send);

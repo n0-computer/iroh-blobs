@@ -17,7 +17,10 @@ use futures_lite::StreamExt;
 use iroh_blobs::{
     api::{blobs::AddBytesOptions, Store, Tag},
     hashseq::HashSeq,
-    store::fs::options::{BatchOptions, GcConfig, InlineOptions, Options, PathOptions},
+    store::{
+        fs::options::{BatchOptions, InlineOptions, Options, PathOptions},
+        GcConfig,
+    },
     BlobFormat, Hash,
 };
 use tokio::signal::ctrl_c;
@@ -30,7 +33,7 @@ async fn create_expiring_tag(
     hashes: &[Hash],
     prefix: &str,
     expiry: SystemTime,
-) -> n0_error::Result<()> {
+) -> anyhow::Result<()> {
     let expiry = chrono::DateTime::<chrono::Utc>::from(expiry);
     let expiry = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let tagname = format!("{prefix}-{expiry}");
@@ -53,7 +56,7 @@ async fn create_expiring_tag(
     Ok(())
 }
 
-async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> n0_error::Result<()> {
+async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> anyhow::Result<()> {
     let prefix = format!("{prefix}-");
     let now = chrono::Utc::now();
     let end = format!(
@@ -100,7 +103,7 @@ async fn delete_expired_tags(blobs: &Store, prefix: &str, bulk: bool) -> n0_erro
     Ok(())
 }
 
-async fn print_store_info(store: &Store) -> n0_error::Result<()> {
+async fn print_store_info(store: &Store) -> anyhow::Result<()> {
     let now = chrono::Utc::now();
     let mut tags = store.tags().list().await?;
     println!(
@@ -121,23 +124,23 @@ async fn print_store_info(store: &Store) -> n0_error::Result<()> {
     Ok(())
 }
 
-async fn info_task(store: Store) -> n0_error::Result<()> {
-    tokio::time::sleep(Duration::from_secs(1)).await;
+async fn info_task(store: Store) -> anyhow::Result<()> {
+    n0_future::time::sleep(Duration::from_secs(1)).await;
     loop {
         print_store_info(&store).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
-async fn delete_expired_tags_task(store: Store, prefix: &str) -> n0_error::Result<()> {
+async fn delete_expired_tags_task(store: Store, prefix: &str) -> anyhow::Result<()> {
     loop {
         delete_expired_tags(&store, prefix, false).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
 #[tokio::main]
-async fn main() -> n0_error::Result<()> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let path = std::env::current_dir()?.join("blobs");
     let options = Options {

@@ -32,7 +32,6 @@ use tokio::sync::{
     mpsc::{self, error::SendError as TokioSendError},
     oneshot, Notify,
 };
-use tokio_util::time::FutureExt as TimeFutureExt;
 use tracing::{debug, error, info, trace};
 
 pub type OnConnected =
@@ -198,8 +197,7 @@ impl Context {
         };
 
         // Connect to the node
-        let state = conn_fut
-            .timeout(context.options.connect_timeout)
+        let state = n0_future::time::timeout(context.options.connect_timeout, conn_fut)
             .await
             .map_err(|_| e!(PoolConnectError::Timeout))
             .and_then(|r| r);
@@ -269,7 +267,7 @@ impl Context {
                         break;
                     }
                     // set the idle timer
-                    idle_timer.as_mut().set_future(tokio::time::sleep(context.options.idle_timeout));
+                    idle_timer.as_mut().set_future(n0_future::time::sleep(context.options.idle_timeout));
                 }
 
                 // Idle timeout - request shutdown
@@ -428,7 +426,7 @@ impl ConnectionPool {
         let (actor, tx) = Actor::new(endpoint, alpn, options);
 
         // Spawn the main actor
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
 
         Self { tx }
     }
@@ -569,7 +567,7 @@ mod tests {
     impl ProtocolHandler for Echo {
         async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
             let conn_id = connection.stable_id();
-            let id = connection.remote_id().map_err(AcceptError::from_err)?;
+            let id = connection.remote_id();
             trace!(%id, %conn_id, "Accepting echo connection");
             loop {
                 match connection.accept_bi().await {
@@ -590,7 +588,7 @@ mod tests {
 
     async fn echo_client(conn: &Connection, text: &[u8]) -> Result<Vec<u8>> {
         let conn_id = conn.stable_id();
-        let id = conn.remote_id().anyerr()?;
+        let id = conn.remote_id();
         trace!(%id, %conn_id, "Sending echo request");
         let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
         send.write_all(text).await.anyerr()?;
@@ -720,7 +718,7 @@ mod tests {
             assert_eq!(cid1, cid2);
             connection_ids.insert(id, cid1);
         }
-        tokio::time::sleep(Duration::from_millis(1000)).await;
+        n0_future::time::sleep(Duration::from_millis(1000)).await;
         for id in &ids {
             let cid1 = *connection_ids.get(id).expect("Connection ID not found");
             let (cid2, res) = client.echo(*id, msg.clone()).await??;
@@ -805,9 +803,7 @@ mod tests {
             .bind()
             .await?;
         let on_connected = |ep: Endpoint, conn: Connection| async move {
-            let Ok(id) = conn.remote_id() else {
-                return Err(io::Error::other("unable to get endpoint id"));
-            };
+            let id = conn.remote_id();
             let Some(watcher) = ep.conn_type(id) else {
                 return Err(io::Error::other("unable to get conn_type watcher"));
             };
@@ -852,7 +848,7 @@ mod tests {
         let conn = pool.get_or_connect(ids[0]).await?;
         let cid1 = conn.stable_id();
         conn.close(0u32.into(), b"test");
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        n0_future::time::sleep(Duration::from_millis(500)).await;
         let conn = pool.get_or_connect(ids[0]).await?;
         let cid2 = conn.stable_id();
         assert_ne!(cid1, cid2);

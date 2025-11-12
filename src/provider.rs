@@ -3,19 +3,13 @@
 //! Note that while using this API directly is fine, the standard way
 //! to provide data is to just register a [`crate::BlobsProtocol`] protocol
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
-use std::{
-    fmt::Debug,
-    future::Future,
-    io,
-    time::{Duration, Instant},
-};
+use std::{fmt::Debug, future::Future, io, time::Duration};
 
 use bao_tree::ChunkRanges;
-use iroh::endpoint::{self, VarInt};
+use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_error::{e, stack_error, Result};
-use n0_future::StreamExt;
-use quinn::ConnectionError;
+use n0_future::{time::Instant, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::select;
 use tracing::{debug, debug_span, Instrument};
@@ -297,7 +291,7 @@ pub async fn handle_connection(
         if let Err(cause) = progress
             .client_connected(|| ClientConnected {
                 connection_id,
-                endpoint_id: connection.remote_id().ok(),
+                endpoint_id: Some(connection.remote_id()),
             })
             .await
         {
@@ -308,7 +302,7 @@ pub async fn handle_connection(
         while let Ok(pair) = StreamPair::accept(&connection, progress.clone()).await {
             let span = debug_span!("stream", stream_id = %pair.stream_id());
             let store = store.clone();
-            tokio::spawn(handle_stream(pair, store).instrument(span));
+            n0_future::task::spawn(handle_stream(pair, store).instrument(span));
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })

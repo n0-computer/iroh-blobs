@@ -18,11 +18,12 @@
 //! [iroh]: https://docs.rs/iroh
 use std::{
     fmt::{self, Debug},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
+use n0_future::time::Instant;
 use n0_error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
