@@ -756,9 +756,9 @@
 <a href=#756 id=756 data-nosnippet>756</a></span>}
 <a href=#757 id=757 data-nosnippet>757</a>
 <a href=#758 id=758 data-nosnippet>758</a><span class="attr">#[cfg(wasm_browser)]
-<a href=#759 id=759 data-nosnippet>759</a></span><span class="kw">async fn </span>import_path(cmd: ImportPathMsg) -&gt; anyhow::Result&lt;ImportEntry&gt; {
+<a href=#759 id=759 data-nosnippet>759</a></span><span class="kw">async fn </span>import_path(cmd: ImportPathMsg) -&gt; <span class="prelude-ty">Result</span>&lt;ImportEntry&gt; {
 <a href=#760 id=760 data-nosnippet>760</a>    <span class="kw">let _</span>: ImportPathRequest = cmd.inner;
-<a href=#761 id=761 data-nosnippet>761</a>    <span class="prelude-val">Err</span>(<span class="macro">anyhow::anyhow!</span>(
+<a href=#761 id=761 data-nosnippet>761</a>    <span class="prelude-val">Err</span>(<span class="macro">n0_error::anyerr!</span>(
 <a href=#762 id=762 data-nosnippet>762</a>        <span class="string">"import_path is not supported in the browser"
 <a href=#763 id=763 data-nosnippet>763</a>    </span>))
 <a href=#764 id=764 data-nosnippet>764</a>}
