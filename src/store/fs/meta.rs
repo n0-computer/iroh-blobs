@@ -5,12 +5,12 @@ use std::{
     io,
     ops::{Bound, Deref, DerefMut},
     path::PathBuf,
-    time::SystemTime,
 };
 
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use irpc::channel::mpsc;
+use n0_future::time::SystemTime;
 use n0_snafu::SpanTrace;
 use nested_enum_utils::common_fields;
 use redb::{Database, DatabaseError, ReadableTable};

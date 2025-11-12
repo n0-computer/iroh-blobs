@@ -1,8 +1,7 @@
 //! Options for configuring the file store.
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
+
+use n0_future::time::Duration;
 
 use super::{meta::raw_outboard_size, temp_name};
 use crate::{store::gc::GcConfig, Hash};

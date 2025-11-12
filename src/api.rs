@@ -127,7 +127,6 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::OneshotRecv { source, .. } => OneshotRecvSnafu.into_error(source),
             irpc::Error::Send { source, .. } => SendSnafu.into_error(source),
             irpc::Error::Request { source, .. } => RequestSnafu.into_error(source),
-            #[cfg(feature = "rpc")]
             irpc::Error::Write { source, .. } => ExportBaoIoSnafu.into_error(source.into()),
         }
     }
