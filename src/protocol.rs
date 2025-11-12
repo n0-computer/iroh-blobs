@@ -387,8 +387,8 @@ use range_collections::{range_set::RangeSetEntry, RangeSet2};
 use serde::{Deserialize, Serialize};
 mod range_spec;
 pub use bao_tree::ChunkRanges;
+use n0_error::stack_error;
 pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
-use snafu::{GenerateImplicitData, Snafu};
 
 use crate::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
@@ -703,20 +703,10 @@ impl From<Closed> for VarInt {
 }
 
 /// Unknown error_code, can not be converted into [`Closed`].
-#[derive(Debug, Snafu)]
-#[snafu(display("Unknown error_code: {code}"))]
+#[stack_error(derive, add_meta)]
+#[error("Unknown error_code: {code}")]
 pub struct UnknownErrorCode {
     code: u64,
-    backtrace: Option<snafu::Backtrace>,
-}
-
-impl UnknownErrorCode {
-    pub(crate) fn new(code: u64) -> Self {
-        Self {
-            code,
-            backtrace: GenerateImplicitData::generate(),
-        }
-    }
 }
 
 impl TryFrom<VarInt> for Closed {
@@ -727,7 +717,7 @@ impl TryFrom<VarInt> for Closed {
             0 => Ok(Self::StreamDropped),
             1 => Ok(Self::ProviderTerminating),
             2 => Ok(Self::RequestReceived),
-            val => Err(UnknownErrorCode::new(val)),
+            val => Err(n0_error::e!(UnknownErrorCode { code: val })),
         }
     }
 }

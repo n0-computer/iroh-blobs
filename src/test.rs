@@ -14,7 +14,7 @@ pub async fn create_random_blobs<R: rand::Rng>(
     num_blobs: usize,
     blob_size: impl Fn(usize, &mut R) -> usize,
     mut rand: R,
-) -> anyhow::Result<Vec<TagInfo>> {
+) -> n0_error::Result<Vec<TagInfo>> {
     // generate sizes and seeds, non-parrallelized so it is deterministic
     let sizes = (0..num_blobs)
         .map(|n| (blob_size(n, &mut rand), rand.random::<u64>()))
@@ -39,7 +39,7 @@ pub async fn add_hash_sequences<R: rand::Rng>(
     num_seqs: usize,
     seq_size: impl Fn(usize, &mut R) -> usize,
     mut rand: R,
-) -> anyhow::Result<Vec<TagInfo>> {
+) -> n0_error::Result<Vec<TagInfo>> {
     let infos = stream::iter(0..num_seqs)
         .then(|n| {
             let size = seq_size(n, &mut rand);

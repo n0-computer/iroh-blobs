@@ -2,6 +2,7 @@
 use std::fmt::Debug;
 
 use bytes::Bytes;
+use n0_error::{anyerr, AnyError};
 
 use crate::Hash;
 
@@ -34,10 +35,10 @@ impl FromIterator<Hash> for HashSeq {
 }
 
 impl TryFrom<Bytes> for HashSeq {
-    type Error = anyhow::Error;
+    type Error = AnyError;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
-        Self::new(bytes).ok_or_else(|| anyhow::anyhow!("invalid hash sequence"))
+        Self::new(bytes).ok_or_else(|| anyerr!("invalid hash sequence"))
     }
 }
 

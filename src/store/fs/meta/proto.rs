@@ -45,7 +45,7 @@ pub struct GetResult {
 /// of the inline data and inline outboard tables if necessary.
 #[derive(Debug)]
 pub struct Dump {
-    pub tx: oneshot::Sender<anyhow::Result<()>>,
+    pub tx: oneshot::Sender<n0_error::Result<()>>,
     pub span: Span,
 }
 

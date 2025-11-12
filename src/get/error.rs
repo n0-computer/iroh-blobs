@@ -2,54 +2,49 @@
 use std::io;
 
 use iroh::endpoint::{ConnectionError, ReadError, VarInt, WriteError};
-use n0_snafu::SpanTrace;
-use nested_enum_utils::common_fields;
-use snafu::{Backtrace, Snafu};
+use n0_error::{stack_error, AnyError};
 
 use crate::get::fsm::{
     AtBlobHeaderNextError, AtClosingNextError, ConnectedNextError, DecodeError, InitialNextError,
 };
 
 /// Failures for a get operation
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
-#[derive(Debug, Snafu)]
-#[snafu(visibility(pub(crate)))]
-#[snafu(module)]
+#[stack_error(derive, add_meta)]
 pub enum GetError {
-    #[snafu(transparent)]
+    #[error(transparent)]
     InitialNext {
+        #[error(from)]
         source: InitialNextError,
     },
-    #[snafu(transparent)]
+    #[error(transparent)]
     ConnectedNext {
+        #[error(from)]
         source: ConnectedNextError,
     },
-    #[snafu(transparent)]
+    #[error(transparent)]
     AtBlobHeaderNext {
+        #[error(from)]
         source: AtBlobHeaderNextError,
     },
-    #[snafu(transparent)]
+    #[error(transparent)]
     Decode {
+        #[error(from)]
         source: DecodeError,
     },
-    #[snafu(transparent)]
+    #[error(transparent)]
     IrpcSend {
+        #[error(from)]
         source: irpc::channel::SendError,
     },
-    #[snafu(transparent)]
+    #[error(transparent)]
     AtClosingNext {
+        #[error(from)]
         source: AtClosingNextError,
     },
-    LocalFailure {
-        source: anyhow::Error,
-    },
-    BadRequest {
-        source: anyhow::Error,
-    },
+    #[error("local failure")]
+    LocalFailure { source: AnyError },
+    #[error("bad request")]
+    BadRequest { source: AnyError },
 }
 
 impl GetError {

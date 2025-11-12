@@ -11,10 +11,8 @@ use std::{
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_snafu::SpanTrace;
-use nested_enum_utils::common_fields;
+use n0_error::{anyerr, e, stack_error, AnyError};
 use redb::{Database, DatabaseError, ReadableTable};
-use snafu::{Backtrace, ResultExt, Snafu};
 use tokio::pin;
 
 use crate::{
@@ -51,27 +49,39 @@ use crate::store::IROH_BLOCK_SIZE;
 ///
 /// What can go wrong are various things with redb, as well as io errors related
 /// to files other than redb.
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum ActorError {
-    #[snafu(display("table error: {source}"))]
-    Table { source: redb::TableError },
-    #[snafu(display("database error: {source}"))]
-    Database { source: redb::DatabaseError },
-    #[snafu(display("transaction error: {source}"))]
-    Transaction { source: redb::TransactionError },
-    #[snafu(display("commit error: {source}"))]
-    Commit { source: redb::CommitError },
-    #[snafu(display("storage error: {source}"))]
-    Storage { source: redb::StorageError },
-    #[snafu(display("inconsistent database state: {msg}"))]
+    #[error("table error: {source}")]
+    Table {
+        #[error(std_err)]
+        source: redb::TableError,
+    },
+    #[error("database error: {source}")]
+    Database {
+        #[error(std_err)]
+        source: redb::DatabaseError,
+    },
+    #[error("transaction error: {source}")]
+    Transaction {
+        #[error(std_err)]
+        source: redb::TransactionError,
+    },
+    #[error("commit error: {source}")]
+    Commit {
+        #[error(std_err)]
+        source: redb::CommitError,
+    },
+    #[error("storage error: {source}")]
+    Storage {
+        #[error(std_err)]
+        source: redb::StorageError,
+    },
+    #[error("inconsistent database state: {msg}")]
     Inconsistent { msg: String },
+    #[error(transparent)]
+    Other { source: AnyError },
 }
 
 impl From<ActorError> for io::Error {
@@ -82,11 +92,11 @@ impl From<ActorError> for io::Error {
 
 impl ActorError {
     pub(super) fn inconsistent(msg: String) -> Self {
-        InconsistentSnafu { msg }.build()
+        e!(ActorError::Inconsistent { msg })
     }
 }
 
-pub type ActorResult<T> = Result<T, ActorError>;
+pub type ActorResult<T> = std::result::Result<T, ActorError>;
 
 #[derive(Debug, Clone)]
 pub struct Db {
@@ -195,7 +205,7 @@ impl Db {
 fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
     trace!("{cmd:?}");
     let Get { hash, tx, .. } = cmd;
-    let Some(entry) = tables.blobs().get(hash).context(StorageSnafu)? else {
+    let Some(entry) = tables.blobs().get(hash)? else {
         tx.send(GetResult { state: Ok(None) });
         return Ok(());
     };
@@ -223,26 +233,42 @@ fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
 fn handle_dump(cmd: Dump, tables: &impl ReadableTables) -> ActorResult<()> {
     trace!("{cmd:?}");
     trace!("dumping database");
-    for e in tables.blobs().iter().context(StorageSnafu)? {
-        let (k, v) = e.context(StorageSnafu)?;
+    for e in tables
+        .blobs()
+        .iter()
+        .map_err(|e| e!(ActorError::Storage, e))?
+    {
+        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
         let k = k.value();
         let v = v.value();
         println!("blobs: {} -> {:?}", k.to_hex(), v);
     }
-    for e in tables.tags().iter().context(StorageSnafu)? {
-        let (k, v) = e.context(StorageSnafu)?;
+    for e in tables
+        .tags()
+        .iter()
+        .map_err(|e| e!(ActorError::Storage, e))?
+    {
+        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
         let k = k.value();
         let v = v.value();
         println!("tags: {k} -> {v:?}");
     }
-    for e in tables.inline_data().iter().context(StorageSnafu)? {
-        let (k, v) = e.context(StorageSnafu)?;
+    for e in tables
+        .inline_data()
+        .iter()
+        .map_err(|e| e!(ActorError::Storage, e))?
+    {
+        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
         let k = k.value();
         let v = v.value();
         println!("inline_data: {} -> {:?}", k.to_hex(), v.len());
     }
-    for e in tables.inline_outboard().iter().context(StorageSnafu)? {
-        let (k, v) = e.context(StorageSnafu)?;
+    for e in tables
+        .inline_outboard()
+        .iter()
+        .map_err(|e| e!(ActorError::Storage, e))?
+    {
+        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
         let k = k.value();
         let v = v.value();
         println!("inline_outboard: {} -> {:?}", k.to_hex(), v.len());
@@ -271,11 +297,19 @@ async fn handle_get_blob_status(
         tx,
         ..
     } = msg;
-    let res = match tables.blobs().get(hash).context(StorageSnafu)? {
+    let res = match tables
+        .blobs()
+        .get(hash)
+        .map_err(|e| e!(ActorError::Storage, e))?
+    {
         Some(entry) => match entry.value() {
             EntryState::Complete { data_location, .. } => match data_location {
                 DataLocation::Inline(_) => {
-                    let Some(data) = tables.inline_data().get(hash).context(StorageSnafu)? else {
+                    let Some(data) = tables
+                        .inline_data()
+                        .get(hash)
+                        .map_err(|e| e!(ActorError::Storage, e))?
+                    else {
                         return Err(ActorError::inconsistent(format!(
                             "inconsistent database state: {} not found",
                             hash.to_hex()
@@ -312,7 +346,11 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
     let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
     let mut res = Vec::new();
-    for item in tables.tags().range((from, to)).context(StorageSnafu)? {
+    for item in tables
+        .tags()
+        .range((from, to))
+        .map_err(|e| e!(ActorError::Storage, e))?
+    {
         match item {
             Ok((k, v)) => {
                 let v = v.value();
@@ -325,9 +363,7 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
                     res.push(crate::api::Result::Ok(info));
                 }
             }
-            Err(e) => {
-                res.push(Err(crate::api::Error::other(e)));
-            }
+            Err(e) => res.push(Err(crate::api::Error::other(e))),
         }
     }
     tx.send(res).await.ok();
@@ -345,11 +381,7 @@ fn handle_update(
     } = cmd;
     protected.insert(hash);
     trace!("updating hash {} to {}", hash.to_hex(), state.fmt_short());
-    let old_entry_opt = tables
-        .blobs
-        .get(hash)
-        .context(StorageSnafu)?
-        .map(|e| e.value());
+    let old_entry_opt = tables.blobs.get(hash)?.map(|e| e.value());
     let (state, data, outboard): (_, Option<Bytes>, Option<Bytes>) = match state {
         EntryState::Complete {
             data_location,
@@ -381,18 +413,21 @@ fn handle_update(
         }
         None => state,
     };
-    tables.blobs.insert(hash, state).context(StorageSnafu)?;
+    tables
+        .blobs
+        .insert(hash, state)
+        .map_err(|e| e!(ActorError::Storage, e))?;
     if let Some(data) = data {
         tables
             .inline_data
             .insert(hash, data.as_ref())
-            .context(StorageSnafu)?;
+            .map_err(|e| e!(ActorError::Storage, e))?;
     }
     if let Some(outboard) = outboard {
         tables
             .inline_outboard
             .insert(hash, outboard.as_ref())
-            .context(StorageSnafu)?;
+            .map_err(|e| e!(ActorError::Storage, e))?;
     }
     if let Some(tx) = tx {
         tx.send(Ok(()));
@@ -424,18 +459,21 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    tables.blobs.insert(hash, state).context(StorageSnafu)?;
+    tables
+        .blobs
+        .insert(hash, state)
+        .map_err(|e| e!(ActorError::Storage, e))?;
     if let Some(data) = data {
         tables
             .inline_data
             .insert(hash, data.as_ref())
-            .context(StorageSnafu)?;
+            .map_err(|e| e!(ActorError::Storage, e))?;
     }
     if let Some(outboard) = outboard {
         tables
             .inline_outboard
             .insert(hash, outboard.as_ref())
-            .context(StorageSnafu)?;
+            .map_err(|e| e!(ActorError::Storage, e))?;
     }
     tx.send(Ok(()));
     Ok(())
@@ -473,12 +511,12 @@ impl Actor {
         cmds: tokio::sync::mpsc::Receiver<Command>,
         mut ds: DeleteHandle,
         options: BatchOptions,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, ActorError> {
         debug!("creating or opening meta database at {}", db_path.display());
         let mut db = match redb::Database::create(db_path) {
             Ok(db) => db,
             Err(DatabaseError::UpgradeRequired(1)) => {
-                return Err(anyhow::anyhow!("migration from v1 no longer supported"));
+                return Err(anyerr!("migration from v1 no longer supported").into());
             }
             Err(err) => return Err(err.into()),
         };
@@ -537,7 +575,7 @@ impl Actor {
                 trace!("delete {hash}: skip (protected)");
                 continue;
             }
-            if let Some(entry) = tables.blobs.remove(hash).context(StorageSnafu)? {
+            if let Some(entry) = tables.blobs.remove(hash)? {
                 match entry.value() {
                     EntryState::Complete {
                         data_location,
@@ -546,7 +584,7 @@ impl Actor {
                         trace!("delete {hash}: currently complete. will be deleted.");
                         match data_location {
                             DataLocation::Inline(_) => {
-                                tables.inline_data.remove(hash).context(StorageSnafu)?;
+                                tables.inline_data.remove(hash)?;
                             }
                             DataLocation::Owned(_) => {
                                 // mark the data for deletion
@@ -556,7 +594,7 @@ impl Actor {
                         }
                         match outboard_location {
                             OutboardLocation::Inline(_) => {
-                                tables.inline_outboard.remove(hash).context(StorageSnafu)?;
+                                tables.inline_outboard.remove(hash)?;
                             }
                             OutboardLocation::Owned => {
                                 // mark the outboard for deletion
@@ -607,10 +645,7 @@ impl Actor {
             let tag = Tag::auto(SystemTime::now(), |x| {
                 matches!(tables.tags.get(Tag(Bytes::copy_from_slice(x))), Ok(Some(_)))
             });
-            tables
-                .tags
-                .insert(tag.clone(), value)
-                .context(StorageSnafu)?;
+            tables.tags.insert(tag.clone(), value)?;
             tag
         };
         tx.send(Ok(tag.clone())).await.ok();
@@ -626,14 +661,11 @@ impl Actor {
         } = cmd;
         let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
         let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-        let removing = tables
-            .tags
-            .extract_from_if((from, to), |_, _| true)
-            .context(StorageSnafu)?;
+        let removing = tables.tags.extract_from_if((from, to), |_, _| true)?;
         // drain the iterator to actually remove the tags
         let mut deleted = 0;
         for res in removing {
-            res.context(StorageSnafu)?;
+            res?;
             deleted += 1;
         }
         tx.send(Ok(deleted)).await.ok();
@@ -647,7 +679,7 @@ impl Actor {
             tx,
             ..
         } = cmd;
-        let value = match tables.tags.remove(from).context(StorageSnafu)? {
+        let value = match tables.tags.remove(from)? {
             Some(value) => value.value(),
             None => {
                 tx.send(Err(api::Error::io(
@@ -659,7 +691,7 @@ impl Actor {
                 return Ok(());
             }
         };
-        tables.tags.insert(to, value).context(StorageSnafu)?;
+        tables.tags.insert(to, value)?;
         tx.send(Ok(())).await.ok();
         Ok(())
     }
@@ -737,8 +769,10 @@ impl Actor {
             }
             TopLevelCommand::Snapshot(cmd) => {
                 trace!("{cmd:?}");
-                let txn = db.begin_read().context(TransactionSnafu)?;
-                let snapshot = ReadOnlyTables::new(&txn).context(TableSnafu)?;
+                let txn = db
+                    .begin_read()
+                    .map_err(|e| e!(ActorError::Transaction, e))?;
+                let snapshot = ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))?;
                 cmd.tx.send(snapshot).ok();
                 None
             }
@@ -764,8 +798,10 @@ impl Actor {
                 Command::ReadOnly(cmd) => {
                     let op = TxnNum::Read(op);
                     self.cmds.push_back(cmd.into()).ok();
-                    let tx = db.begin_read().context(TransactionSnafu)?;
-                    let tables = ReadOnlyTables::new(&tx).context(TableSnafu)?;
+                    let tx = db
+                        .begin_read()
+                        .map_err(|e| e!(ActorError::Transaction, e))?;
+                    let tables = ReadOnlyTables::new(&tx).map_err(|e| e!(ActorError::Table, e))?;
                     let timeout = n0_future::time::sleep(self.options.max_read_duration);
                     pin!(timeout);
                     let mut n = 0;
@@ -782,8 +818,11 @@ impl Actor {
                     let op = TxnNum::Write(op);
                     self.cmds.push_back(cmd.into()).ok();
                     let ftx = self.ds.begin_write();
-                    let tx = db.begin_write().context(TransactionSnafu)?;
-                    let mut tables = Tables::new(&tx, &ftx).context(TableSnafu)?;
+                    let tx = db
+                        .begin_write()
+                        .map_err(|e| e!(ActorError::Transaction, e))?;
+                    let mut tables =
+                        Tables::new(&tx, &ftx).map_err(|e| e!(ActorError::Table, e))?;
                     let timeout = n0_future::time::sleep(self.options.max_read_duration);
                     pin!(timeout);
                     let mut n = 0;
@@ -800,7 +839,7 @@ impl Actor {
                         }
                     }
                     drop(tables);
-                    tx.commit().context(CommitSnafu)?;
+                    tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
                     ftx.commit();
                 }
             }
@@ -853,7 +892,11 @@ fn load_data(
 ) -> ActorResult<DataLocation<Bytes, u64>> {
     Ok(match location {
         DataLocation::Inline(()) => {
-            let Some(data) = tables.inline_data().get(hash).context(StorageSnafu)? else {
+            let Some(data) = tables
+                .inline_data()
+                .get(hash)
+                .map_err(|e| e!(ActorError::Storage, e))?
+            else {
                 return Err(ActorError::inconsistent(format!(
                     "inconsistent database state: {} should have inline data but does not",
                     hash.to_hex()
@@ -874,7 +917,11 @@ fn load_outboard(
     Ok(match location {
         OutboardLocation::NotNeeded => OutboardLocation::NotNeeded,
         OutboardLocation::Inline(_) => {
-            let Some(outboard) = tables.inline_outboard().get(hash).context(StorageSnafu)? else {
+            let Some(outboard) = tables
+                .inline_outboard()
+                .get(hash)
+                .map_err(|e| e!(ActorError::Storage, e))?
+            else {
                 return Err(ActorError::inconsistent(format!(
                     "inconsistent database state: {} should have inline outboard but does not",
                     hash.to_hex()
