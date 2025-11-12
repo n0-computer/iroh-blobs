@@ -756,9 +756,9 @@ async fn import_byte_stream(
 }
 
 #[cfg(wasm_browser)]
-async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+async fn import_path(cmd: ImportPathMsg) -> Result<ImportEntry> {
     let _: ImportPathRequest = cmd.inner;
-    Err(anyhow::anyhow!(
+    Err(n0_error::anyerr!(
         "import_path is not supported in the browser"
     ))
 }
