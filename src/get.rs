@@ -23,8 +23,8 @@ use std::{
 
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
-use n0_future::time::Instant;
 use n0_error::Result;
+use n0_future::time::Instant;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
