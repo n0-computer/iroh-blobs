@@ -26,14 +26,22 @@ impl<T> Clone for Sender<T> {
 pub struct Receiver<T>(Arc<Shared<T>>);
 
 impl<T> Sender<T> {
-    pub fn new(value: T) -> Self {
-        Self(Arc::new(Shared {
-            value: AtomicRefCell::new(State {
-                value,
-                dropped: false,
-            }),
-            notify: tokio::sync::Notify::new(),
-        }))
+
+    pub fn send_modify<F>(&self, modify: F)
+    where
+        F: FnOnce(&mut T),
+    {
+        self.send_if_modified(|value| {
+            modify(value);
+            true
+        });
+    }
+
+    pub fn send_replace(&self, mut value: T) -> T {
+        // swap old watched value with the new one
+        self.send_modify(|old| std::mem::swap(old, &mut value));
+
+        value
     }
 
     pub fn send_if_modified<F>(&self, modify: F) -> bool
