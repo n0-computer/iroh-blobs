@@ -23,11 +23,11 @@ use iroh::{
     endpoint::{ConnectError, Connection},
     Endpoint, EndpointId,
 };
+use n0_error::{e, stack_error};
 use n0_future::{
     future::{self},
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
 };
-use snafu::Snafu;
 use tokio::sync::{
     mpsc::{self, error::SendError as TokioSendError},
     oneshot, Notify,
@@ -108,45 +108,49 @@ impl ConnectionRef {
 ///
 /// This includes the normal iroh connection errors as well as pool specific
 /// errors such as timeouts and connection limits.
-#[derive(Debug, Clone, Snafu)]
-#[snafu(module)]
+#[stack_error(derive, add_meta)]
+#[derive(Clone)]
 pub enum PoolConnectError {
     /// Connection pool is shut down
-    Shutdown,
+    #[error("Connection pool is shut down")]
+    Shutdown {},
     /// Timeout during connect
-    Timeout,
+    #[error("Timeout during connect")]
+    Timeout {},
     /// Too many connections
-    TooManyConnections,
+    #[error("Too many connections")]
+    TooManyConnections {},
     /// Error during connect
+    #[error(transparent)]
     ConnectError { source: Arc<ConnectError> },
     /// Error during on_connect callback
-    OnConnectError { source: Arc<io::Error> },
+    #[error(transparent)]
+    OnConnectError {
+        #[error(std_err)]
+        source: Arc<io::Error>,
+    },
 }
 
 impl From<ConnectError> for PoolConnectError {
     fn from(e: ConnectError) -> Self {
-        PoolConnectError::ConnectError {
-            source: Arc::new(e),
-        }
+        e!(PoolConnectError::ConnectError, Arc::new(e))
     }
 }
 
 impl From<io::Error> for PoolConnectError {
     fn from(e: io::Error) -> Self {
-        PoolConnectError::OnConnectError {
-            source: Arc::new(e),
-        }
+        e!(PoolConnectError::OnConnectError, Arc::new(e))
     }
 }
 
 /// Error when calling a fn on the [`ConnectionPool`].
 ///
 /// The only thing that can go wrong is that the connection pool is shut down.
-#[derive(Debug, Snafu)]
-#[snafu(module)]
+#[stack_error(derive, add_meta)]
 pub enum ConnectionPoolError {
     /// The connection pool has been shut down
-    Shutdown,
+    #[error("The connection pool has been shut down")]
+    Shutdown {},
 }
 
 enum ActorMessage {
@@ -195,7 +199,7 @@ impl Context {
         // Connect to the node
         let state = n0_future::time::timeout(context.options.connect_timeout, conn_fut)
             .await
-            .map_err(|_| PoolConnectError::Timeout)
+            .map_err(|_| e!(PoolConnectError::Timeout))
             .and_then(|r| r);
         let conn_close = match &state {
             Ok(conn) => {
@@ -360,7 +364,9 @@ impl Actor {
                         trace!("removing oldest idle connection {}", idle);
                         self.connections.remove(&idle);
                     } else {
-                        msg.tx.send(Err(PoolConnectError::TooManyConnections)).ok();
+                        msg.tx
+                            .send(Err(e!(PoolConnectError::TooManyConnections)))
+                            .ok();
                         return;
                     }
                 }
@@ -437,8 +443,8 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::RequestRef(RequestRef { id, tx }))
             .await
-            .map_err(|_| PoolConnectError::Shutdown)?;
-        rx.await.map_err(|_| PoolConnectError::Shutdown)?
+            .map_err(|_| e!(PoolConnectError::Shutdown))?;
+        rx.await.map_err(|_| e!(PoolConnectError::Shutdown))?
     }
 
     /// Close an existing connection, if it exists
@@ -449,7 +455,7 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::ConnectionShutdown { id })
             .await
-            .map_err(|_| ConnectionPoolError::Shutdown)?;
+            .map_err(|_| e!(ConnectionPoolError::Shutdown))?;
         Ok(())
     }
 
@@ -463,7 +469,7 @@ impl ConnectionPool {
         self.tx
             .send(ActorMessage::ConnectionIdle { id })
             .await
-            .map_err(|_| ConnectionPoolError::Shutdown)?;
+            .map_err(|_| e!(ConnectionPoolError::Shutdown))?;
         Ok(())
     }
 }
@@ -545,8 +551,8 @@ mod tests {
         protocol::{AcceptError, ProtocolHandler, Router},
         EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
     };
+    use n0_error::{AnyError, Result, StdResultExt};
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
-    use n0_snafu::ResultExt;
     use testresult::TestResult;
     use tracing::trace;
 
@@ -580,14 +586,14 @@ mod tests {
         }
     }
 
-    async fn echo_client(conn: &Connection, text: &[u8]) -> n0_snafu::Result<Vec<u8>> {
+    async fn echo_client(conn: &Connection, text: &[u8]) -> Result<Vec<u8>> {
         let conn_id = conn.stable_id();
         let id = conn.remote_id();
         trace!(%id, %conn_id, "Sending echo request");
-        let (mut send, mut recv) = conn.open_bi().await.e()?;
-        send.write_all(text).await.e()?;
-        send.finish().e()?;
-        let response = recv.read_to_end(1000).await.e()?;
+        let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
+        send.write_all(text).await.anyerr()?;
+        send.finish().anyerr()?;
+        let response = recv.read_to_end(1000).await.anyerr()?;
         trace!(%id, %conn_id, "Received echo response");
         Ok(response)
     }
@@ -645,7 +651,7 @@ mod tests {
             &self,
             id: EndpointId,
             text: Vec<u8>,
-        ) -> Result<Result<(usize, Vec<u8>), n0_snafu::Error>, PoolConnectError> {
+        ) -> Result<Result<(usize, Vec<u8>), AnyError>, PoolConnectError> {
             let conn = self.pool.get_or_connect(id).await?;
             let id = conn.stable_id();
             match echo_client(&conn, &text).await {
@@ -685,7 +691,7 @@ mod tests {
             // trying to connect to an id for which we have info, but the other
             // end is not listening, will lead to a timeout.
             let res = client.echo(non_listening, b"Hello, world!".to_vec()).await;
-            assert!(matches!(res, Err(PoolConnectError::Timeout)));
+            assert!(matches!(res, Err(PoolConnectError::Timeout { .. })));
         }
         Ok(())
     }

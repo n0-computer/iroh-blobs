@@ -1,9 +1,9 @@
 //! Tickets for blobs.
 use std::{collections::BTreeSet, net::SocketAddr, str::FromStr};
 
-use anyhow::Result;
 use iroh::{EndpointAddr, EndpointId, RelayUrl};
 use iroh_tickets::{ParseError, Ticket};
+use n0_error::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{BlobFormat, Hash, HashAndFormat};

@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();
     let tag = store.add_slice(b"Hello world").await?;
-  
+
     let _ = endpoint.online().await;
     let addr = endpoint.addr();
     let ticket = BlobTicket::new(addr, tag.hash, tag.format);
