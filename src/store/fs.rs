@@ -1378,9 +1378,7 @@ async fn copy_with_progress<T: CopyProgress>(
         let buf: &mut [u8] = &mut buf[..remaining];
         file.read_exact_at(offset, buf)?;
         target.write_all(buf)?;
-        tx.try_send(T::from_offset(offset))
-            .await
-            .map_err(|_e| io::Error::other(""))?;
+        tx.try_send(T::from_offset(offset)).await?;
         yield_now().await;
         offset += buf.len() as u64;
     }

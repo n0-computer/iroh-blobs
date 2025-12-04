@@ -196,12 +196,8 @@ async fn import_bytes_tiny_impl(
     let size = cmd.data.len() as u64;
     // send the required progress events
     // AddProgressItem::Done will be sent when finishing the import!
-    tx.send(AddProgressItem::Size(size))
-        .await
-        .map_err(|_e| io::Error::other("error"))?;
-    tx.send(AddProgressItem::CopyDone)
-        .await
-        .map_err(|_e| io::Error::other("error"))?;
+    tx.send(AddProgressItem::Size(size)).await?;
+    tx.send(AddProgressItem::CopyDone).await?;
     Ok(if raw_outboard_size(size) == 0 {
         // the thing is so small that it does not even need an outboard
         ImportEntry {
@@ -286,12 +282,8 @@ async fn import_byte_stream_impl(
 ) -> io::Result<ImportEntry> {
     let ImportByteStreamRequest { format, scope } = cmd;
     let import_source = get_import_source(stream, tx, &options).await?;
-    tx.send(AddProgressItem::Size(import_source.size()))
-        .await
-        .map_err(|_e| io::Error::other("error"))?;
-    tx.send(AddProgressItem::CopyDone)
-        .await
-        .map_err(|_e| io::Error::other("error"))?;
+    tx.send(AddProgressItem::Size(import_source.size())).await?;
+    tx.send(AddProgressItem::CopyDone).await?;
     compute_outboard(import_source, format, scope, options, tx).await
 }
 
@@ -344,18 +336,14 @@ async fn get_import_source(
             data.extend_from_slice(&chunk);
         }
         // todo: don't send progress for every chunk if the chunks are small?
-        tx.try_send(AddProgressItem::CopyProgress(size))
-            .await
-            .map_err(|_e| io::Error::other("error"))?;
+        tx.try_send(AddProgressItem::CopyProgress(size)).await?;
     }
     Ok(if let Some((mut file, temp_path)) = disk {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             file.write_all(&chunk)?;
             size += chunk.len() as u64;
-            tx.send(AddProgressItem::CopyProgress(size))
-                .await
-                .map_err(|_e| io::Error::other("error"))?;
+            tx.send(AddProgressItem::CopyProgress(size)).await?;
         }
         ImportSource::TempFile(temp_path, file, size)
     } else {
@@ -473,14 +461,10 @@ async fn import_path_impl(
     }
 
     let size = path.metadata()?.len();
-    tx.send(AddProgressItem::Size(size))
-        .await
-        .map_err(|_e| io::Error::other("error"))?;
+    tx.send(AddProgressItem::Size(size)).await?;
     let import_source = if size <= options.inline.max_data_inlined {
         let data = std::fs::read(path)?;
-        tx.send(AddProgressItem::CopyDone)
-            .await
-            .map_err(|_e| io::Error::other("error"))?;
+        tx.send(AddProgressItem::CopyDone).await?;
         ImportSource::Memory(data.into())
     } else if mode == ImportMode::TryReference {
         // reference where it is. We are going to need the file handle to
@@ -500,9 +484,7 @@ async fn import_path_impl(
         );
         // copy from path to temp_path
         let file = OpenOptions::new().read(true).open(&temp_path)?;
-        tx.send(AddProgressItem::CopyDone)
-            .await
-            .map_err(|_| io::Error::other("error"))?;
+        tx.send(AddProgressItem::CopyDone).await?;
         ImportSource::TempFile(temp_path, file, size)
     };
     compute_outboard(import_source, format, batch, options, tx).await

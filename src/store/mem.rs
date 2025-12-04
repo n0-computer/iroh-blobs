@@ -837,8 +837,7 @@ async fn export_path_impl(
         entry.0.state.borrow().data().read_exact_at(offset, buf)?;
         file.write_all(buf)?;
         tx.try_send(ExportProgressItem::CopyProgress(offset))
-            .await
-            .map_err(|_e| io::Error::other(""))?;
+            .await?;
         yield_now().await;
     }
     Ok(())
