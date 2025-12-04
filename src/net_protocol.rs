@@ -5,7 +5,7 @@
 //! # Example
 //!
 //! ```rust
-//! # async fn example() -> anyhow::Result<()> {
+//! # async fn example() -> n0_error::Result<()> {
 //! use iroh::{protocol::Router, Endpoint};
 //! use iroh_blobs::{store, ticket::BlobTicket, BlobsProtocol};
 //!

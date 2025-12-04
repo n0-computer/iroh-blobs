@@ -6,10 +6,10 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::bail;
 use genawaiter::sync::Gen;
 use iroh::{Endpoint, EndpointId};
 use irpc::{channel::mpsc, rpc_requests};
+use n0_error::{anyerr, Result};
 use n0_future::{future, stream, task::JoinSet, BufferedStreamExt, Stream, StreamExt};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
@@ -47,7 +47,7 @@ struct DownloaderActor {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DownloadProgressItem {
     #[serde(skip)]
-    Error(anyhow::Error),
+    Error(n0_error::AnyError),
     TryProvider {
         id: EndpointId,
         request: Arc<GetRequest>,
@@ -106,7 +106,7 @@ async fn handle_download_impl(
     pool: ConnectionPool,
     request: DownloadRequest,
     tx: &mut mpsc::Sender<DownloadProgressItem>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     match request.strategy {
         SplitStrategy::Split => handle_download_split_impl(store, pool, request, tx).await?,
         SplitStrategy::None => match request.request {
@@ -127,7 +127,7 @@ async fn handle_download_split_impl(
     pool: ConnectionPool,
     request: DownloadRequest,
     tx: &mut mpsc::Sender<DownloadProgressItem>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let providers = request.providers;
     let requests = split_request(&request.request, &providers, &pool, &store, Drain).await?;
     let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(32);
@@ -313,14 +313,16 @@ impl DownloadProgress {
         })))
     }
 
-    async fn complete(self) -> anyhow::Result<()> {
+    async fn complete(self) -> Result<()> {
         let rx = self.fut.await?;
         let stream = rx.into_stream();
         tokio::pin!(stream);
         while let Some(item) = stream.next().await {
             match item? {
                 DownloadProgressItem::Error(e) => Err(e)?,
-                DownloadProgressItem::DownloadError => anyhow::bail!("Download error"),
+                DownloadProgressItem::DownloadError => {
+                    n0_error::bail_any!("Download error");
+                }
                 _ => {}
             }
         }
@@ -329,7 +331,7 @@ impl DownloadProgress {
 }
 
 impl IntoFuture for DownloadProgress {
-    type Output = anyhow::Result<()>;
+    type Output = Result<()>;
     type IntoFuture = future::Boxed<Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -372,7 +374,7 @@ async fn split_request<'a>(
     pool: &ConnectionPool,
     store: &Store,
     progress: impl Sink<DownloadProgressItem, Error = irpc::channel::SendError>,
-) -> anyhow::Result<Box<dyn Iterator<Item = GetRequest> + Send + 'a>> {
+) -> Result<Box<dyn Iterator<Item = GetRequest> + Send + 'a>> {
     Ok(match request {
         FiniteRequest::Get(req) => {
             let Some(_first) = req.ranges.iter_infinite().next() else {
@@ -381,7 +383,7 @@ async fn split_request<'a>(
             let first = GetRequest::blob(req.hash);
             execute_get(pool, Arc::new(first), providers, store, progress).await?;
             let size = store.observe(req.hash).await?.size();
-            anyhow::ensure!(size % 32 == 0, "Size is not a multiple of 32");
+            n0_error::ensure_any!(size % 32 == 0, "Size is not a multiple of 32");
             let n = size / 32;
             Box::new(
                 req.ranges
@@ -428,7 +430,7 @@ async fn execute_get(
     providers: &Arc<dyn ContentDiscovery>,
     store: &Store,
     mut progress: impl Sink<DownloadProgressItem, Error = irpc::channel::SendError>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let remote = store.remote();
     let mut providers = providers.find_providers(request.content());
     while let Some(provider) = providers.next().await {
@@ -480,7 +482,7 @@ async fn execute_get(
             }
         }
     }
-    bail!("Unable to download {}", request.hash);
+    Err(anyerr!("Unable to download {}", request.hash))
 }
 
 /// Trait for pluggable content discovery strategies.

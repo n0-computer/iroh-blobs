@@ -15,11 +15,9 @@ use bao_tree::{
 use genawaiter::sync::{Co, Gen};
 use iroh::endpoint::Connection;
 use irpc::util::{AsyncReadVarintExt, WriteVarintExt};
+use n0_error::{e, stack_error, AnyError, Result, StdResultExt};
 use n0_future::{io, Stream, StreamExt};
-use n0_snafu::SpanTrace;
-use nested_enum_utils::common_fields;
 use ref_cast::RefCast;
-use snafu::{Backtrace, IntoError, ResultExt, Snafu};
 use tracing::{debug, trace};
 
 use super::blobs::{Bitfield, ExportBaoOptions};
@@ -34,7 +32,6 @@ use crate::{
             AtBlobHeader, AtConnected, AtEndBlob, BlobContentNext, ConnectedNext, DecodeError,
             EndBlobNext,
         },
-        get_error::{BadRequestSnafu, LocalFailureSnafu},
         GetError, GetResult, Stats, StreamPair,
     },
     hashseq::{HashSeq, HashSeqIter},
@@ -124,7 +121,10 @@ impl GetProgress {
 
     pub async fn complete(self) -> GetResult<Stats> {
         just_result(self.stream()).await.unwrap_or_else(|| {
-            Err(LocalFailureSnafu.into_error(anyhow::anyhow!("stream closed without result")))
+            Err(e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("stream closed without result")
+            ))
         })
     }
 }
@@ -136,11 +136,11 @@ pub enum PushProgressItem {
     /// The request was completed.
     Done(Stats),
     /// The request was closed, but not completed.
-    Error(anyhow::Error),
+    Error(AnyError),
 }
 
-impl From<anyhow::Result<Stats>> for PushProgressItem {
-    fn from(res: anyhow::Result<Stats>) -> Self {
+impl From<Result<Stats>> for PushProgressItem {
+    fn from(res: Result<Stats>) -> Self {
         match res {
             Ok(stats) => Self::Done(stats),
             Err(e) => Self::Error(e),
@@ -148,7 +148,7 @@ impl From<anyhow::Result<Stats>> for PushProgressItem {
     }
 }
 
-impl TryFrom<PushProgressItem> for anyhow::Result<Stats> {
+impl TryFrom<PushProgressItem> for Result<Stats> {
     type Error = &'static str;
 
     fn try_from(item: PushProgressItem) -> Result<Self, Self::Error> {
@@ -166,7 +166,7 @@ pub struct PushProgress {
 }
 
 impl IntoFuture for PushProgress {
-    type Output = anyhow::Result<Stats>;
+    type Output = Result<Stats>;
     type IntoFuture = n0_future::boxed::BoxFuture<Self::Output>;
 
     fn into_future(self) -> n0_future::boxed::BoxFuture<Self::Output> {
@@ -179,10 +179,10 @@ impl PushProgress {
         into_stream(self.rx, self.fut)
     }
 
-    pub async fn complete(self) -> anyhow::Result<Stats> {
+    pub async fn complete(self) -> Result<Stats> {
         just_result(self.stream())
             .await
-            .unwrap_or_else(|| Err(anyhow::anyhow!("stream closed without result")))
+            .unwrap_or_else(|| Err(n0_error::anyerr!("stream closed without result")))
     }
 }
 
@@ -441,7 +441,7 @@ impl Remote {
     pub async fn local_for_request(
         &self,
         request: impl Into<Arc<GetRequest>>,
-    ) -> anyhow::Result<LocalInfo> {
+    ) -> Result<LocalInfo> {
         let request = request.into();
         let root = request.hash;
         let bitfield = self.store().observe(root).await?;
@@ -494,7 +494,7 @@ impl Remote {
     }
 
     /// Get the local info for a given blob or hash sequence, at the present time.
-    pub async fn local(&self, content: impl Into<HashAndFormat>) -> anyhow::Result<LocalInfo> {
+    pub async fn local(&self, content: impl Into<HashAndFormat>) -> Result<LocalInfo> {
         let request = GetRequest::from(content.into());
         self.local_for_request(request).await
     }
@@ -536,7 +536,7 @@ impl Remote {
         let local = self
             .local(content)
             .await
-            .map_err(|e: anyhow::Error| LocalFailureSnafu.into_error(e))?;
+            .map_err(|e| e!(GetError::LocalFailure, e))?;
         if local.is_complete() {
             return Ok(Default::default());
         }
@@ -599,16 +599,16 @@ impl Remote {
         conn: Connection,
         request: PushRequest,
         progress: impl Sink<u64, Error = irpc::channel::SendError>,
-    ) -> anyhow::Result<Stats> {
+    ) -> Result<Stats> {
         let hash = request.hash;
         debug!(%hash, "pushing");
-        let (mut send, mut recv) = conn.open_bi().await?;
+        let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
         let mut context = StreamContext {
             payload_bytes_sent: 0,
             sender: progress,
         };
         // we are not going to need this!
-        recv.stop(0u32.into())?;
+        recv.stop(0u32.into()).anyerr()?;
         // write the request. Unlike for reading, we can just serialize it sync using postcard.
         let request = write_push_request(request, &mut send).await?;
         let mut request_ranges = request.ranges.iter_infinite();
@@ -622,7 +622,7 @@ impl Remote {
         }
         if request.ranges.is_blob() {
             // we are done
-            send.finish()?;
+            send.finish().anyerr()?;
             return Ok(Default::default());
         }
         let hash_seq = self.store().get_bytes(root).await?;
@@ -637,7 +637,7 @@ impl Remote {
                     .await?;
             }
         }
-        send.finish()?;
+        send.finish().anyerr()?;
         Ok(Default::default())
     }
 
@@ -681,7 +681,10 @@ impl Remote {
         let store = self.store();
         let root = request.hash;
         let conn = conn.open_stream_pair().await.map_err(|e| {
-            LocalFailureSnafu.into_error(anyhow::anyhow!("failed to open stream pair: {e}"))
+            e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("failed to open stream pair: {e}")
+            )
         })?;
         // I am cloning the connection, but it's fine because the original connection or ConnectionRef stays alive
         // for the duration of the operation.
@@ -689,7 +692,11 @@ impl Remote {
             AtConnected::new(conn.t0, conn.recv, conn.send, request, Default::default());
         trace!("Getting header");
         // read the header
-        let next_child = match connected.next().await? {
+        let next_child = match connected
+            .next()
+            .await
+            .map_err(|e| e!(GetError::ConnectedNext, e))?
+        {
             ConnectedNext::StartRoot(at_start_root) => {
                 let header = at_start_root.next();
                 let end = get_blob_ranges_impl(header, root, store, &mut progress).await?;
@@ -709,9 +716,9 @@ impl Remote {
                     store
                         .get_bytes(root)
                         .await
-                        .map_err(|e| LocalFailureSnafu.into_error(e.into()))?,
+                        .map_err(|e| e!(GetError::LocalFailure, e.into()))?,
                 )
-                .context(BadRequestSnafu)?;
+                .map_err(|e| e!(GetError::BadRequest, e))?;
                 // let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), root);
                 loop {
                     let at_start_child = match next_child {
@@ -734,7 +741,10 @@ impl Remote {
             Err(at_closing) => at_closing,
         };
         // read the rest, if any
-        let stats = at_closing.next().await?;
+        let stats = at_closing
+            .next()
+            .await
+            .map_err(|e| e!(GetError::AtClosingNext, e))?;
         trace!(?stats, "get hash seq done");
         Ok(stats)
     }
@@ -796,51 +806,57 @@ impl Remote {
             Err(at_closing) => at_closing,
         };
         // read the rest, if any
-        let stats = at_closing.next().await?;
+        let stats = at_closing
+            .next()
+            .await
+            .map_err(|e| e!(GetError::AtClosingNext, e))?;
         trace!(?stats, "get hash seq done");
         Ok(stats)
     }
 }
 
 /// Failures for a get operation
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta)]
 pub enum ExecuteError {
     /// Network or IO operation failed.
-    #[snafu(display("Unable to open bidi stream"))]
+    #[error("Unable to open bidi stream")]
     Connection {
+        #[error(std_err)]
         source: iroh::endpoint::ConnectionError,
     },
-    #[snafu(display("Unable to read from the remote"))]
-    Read { source: iroh::endpoint::ReadError },
-    #[snafu(display("Error sending the request"))]
+    #[error("Unable to read from the remote")]
+    Read {
+        #[error(std_err)]
+        source: iroh::endpoint::ReadError,
+    },
+    #[error("Error sending the request")]
     Send {
+        #[error(std_err)]
         source: crate::get::fsm::ConnectedNextError,
     },
-    #[snafu(display("Unable to read size"))]
+    #[error("Unable to read size")]
     Size {
+        #[error(std_err)]
         source: crate::get::fsm::AtBlobHeaderNextError,
     },
-    #[snafu(display("Error while decoding the data"))]
+    #[error("Error while decoding the data")]
     Decode {
+        #[error(std_err)]
         source: crate::get::fsm::DecodeError,
     },
-    #[snafu(display("Internal error while reading the hash sequence"))]
+    #[error("Internal error while reading the hash sequence")]
     ExportBao { source: api::ExportBaoError },
-    #[snafu(display("Hash sequence has an invalid length"))]
-    InvalidHashSeq { source: anyhow::Error },
-    #[snafu(display("Internal error importing the data"))]
+    #[error("Hash sequence has an invalid length")]
+    InvalidHashSeq { source: AnyError },
+    #[error("Internal error importing the data")]
     ImportBao { source: crate::api::RequestError },
-    #[snafu(display("Error sending download progress - receiver closed"))]
+    #[error("Error sending download progress - receiver closed")]
     SendDownloadProgress { source: irpc::channel::SendError },
-    #[snafu(display("Internal error importing the data"))]
+    #[error("Internal error importing the data")]
     MpscSend {
+        #[error(std_err)]
         source: tokio::sync::mpsc::error::SendError<BaoContentItem>,
     },
 }
@@ -877,13 +893,19 @@ async fn get_blob_ranges_impl<R: RecvStream>(
     store: &Store,
     mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
 ) -> GetResult<AtEndBlob<R>> {
-    let (mut content, size) = header.next().await?;
+    let (mut content, size) = header
+        .next()
+        .await
+        .map_err(|e| e!(GetError::AtBlobHeaderNext, e))?;
     let Some(size) = NonZeroU64::new(size) else {
         return if hash == Hash::EMPTY {
-            let end = content.drain().await?;
+            let end = content.drain().await.map_err(|e| e!(GetError::Decode, e))?;
             Ok(end)
         } else {
-            Err(DecodeError::leaf_hash_mismatch(ChunkNum(0)).into())
+            Err(e!(
+                GetError::Decode,
+                DecodeError::leaf_hash_mismatch(ChunkNum(0))
+            ))
         };
     };
     let buffer_size = get_buffer_size(size);
@@ -891,17 +913,21 @@ async fn get_blob_ranges_impl<R: RecvStream>(
     let handle = store
         .import_bao(hash, size, buffer_size)
         .await
-        .map_err(|e| LocalFailureSnafu.into_error(e.into()))?;
+        .map_err(|e| e!(GetError::LocalFailure, e.into()))?;
     let write = async move {
         GetResult::Ok(loop {
             match content.next().await {
                 BlobContentNext::More((next, res)) => {
-                    let item = res?;
+                    let item = res.map_err(|e| e!(GetError::Decode, e))?;
                     progress
                         .send(next.stats().payload_bytes_read)
                         .await
-                        .map_err(|e| LocalFailureSnafu.into_error(e.into()))?;
-                    handle.tx.send(item).await?;
+                        .map_err(|e| e!(GetError::LocalFailure, e.into()))?;
+                    handle
+                        .tx
+                        .send(item)
+                        .await
+                        .map_err(|e| e!(GetError::IrpcSend, e))?;
                     content = next;
                 }
                 BlobContentNext::Done(end) => {
@@ -913,7 +939,10 @@ async fn get_blob_ranges_impl<R: RecvStream>(
     };
     let complete = async move {
         handle.rx.await.map_err(|e| {
-            LocalFailureSnafu.into_error(anyhow::anyhow!("error reading from import stream: {e}"))
+            e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("error reading from import stream: {e}")
+            )
         })
     };
     let (_, end) = tokio::try_join!(complete, write)?;
@@ -936,7 +965,7 @@ pub(crate) struct HashSeqChunk {
 }
 
 impl TryFrom<Leaf> for HashSeqChunk {
-    type Error = anyhow::Error;
+    type Error = AnyError;
 
     fn try_from(leaf: Leaf) -> Result<Self, Self::Error> {
         let offset = leaf.offset;
@@ -983,7 +1012,7 @@ impl LazyHashSeq {
     }
 
     #[allow(dead_code)]
-    pub async fn get_from_offset(&mut self, offset: u64) -> anyhow::Result<Option<Hash>> {
+    pub async fn get_from_offset(&mut self, offset: u64) -> Result<Option<Hash>> {
         if offset == 0 {
             Ok(Some(self.hash))
         } else {
@@ -992,7 +1021,7 @@ impl LazyHashSeq {
     }
 
     #[allow(dead_code)]
-    pub async fn get(&mut self, child_offset: u64) -> anyhow::Result<Option<Hash>> {
+    pub async fn get(&mut self, child_offset: u64) -> Result<Option<Hash>> {
         // check if we have the hash in the current chunk
         if let Some(chunk) = &self.current_chunk {
             if let Some(hash) = chunk.get(child_offset) {
@@ -1015,7 +1044,7 @@ impl LazyHashSeq {
 async fn write_push_request(
     request: PushRequest,
     stream: &mut impl SendStream,
-) -> anyhow::Result<PushRequest> {
+) -> Result<PushRequest> {
     let mut request_bytes = Vec::new();
     request_bytes.push(RequestType::Push as u8);
     request_bytes.write_length_prefixed(&request).unwrap();
@@ -1053,7 +1082,7 @@ where
         self.sender
             .send(self.payload_bytes_sent)
             .await
-            .map_err(|e| ProgressError::Internal { source: e.into() })?;
+            .map_err(|e| n0_error::e!(ProgressError::Internal, e.into()))?;
         Ok(())
     }
 
