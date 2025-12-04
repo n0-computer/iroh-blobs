@@ -232,7 +232,7 @@ impl entity_manager::Params for EmParams {
         cause: entity_manager::ShutdownCause,
     ) {
         trace!("persist {:?} due to {cause:?}", state.id);
-        state.persist().await;
+        EntityApi::persist(&state).await;
     }
 }
 
@@ -259,8 +259,7 @@ struct Actor {
 type HashContext = ActiveEntityState<EmParams>;
 
 impl SyncEntityApi for HashContext {
-
-    fn id(&self) -> Hash {
+    fn hash(&self) -> Hash {
         self.id
     }
 
@@ -381,10 +380,69 @@ impl SyncEntityApi for HashContext {
             BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn observe(&self, cmd: ObserveMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        BaoFileStorageSubscriber::new(self.state.subscribe())
+            .forward(cmd.tx)
+            .await
+            .ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_path(&self, cmd: ExportPathMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let ExportPathMsg { inner, mut tx, .. } = cmd;
+        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
+            tx.send(cause.into()).await.ok();
+        }
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let res = match finish_import_impl(self, cmd.inner).await {
+            Ok(()) => {
+                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
+                // it will be cleaned up when either the process exits or scope ends
+                if cmd.tx.is_rpc() {
+                    trace!("leaking temp tag {}", tt.hash_and_format());
+                    tt.leak();
+                }
+                AddProgressItem::Done(tt)
+            }
+            Err(cause) => AddProgressItem::Error(cause),
+        };
+        cmd.tx.send(res).await.ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %self.hash().fmt_short()))]
+    async fn persist(&self) {
+        self.state.send_if_modified(|guard| {
+            let hash = &self.id;
+            let BaoFileStorage::Partial(fs) = guard.take() else {
+                return false;
+            };
+            let path = self.global.options.path.bitfield_path(hash);
+            trace!("writing bitfield for hash {} to {}", hash, path.display());
+            if let Err(cause) = fs.sync_all(&path) {
+                error!(
+                    "failed to write bitfield for {} at {}: {:?}",
+                    hash,
+                    path.display(),
+                    cause
+                );
+            }
+            false
+        });
+    }
 }
 
 impl HashContext {
-
     fn db(&self) -> &meta::Db {
         &self.global.db
     }
@@ -715,13 +773,13 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 
 impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.observe(self).await
+        EntityApi::observe(&ctx, self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.export_path(self).await
+        EntityApi::export_path(&ctx, self).await
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -788,7 +846,7 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
     async fn handle(self, ctx: HashContext) {
         let (tt, cmd) = self;
-        ctx.finish_import(cmd, tt).await
+        EntityApi::finish_import(&ctx, cmd, tt).await;
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -878,23 +936,21 @@ trait EntityApi {
 
 /// A more opinionated API that can be used as a helper to save implementation
 /// effort when implementing the EntityApi trait.
-trait SyncEntityApi: EntityApi {
+trait SyncEntityApi {
     /// Load the entry state from the database. This must make sure that it is
     /// not run concurrently, so if load is called multiple times, all but one
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
     async fn load(&self);
 
-    fn id(&self) -> Hash;
+    /// The hash of the entry.
+    fn hash(&self) -> Hash;
 
     /// The outboard for the file.
     fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
         let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id()),
-            tree,
-            data: outboard,
-        })
+        let data = self.outboard_reader();
+        let root = self.hash().into();
+        Ok(PreOrderOutboard { root, tree, data })
     }
 
     /// Get a synchronous reader for the data file.
@@ -911,10 +967,21 @@ trait SyncEntityApi: EntityApi {
 
     /// Write a batch of content items to the entry.
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+
+    // these fns are just copied from EntityApi
+
+    /// Finish an import from a local file or memory.
+    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
+    /// Observe the bitfield of the entry.
+    async fn observe(&self, cmd: ObserveMsg);
+    /// Export the entry to a local file.
+    async fn export_path(&self, cmd: ExportPathMsg);
+    /// Persist the entry at the end of its lifecycle.
+    async fn persist(&self);
 }
 
 /// The high level entry point per entry.
-impl EntityApi for HashContext {
+impl<T: SyncEntityApi> EntityApi for T {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
@@ -928,16 +995,6 @@ impl EntityApi for HashContext {
         let res = import_bao_impl(self, size, rx).await;
         trace!("{res:?}");
         tx.send(res).await.ok();
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn observe(&self, cmd: ObserveMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        BaoFileStorageSubscriber::new(self.state.subscribe())
-            .forward(cmd.tx)
-            .await
-            .ok();
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -966,59 +1023,25 @@ impl EntityApi for HashContext {
         }
     }
 
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn observe(&self, cmd: ObserveMsg) {
+        SyncEntityApi::observe(self, cmd).await
+    }
+
+    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag) {
+        SyncEntityApi::finish_import(self, cmd, tt).await
+    }
+
     async fn export_path(&self, cmd: ExportPathMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ExportPathMsg { inner, mut tx, .. } = cmd;
-        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
-            tx.send(cause.into()).await.ok();
-        }
+        SyncEntityApi::export_path(self, cmd).await
     }
 
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let res = match finish_import_impl(self, cmd.inner).await {
-            Ok(()) => {
-                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-                // it will be cleaned up when either the process exits or scope ends
-                if cmd.tx.is_rpc() {
-                    trace!("leaking temp tag {}", tt.hash_and_format());
-                    tt.leak();
-                }
-                AddProgressItem::Done(tt)
-            }
-            Err(cause) => AddProgressItem::Error(cause),
-        };
-        cmd.tx.send(res).await.ok();
-    }
-
-    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
     async fn persist(&self) {
-        self.state.send_if_modified(|guard| {
-            let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
-                return false;
-            };
-            let path = self.global.options.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            false
-        });
+        SyncEntityApi::persist(self).await
     }
 }
 
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
-    if ctx.id() == Hash::EMPTY {
+    if ctx.hash() == Hash::EMPTY {
         return Ok(()); // nothing to do for the empty hash
     }
     let ImportEntry {
@@ -1134,7 +1157,7 @@ async fn import_bao_impl(
     size: NonZeroU64,
     mut rx: mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
+    trace!("importing bao: {} {} bytes", ctx.hash().fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
