@@ -542,7 +542,7 @@ async fn handle_batch(cmd: BatchMsg, id: Scope, scope: Arc<TempTagScope>) -> Sco
 async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) -> api::Result<()> {
     let BatchMsg { tx, mut rx, .. } = cmd;
     trace!("created scope {}", id);
-    tx.send(id).await.map_err(api::Error::other)?;
+    tx.send(id).await?;
     while let Some(msg) = rx.recv().await? {
         match msg {
             BatchResponse::Drop(msg) => scope.on_drop(&msg),
@@ -837,8 +837,7 @@ async fn export_path_impl(
         entry.0.state.borrow().data().read_exact_at(offset, buf)?;
         file.write_all(buf)?;
         tx.try_send(ExportProgressItem::CopyProgress(offset))
-            .await
-            .map_err(|_e| io::Error::other(""))?;
+            .await?;
         yield_now().await;
     }
     Ok(())

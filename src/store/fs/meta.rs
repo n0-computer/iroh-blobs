@@ -363,7 +363,7 @@ async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> Act
                     res.push(crate::api::Result::Ok(info));
                 }
             }
-            Err(e) => res.push(Err(crate::api::Error::other(e))),
+            Err(e) => res.push(Err(api_error_from_storage_error(e))),
         }
     }
     tx.send(res).await.ok();
@@ -629,8 +629,12 @@ impl Actor {
             tx,
             ..
         } = cmd;
-        let res = tables.tags.insert(tag, value).map(|_| ());
-        tx.send(res.map_err(crate::api::Error::other)).await.ok();
+        let res = tables
+            .tags
+            .insert(tag, value)
+            .map_err(api_error_from_storage_error)
+            .map(|_| ());
+        tx.send(res).await.ok();
         Ok(())
     }
 
@@ -852,6 +856,13 @@ impl Actor {
     }
 }
 
+/// Convert a redb StorageError into an api::Error
+///
+/// This can't be a From instance because that would require exposing redb::StorageError in the public API.
+fn api_error_from_storage_error(e: redb::StorageError) -> api::Error {
+    api::Error::Io(io::Error::other(e))
+}
+
 #[derive(Debug)]
 struct DbWrapper(Option<Database>);
 
@@ -953,8 +964,12 @@ async fn list_blobs_impl(
     _cmd: ListRequest,
     tx: &mut mpsc::Sender<api::Result<Hash>>,
 ) -> api::Result<()> {
-    for item in snapshot.blobs.iter().map_err(api::Error::other)? {
-        let (k, _) = item.map_err(api::Error::other)?;
+    for item in snapshot
+        .blobs
+        .iter()
+        .map_err(api_error_from_storage_error)?
+    {
+        let (k, _) = item.map_err(api_error_from_storage_error)?;
         let k = k.value();
         tx.send(Ok(k)).await.ok();
     }

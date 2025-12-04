@@ -96,11 +96,9 @@ impl Actor {
     async fn handle_command(&mut self, cmd: Command) -> Option<irpc::channel::oneshot::Sender<()>> {
         match cmd {
             Command::ImportBao(ImportBaoMsg { tx, .. }) => {
-                tx.send(Err(api::Error::from(io::Error::other(
-                    "import not supported",
-                ))))
-                .await
-                .ok();
+                tx.send(Err(unsupported("import not supported").into()))
+                    .await
+                    .ok();
             }
             Command::WaitIdle(WaitIdleMsg { tx, .. }) => {
                 if self.tasks.is_empty() {
@@ -112,17 +110,17 @@ impl Actor {
                 }
             }
             Command::ImportBytes(ImportBytesMsg { tx, .. }) => {
-                tx.send(io::Error::other("import not supported").into())
+                tx.send(unsupported("import not supported").into())
                     .await
                     .ok();
             }
             Command::ImportByteStream(ImportByteStreamMsg { tx, .. }) => {
-                tx.send(io::Error::other("import not supported").into())
+                tx.send(unsupported("import not supported").into())
                     .await
                     .ok();
             }
             Command::ImportPath(ImportPathMsg { tx, .. }) => {
-                tx.send(io::Error::other("import not supported").into())
+                tx.send(unsupported("import not supported").into())
                     .await
                     .ok();
             }
@@ -163,7 +161,7 @@ impl Actor {
             }
             Command::CreateTag(cmd) => {
                 cmd.tx
-                    .send(Err(io::Error::other("create tag not supported").into()))
+                    .send(Err(unsupported("create tag not supported").into()))
                     .await
                     .ok();
             }
@@ -172,19 +170,19 @@ impl Actor {
             }
             Command::RenameTag(cmd) => {
                 cmd.tx
-                    .send(Err(io::Error::other("rename tag not supported").into()))
+                    .send(Err(unsupported("rename tag not supported").into()))
                     .await
                     .ok();
             }
             Command::DeleteTags(cmd) => {
                 cmd.tx
-                    .send(Err(io::Error::other("delete tags not supported").into()))
+                    .send(Err(unsupported("delete tags not supported").into()))
                     .await
                     .ok();
             }
             Command::DeleteBlobs(cmd) => {
                 cmd.tx
-                    .send(Err(io::Error::other("delete blobs not supported").into()))
+                    .send(Err(unsupported("delete blobs not supported").into()))
                     .await
                     .ok();
             }
@@ -213,7 +211,7 @@ impl Actor {
             }
             Command::SetTag(cmd) => {
                 cmd.tx
-                    .send(Err(io::Error::other("set tag not supported").into()))
+                    .send(Err(unsupported("set tag not supported").into()))
                     .await
                     .ok();
             }
@@ -262,6 +260,10 @@ impl Actor {
             }
         }
     }
+}
+
+fn unsupported(text: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, text)
 }
 
 async fn export_bao(
@@ -413,8 +415,7 @@ async fn export_path_impl(
         data.as_ref().read_exact_at(offset, buf)?;
         file.write_all(buf)?;
         tx.try_send(ExportProgressItem::CopyProgress(offset))
-            .await
-            .map_err(|_e| io::Error::other("error"))?;
+            .await?;
         yield_now().await;
     }
     Ok(())
