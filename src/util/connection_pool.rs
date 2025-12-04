@@ -541,9 +541,9 @@ mod tests {
 
     use iroh::{
         discovery::static_provider::StaticProvider,
-        endpoint::{Connection, ConnectionType},
+        endpoint::Connection,
         protocol::{AcceptError, ProtocolHandler, Router},
-        Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
+        EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
     };
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
     use n0_snafu::ResultExt;
@@ -796,14 +796,11 @@ mod tests {
             .discovery(discovery)
             .bind()
             .await?;
-        let on_connected = |ep: Endpoint, conn: Connection| async move {
-            let id = conn.remote_id();
-            let Some(watcher) = ep.conn_type(id) else {
-                return Err(io::Error::other("unable to get conn_type watcher"));
-            };
-            let mut stream = watcher.stream();
-            while let Some(status) = stream.next().await {
-                if let ConnectionType::Direct { .. } = status {
+        let on_connected = |_, conn: Connection| async move {
+            let paths = conn.paths();
+            let mut stream = paths.stream();
+            while let Some(paths) = stream.next().await {
+                if paths.iter().any(|path| path.is_ip()) {
                     return Ok(());
                 }
             }
