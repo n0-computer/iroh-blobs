@@ -259,6 +259,11 @@ struct Actor {
 type HashContext = ActiveEntityState<EmParams>;
 
 impl SyncEntityApi for HashContext {
+
+    fn id(&self) -> Hash {
+        self.id
+    }
+
     /// Load the state from the database.
     ///
     /// If the state is Initial, this will start the load.
@@ -379,16 +384,6 @@ impl SyncEntityApi for HashContext {
 }
 
 impl HashContext {
-    /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id),
-            tree,
-            data: outboard,
-        })
-    }
 
     fn db(&self) -> &meta::Db {
         &self.global.db
@@ -889,6 +884,19 @@ trait SyncEntityApi: EntityApi {
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
     async fn load(&self);
 
+    fn id(&self) -> Hash;
+
+    /// The outboard for the file.
+    fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
+        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let outboard = self.outboard_reader();
+        Ok(PreOrderOutboard {
+            root: blake3::Hash::from(self.id()),
+            tree,
+            data: outboard,
+        })
+    }
+
     /// Get a synchronous reader for the data file.
     fn data_reader(&self) -> impl ReadBytesAt;
 
@@ -1010,7 +1018,7 @@ impl EntityApi for HashContext {
 }
 
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
-    if ctx.id == Hash::EMPTY {
+    if ctx.id() == Hash::EMPTY {
         return Ok(()); // nothing to do for the empty hash
     }
     let ImportEntry {
@@ -1122,11 +1130,11 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 async fn import_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     size: NonZeroU64,
     mut rx: mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
+    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
@@ -1155,7 +1163,7 @@ async fn import_bao_impl(
 }
 
 async fn export_ranges_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
 ) -> io::Result<()> {
@@ -1196,7 +1204,7 @@ async fn export_ranges_impl(
 }
 
 async fn export_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
 ) -> io::Result<()> {
