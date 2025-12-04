@@ -30,10 +30,9 @@
 
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iroh::{protocol::Router, Endpoint};
 <span class="kw">use </span>iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
-<span class="kw">use </span>n0_error::{<span class="prelude-ty">Result</span>, StdResultExt};
 
 <span class="attr">#[tokio::main]
-</span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+</span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
     <span class="comment">// create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
     </span><span class="kw">let </span>endpoint = Endpoint::bind().<span class="kw">await</span><span class="question-mark">?</span>;
