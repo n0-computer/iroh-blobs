@@ -437,10 +437,7 @@ impl Blobs {
         mut reader: R,
     ) -> RequestResult<R> {
         let mut size = [0; 8];
-        reader
-            .recv_exact(&mut size)
-            .await
-            .map_err(io::Error::from)?;
+        reader.recv_exact(&mut size).await?;
         let size = u64::from_le_bytes(size);
         let Some(size) = NonZeroU64::new(size) else {
             return if hash == Hash::EMPTY {
