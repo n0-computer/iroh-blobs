@@ -853,7 +853,7 @@ async fn handle_batch(cmd: BatchMsg, id: Scope, scope: Arc<TempTagScope>, ctx: A
 async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) -> api::Result<()> {
     let BatchMsg { tx, mut rx, .. } = cmd;
     trace!("created scope {}", id);
-    tx.send(id).await.map_err(api::Error::other)?;
+    tx.send(id).await?;
     while let Some(msg) = rx.recv().await? {
         match msg {
             BatchResponse::Drop(msg) => scope.on_drop(&msg),
@@ -1266,9 +1266,7 @@ async fn export_path_impl(
         MemOrFile::Mem(data) => data.len() as u64,
         MemOrFile::File((_, size)) => *size,
     };
-    tx.send(ExportProgressItem::Size(size))
-        .await
-        .map_err(api::Error::other)?;
+    tx.send(ExportProgressItem::Size(size)).await?;
     match data {
         MemOrFile::Mem(data) => {
             let mut target = fs::File::create(&target)?;
@@ -1324,9 +1322,7 @@ async fn export_path_impl(
             }
         },
     }
-    tx.send(ExportProgressItem::Done)
-        .await
-        .map_err(api::Error::other)?;
+    tx.send(ExportProgressItem::Done).await?;
     Ok(())
 }
 

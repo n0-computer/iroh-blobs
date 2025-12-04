@@ -440,13 +440,13 @@ impl Blobs {
         reader
             .recv_exact(&mut size)
             .await
-            .map_err(super::Error::other)?;
+            .map_err(io::Error::from)?;
         let size = u64::from_le_bytes(size);
         let Some(size) = NonZeroU64::new(size) else {
             return if hash == Hash::EMPTY {
                 Ok(reader)
             } else {
-                Err(super::Error::other("invalid size for hash").into())
+                Err(io::Error::other("invalid size for hash").into())
             };
         };
         let tree = BaoTree::new(size.get(), IROH_BLOCK_SIZE);
@@ -651,7 +651,7 @@ impl<'a> AddProgress<'a> {
                 _ => {}
             }
         }
-        Err(super::Error::other("unexpected end of stream").into())
+        Err(io::Error::other("unexpected end of stream").into())
     }
 
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
@@ -704,7 +704,7 @@ impl IntoFuture for ObserveProgress {
             let mut rx = self.inner.await?;
             match rx.recv().await? {
                 Some(bitfield) => Ok(bitfield),
-                None => Err(super::Error::other("unexpected end of stream").into()),
+                None => Err(io::Error::other("unexpected end of stream").into()),
             }
         })
     }
@@ -726,7 +726,7 @@ impl ObserveProgress {
                 return Ok(item);
             }
         }
-        Err(super::Error::other("unexpected end of stream").into())
+        Err(io::Error::other("unexpected end of stream").into())
     }
 
     /// Returns an infinite stream of bitfields. The first bitfield is the
@@ -805,7 +805,7 @@ impl ExportProgress {
         if let Some(size) = size {
             Ok(size)
         } else {
-            Err(super::Error::other("unexpected end of stream").into())
+            Err(io::Error::other("unexpected end of stream").into())
         }
     }
 }

@@ -542,7 +542,7 @@ async fn handle_batch(cmd: BatchMsg, id: Scope, scope: Arc<TempTagScope>) -> Sco
 async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) -> api::Result<()> {
     let BatchMsg { tx, mut rx, .. } = cmd;
     trace!("created scope {}", id);
-    tx.send(id).await.map_err(api::Error::other)?;
+    tx.send(id).await?;
     while let Some(msg) = rx.recv().await? {
         match msg {
             BatchResponse::Drop(msg) => scope.on_drop(&msg),
