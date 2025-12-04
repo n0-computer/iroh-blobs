@@ -78,7 +78,6 @@ use std::{
 };
 
 use bao_tree::{
-    blake3,
     io::{
         mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
         outboard::PreOrderOutboard,
@@ -443,11 +442,7 @@ impl SyncEntityApi for HashContext {
 }
 
 impl HashContext {
-    fn db(&self) -> &meta::Db {
-        &self.global.db
-    }
-
-    pub fn options(&self) -> &Arc<Options> {
+    pub fn options(&self) -> &Options {
         &self.global.options
     }
 
@@ -457,7 +452,7 @@ impl HashContext {
 
     /// Update the entry state in the database, and wait for completion.
     pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().update_await(self.id, state).await?;
+        self.global.db.update_await(self.id, state).await?;
         Ok(())
     }
 
@@ -469,12 +464,12 @@ impl HashContext {
                 outboard_location: OutboardLocation::NotNeeded,
             }));
         };
-        self.db().get(hash).await
+        self.global.db.get(hash).await
     }
 
     /// Update the entry state in the database, and wait for completion.
     pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().set(self.id, state).await
+        self.global.db.set(self.id, state).await
     }
 }
 
