@@ -57,7 +57,7 @@
     </span>tokio::signal::ctrl_c().<span class="kw">await</span>;
 
     <span class="comment">// clean shutdown of router and store
-    </span>router.shutdown().<span class="kw">await</span>.anyerr()<span class="question-mark">?</span>;
+    </span>router.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(())
 }</code></pre></div><h3 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h3>
 <p>Examples that use <code>iroh-blobs</code> can be found in <a href="https://github.com/n0-computer/iroh-blobs/tree/main/examples">this repo</a>.</p>
