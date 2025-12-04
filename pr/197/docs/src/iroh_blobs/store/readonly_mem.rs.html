@@ -96,7 +96,7 @@
 <a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">async fn </span>handle_command(<span class="kw-2">&amp;mut </span><span class="self">self</span>, cmd: Command) -&gt; <span class="prelude-ty">Option</span>&lt;irpc::channel::oneshot::Sender&lt;()&gt;&gt; {
 <a href=#97 id=97 data-nosnippet>97</a>        <span class="kw">match </span>cmd {
 <a href=#98 id=98 data-nosnippet>98</a>            Command::ImportBao(ImportBaoMsg { tx, .. }) =&gt; {
-<a href=#99 id=99 data-nosnippet>99</a>                tx.send(<span class="prelude-val">Err</span>(api::Error::Io(io::Error::other(
+<a href=#99 id=99 data-nosnippet>99</a>                tx.send(<span class="prelude-val">Err</span>(api::Error::from(io::Error::other(
 <a href=#100 id=100 data-nosnippet>100</a>                    <span class="string">"import not supported"</span>,
 <a href=#101 id=101 data-nosnippet>101</a>                ))))
 <a href=#102 id=102 data-nosnippet>102</a>                .<span class="kw">await

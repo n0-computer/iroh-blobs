@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    num_blobs: usize,
 <a href=#15 id=15 data-nosnippet>15</a>    blob_size: <span class="kw">impl </span>Fn(usize, <span class="kw-2">&amp;mut </span>R) -&gt; usize,
 <a href=#16 id=16 data-nosnippet>16</a>    <span class="kw-2">mut </span>rand: R,
-<a href=#17 id=17 data-nosnippet>17</a>) -&gt; anyhow::Result&lt;Vec&lt;TagInfo&gt;&gt; {
+<a href=#17 id=17 data-nosnippet>17</a>) -&gt; n0_error::Result&lt;Vec&lt;TagInfo&gt;&gt; {
 <a href=#18 id=18 data-nosnippet>18</a>    <span class="comment">// generate sizes and seeds, non-parrallelized so it is deterministic
 <a href=#19 id=19 data-nosnippet>19</a>    </span><span class="kw">let </span>sizes = (<span class="number">0</span>..num_blobs)
 <a href=#20 id=20 data-nosnippet>20</a>        .map(|n| (blob_size(n, <span class="kw-2">&amp;mut </span>rand), rand.random::&lt;u64&gt;()))
@@ -39,7 +39,7 @@
 <a href=#39 id=39 data-nosnippet>39</a>    num_seqs: usize,
 <a href=#40 id=40 data-nosnippet>40</a>    seq_size: <span class="kw">impl </span>Fn(usize, <span class="kw-2">&amp;mut </span>R) -&gt; usize,
 <a href=#41 id=41 data-nosnippet>41</a>    <span class="kw-2">mut </span>rand: R,
-<a href=#42 id=42 data-nosnippet>42</a>) -&gt; anyhow::Result&lt;Vec&lt;TagInfo&gt;&gt; {
+<a href=#42 id=42 data-nosnippet>42</a>) -&gt; n0_error::Result&lt;Vec&lt;TagInfo&gt;&gt; {
 <a href=#43 id=43 data-nosnippet>43</a>    <span class="kw">let </span>infos = stream::iter(<span class="number">0</span>..num_seqs)
 <a href=#44 id=44 data-nosnippet>44</a>        .then(|n| {
 <a href=#45 id=45 data-nosnippet>45</a>            <span class="kw">let </span>size = seq_size(n, <span class="kw-2">&amp;mut </span>rand);
