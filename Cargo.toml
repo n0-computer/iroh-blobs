@@ -28,7 +28,7 @@ hex = "0.4.3"
 serde = "1.0.217"
 postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
 data-encoding = "2.8.0"
-chrono = "0.4.39"
+chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
 iroh = { version = "0.95", default-features = false }
