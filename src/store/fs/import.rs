@@ -11,10 +11,8 @@
 //! The various ..._task fns return an `Option<ImportEntry>`. If import fails for whatever reason, the error goes
 //! to the requester, and the task returns None.
 use std::{
-    fmt,
     fs::{self, File, OpenOptions},
     io::{self, Seek, Write},
-    path::PathBuf,
     sync::Arc,
 };
 
@@ -26,7 +24,7 @@ use bytes::Bytes;
 use genawaiter::sync::Gen;
 use irpc::{
     channel::{mpsc, none::NoReceiver},
-    Channels, WithChannels,
+    Channels,
 };
 use n0_future::{stream, Stream, StreamExt};
 use ref_cast::RefCast;
@@ -43,105 +41,17 @@ use crate::{
         },
     },
     store::{
-        fs::reflink_or_copy_with_progress,
-        util::{MemOrFile, DD},
-        IROH_BLOCK_SIZE,
+        fs::reflink_or_copy_with_progress, util::MemOrFile, ImportEntry, ImportEntryMsg,
+        ImportSource, IROH_BLOCK_SIZE,
     },
     util::{outboard_with_progress::init_outboard, sink::Sink},
     BlobFormat, Hash,
 };
 
-/// An import source.
-///
-/// It must provide a way to read the data synchronously, as well as the size
-/// and the file location.
-///
-/// This serves as an intermediate result between copying and outboard computation.
-pub enum ImportSource {
-    TempFile(PathBuf, File, u64),
-    External(PathBuf, File, u64),
-    Memory(Bytes),
-}
-
-impl std::fmt::Debug for ImportSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TempFile(path, _, size) => {
-                f.debug_tuple("TempFile").field(path).field(size).finish()
-            }
-            Self::External(path, _, size) => {
-                f.debug_tuple("External").field(path).field(size).finish()
-            }
-            Self::Memory(data) => f.debug_tuple("Memory").field(&data.len()).finish(),
-        }
-    }
-}
-
-impl ImportSource {
-    pub fn fmt_short(&self) -> String {
-        match self {
-            Self::TempFile(path, _, _) => format!("TempFile({})", path.display()),
-            Self::External(path, _, _) => format!("External({})", path.display()),
-            Self::Memory(data) => format!("Memory({})", data.len()),
-        }
-    }
-
-    fn is_mem(&self) -> bool {
-        matches!(self, Self::Memory(_))
-    }
-
-    /// A reader for the import source.
-    fn read(&self) -> MemOrFile<std::io::Cursor<&[u8]>, &File> {
-        match self {
-            Self::TempFile(_, file, _) => MemOrFile::File(file),
-            Self::External(_, file, _) => MemOrFile::File(file),
-            Self::Memory(data) => MemOrFile::Mem(std::io::Cursor::new(data.as_ref())),
-        }
-    }
-
-    /// The size of the import source.
-    fn size(&self) -> u64 {
-        match self {
-            Self::TempFile(_, _, size) => *size,
-            Self::External(_, _, size) => *size,
-            Self::Memory(data) => data.len() as u64,
-        }
-    }
-}
-
-/// An import entry.
-///
-/// This is the final result of an import operation. It gets passed to the store
-/// for integration.
-///
-/// The store can assume that the outboard, if on disk, is in a location where
-/// it can be moved to the final location (basically it needs to be on the same device).
-pub struct ImportEntry {
-    pub hash: Hash,
-    pub format: BlobFormat,
-    pub scope: Scope,
-    pub source: ImportSource,
-    pub outboard: MemOrFile<Bytes, PathBuf>,
-}
-
-impl std::fmt::Debug for ImportEntry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ImportEntry")
-            .field("hash", &self.hash)
-            .field("format", &self.format)
-            .field("scope", &self.scope)
-            .field("source", &DD(self.source.fmt_short()))
-            .field("outboard", &DD(self.outboard.fmt_short()))
-            .finish()
-    }
-}
-
 impl Channels<Request> for ImportEntry {
     type Tx = mpsc::Sender<AddProgressItem>;
     type Rx = NoReceiver;
 }
-
-pub type ImportEntryMsg = WithChannels<ImportEntry, Request>;
 
 impl HashSpecific for ImportEntryMsg {
     fn hash(&self) -> Hash {

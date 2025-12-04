@@ -90,7 +90,6 @@ use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
-use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use meta::list_blobs;
 use n0_error::{Result, StdResultExt};
@@ -121,7 +120,7 @@ use crate::{
         },
         gc::run_gc,
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
-        IROH_BLOCK_SIZE,
+        ImportEntry, ImportEntryMsg, ImportSource, IROH_BLOCK_SIZE,
     },
     util::{
         channel::oneshot,
@@ -138,7 +137,7 @@ mod meta;
 pub mod options;
 pub(crate) mod util;
 use entry_state::EntryState;
-use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
+use import::{import_byte_stream, import_bytes, import_path};
 use options::Options;
 use tracing::Instrument;
 
@@ -231,7 +230,7 @@ impl entity_manager::Params for EmParams {
         cause: entity_manager::ShutdownCause,
     ) {
         trace!("persist {:?} due to {cause:?}", state.id);
-        EntityApi::persist(&state).await;
+        state.persist().await;
     }
 }
 
@@ -509,10 +508,6 @@ impl Actor {
         let span = cmd.parent_span();
         let _entered = span.enter();
         match cmd {
-            Command::SyncDb(cmd) => {
-                trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
-            }
             Command::WaitIdle(cmd) => {
                 trace!("{cmd:?}");
                 if self.tasks.is_empty() {
@@ -522,6 +517,10 @@ impl Actor {
                     // wait for idle state
                     self.idle_waiters.push(cmd.tx);
                 }
+            }
+            Command::SyncDb(cmd) => {
+                trace!("{cmd:?}");
+                self.db().send(cmd.into()).await.ok();
             }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
@@ -768,13 +767,13 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 
 impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
-        EntityApi::observe(&ctx, self).await
+        ctx.observe(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
-        EntityApi::export_path(&ctx, self).await
+        ctx.export_path(self).await
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -790,7 +789,7 @@ impl HashSpecificCommand for ExportPathMsg {
 }
 impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.export_bao(self).await
+        super::EntityApi::export_bao(&ctx, self).await
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -806,7 +805,7 @@ impl HashSpecificCommand for ExportBaoMsg {
 }
 impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.export_ranges(self).await
+        super::EntityApi::export_ranges(&ctx, self).await
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -822,7 +821,7 @@ impl HashSpecificCommand for ExportRangesMsg {
 }
 impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
-        ctx.import_bao(self).await
+        super::EntityApi::import_bao(&ctx, self).await
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -841,7 +840,7 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
     async fn handle(self, ctx: HashContext) {
         let (tt, cmd) = self;
-        EntityApi::finish_import(&ctx, cmd, tt).await;
+        ctx.finish_import(cmd, tt).await;
     }
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
@@ -911,24 +910,6 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
-/// The minimal API you need to implement for an entity for a store to work.
-trait EntityApi {
-    /// Import from a stream of n0 bao encoded data.
-    async fn import_bao(&self, cmd: ImportBaoMsg);
-    /// Finish an import from a local file or memory.
-    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
-    /// Observe the bitfield of the entry.
-    async fn observe(&self, cmd: ObserveMsg);
-    /// Export byte ranges of the entry as data
-    async fn export_ranges(&self, cmd: ExportRangesMsg);
-    /// Export chunk ranges of the entry as a n0 bao encoded stream.
-    async fn export_bao(&self, cmd: ExportBaoMsg);
-    /// Export the entry to a local file.
-    async fn export_path(&self, cmd: ExportPathMsg);
-    /// Persist the entry at the end of its lifecycle.
-    async fn persist(&self);
-}
-
 /// A more opinionated API that can be used as a helper to save implementation
 /// effort when implementing the EntityApi trait.
 trait SyncEntityApi {
@@ -976,7 +957,7 @@ trait SyncEntityApi {
 }
 
 /// The high level entry point per entry.
-impl<T: SyncEntityApi> EntityApi for T {
+impl<T: SyncEntityApi> super::EntityApi for T {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");

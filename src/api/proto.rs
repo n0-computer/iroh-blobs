@@ -79,6 +79,12 @@ impl HashSpecific for ExportPathMsg {
     }
 }
 
+impl HashSpecific for BlobStatusMsg {
+    fn hash(&self) -> crate::Hash {
+        self.inner.hash
+    }
+}
+
 pub type BoxedByteStream = Pin<Box<dyn Stream<Item = io::Result<Bytes>> + Send + Sync + 'static>>;
 
 impl HashSpecific for CreateTagMsg {
