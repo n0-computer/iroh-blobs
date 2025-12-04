@@ -16,15 +16,12 @@
 //! or you can choose to finish early.
 //!
 //! [iroh]: https://docs.rs/iroh
-use std::{
-    fmt::{self, Debug},
-    time::Duration,
-};
+use std::fmt::{self, Debug};
 
 use bao_tree::{io::fsm::BaoContentItem, ChunkNum};
 use fsm::RequestCounters;
 use n0_error::Result;
-use n0_future::time::Instant;
+use n0_future::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
