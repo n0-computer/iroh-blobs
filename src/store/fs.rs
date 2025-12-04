@@ -731,7 +731,7 @@ impl HashSpecificCommand for ExportPathMsg {
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => io::Error::other("entity is dead"),
+            SpawnArg::Dead => err_entity_dead(),
             _ => unreachable!(),
         };
         self.tx
@@ -747,7 +747,7 @@ impl HashSpecificCommand for ExportBaoMsg {
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => io::Error::other("entity is dead"),
+            SpawnArg::Dead => err_entity_dead(),
             _ => unreachable!(),
         };
         self.tx
@@ -763,7 +763,7 @@ impl HashSpecificCommand for ExportRangesMsg {
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => io::Error::other("entity is dead"),
+            SpawnArg::Dead => err_entity_dead(),
             _ => unreachable!(),
         };
         self.tx
@@ -779,7 +779,7 @@ impl HashSpecificCommand for ImportBaoMsg {
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => io::Error::other("entity is dead"),
+            SpawnArg::Dead => err_entity_dead(),
             _ => unreachable!(),
         };
         self.tx.send(Err(api::Error::from(err))).await.ok();
@@ -798,11 +798,15 @@ impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
     async fn on_error(self, arg: SpawnArg<EmParams>) {
         let err = match arg {
             SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => io::Error::other("entity is dead"),
+            SpawnArg::Dead => err_entity_dead(),
             _ => unreachable!(),
         };
         self.1.tx.send(AddProgressItem::Error(err)).await.ok();
     }
+}
+
+fn err_entity_dead() -> io::Error {
+    io::Error::other("entity is dead")
 }
 
 struct RtWrapper(Option<tokio::runtime::Runtime>);
