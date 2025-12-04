@@ -1,3 +1,4 @@
+#![cfg(feature = "fs-store")]
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Deref,
@@ -68,7 +69,7 @@ async fn blobs_smoke(path: &Path, blobs: &Blobs) -> TestResult<()> {
                 break;
             }
         }
-        let actual_hash = res.as_ref().map(|x| *x.hash());
+        let actual_hash = res.as_ref().map(|x| x.hash());
         let expected_hash = Hash::new(&expected);
         assert_eq!(actual_hash, Some(expected_hash));
     }
@@ -108,7 +109,7 @@ async fn blobs_smoke_fs_rpc() -> TestResult {
     let client = irpc::util::make_client_endpoint(unspecified, &[cert.as_ref()])?;
     let td = tempfile::tempdir()?;
     let store = FsStore::load(td.path().join("a")).await?;
-    tokio::spawn(store.deref().clone().listen(server.clone()));
+    n0_future::task::spawn(store.deref().clone().listen(server.clone()));
     let api = Store::connect(client, server.local_addr()?);
     blobs_smoke(td.path(), api.blobs()).await?;
     api.shutdown().await?;

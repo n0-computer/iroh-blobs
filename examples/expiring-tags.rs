@@ -17,7 +17,10 @@ use futures_lite::StreamExt;
 use iroh_blobs::{
     api::{blobs::AddBytesOptions, Store, Tag},
     hashseq::HashSeq,
-    store::fs::options::{BatchOptions, GcConfig, InlineOptions, Options, PathOptions},
+    store::{
+        fs::options::{BatchOptions, InlineOptions, Options, PathOptions},
+        GcConfig,
+    },
     BlobFormat, Hash,
 };
 use tokio::signal::ctrl_c;
@@ -122,17 +125,17 @@ async fn print_store_info(store: &Store) -> anyhow::Result<()> {
 }
 
 async fn info_task(store: Store) -> anyhow::Result<()> {
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    n0_future::time::sleep(Duration::from_secs(1)).await;
     loop {
         print_store_info(&store).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
 async fn delete_expired_tags_task(store: Store, prefix: &str) -> anyhow::Result<()> {
     loop {
         delete_expired_tags(&store, prefix, false).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -162,14 +165,14 @@ async fn main() -> anyhow::Result<()> {
         let expires_at = SystemTime::now()
             .checked_add(Duration::from_secs(10))
             .unwrap();
-        create_expiring_tag(&store, &[*a.hash(), *b.hash()], "expiring", expires_at).await?;
+        create_expiring_tag(&store, &[a.hash(), b.hash()], "expiring", expires_at).await?;
 
         // add a single blob and tag it with an expiry date 60 seconds in the future
         let c = batch.add_bytes("blob 3".as_bytes()).await?;
         let expires_at = SystemTime::now()
             .checked_add(Duration::from_secs(60))
             .unwrap();
-        create_expiring_tag(&store, &[*c.hash()], "expiring", expires_at).await?;
+        create_expiring_tag(&store, &[c.hash()], "expiring", expires_at).await?;
         // batch goes out of scope, so data is only protected by the tags we created
     }
 

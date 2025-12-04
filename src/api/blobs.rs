@@ -23,14 +23,13 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
-use iroh_io::{AsyncStreamReader, TokioStreamReader};
+use iroh_io::AsyncStreamWriter;
 use irpc::channel::{mpsc, oneshot};
+use n0_error::AnyError;
 use n0_future::{future, stream, Stream, StreamExt};
-use quinn::SendStream;
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 use tracing::trace;
 mod reader;
 pub use reader::BlobReader;
@@ -57,9 +56,9 @@ use super::{
 };
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
-    provider::StreamContext,
+    provider::events::ClientResult,
     store::IROH_BLOCK_SIZE,
-    util::temp_tag::TempTag,
+    util::{temp_tag::TempTag, RecvStreamAsyncStreamReader},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -115,7 +114,7 @@ impl Blobs {
     /// use iroh_blobs::{store::mem::MemStore, api::blobs::Blobs};
     /// use tokio::io::AsyncReadExt;
     ///
-    /// # async fn example() -> anyhow::Result<()> {
+    /// # async fn example() -> n0_error::Result<()> {
     /// let store = MemStore::new();
     /// let tag = store.add_slice(b"Hello, world!").await?;
     /// let mut reader = store.reader(tag.hash);
@@ -293,7 +292,7 @@ impl Blobs {
                     sender.send(ImportByteStreamUpdate::Bytes(item?)).await?;
                 }
                 sender.send(ImportByteStreamUpdate::Done).await?;
-                anyhow::Ok(())
+                n0_error::Ok(())
             };
             let _ = tokio::join!(send, recv);
         });
@@ -431,13 +430,18 @@ impl Blobs {
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
-    async fn import_bao_reader<R: AsyncStreamReader>(
+    pub async fn import_bao_reader<R: crate::util::RecvStream>(
         &self,
         hash: Hash,
         ranges: ChunkRanges,
         mut reader: R,
     ) -> RequestResult<R> {
-        let size = u64::from_le_bytes(reader.read::<8>().await.map_err(super::Error::other)?);
+        let mut size = [0; 8];
+        reader
+            .recv_exact(&mut size)
+            .await
+            .map_err(super::Error::other)?;
+        let size = u64::from_le_bytes(size);
         let Some(size) = NonZeroU64::new(size) else {
             return if hash == Hash::EMPTY {
                 Ok(reader)
@@ -446,7 +450,12 @@ impl Blobs {
             };
         };
         let tree = BaoTree::new(size.get(), IROH_BLOCK_SIZE);
-        let mut decoder = ResponseDecoder::new(hash.into(), ranges, tree, reader);
+        let mut decoder = ResponseDecoder::new(
+            hash.into(),
+            ranges,
+            tree,
+            RecvStreamAsyncStreamReader::new(reader),
+        );
         let options = ImportBaoOptions { hash, size };
         let handle = self.import_bao_with_opts(options, 32).await?;
         let driver = async move {
@@ -465,19 +474,7 @@ impl Blobs {
         let fut = async move { handle.rx.await.map_err(io::Error::other)? };
         let (reader, res) = tokio::join!(driver, fut);
         res?;
-        Ok(reader?)
-    }
-
-    #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
-    pub async fn import_bao_quinn(
-        &self,
-        hash: Hash,
-        ranges: ChunkRanges,
-        stream: &mut iroh::endpoint::RecvStream,
-    ) -> RequestResult<()> {
-        let reader = TokioStreamReader::new(stream);
-        self.import_bao_reader(hash, ranges, reader).await?;
-        Ok(())
+        Ok(reader?.into_inner())
     }
 
     #[cfg_attr(feature = "hide-proto-docs", doc(hidden))]
@@ -510,6 +507,7 @@ impl Blobs {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn clear_protected(&self) -> RequestResult<()> {
         let msg = ClearProtectedRequest;
         self.client.rpc(msg).await??;
@@ -617,7 +615,7 @@ pub struct AddPathOptions {
 /// stream directly can be inconvenient, so this struct provides some convenience
 /// methods to work with the result.
 ///
-/// It also implements [`IntoFuture`], so you can await it to get the [`TempTag`] that
+/// It also implements [`IntoFuture`], so you can await it to get the [`TagInfo`] that
 /// contains the hash of the added content and also protects the content.
 ///
 /// If you want access to the stream, you can use the [`AddProgress::stream`] method.
@@ -659,9 +657,9 @@ impl<'a> AddProgress<'a> {
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
-        let haf = *tt.hash_and_format();
+        let haf = tt.hash_and_format();
         let tags = Tags::ref_from_sender(&blobs.client);
-        tags.set(name, *tt.hash_and_format()).await?;
+        tags.set(name, haf).await?;
         drop(tt);
         Ok(haf)
     }
@@ -669,10 +667,10 @@ impl<'a> AddProgress<'a> {
     pub async fn with_tag(self) -> RequestResult<TagInfo> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
-        let hash = *tt.hash();
+        let hash = tt.hash();
         let format = tt.format();
         let tags = Tags::ref_from_sender(&blobs.client);
-        let name = tags.create(*tt.hash_and_format()).await?;
+        let name = tags.create(tt.hash_and_format()).await?;
         drop(tt);
         Ok(TagInfo { name, hash, format })
     }
@@ -975,14 +973,14 @@ impl ExportBaoProgress {
     /// to get all non-corrupted sections.
     pub fn hashes_with_index(
         self,
-    ) -> impl Stream<Item = std::result::Result<(u64, Hash), anyhow::Error>> {
+    ) -> impl Stream<Item = std::result::Result<(u64, Hash), AnyError>> {
         let mut stream = self.stream();
         Gen::new(|co| async move {
             while let Some(item) = stream.next().await {
                 let leaf = match item {
                     EncodedItem::Leaf(leaf) => leaf,
                     EncodedItem::Error(e) => {
-                        co.yield_(Err(e.into())).await;
+                        co.yield_(Err(AnyError::from_std(e))).await;
                         continue;
                     }
                     _ => continue,
@@ -1003,7 +1001,7 @@ impl ExportBaoProgress {
     }
 
     /// Same as [`Self::hashes_with_index`], but without the indexes.
-    pub fn hashes(self) -> impl Stream<Item = std::result::Result<Hash, anyhow::Error>> {
+    pub fn hashes(self) -> impl Stream<Item = std::result::Result<Hash, AnyError>> {
         self.hashes_with_index().map(|x| x.map(|(_, hash)| hash))
     }
 
@@ -1058,24 +1056,21 @@ impl ExportBaoProgress {
         Ok(data)
     }
 
-    pub async fn write_quinn(self, target: &mut quinn::SendStream) -> super::ExportBaoResult<()> {
+    pub async fn write<W: AsyncStreamWriter>(self, target: &mut W) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
         while let Some(item) = rx.recv().await? {
             match item {
                 EncodedItem::Size(size) => {
-                    target.write_u64_le(size).await?;
+                    target.write(&size.to_le_bytes()).await?;
                 }
                 EncodedItem::Parent(parent) => {
                     let mut data = vec![0u8; 64];
                     data[..32].copy_from_slice(parent.pair.0.as_bytes());
                     data[32..].copy_from_slice(parent.pair.1.as_bytes());
-                    target.write_all(&data).await.map_err(io::Error::from)?;
+                    target.write(&data).await?;
                 }
                 EncodedItem::Leaf(leaf) => {
-                    target
-                        .write_chunk(leaf.data)
-                        .await
-                        .map_err(io::Error::from)?;
+                    target.write_bytes(leaf.data).await?;
                 }
                 EncodedItem::Done => break,
                 EncodedItem::Error(cause) => return Err(cause.into()),
@@ -1085,9 +1080,9 @@ impl ExportBaoProgress {
     }
 
     /// Write quinn variant that also feeds a progress writer.
-    pub(crate) async fn write_quinn_with_progress(
+    pub(crate) async fn write_with_progress<W: crate::util::SendStream>(
         self,
-        writer: &mut SendStream,
+        writer: &mut W,
         progress: &mut impl WriteProgress,
         hash: &Hash,
         index: u64,
@@ -1097,23 +1092,22 @@ impl ExportBaoProgress {
             match item {
                 EncodedItem::Size(size) => {
                     progress.send_transfer_started(index, hash, size).await;
-                    writer.write_u64_le(size).await?;
+                    writer.send(&size.to_le_bytes()).await?;
                     progress.log_other_write(8);
                 }
                 EncodedItem::Parent(parent) => {
-                    let mut data = vec![0u8; 64];
+                    let mut data = [0u8; 64];
                     data[..32].copy_from_slice(parent.pair.0.as_bytes());
                     data[32..].copy_from_slice(parent.pair.1.as_bytes());
-                    writer.write_all(&data).await.map_err(io::Error::from)?;
+                    writer.send(&data).await?;
                     progress.log_other_write(64);
                 }
                 EncodedItem::Leaf(leaf) => {
                     let len = leaf.data.len();
-                    writer
-                        .write_chunk(leaf.data)
-                        .await
-                        .map_err(io::Error::from)?;
-                    progress.notify_payload_write(index, leaf.offset, len).await;
+                    writer.send_bytes(leaf.data).await?;
+                    progress
+                        .notify_payload_write(index, leaf.offset, len)
+                        .await?;
                 }
                 EncodedItem::Done => break,
                 EncodedItem::Error(cause) => return Err(cause.into()),
@@ -1159,25 +1153,11 @@ impl ExportBaoProgress {
 
 pub(crate) trait WriteProgress {
     /// Notify the progress writer that a payload write has happened.
-    async fn notify_payload_write(&mut self, index: u64, offset: u64, len: usize);
+    async fn notify_payload_write(&mut self, index: u64, offset: u64, len: usize) -> ClientResult;
 
     /// Log a write of some other data.
     fn log_other_write(&mut self, len: usize);
 
     /// Notify the progress writer that a transfer has started.
     async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64);
-}
-
-impl WriteProgress for StreamContext {
-    async fn notify_payload_write(&mut self, index: u64, offset: u64, len: usize) {
-        StreamContext::notify_payload_write(self, index, offset, len);
-    }
-
-    fn log_other_write(&mut self, len: usize) {
-        StreamContext::log_other_write(self, len);
-    }
-
-    async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64) {
-        StreamContext::send_transfer_started(self, index, hash, size).await
-    }
 }

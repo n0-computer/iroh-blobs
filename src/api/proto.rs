@@ -40,6 +40,7 @@ pub use bitfield::Bitfield;
 
 use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
 
+#[allow(dead_code)]
 pub(crate) trait HashSpecific {
     fn hash(&self) -> Hash;
 
@@ -86,7 +87,7 @@ impl HashSpecific for CreateTagMsg {
     }
 }
 
-#[rpc_requests(message = Command, alias = "Msg")]
+#[rpc_requests(message = Command, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]
@@ -117,7 +118,7 @@ pub enum Request {
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
-    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
+    #[rpc(tx = oneshot::Sender<super::Result<u64>>)]
     DeleteTags(DeleteTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     RenameTag(RenameTagRequest),
@@ -130,10 +131,15 @@ pub enum Request {
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SyncDb(SyncDbRequest),
     #[rpc(tx = oneshot::Sender<()>)]
+    WaitIdle(WaitIdleRequest),
+    #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     ClearProtected(ClearProtectedRequest),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WaitIdleRequest;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncDbRequest;

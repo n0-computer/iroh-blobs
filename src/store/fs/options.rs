@@ -4,9 +4,8 @@ use std::{
     time::Duration,
 };
 
-pub use super::gc::{GcConfig, ProtectCb, ProtectOutcome};
 use super::{meta::raw_outboard_size, temp_name};
-use crate::Hash;
+use crate::{store::gc::GcConfig, Hash};
 
 /// Options for directories used by the file store.
 #[derive(Debug, Clone)]

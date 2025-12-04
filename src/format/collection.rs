@@ -1,9 +1,10 @@
 //! The collection type used by iroh
 use std::{collections::BTreeMap, future::Future};
 
-use anyhow::Context;
+// n0_error::Context is no longer exported; use explicit mapping instead.
 use bao_tree::blake3;
 use bytes::Bytes;
+use n0_error::{Result, StdResultExt};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -66,11 +67,11 @@ impl IntoIterator for Collection {
 /// A simple store trait for loading blobs
 pub trait SimpleStore {
     /// Load a blob from the store
-    fn load(&self, hash: Hash) -> impl Future<Output = anyhow::Result<Bytes>> + Send + '_;
+    fn load(&self, hash: Hash) -> impl Future<Output = Result<Bytes>> + Send + '_;
 }
 
 impl SimpleStore for crate::api::Store {
-    async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
+    async fn load(&self, hash: Hash) -> Result<Bytes> {
         Ok(self.get_bytes(hash).await?)
     }
 }
@@ -115,23 +116,26 @@ impl Collection {
     /// the links array, and the collection.
     pub async fn read_fsm(
         fsm_at_start_root: fsm::AtStartRoot,
-    ) -> anyhow::Result<(fsm::EndBlobNext, HashSeq, Collection)> {
+    ) -> Result<(fsm::EndBlobNext, HashSeq, Collection)> {
         let (next, links) = {
             let curr = fsm_at_start_root.next();
             let (curr, data) = curr.concatenate_into_vec().await?;
-            let links = HashSeq::new(data.into()).context("links could not be parsed")?;
+            let links = HashSeq::new(data.into())
+                .ok_or_else(|| n0_error::anyerr!("links could not be parsed"))?;
             (curr.next(), links)
         };
         let fsm::EndBlobNext::MoreChildren(at_meta) = next else {
-            anyhow::bail!("expected meta");
+            n0_error::bail_any!("expected meta");
         };
         let (next, collection) = {
             let mut children = links.clone();
-            let meta_link = children.pop_front().context("meta link not found")?;
+            let meta_link = children
+                .pop_front()
+                .ok_or_else(|| n0_error::anyerr!("meta link not found"))?;
             let curr = at_meta.next(meta_link);
             let (curr, names) = curr.concatenate_into_vec().await?;
-            let names = postcard::from_bytes::<CollectionMeta>(&names)?;
-            anyhow::ensure!(
+            let names = postcard::from_bytes::<CollectionMeta>(&names).anyerr()?;
+            n0_error::ensure_any!(
                 names.header == *Self::HEADER,
                 "expected header {:?}, got {:?}",
                 Self::HEADER,
@@ -148,7 +152,7 @@ impl Collection {
     /// Returns the collection, a map from blob offsets to bytes, and the stats.
     pub async fn read_fsm_all(
         fsm_at_start_root: crate::get::fsm::AtStartRoot,
-    ) -> anyhow::Result<(Collection, BTreeMap<u64, Bytes>, Stats)> {
+    ) -> Result<(Collection, BTreeMap<u64, Bytes>, Stats)> {
         let (next, links, collection) = Self::read_fsm(fsm_at_start_root).await?;
         let mut res = BTreeMap::new();
         let mut curr = next;
@@ -156,7 +160,7 @@ impl Collection {
             match curr {
                 fsm::EndBlobNext::MoreChildren(more) => {
                     let child_offset = more.offset() - 1;
-                    let Some(hash) = links.get(usize::try_from(child_offset)?) else {
+                    let Some(hash) = links.get(usize::try_from(child_offset).anyerr()?) else {
                         break more.finish();
                     };
                     let header = more.next(hash);
@@ -172,13 +176,16 @@ impl Collection {
     }
 
     /// Create a new collection from a hash sequence and metadata.
-    pub async fn load(root: Hash, store: &impl SimpleStore) -> anyhow::Result<Self> {
+    pub async fn load(root: Hash, store: &impl SimpleStore) -> Result<Self> {
         let hs = store.load(root).await?;
         let hs = HashSeq::try_from(hs)?;
-        let meta_hash = hs.iter().next().context("empty hash seq")?;
+        let meta_hash = hs
+            .iter()
+            .next()
+            .ok_or_else(|| n0_error::anyerr!("empty hash seq"))?;
         let meta = store.load(meta_hash).await?;
-        let meta: CollectionMeta = postcard::from_bytes(&meta)?;
-        anyhow::ensure!(
+        let meta: CollectionMeta = postcard::from_bytes(&meta).anyerr()?;
+        n0_error::ensure_any!(
             meta.names.len() + 1 == hs.len(),
             "names and links length mismatch"
         );
@@ -187,11 +194,11 @@ impl Collection {
 
     /// Store a collection in a store. returns the root hash of the collection
     /// as a TempTag.
-    pub async fn store(self, db: &Store) -> anyhow::Result<TempTag> {
+    pub async fn store(self, db: &Store) -> Result<TempTag> {
         let (links, meta) = self.into_parts();
-        let meta_bytes = postcard::to_stdvec(&meta)?;
+        let meta_bytes = postcard::to_stdvec(&meta).anyerr()?;
         let meta_tag = db.add_bytes(meta_bytes).temp_tag().await?;
-        let links_bytes = std::iter::once(*meta_tag.hash())
+        let links_bytes = std::iter::once(meta_tag.hash())
             .chain(links)
             .collect::<HashSeq>();
         let links_tag = db
@@ -257,6 +264,8 @@ impl Collection {
 
 #[cfg(test)]
 mod tests {
+    use n0_error::{Result, StackResultExt};
+
     use super::*;
 
     #[test]
@@ -322,7 +331,7 @@ mod tests {
     }
 
     impl SimpleStore for TestStore {
-        async fn load(&self, hash: Hash) -> anyhow::Result<Bytes> {
+        async fn load(&self, hash: Hash) -> Result<Bytes> {
             self.0.get(&hash).cloned().context("not found")
         }
     }

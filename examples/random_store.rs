@@ -2,18 +2,19 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iroh::{SecretKey, Watcher};
-use iroh_base::ticket::NodeTicket;
+use iroh::{discovery::static_provider::StaticProvider, SecretKey};
 use iroh_blobs::{
     api::downloader::Shuffled,
-    provider::Event,
+    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
     store::fs::FsStore,
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
 };
+use iroh_tickets::endpoint::EndpointTicket;
+use irpc::RpcMessage;
 use n0_future::StreamExt;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use tokio::{signal::ctrl_c, sync::mpsc};
+use tokio::signal::ctrl_c;
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -79,7 +80,7 @@ pub struct RequestArgs {
     pub content: Vec<HashAndFormat>,
 
     /// Nodes to request from
-    pub nodes: Vec<NodeTicket>,
+    pub nodes: Vec<EndpointTicket>,
 
     /// Split large requests
     #[arg(long, default_value_t = false)]
@@ -92,7 +93,7 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
         SecretKey::from_str(&secret).context("Invalid secret key format")
     } else {
         // Generate a new random key
-        let secret_key = SecretKey::generate(&mut rand::thread_rng());
+        let secret_key = SecretKey::generate(&mut rand::rng());
         let secret_key_str = hex::encode(secret_key.to_bytes());
         println!("Generated new random secret key");
         println!("To reuse this key, set the IROH_SECRET={secret_key_str}");
@@ -100,77 +101,77 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
     }
 }
 
-pub fn dump_provider_events(
-    allow_push: bool,
-) -> (
-    tokio::task::JoinHandle<()>,
-    mpsc::Sender<iroh_blobs::provider::Event>,
-) {
-    let (tx, mut rx) = mpsc::channel(100);
+pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, EventSender) {
+    let (tx, mut rx) = EventSender::channel(100, EventMask::ALL_READONLY);
+    fn dump_updates<T: RpcMessage>(mut rx: irpc::channel::mpsc::Receiver<T>) {
+        tokio::spawn(async move {
+            while let Ok(Some(update)) = rx.recv().await {
+                println!("{update:?}");
+            }
+        });
+    }
     let dump_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
-                Event::ClientConnected {
-                    node_id,
-                    connection_id,
-                    permitted,
-                } => {
-                    permitted.send(true).await.ok();
-                    println!("Client connected: {node_id} {connection_id}");
+                ProviderMessage::ClientConnected(msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
                 }
-                Event::GetRequestReceived {
-                    connection_id,
-                    request_id,
-                    hash,
-                    ranges,
-                } => {
-                    println!(
-                        "Get request received: {connection_id} {request_id} {hash} {ranges:?}"
-                    );
+                ProviderMessage::ClientConnectedNotify(msg) => {
+                    println!("{:?}", msg.inner);
                 }
-                Event::TransferCompleted {
-                    connection_id,
-                    request_id,
-                    stats,
-                } => {
-                    println!("Transfer completed: {connection_id} {request_id} {stats:?}");
+                ProviderMessage::ConnectionClosed(msg) => {
+                    println!("{:?}", msg.inner);
                 }
-                Event::TransferAborted {
-                    connection_id,
-                    request_id,
-                    stats,
-                } => {
-                    println!("Transfer aborted: {connection_id} {request_id} {stats:?}");
+                ProviderMessage::GetRequestReceived(msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
+                    dump_updates(msg.rx);
                 }
-                Event::TransferProgress {
-                    connection_id,
-                    request_id,
-                    index,
-                    end_offset,
-                } => {
-                    info!("Transfer progress: {connection_id} {request_id} {index} {end_offset}");
+                ProviderMessage::GetRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
                 }
-                Event::PushRequestReceived {
-                    connection_id,
-                    request_id,
-                    hash,
-                    ranges,
-                    permitted,
-                } => {
-                    if allow_push {
-                        permitted.send(true).await.ok();
-                        println!(
-                            "Push request received: {connection_id} {request_id} {hash} {ranges:?}"
-                        );
+                ProviderMessage::GetManyRequestReceived(msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::GetManyRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::PushRequestReceived(msg) => {
+                    println!("{:?}", msg.inner);
+                    let res = if allow_push {
+                        Ok(())
                     } else {
-                        permitted.send(false).await.ok();
-                        println!(
-                            "Push request denied: {connection_id} {request_id} {hash} {ranges:?}"
-                        );
-                    }
+                        Err(AbortReason::Permission)
+                    };
+                    msg.tx.send(res).await.ok();
+                    dump_updates(msg.rx);
                 }
-                _ => {
-                    info!("Received event: {:?}", event);
+                ProviderMessage::PushRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::ObserveRequestReceived(msg) => {
+                    println!("{:?}", msg.inner);
+                    let res = if allow_push {
+                        Ok(())
+                    } else {
+                        Err(AbortReason::Permission)
+                    };
+                    msg.tx.send(res).await.ok();
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::ObserveRequestReceivedNotify(msg) => {
+                    println!("{:?}", msg.inner);
+                    dump_updates(msg.rx);
+                }
+                ProviderMessage::Throttle(msg) => {
+                    println!("{:?}", msg.inner);
+                    msg.tx.send(Ok(())).await.ok();
                 }
             }
         }
@@ -203,12 +204,12 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     println!("Using store at: {}", path.display());
     let mut rng = match args.common.seed {
         Some(seed) => StdRng::seed_from_u64(seed),
-        None => StdRng::from_entropy(),
+        None => StdRng::from_rng(&mut rand::rng()),
     };
     let blobs = create_random_blobs(
         &store,
         args.num_blobs,
-        |_, rand| rand.gen_range(1..=args.blob_size),
+        |_, rand| rand.random_range(1..=args.blob_size),
         &mut rng,
     )
     .await?;
@@ -216,7 +217,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         &store,
         &blobs,
         args.hash_seqs,
-        |_, rand| rand.gen_range(1..=args.hash_seq_size),
+        |_, rand| rand.random_range(1..=args.hash_seq_size),
         &mut rng,
     )
     .await?;
@@ -237,12 +238,12 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         .bind()
         .await?;
     let (dump_task, events_tx) = dump_provider_events(args.allow_push);
-    let blobs = iroh_blobs::BlobsProtocol::new(&store, endpoint.clone(), Some(events_tx));
+    let blobs = iroh_blobs::BlobsProtocol::new(&store, Some(events_tx));
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(iroh_blobs::ALPN, blobs)
         .spawn();
-    let addr = router.endpoint().node_addr().initialized().await;
-    let ticket = NodeTicket::from(addr.clone());
+    let addr = router.endpoint().addr();
+    let ticket = EndpointTicket::from(addr.clone());
     println!("Node address: {addr:?}");
     println!("ticket:\n{ticket}");
     ctrl_c().await?;
@@ -264,15 +265,19 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| tempdir.as_ref().unwrap().path().to_path_buf());
     let store = FsStore::load(&path).await?;
     println!("Using store at: {}", path.display());
-    let endpoint = iroh::Endpoint::builder().bind().await?;
+    let sp = StaticProvider::new();
+    let endpoint = iroh::Endpoint::builder()
+        .discovery(sp.clone())
+        .bind()
+        .await?;
     let downloader = store.downloader(&endpoint);
     for ticket in &args.nodes {
-        endpoint.add_node_addr(ticket.node_addr().clone())?;
+        sp.add_endpoint_info(ticket.endpoint_addr().clone());
     }
     let nodes = args
         .nodes
         .iter()
-        .map(|ticket| ticket.node_addr().node_id)
+        .map(|ticket| ticket.endpoint_addr().id)
         .collect::<Vec<_>>();
     for content in args.content {
         let mut progress = downloader

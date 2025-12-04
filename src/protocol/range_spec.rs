@@ -12,7 +12,7 @@ use bao_tree::{ChunkNum, ChunkRangesRef};
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 
-pub use crate::util::ChunkRangesExt;
+use crate::protocol::ChunkRangesExt;
 
 static CHUNK_RANGES_EMPTY: OnceLock<ChunkRanges> = OnceLock::new();
 
@@ -511,7 +511,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::util::ChunkRangesExt;
+    use crate::protocol::ChunkRangesExt;
 
     fn ranges(value_range: Range<u64>) -> impl Strategy<Value = ChunkRanges> {
         prop::collection::vec((value_range.clone(), value_range), 0..16).prop_map(|v| {

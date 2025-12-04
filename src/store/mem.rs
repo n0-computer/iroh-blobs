@@ -14,7 +14,6 @@ use std::{
     num::NonZeroU64,
     ops::Deref,
     sync::Arc,
-    time::SystemTime,
 };
 
 use bao_tree::{
@@ -29,13 +28,14 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_future::future::yield_now;
-use range_collections::range_set::RangeSetRange;
-use tokio::{
-    io::AsyncReadExt,
-    sync::watch,
+use n0_error::{Result, StdResultExt};
+use n0_future::{
+    future::yield_now,
     task::{JoinError, JoinSet},
+    time::SystemTime,
 };
+use range_collections::range_set::RangeSetRange;
+use tokio::sync::watch;
 use tracing::{error, info, instrument, trace, Instrument};
 
 use super::util::{BaoTreeSender, PartialMemStorage};
@@ -51,29 +51,36 @@ use crate::{
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
             ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
             ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg,
+            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
     },
+    protocol::ChunkRangesExt,
     store::{
+        gc::{run_gc, GcConfig},
         util::{SizeInfo, SparseMemFile, Tag},
-        HashAndFormat, IROH_BLOCK_SIZE,
+        IROH_BLOCK_SIZE,
     },
-    util::{
-        temp_tag::{TagDrop, TempTagScope, TempTags},
-        ChunkRangesExt,
-    },
-    BlobFormat, Hash,
+    util::temp_tag::{TagDrop, TempTagScope, TempTags},
+    BlobFormat, Hash, HashAndFormat,
 };
 
 #[derive(Debug, Default)]
-pub struct Options {}
+pub struct Options {
+    pub gc_config: Option<GcConfig>,
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct MemStore {
     client: ApiClient,
+}
+
+impl From<MemStore> for crate::api::Store {
+    fn from(value: MemStore) -> Self {
+        crate::api::Store::from_sender(value.client)
+    }
 }
 
 impl AsRef<crate::api::Store> for MemStore {
@@ -99,7 +106,7 @@ impl Default for MemStore {
 #[derive(derive_more::From)]
 enum TaskResult {
     Unit(()),
-    Import(anyhow::Result<ImportEntry>),
+    Import(Result<ImportEntry>),
     Scope(Scope),
 }
 
@@ -109,8 +116,12 @@ impl MemStore {
     }
 
     pub fn new() -> Self {
+        Self::new_with_opts(Options::default())
+    }
+
+    pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
-        tokio::spawn(
+        n0_future::task::spawn(
             Actor {
                 commands: receiver,
                 tasks: JoinSet::new(),
@@ -122,10 +133,17 @@ impl MemStore {
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
                 protected: Default::default(),
+                idle_waiters: Default::default(),
             }
             .run(),
         );
-        Self::from_sender(sender.into())
+
+        let store = Self::from_sender(sender.into());
+        if let Some(gc_config) = opts.gc_config {
+            n0_future::task::spawn(run_gc(store.deref().clone(), gc_config));
+        }
+
+        store
     }
 }
 
@@ -137,6 +155,8 @@ struct Actor {
     options: Arc<Options>,
     // temp tags
     temp_tags: TempTags,
+    // idle waiters
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     protected: HashSet<Hash>,
 }
 
@@ -161,6 +181,16 @@ impl Actor {
             }) => {
                 let entry = self.get_or_create_entry(hash);
                 self.spawn(import_bao(entry, size, data, tx));
+            }
+            Command::WaitIdle(WaitIdleMsg { tx, .. }) => {
+                trace!("wait idle");
+                if self.tasks.is_empty() {
+                    // we are currently idle
+                    tx.send(()).await.ok();
+                } else {
+                    // wait for idle state
+                    self.idle_waiters.push(tx);
+                }
             }
             Command::Observe(ObserveMsg {
                 inner: ObserveRequest { hash },
@@ -210,6 +240,7 @@ impl Actor {
                 info!("deleting tags from {:?} to {:?}", from, to);
                 // state.tags.remove(&from.unwrap());
                 // todo: more efficient impl
+                let mut deleted = 0;
                 self.state.tags.retain(|tag, _| {
                     if let Some(from) = &from {
                         if tag < from {
@@ -222,9 +253,10 @@ impl Actor {
                         }
                     }
                     info!("    removing {:?}", tag);
+                    deleted += 1;
                     false
                 });
-                tx.send(Ok(())).await.ok();
+                tx.send(Ok(deleted)).await.ok();
             }
             Command::RenameTag(cmd) => {
                 let RenameTagMsg {
@@ -414,7 +446,7 @@ impl Actor {
         tx.send(tt).await.ok();
     }
 
-    async fn finish_import(&mut self, res: anyhow::Result<ImportEntry>) {
+    async fn finish_import(&mut self, res: Result<ImportEntry>) {
         let import_data = match res {
             Ok(entry) => entry,
             Err(e) => {
@@ -484,6 +516,12 @@ impl Actor {
                             self.temp_tags.end_scope(scope);
                         }
                         TaskResult::Unit(_) => {}
+                    }
+                    if self.tasks.is_empty() {
+                        // we are idle now
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
                     }
                 }
             }
@@ -672,7 +710,7 @@ async fn import_bytes(
     scope: Scope,
     format: BlobFormat,
     tx: mpsc::Sender<AddProgressItem>,
-) -> anyhow::Result<ImportEntry> {
+) -> Result<ImportEntry> {
     tx.send(AddProgressItem::Size(data.len() as u64)).await?;
     tx.send(AddProgressItem::CopyDone).await?;
     let outboard = PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE);
@@ -690,7 +728,7 @@ async fn import_byte_stream(
     format: BlobFormat,
     mut rx: mpsc::Receiver<ImportByteStreamUpdate>,
     tx: mpsc::Sender<AddProgressItem>,
-) -> anyhow::Result<ImportEntry> {
+) -> Result<ImportEntry> {
     let mut res = Vec::new();
     loop {
         match rx.recv().await {
@@ -717,8 +755,18 @@ async fn import_byte_stream(
     import_bytes(res.into(), scope, format, tx).await
 }
 
+#[cfg(wasm_browser)]
+async fn import_path(cmd: ImportPathMsg) -> Result<ImportEntry> {
+    let _: ImportPathRequest = cmd.inner;
+    Err(n0_error::anyerr!(
+        "import_path is not supported in the browser"
+    ))
+}
+
 #[instrument(skip_all, fields(path = %cmd.path.display()))]
-async fn import_path(cmd: ImportPathMsg) -> anyhow::Result<ImportEntry> {
+#[cfg(not(wasm_browser))]
+async fn import_path(cmd: ImportPathMsg) -> Result<ImportEntry> {
+    use tokio::io::AsyncReadExt;
     let ImportPathMsg {
         inner:
             ImportPathRequest {
@@ -997,7 +1045,7 @@ impl BaoFileStorageSubscriber {
     /// Forward observed *values* to the given sender
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
-    pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> anyhow::Result<()> {
+    pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
         let value = self.receiver.borrow().bitfield();
         tx.send(value).await?;
         loop {
@@ -1011,7 +1059,7 @@ impl BaoFileStorageSubscriber {
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
     #[allow(dead_code)]
-    pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> anyhow::Result<()> {
+    pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
         let value = self.receiver.borrow().bitfield();
         let mut old = value.clone();
         tx.send(value).await?;
@@ -1027,13 +1075,13 @@ impl BaoFileStorageSubscriber {
         }
     }
 
-    async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> anyhow::Result<()> {
+    async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> Result<()> {
         tokio::select! {
             _ = tx.closed() => {
                 // the sender is closed, we are done
-                Err(irpc::channel::SendError::ReceiverClosed.into())
+                Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into())
             }
-            e = self.receiver.changed() => Ok(e?),
+            e = self.receiver.changed() => Ok(e.anyerr()?),
         }
     }
 }
@@ -1049,7 +1097,7 @@ mod tests {
     async fn smoke() -> TestResult<()> {
         let store = MemStore::new();
         let tt = store.add_bytes(vec![0u8; 1024 * 64]).temp_tag().await?;
-        let hash = *tt.hash();
+        let hash = tt.hash();
         println!("hash: {hash:?}");
         let mut stream = store.export_bao(hash, ChunkRanges::all()).stream();
         while let Some(item) = stream.next().await {
@@ -1060,7 +1108,7 @@ mod tests {
 
         let store2 = MemStore::new();
         let mut or = store2.observe(hash).stream().await?;
-        tokio::spawn(async move {
+        n0_future::task::spawn(async move {
             while let Some(event) = or.next().await {
                 println!("event: {event:?}");
             }

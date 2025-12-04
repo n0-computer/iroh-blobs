@@ -373,25 +373,34 @@
 //! a large existing system that has demonstrated performance issues.
 //!
 //! If in doubt, just use multiple requests and multiple connections.
-use std::io;
+use std::{
+    io,
+    ops::{Bound, RangeBounds},
+};
 
+use bao_tree::{io::round_up_to_chunks, ChunkNum};
 use builder::GetRequestBuilder;
 use derive_more::From;
 use iroh::endpoint::VarInt;
-use irpc::util::AsyncReadVarintExt;
 use postcard::experimental::max_size::MaxSize;
+use range_collections::{range_set::RangeSetEntry, RangeSet2};
 use serde::{Deserialize, Serialize};
 mod range_spec;
 pub use bao_tree::ChunkRanges;
+use n0_error::stack_error;
 pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
-use snafu::{GenerateImplicitData, Snafu};
-use tokio::io::AsyncReadExt;
 
-pub use crate::util::ChunkRangesExt;
-use crate::{api::blobs::Bitfield, provider::CountingReader, BlobFormat, Hash, HashAndFormat};
+use crate::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
 /// Maximum message size is limited to 100MiB for now.
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+
+/// Error code for a permission error
+pub const ERR_PERMISSION: VarInt = VarInt::from_u32(1u32);
+/// Error code for when a request is aborted due to a rate limit
+pub const ERR_LIMIT: VarInt = VarInt::from_u32(2u32);
+/// Error code for when a request is aborted due to internal error
+pub const ERR_INTERNAL: VarInt = VarInt::from_u32(3u32);
 
 /// The ALPN used with quic for the iroh blobs protocol.
 pub const ALPN: &[u8] = b"/iroh-bytes/4";
@@ -437,9 +446,9 @@ pub enum RequestType {
 }
 
 impl Request {
-    pub async fn read_async(
-        reader: &mut CountingReader<&mut iroh::endpoint::RecvStream>,
-    ) -> io::Result<Self> {
+    pub async fn read_async<R: crate::util::RecvStream>(
+        reader: &mut R,
+    ) -> io::Result<(Self, usize)> {
         let request_type = reader.read_u8().await?;
         let request_type: RequestType = postcard::from_bytes(std::slice::from_ref(&request_type))
             .map_err(|_| {
@@ -449,22 +458,31 @@ impl Request {
             )
         })?;
         Ok(match request_type {
-            RequestType::Get => reader
-                .read_to_end_as::<GetRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
-            RequestType::GetMany => reader
-                .read_to_end_as::<GetManyRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
-            RequestType::Observe => reader
-                .read_to_end_as::<ObserveRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
-            RequestType::Push => reader
-                .read_length_prefixed::<PushRequest>(MAX_MESSAGE_SIZE)
-                .await?
-                .into(),
+            RequestType::Get => {
+                let (r, size) = reader
+                    .read_to_end_as::<GetRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                (r.into(), size)
+            }
+            RequestType::GetMany => {
+                let (r, size) = reader
+                    .read_to_end_as::<GetManyRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                (r.into(), size)
+            }
+            RequestType::Observe => {
+                let (r, size) = reader
+                    .read_to_end_as::<ObserveRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                (r.into(), size)
+            }
+            RequestType::Push => {
+                let r = reader
+                    .read_length_prefixed::<PushRequest>(MAX_MESSAGE_SIZE)
+                    .await?;
+                let size = postcard::experimental::serialized_size(&r).unwrap();
+                (r.into(), size)
+            }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -685,20 +703,10 @@ impl From<Closed> for VarInt {
 }
 
 /// Unknown error_code, can not be converted into [`Closed`].
-#[derive(Debug, Snafu)]
-#[snafu(display("Unknown error_code: {code}"))]
+#[stack_error(derive, add_meta)]
+#[error("Unknown error_code: {code}")]
 pub struct UnknownErrorCode {
     code: u64,
-    backtrace: Option<snafu::Backtrace>,
-}
-
-impl UnknownErrorCode {
-    pub(crate) fn new(code: u64) -> Self {
-        Self {
-            code,
-            backtrace: GenerateImplicitData::generate(),
-        }
-    }
 }
 
 impl TryFrom<VarInt> for Closed {
@@ -709,8 +717,75 @@ impl TryFrom<VarInt> for Closed {
             0 => Ok(Self::StreamDropped),
             1 => Ok(Self::ProviderTerminating),
             2 => Ok(Self::RequestReceived),
-            val => Err(UnknownErrorCode::new(val)),
+            val => Err(n0_error::e!(UnknownErrorCode { code: val })),
         }
+    }
+}
+
+pub trait ChunkRangesExt {
+    fn last_chunk() -> Self;
+    fn chunk(offset: u64) -> Self;
+    fn bytes(ranges: impl RangeBounds<u64>) -> Self;
+    fn chunks(ranges: impl RangeBounds<u64>) -> Self;
+    fn offset(offset: u64) -> Self;
+}
+
+impl ChunkRangesExt for ChunkRanges {
+    fn last_chunk() -> Self {
+        ChunkRanges::from(ChunkNum(u64::MAX)..)
+    }
+
+    /// Create a chunk range that contains a single chunk.
+    fn chunk(offset: u64) -> Self {
+        ChunkRanges::from(ChunkNum(offset)..ChunkNum(offset + 1))
+    }
+
+    /// Create a range of chunks that contains the given byte ranges.
+    /// The byte ranges are rounded up to the nearest chunk size.
+    fn bytes(ranges: impl RangeBounds<u64>) -> Self {
+        round_up_to_chunks(&bounds_from_range(ranges, |v| v))
+    }
+
+    /// Create a range of chunks from u64 chunk bounds.
+    ///
+    /// This is equivalent but more convenient than using the ChunkNum newtype.
+    fn chunks(ranges: impl RangeBounds<u64>) -> Self {
+        bounds_from_range(ranges, ChunkNum)
+    }
+
+    /// Create a chunk range that contains a single byte offset.
+    fn offset(offset: u64) -> Self {
+        Self::bytes(offset..offset + 1)
+    }
+}
+
+// todo: move to range_collections
+pub(crate) fn bounds_from_range<R, T, F>(range: R, f: F) -> RangeSet2<T>
+where
+    R: RangeBounds<u64>,
+    T: RangeSetEntry,
+    F: Fn(u64) -> T,
+{
+    let from = match range.start_bound() {
+        Bound::Included(start) => Some(*start),
+        Bound::Excluded(start) => {
+            let Some(start) = start.checked_add(1) else {
+                return RangeSet2::empty();
+            };
+            Some(start)
+        }
+        Bound::Unbounded => None,
+    };
+    let to = match range.end_bound() {
+        Bound::Included(end) => end.checked_add(1),
+        Bound::Excluded(end) => Some(*end),
+        Bound::Unbounded => None,
+    };
+    match (from, to) {
+        (Some(from), Some(to)) => RangeSet2::from(f(from)..f(to)),
+        (Some(from), None) => RangeSet2::from(f(from)..),
+        (None, Some(to)) => RangeSet2::from(..f(to)),
+        (None, None) => RangeSet2::all(),
     }
 }
 
@@ -863,7 +938,7 @@ pub mod builder {
         use bao_tree::ChunkNum;
 
         use super::*;
-        use crate::{protocol::GetManyRequest, util::ChunkRangesExt};
+        use crate::protocol::{ChunkRangesExt, GetManyRequest};
 
         #[test]
         fn chunk_ranges_ext() {

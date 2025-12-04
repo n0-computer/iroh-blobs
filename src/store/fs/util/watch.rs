@@ -2,17 +2,26 @@ use std::{ops::Deref, sync::Arc};
 
 use atomic_refcell::{AtomicRef, AtomicRefCell};
 
+#[derive(Debug, Default)]
 struct State<T> {
     value: T,
     dropped: bool,
 }
 
+#[derive(Debug, Default)]
 struct Shared<T> {
     value: AtomicRefCell<State<T>>,
     notify: tokio::sync::Notify,
 }
 
+#[derive(Debug, Default)]
 pub struct Sender<T>(Arc<Shared<T>>);
+
+impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 pub struct Receiver<T>(Arc<Shared<T>>);
 

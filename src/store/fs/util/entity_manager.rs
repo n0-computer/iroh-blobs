@@ -400,7 +400,7 @@ mod main_actor {
                 match e {
                     mpsc::error::TrySendError::Full(cmd) => {
                         let entity_actor::Command::Spawn(spawn) = cmd else {
-                            panic!()
+                            unreachable!()
                         };
                         warn!(
                             "Entity actor inbox is full, cannot send command to entity actor {:?}.",
@@ -412,7 +412,7 @@ mod main_actor {
                     }
                     mpsc::error::TrySendError::Closed(cmd) => {
                         let entity_actor::Command::Spawn(spawn) = cmd else {
-                            panic!()
+                            unreachable!()
                         };
                         error!(
                             "Entity actor inbox is closed, cannot send command to entity actor {:?}.",
@@ -723,7 +723,7 @@ impl<P: Params> EntityManager<P> {
             options.entity_response_inbox_size,
             options.entity_futures_initial_capacity,
         );
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
         Self(send)
     }
 
@@ -959,10 +959,11 @@ mod tests {
                 assert_eq!(global.data, values, "Data mismatch");
                 for id in values.keys() {
                     let log = global.log.get(id).unwrap();
-                    assert!(
-                        log.len() % 2 == 0,
-                        "Log must contain alternating wakeup and shutdown events"
-                    );
+                    if log.len() % 2 != 0 {
+                        panic!(
+                            "Log for entity {id} must contain an even number of events.\n{log:#?}"
+                        );
+                    }
                     for (i, (event, _)) in log.iter().enumerate() {
                         assert_eq!(
                             *event,
@@ -1185,10 +1186,6 @@ mod tests {
                     .spawn(id, move |arg| async move {
                         match arg {
                             SpawnArg::Active(state) => {
-                                println!(
-                                    "Adding value {} to entity actor with id {:?}",
-                                    value, state.id
-                                );
                                 state
                                     .with_value(|v| *v = v.wrapping_add(value))
                                     .await

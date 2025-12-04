@@ -4,11 +4,9 @@ use std::{borrow::Borrow, fmt, str::FromStr};
 
 use arrayvec::ArrayString;
 use bao_tree::blake3;
-use n0_snafu::SpanTrace;
-use nested_enum_utils::common_fields;
+use n0_error::{e, stack_error, StdResultExt};
 use postcard::experimental::max_size::MaxSize;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use snafu::{Backtrace, ResultExt, Snafu};
 
 use crate::store::util::DD;
 
@@ -137,19 +135,17 @@ impl fmt::Display for Hash {
     }
 }
 
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, std_sources)]
 pub enum HexOrBase32ParseError {
-    #[snafu(display("Invalid length"))]
+    #[error("Invalid length")]
     DecodeInvalidLength {},
-    #[snafu(display("Failed to decode {source}"))]
-    Decode { source: data_encoding::DecodeError },
+    #[error("Failed to decode {source}")]
+    Decode {
+        #[error(std_err)]
+        source: data_encoding::DecodeError,
+    },
 }
 
 impl FromStr for Hash {
@@ -167,10 +163,10 @@ impl FromStr for Hash {
         match res {
             Ok(len) => {
                 if len != 32 {
-                    return Err(DecodeInvalidLengthSnafu.build());
+                    return Err(e!(HexOrBase32ParseError::DecodeInvalidLength));
                 }
             }
-            Err(partial) => return Err(partial.error).context(DecodeSnafu),
+            Err(partial) => return Err(e!(HexOrBase32ParseError::Decode, partial.error)),
         }
         Ok(Self(blake3::Hash::from_bytes(bytes)))
     }
@@ -283,7 +279,7 @@ impl From<Hash> for HashAndFormat {
     }
 }
 
-// #[cfg(feature = "redb")]
+#[cfg(feature = "fs-store")]
 mod redb_support {
     use postcard::experimental::max_size::MaxSize;
     use redb::{Key as RedbKey, Value as RedbValue};
@@ -399,21 +395,23 @@ impl fmt::Display for HashAndFormat {
 }
 
 impl FromStr for HashAndFormat {
-    type Err = anyhow::Error;
+    type Err = n0_error::AnyError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.as_bytes();
         let mut hash = [0u8; 32];
         match s.len() {
             64 => {
-                hex::decode_to_slice(s, &mut hash)?;
+                hex::decode_to_slice(s, &mut hash).anyerr()?;
                 Ok(Self::raw(hash.into()))
             }
             65 if s[0].eq_ignore_ascii_case(&b's') => {
-                hex::decode_to_slice(&s[1..], &mut hash)?;
+                hex::decode_to_slice(&s[1..], &mut hash).anyerr()?;
                 Ok(Self::hash_seq(hash.into()))
             }
-            _ => anyhow::bail!("invalid hash and format"),
+            _ => {
+                n0_error::bail_any!("invalid hash and format");
+            }
         }
     }
 }
@@ -493,7 +491,7 @@ mod tests {
         assert_eq_hex!(serialized, expected);
     }
 
-    // #[cfg(feature = "redb")]
+    #[cfg(feature = "fs-store")]
     #[test]
     fn hash_redb() {
         use redb::Value as RedbValue;
@@ -518,7 +516,7 @@ mod tests {
         assert_eq_hex!(serialized, expected);
     }
 
-    // #[cfg(feature = "redb")]
+    #[cfg(feature = "fs-store")]
     #[test]
     fn hash_and_format_redb() {
         use redb::Value as RedbValue;

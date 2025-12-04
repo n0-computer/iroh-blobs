@@ -34,25 +34,29 @@ Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 
 ```rust,no_run
 use iroh::{protocol::Router, Endpoint};
-use iroh_blobs::{store::mem::MemStore, BlobsProtocol};
+use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // create an iroh endpoint that includes the standard discovery mechanisms
     // we've built at number0
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::bind().await?;
 
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();
-    let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+    let tag = store.add_slice(b"Hello world").await?;
+
+    let _ = endpoint.online().await;
+    let addr = endpoint.addr();
+    let ticket = BlobTicket::new(addr, tag.hash, tag.format);
 
     // build the router
+    let blobs = BlobsProtocol::new(&store, None);
     let router = Router::builder(endpoint)
-        .accept(iroh_blobs::ALPN, blobs.clone())
+        .accept(iroh_blobs::ALPN, blobs)
         .spawn();
 
-    let tag = blobs.add_slice(b"Hello world").await?;
-    println!("We are now serving {}", blobs.ticket(tag).await?);
+    println!("We are now serving {}", ticket);
 
     // wait for control-c
     tokio::signal::ctrl_c().await;

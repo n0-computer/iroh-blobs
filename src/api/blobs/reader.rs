@@ -214,6 +214,7 @@ impl tokio::io::AsyncSeek for BlobReader {
 }
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests {
     use bao_tree::ChunkRanges;
     use testresult::TestResult;
@@ -221,14 +222,15 @@ mod tests {
 
     use super::*;
     use crate::{
+        protocol::ChunkRangesExt,
         store::{
             fs::{
-                tests::{create_n0_bao, test_data, INTERESTING_SIZES},
+                tests::{test_data, INTERESTING_SIZES},
                 FsStore,
             },
             mem::MemStore,
+            util::tests::create_n0_bao,
         },
-        util::ChunkRangesExt,
     };
 
     async fn reader_smoke(blobs: &Blobs) -> TestResult<()> {

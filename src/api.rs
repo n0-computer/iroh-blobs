@@ -12,17 +12,14 @@
 //!
 //! You can also [`connect`](Store::connect) to a remote store that is listening
 //! to rpc requests.
-use std::{io, net::SocketAddr, ops::Deref};
+use std::{io, ops::Deref};
 
 use bao_tree::io::EncodeError;
 use iroh::Endpoint;
-use irpc::rpc::{listen, RemoteService};
-use n0_snafu::SpanTrace;
-use nested_enum_utils::common_fields;
-use proto::{Request, ShutdownRequest, SyncDbRequest};
+use n0_error::{e, stack_error};
+use proto::{ShutdownRequest, SyncDbRequest};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use snafu::{Backtrace, IntoError, Snafu};
 use tags::Tags;
 
 pub mod blobs;
@@ -30,82 +27,92 @@ pub mod downloader;
 pub mod proto;
 pub mod remote;
 pub mod tags;
+use crate::{api::proto::WaitIdleRequest, provider::events::ProgressError};
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
 pub(crate) type ApiClient = irpc::Client<proto::Request>;
 
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta)]
 pub enum RequestError {
     /// Request failed due to rpc error.
-    #[snafu(display("rpc error: {source}"))]
+    #[error("rpc error: {source}")]
     Rpc { source: irpc::Error },
     /// Request failed due an actual error.
-    #[snafu(display("inner error: {source}"))]
-    Inner { source: Error },
+    #[error("inner error: {source}")]
+    Inner {
+        #[error(std_err)]
+        source: Error,
+    },
 }
 
 impl From<irpc::Error> for RequestError {
     fn from(value: irpc::Error) -> Self {
-        RpcSnafu.into_error(value)
+        e!(RequestError::Rpc, value)
     }
 }
 
 impl From<Error> for RequestError {
     fn from(value: Error) -> Self {
-        InnerSnafu.into_error(value)
+        e!(RequestError::Inner, value)
     }
 }
 
 impl From<io::Error> for RequestError {
     fn from(value: io::Error) -> Self {
-        InnerSnafu.into_error(value.into())
+        e!(RequestError::Inner, value.into())
     }
 }
 
-impl From<irpc::channel::RecvError> for RequestError {
-    fn from(value: irpc::channel::RecvError) -> Self {
-        RpcSnafu.into_error(value.into())
+impl From<irpc::channel::mpsc::RecvError> for RequestError {
+    fn from(value: irpc::channel::mpsc::RecvError) -> Self {
+        e!(RequestError::Rpc, value.into())
     }
 }
 
 pub type RequestResult<T> = std::result::Result<T, RequestError>;
 
-#[common_fields({
-    backtrace: Option<Backtrace>,
-    #[snafu(implicit)]
-    span_trace: SpanTrace,
-})]
 #[allow(missing_docs)]
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[stack_error(derive, add_meta, from_sources)]
 pub enum ExportBaoError {
-    #[snafu(display("send error: {source}"))]
+    #[error("send error")]
     Send { source: irpc::channel::SendError },
-    #[snafu(display("recv error: {source}"))]
-    Recv { source: irpc::channel::RecvError },
-    #[snafu(display("request error: {source}"))]
+    #[error("mpsc recv e api.acp.pro-channelsrror")]
+    MpscRecv {
+        source: irpc::channel::mpsc::RecvError,
+    },
+    #[error("oneshot recv error")]
+    OneshotRecv {
+        source: irpc::channel::oneshot::RecvError,
+    },
+    #[error("request error")]
     Request { source: irpc::RequestError },
-    #[snafu(display("io error: {source}"))]
-    ExportBaoIo { source: io::Error },
-    #[snafu(display("encode error: {source}"))]
-    ExportBaoInner { source: bao_tree::io::EncodeError },
+    #[error("io error")]
+    ExportBaoIo {
+        #[error(std_err)]
+        source: io::Error,
+    },
+    #[error("encode error")]
+    ExportBaoInner {
+        #[error(std_err)]
+        source: bao_tree::io::EncodeError,
+    },
+    #[error("client error")]
+    ClientError { source: ProgressError },
 }
 
 impl From<ExportBaoError> for Error {
     fn from(e: ExportBaoError) -> Self {
         match e {
             ExportBaoError::Send { source, .. } => Self::Io(source.into()),
-            ExportBaoError::Recv { source, .. } => Self::Io(source.into()),
+            ExportBaoError::MpscRecv { source, .. } => Self::Io(source.into()),
+            ExportBaoError::OneshotRecv { source, .. } => Self::Io(source.into()),
             ExportBaoError::Request { source, .. } => Self::Io(source.into()),
             ExportBaoError::ExportBaoIo { source, .. } => Self::Io(source),
             ExportBaoError::ExportBaoInner { source, .. } => Self::Io(source.into()),
+            ExportBaoError::ClientError { source, .. } => Self::Io(source.into()),
         }
     }
 }
@@ -113,50 +120,23 @@ impl From<ExportBaoError> for Error {
 impl From<irpc::Error> for ExportBaoError {
     fn from(e: irpc::Error) -> Self {
         match e {
-            irpc::Error::Recv(e) => RecvSnafu.into_error(e),
-            irpc::Error::Send(e) => SendSnafu.into_error(e),
-            irpc::Error::Request(e) => RequestSnafu.into_error(e),
-            irpc::Error::Write(e) => ExportBaoIoSnafu.into_error(e.into()),
+            irpc::Error::MpscRecv { source: e, .. } => e!(ExportBaoError::MpscRecv, e),
+            irpc::Error::OneshotRecv { source: e, .. } => e!(ExportBaoError::OneshotRecv, e),
+            irpc::Error::Send { source: e, .. } => e!(ExportBaoError::Send, e),
+            irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
+            #[cfg(feature = "rpc")]
+            irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
-    }
-}
-
-impl From<io::Error> for ExportBaoError {
-    fn from(value: io::Error) -> Self {
-        ExportBaoIoSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::channel::RecvError> for ExportBaoError {
-    fn from(value: irpc::channel::RecvError) -> Self {
-        RecvSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::channel::SendError> for ExportBaoError {
-    fn from(value: irpc::channel::SendError) -> Self {
-        SendSnafu.into_error(value)
-    }
-}
-
-impl From<irpc::RequestError> for ExportBaoError {
-    fn from(value: irpc::RequestError) -> Self {
-        RequestSnafu.into_error(value)
-    }
-}
-
-impl From<bao_tree::io::EncodeError> for ExportBaoError {
-    fn from(value: bao_tree::io::EncodeError) -> Self {
-        ExportBaoInnerSnafu.into_error(value)
     }
 }
 
 pub type ExportBaoResult<T> = std::result::Result<T, ExportBaoError>;
 
-#[derive(Debug, derive_more::Display, derive_more::From, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+#[stack_error(derive, std_sources, from_sources)]
 pub enum Error {
     #[serde(with = "crate::util::serde::io_error_serde")]
-    Io(io::Error),
+    Io(#[error(source)] io::Error),
 }
 
 impl Error {
@@ -190,12 +170,13 @@ impl From<RequestError> for Error {
     }
 }
 
-impl From<irpc::channel::RecvError> for Error {
-    fn from(e: irpc::channel::RecvError) -> Self {
+impl From<irpc::channel::mpsc::RecvError> for Error {
+    fn from(e: irpc::channel::mpsc::RecvError) -> Self {
         Self::Io(e.into())
     }
 }
 
+#[cfg(feature = "rpc")]
 impl From<irpc::rpc::WriteError> for Error {
     fn from(e: irpc::rpc::WriteError) -> Self {
         Self::Io(e.into())
@@ -211,14 +192,6 @@ impl From<irpc::RequestError> for Error {
 impl From<irpc::channel::SendError> for Error {
     fn from(e: irpc::channel::SendError) -> Self {
         Self::Io(e.into())
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Io(e) => Some(e),
-        }
     }
 }
 
@@ -274,16 +247,21 @@ impl Store {
     }
 
     /// Connect to a remote store as a rpc client.
-    pub fn connect(endpoint: quinn::Endpoint, addr: SocketAddr) -> Self {
+    #[cfg(feature = "rpc")]
+    pub fn connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::quinn(endpoint, addr);
         Store::from_sender(sender)
     }
 
     /// Listen on a quinn endpoint for incoming rpc connections.
+    #[cfg(feature = "rpc")]
     pub async fn listen(self, endpoint: quinn::Endpoint) {
+        use irpc::rpc::RemoteService;
+
+        use self::proto::Request;
         let local = self.client.as_local().unwrap().clone();
         let handler = Request::remote_handler(local);
-        listen::<Request>(endpoint, handler).await
+        irpc::rpc::listen::<Request>(endpoint, handler).await
     }
 
     pub async fn sync_db(&self) -> RequestResult<()> {
@@ -294,6 +272,23 @@ impl Store {
 
     pub async fn shutdown(&self) -> irpc::Result<()> {
         let msg = ShutdownRequest;
+        self.client.rpc(msg).await?;
+        Ok(())
+    }
+
+    /// Waits for the store to become completely idle.
+    ///
+    /// This is mostly useful for tests, where you want to check that e.g. the
+    /// store has written all data to disk.
+    ///
+    /// Note that a store is not guaranteed to become idle, if it is being
+    /// interacted with concurrently. So this might wait forever.
+    ///
+    /// Also note that once you get the callback, the store is not guaranteed to
+    /// still be idle. All this tells you that there was a point in time where
+    /// the store was idle between the call and the response.
+    pub async fn wait_idle(&self) -> irpc::Result<()> {
+        let msg = WaitIdleRequest;
         self.client.rpc(msg).await?;
         Ok(())
     }

@@ -9,13 +9,12 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
     use std::{env, str::FromStr};
 
     use anyhow::Context;
-    use rand::thread_rng;
     if let Ok(secret) = env::var("IROH_SECRET") {
         // Parse the secret key from string
         SecretKey::from_str(&secret).context("Invalid secret key format")
     } else {
         // Generate a new random key
-        let secret_key = SecretKey::generate(&mut thread_rng());
+        let secret_key = SecretKey::generate(&mut rand::rng());
         println!(
             "Generated new secret key: {}",
             hex::encode(secret_key.to_bytes())

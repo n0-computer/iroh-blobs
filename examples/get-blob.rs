@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     setup_logging();
     let cli = Cli::parse();
     let ticket = cli.ticket;
-    let endpoint = iroh::Endpoint::builder()
+    let endpoint = iroh::Endpoint::empty_builder(iroh::RelayMode::Default)
         .discovery(PkarrResolver::n0_dns())
         .bind()
         .await?;
@@ -37,9 +37,7 @@ async fn main() -> anyhow::Result<()> {
         ticket.format() == BlobFormat::Raw,
         "This example only supports raw blobs."
     );
-    let connection = endpoint
-        .connect(ticket.node_addr().node_id, iroh_blobs::ALPN)
-        .await?;
+    let connection = endpoint.connect(ticket.addr().id, iroh_blobs::ALPN).await?;
     let mut progress = iroh_blobs::get::request::get_blob(connection, ticket.hash());
     let stats = if cli.progress {
         loop {

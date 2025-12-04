@@ -23,10 +23,12 @@ use bao_tree::{
 };
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_future::future::{self, yield_now};
+use n0_future::{
+    future::{self, yield_now},
+    task::{JoinError, JoinSet},
+};
 use range_collections::range_set::RangeSetRange;
 use ref_cast::RefCast;
-use tokio::task::{JoinError, JoinSet};
 
 use super::util::BaoTreeSender;
 use crate::{
@@ -37,12 +39,12 @@ use crate::{
             self, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
             ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
             ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
-            ObserveRequest,
+            ObserveRequest, WaitIdleMsg,
         },
         ApiClient, TempTag,
     },
+    protocol::ChunkRangesExt,
     store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
-    util::ChunkRangesExt,
     Hash,
 };
 
@@ -59,9 +61,22 @@ impl Deref for ReadonlyMemStore {
     }
 }
 
+impl From<ReadonlyMemStore> for crate::api::Store {
+    fn from(value: ReadonlyMemStore) -> Self {
+        crate::api::Store::from_sender(value.client)
+    }
+}
+
+impl AsRef<crate::api::Store> for ReadonlyMemStore {
+    fn as_ref(&self) -> &crate::api::Store {
+        crate::api::Store::ref_from_sender(&self.client)
+    }
+}
+
 struct Actor {
     commands: tokio::sync::mpsc::Receiver<proto::Command>,
     tasks: JoinSet<()>,
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     data: HashMap<Hash, CompleteStorage>,
 }
 
@@ -74,17 +89,27 @@ impl Actor {
             data,
             commands,
             tasks: JoinSet::new(),
+            idle_waiters: Vec::new(),
         }
     }
 
     async fn handle_command(&mut self, cmd: Command) -> Option<irpc::channel::oneshot::Sender<()>> {
         match cmd {
             Command::ImportBao(ImportBaoMsg { tx, .. }) => {
-                tx.send(Err(api::Error::Io(io::Error::other(
+                tx.send(Err(api::Error::from(io::Error::other(
                     "import not supported",
                 ))))
                 .await
                 .ok();
+            }
+            Command::WaitIdle(WaitIdleMsg { tx, .. }) => {
+                if self.tasks.is_empty() {
+                    // we are currently idle
+                    tx.send(()).await.ok();
+                } else {
+                    // wait for idle state
+                    self.idle_waiters.push(tx);
+                }
             }
             Command::ImportBytes(ImportBytesMsg { tx, .. }) => {
                 tx.send(io::Error::other("import not supported").into())
@@ -226,6 +251,12 @@ impl Actor {
                 },
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     self.log_unit_task(res);
+                    if self.tasks.is_empty() {
+                        // we are idle now
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
+                    }
                 },
                 else => break,
             }
@@ -340,7 +371,7 @@ impl ReadonlyMemStore {
         }
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let actor = Actor::new(receiver, entries);
-        tokio::spawn(actor.run());
+        n0_future::task::spawn(actor.run());
         let local = irpc::LocalSender::from(sender);
         Self {
             client: local.into(),

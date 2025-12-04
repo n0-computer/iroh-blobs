@@ -1,11 +1,15 @@
-use std::ops::{Bound, RangeBounds};
-
-use bao_tree::{io::round_up_to_chunks, ChunkNum, ChunkRanges};
-use range_collections::{range_set::RangeSetEntry, RangeSet2};
-
-pub mod channel;
+//! Utilities
+pub(crate) mod channel;
+pub mod connection_pool;
+mod stream;
 pub(crate) mod temp_tag;
-pub mod serde {
+pub use stream::{
+    AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream, AsyncWriteSendStreamExtra,
+    RecvStream, RecvStreamAsyncStreamReader, SendStream,
+};
+pub(crate) use stream::{RecvStreamExt, SendStreamExt};
+
+pub(crate) mod serde {
     // Module that handles io::Error serialization/deserialization
     pub mod io_error_serde {
         use std::{fmt, io};
@@ -216,74 +220,8 @@ pub mod serde {
     }
 }
 
-pub trait ChunkRangesExt {
-    fn last_chunk() -> Self;
-    fn chunk(offset: u64) -> Self;
-    fn bytes(ranges: impl RangeBounds<u64>) -> Self;
-    fn chunks(ranges: impl RangeBounds<u64>) -> Self;
-    fn offset(offset: u64) -> Self;
-}
-
-impl ChunkRangesExt for ChunkRanges {
-    fn last_chunk() -> Self {
-        ChunkRanges::from(ChunkNum(u64::MAX)..)
-    }
-
-    /// Create a chunk range that contains a single chunk.
-    fn chunk(offset: u64) -> Self {
-        ChunkRanges::from(ChunkNum(offset)..ChunkNum(offset + 1))
-    }
-
-    /// Create a range of chunks that contains the given byte ranges.
-    /// The byte ranges are rounded up to the nearest chunk size.
-    fn bytes(ranges: impl RangeBounds<u64>) -> Self {
-        round_up_to_chunks(&bounds_from_range(ranges, |v| v))
-    }
-
-    /// Create a range of chunks from u64 chunk bounds.
-    ///
-    /// This is equivalent but more convenient than using the ChunkNum newtype.
-    fn chunks(ranges: impl RangeBounds<u64>) -> Self {
-        bounds_from_range(ranges, ChunkNum)
-    }
-
-    /// Create a chunk range that contains a single byte offset.
-    fn offset(offset: u64) -> Self {
-        Self::bytes(offset..offset + 1)
-    }
-}
-
-// todo: move to range_collections
-pub(crate) fn bounds_from_range<R, T, F>(range: R, f: F) -> RangeSet2<T>
-where
-    R: RangeBounds<u64>,
-    T: RangeSetEntry,
-    F: Fn(u64) -> T,
-{
-    let from = match range.start_bound() {
-        Bound::Included(start) => Some(*start),
-        Bound::Excluded(start) => {
-            let Some(start) = start.checked_add(1) else {
-                return RangeSet2::empty();
-            };
-            Some(start)
-        }
-        Bound::Unbounded => None,
-    };
-    let to = match range.end_bound() {
-        Bound::Included(end) => end.checked_add(1),
-        Bound::Excluded(end) => Some(*end),
-        Bound::Unbounded => None,
-    };
-    match (from, to) {
-        (Some(from), Some(to)) => RangeSet2::from(f(from)..f(to)),
-        (Some(from), None) => RangeSet2::from(f(from)..),
-        (None, Some(to)) => RangeSet2::from(..f(to)),
-        (None, None) => RangeSet2::all(),
-    }
-}
-
-pub mod outboard_with_progress {
+#[cfg(feature = "fs-store")]
+pub(crate) mod outboard_with_progress {
     use std::io::{self, BufReader, Read};
 
     use bao_tree::{
@@ -431,8 +369,8 @@ pub mod outboard_with_progress {
     }
 }
 
-pub mod sink {
-    use std::{future::Future, io};
+pub(crate) mod sink {
+    use std::future::Future;
 
     use irpc::RpcMessage;
 
@@ -472,6 +410,7 @@ pub mod sink {
         }
     }
 
+    #[allow(dead_code)]
     pub struct IrpcSenderSink<T>(pub irpc::channel::mpsc::Sender<T>);
 
     impl<T> Sink<T> for IrpcSenderSink<T>
@@ -501,10 +440,13 @@ pub mod sink {
     pub struct TokioMpscSenderSink<T>(pub tokio::sync::mpsc::Sender<T>);
 
     impl<T> Sink<T> for TokioMpscSenderSink<T> {
-        type Error = tokio::sync::mpsc::error::SendError<T>;
+        type Error = irpc::channel::SendError;
 
         async fn send(&mut self, value: T) -> std::result::Result<(), Self::Error> {
-            self.0.send(value).await
+            self.0
+                .send(value)
+                .await
+                .map_err(|_| n0_error::e!(irpc::channel::SendError::ReceiverClosed))
         }
     }
 
@@ -551,10 +493,10 @@ pub mod sink {
     pub struct Drain;
 
     impl<T> Sink<T> for Drain {
-        type Error = io::Error;
+        type Error = irpc::channel::SendError;
 
         async fn send(&mut self, _offset: T) -> std::result::Result<(), Self::Error> {
-            io::Result::Ok(())
+            Ok(())
         }
     }
 }

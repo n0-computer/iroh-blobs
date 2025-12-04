@@ -24,6 +24,11 @@
 //! The [downloader](api::downloader) module provides a component to download blobs from
 //! multiple sources and store them in a store.
 //!
+//! # Features:
+//!
+//! - `fs-store`: Enables the filesystem based store implementation. This comes with a few additional dependencies such as `redb` and `reflink-copy`.
+//! - `metrics`: Enables prometheus metrics for stores and the protocol.
+//!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
 //! [iroh]: https://docs.rs/iroh
 mod hash;
@@ -43,9 +48,10 @@ pub mod ticket;
 
 #[doc(hidden)]
 pub mod test;
-mod util;
+pub mod util;
 
 #[cfg(test)]
+#[cfg(feature = "fs-store")]
 mod tests;
 
 pub use protocol::ALPN;

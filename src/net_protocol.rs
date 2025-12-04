@@ -5,9 +5,9 @@
 //! # Example
 //!
 //! ```rust
-//! # async fn example() -> anyhow::Result<()> {
+//! # async fn example() -> n0_error::Result<()> {
 //! use iroh::{protocol::Router, Endpoint};
-//! use iroh_blobs::{store, BlobsProtocol};
+//! use iroh_blobs::{store, ticket::BlobTicket, BlobsProtocol};
 //!
 //! // create a store
 //! let store = store::fs::FsStore::load("blobs").await?;
@@ -16,18 +16,20 @@
 //! let t = store.add_slice(b"hello world").await?;
 //!
 //! // create an iroh endpoint
-//! let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+//! let endpoint = Endpoint::bind().await?;
+//! endpoint.online().await;
+//! let addr = endpoint.addr();
 //!
 //! // create a blobs protocol handler
-//! let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+//! let blobs = BlobsProtocol::new(&store, None);
 //!
 //! // create a router and add the blobs protocol handler
 //! let router = Router::builder(endpoint)
-//!     .accept(iroh_blobs::ALPN, blobs.clone())
+//!     .accept(iroh_blobs::ALPN, blobs)
 //!     .spawn();
 //!
 //! // this data is now globally available using the ticket
-//! let ticket = blobs.ticket(t).await?;
+//! let ticket = BlobTicket::new(addr, t.hash, t.format);
 //! println!("ticket: {}", ticket);
 //!
 //! // wait for control-c to exit
@@ -36,34 +38,26 @@
 //! # }
 //! ```
 
-use std::{fmt::Debug, future::Future, ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use iroh::{
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler},
-    Endpoint, Watcher,
 };
-use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::{
-    api::Store,
-    provider::{Event, EventSender},
-    ticket::BlobTicket,
-    HashAndFormat,
-};
+use crate::{api::Store, provider::events::EventSender};
 
 #[derive(Debug)]
 pub(crate) struct BlobsInner {
-    pub(crate) store: Store,
-    pub(crate) endpoint: Endpoint,
-    pub(crate) events: EventSender,
+    store: Store,
+    events: EventSender,
 }
 
 /// A protocol handler for the blobs protocol.
 #[derive(Debug, Clone)]
 pub struct BlobsProtocol {
-    pub(crate) inner: Arc<BlobsInner>,
+    inner: Arc<BlobsInner>,
 }
 
 impl Deref for BlobsProtocol {
@@ -75,12 +69,11 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
-    pub fn new(store: &Store, endpoint: Endpoint, events: Option<mpsc::Sender<Event>>) -> Self {
+    pub fn new(store: &Store, events: Option<EventSender>) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
                 store: store.clone(),
-                endpoint,
-                events: EventSender::new(events),
+                events: events.unwrap_or(EventSender::DEFAULT),
             }),
         }
     }
@@ -88,43 +81,19 @@ impl BlobsProtocol {
     pub fn store(&self) -> &Store {
         &self.inner.store
     }
-
-    pub fn endpoint(&self) -> &Endpoint {
-        &self.inner.endpoint
-    }
-
-    /// Create a ticket for content on this node.
-    ///
-    /// Note that this does not check whether the content is partially or fully available. It is
-    /// just a convenience method to create a ticket from content and the address of this node.
-    pub async fn ticket(&self, content: impl Into<HashAndFormat>) -> anyhow::Result<BlobTicket> {
-        let content = content.into();
-        let addr = self.inner.endpoint.node_addr().initialized().await;
-        let ticket = BlobTicket::new(addr, content.hash, content.format);
-        Ok(ticket)
-    }
 }
 
 impl ProtocolHandler for BlobsProtocol {
-    fn accept(
-        &self,
-        conn: Connection,
-    ) -> impl Future<Output = std::result::Result<(), AcceptError>> + Send {
+    async fn accept(&self, conn: Connection) -> std::result::Result<(), AcceptError> {
         let store = self.store().clone();
         let events = self.inner.events.clone();
-
-        Box::pin(async move {
-            crate::provider::handle_connection(conn, store, events).await;
-            Ok(())
-        })
+        crate::provider::handle_connection(conn, store, events).await;
+        Ok(())
     }
 
-    fn shutdown(&self) -> impl Future<Output = ()> + Send {
-        let store = self.store().clone();
-        Box::pin(async move {
-            if let Err(cause) = store.shutdown().await {
-                error!("error shutting down store: {:?}", cause);
-            }
-        })
+    async fn shutdown(&self) {
+        if let Err(cause) = self.store().shutdown().await {
+            error!("error shutting down store: {:?}", cause);
+        }
     }
 }

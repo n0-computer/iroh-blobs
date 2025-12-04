@@ -64,31 +64,37 @@
 //! safely shut down as well. Any store refs you are holding will be inoperable
 //! after this.
 use std::{
-    fmt, fs,
+    fmt::{self, Debug},
+    fs,
     future::Future,
     io::Write,
     num::NonZeroU64,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use bao_tree::{
+    blake3,
     io::{
         mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
+        outboard::PreOrderOutboard,
         sync::ReadAt,
         BaoContentItem, Leaf,
     },
-    ChunkNum, ChunkRanges,
+    BaoTree, ChunkNum, ChunkRanges,
 };
 use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
-use gc::run_gc;
 use import::{ImportEntry, ImportSource};
-use irpc::channel::mpsc;
+use irpc::{channel::mpsc, RpcMessage};
 use meta::list_blobs;
+use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
@@ -105,16 +111,24 @@ use crate::{
         },
         ApiClient,
     },
+    protocol::ChunkRangesExt,
     store::{
-        fs::util::entity_manager::{self, ActiveEntityState, ShutdownCause},
+        fs::{
+            bao_file::{
+                BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
+                OutboardReader,
+            },
+            util::entity_manager::{self, ActiveEntityState},
+        },
+        gc::run_gc,
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
-        Hash,
+        IROH_BLOCK_SIZE,
     },
     util::{
         channel::oneshot,
         temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
-        ChunkRangesExt,
     },
+    Hash,
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
@@ -128,19 +142,23 @@ use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::Options;
 use tracing::Instrument;
-mod gc;
 
-use super::HashAndFormat;
-use crate::api::{
-    self,
-    blobs::{AddProgressItem, ExportMode, ExportProgressItem},
-    Store,
+use crate::{
+    api::{
+        self,
+        blobs::{AddProgressItem, ExportMode, ExportProgressItem},
+        Store,
+    },
+    HashAndFormat,
 };
+
+/// Maximum number of external paths we track per blob.
+const MAX_EXTERNAL_PATHS: usize = 8;
 
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
     use rand::RngCore;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut bytes = [0u8; 16];
     rng.fill_bytes(&mut bytes);
     bytes
@@ -186,8 +204,6 @@ struct TaskContext {
     pub db: meta::Db,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
-    /// The file handle for the empty hash.
-    pub empty: BaoFileHandle,
     /// Handle to protect files from deletion.
     pub protect: ProtectHandle,
 }
@@ -201,12 +217,6 @@ impl TaskContext {
     }
 }
 
-impl entity_manager::Reset for Slot {
-    fn reset(&mut self) {
-        self.0 = Arc::new(tokio::sync::Mutex::new(None));
-    }
-}
-
 #[derive(Debug)]
 struct EmParams;
 
@@ -215,19 +225,14 @@ impl entity_manager::Params for EmParams {
 
     type GlobalState = Arc<TaskContext>;
 
-    type EntityState = Slot;
+    type EntityState = BaoFileHandle;
 
-    async fn on_shutdown(state: HashContext, cause: ShutdownCause) {
-        // this isn't strictly necessary. Drop will run anyway as soon as the
-        // state is reset to it's default value. Doing it here means that we
-        // have exact control over where it happens.
-        if let Some(handle) = state.state.0.lock().await.take() {
-            trace!(
-                "shutting down entity manager for hash: {}, cause: {cause:?}",
-                state.id
-            );
-            drop(handle);
-        }
+    async fn on_shutdown(
+        state: entity_manager::ActiveEntityState<Self>,
+        cause: entity_manager::ShutdownCause,
+    ) {
+        trace!("persist {:?} due to {cause:?}", state.id);
+        state.persist().await;
     }
 }
 
@@ -245,14 +250,147 @@ struct Actor {
     handles: EntityManagerState<EmParams>,
     // temp tags
     temp_tags: TempTags,
+    // waiters for idle state.
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     // our private tokio runtime. It has to live somewhere.
     _rt: RtWrapper,
 }
 
 type HashContext = ActiveEntityState<EmParams>;
 
+impl SyncEntityApi for HashContext {
+    /// Load the state from the database.
+    ///
+    /// If the state is Initial, this will start the load.
+    /// If it is Loading, it will wait until loading is done.
+    /// If it is any other state, it will be a noop.
+    async fn load(&self) {
+        enum Action {
+            Load,
+            Wait,
+            None,
+        }
+        let mut action = Action::None;
+        self.state.send_if_modified(|guard| match guard.deref() {
+            BaoFileStorage::Initial => {
+                *guard = BaoFileStorage::Loading;
+                action = Action::Load;
+                true
+            }
+            BaoFileStorage::Loading => {
+                action = Action::Wait;
+                false
+            }
+            _ => false,
+        });
+        match action {
+            Action::Load => {
+                let state = if self.id == Hash::EMPTY {
+                    BaoFileStorage::Complete(CompleteStorage {
+                        data: MemOrFile::Mem(Bytes::new()),
+                        outboard: MemOrFile::empty(),
+                    })
+                } else {
+                    // we must assign a new state even in the error case, otherwise
+                    // tasks waiting for loading would stall!
+                    match self.global.db.get(self.id).await {
+                        Ok(state) => match BaoFileStorage::open(state, self).await {
+                            Ok(handle) => handle,
+                            Err(_) => BaoFileStorage::Poisoned,
+                        },
+                        Err(_) => BaoFileStorage::Poisoned,
+                    }
+                };
+                self.state.send_replace(state);
+            }
+            Action::Wait => {
+                // we are in state loading already, so we just need to wait for the
+                // other task to complete loading.
+                while matches!(self.state.borrow().deref(), BaoFileStorage::Loading) {
+                    self.state.0.subscribe().changed().await.ok();
+                }
+            }
+            Action::None => {}
+        }
+    }
+
+    /// Write a batch and notify the db
+    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
+        trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
+        let mut res = Ok(None);
+        self.state.send_if_modified(|state| {
+            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, self) else {
+                res = Err(io::Error::other("write batch failed"));
+                return false;
+            };
+            res = Ok(update);
+            *state = state1;
+            true
+        });
+        if let Some(update) = res? {
+            self.global.db.update(self.id, update).await?;
+        }
+        Ok(())
+    }
+
+    /// An AsyncSliceReader for the data file.
+    ///
+    /// Caution: this is a reader for the unvalidated data file. Reading this
+    /// can produce data that does not match the hash.
+    #[allow(refining_impl_trait_internal)]
+    fn data_reader(&self) -> DataReader {
+        DataReader(self.state.clone())
+    }
+
+    /// An AsyncSliceReader for the outboard file.
+    ///
+    /// The outboard file is used to validate the data file. It is not guaranteed
+    /// to be complete.
+    #[allow(refining_impl_trait_internal)]
+    fn outboard_reader(&self) -> OutboardReader {
+        OutboardReader(self.state.clone())
+    }
+
+    /// The most precise known total size of the data file.
+    fn current_size(&self) -> io::Result<u64> {
+        match self.state.borrow().deref() {
+            BaoFileStorage::Complete(mem) => Ok(mem.size()),
+            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
+            BaoFileStorage::Partial(file) => file.current_size(),
+            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    /// The most precise known total size of the data file.
+    fn bitfield(&self) -> io::Result<Bitfield> {
+        match self.state.borrow().deref() {
+            BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
+            BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
+            BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
+            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Initial => Err(io::Error::other("initial")),
+            BaoFileStorage::Loading => Err(io::Error::other("loading")),
+            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+}
+
 impl HashContext {
-    pub fn db(&self) -> &meta::Db {
+    /// The outboard for the file.
+    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
+        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let outboard = self.outboard_reader();
+        Ok(PreOrderOutboard {
+            root: blake3::Hash::from(self.id),
+            tree,
+            data: outboard,
+        })
+    }
+
+    fn db(&self) -> &meta::Db {
         &self.global.db
     }
 
@@ -260,21 +398,18 @@ impl HashContext {
         &self.global.options
     }
 
-    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, Option<BaoFileHandle>> {
-        self.state.0.lock().await
-    }
-
-    pub fn protect(&self, hash: Hash, parts: impl IntoIterator<Item = BaoFilePart>) {
-        self.global.protect.protect(hash, parts);
+    pub fn protect(&self, parts: impl IntoIterator<Item = BaoFilePart>) {
+        self.global.protect.protect(self.id, parts);
     }
 
     /// Update the entry state in the database, and wait for completion.
-    pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().update_await(hash, state).await?;
+    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db().update_await(self.id, state).await?;
         Ok(())
     }
 
-    pub async fn get_entry_state(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
+    pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
+        let hash = self.id;
         if hash == Hash::EMPTY {
             return Ok(Some(EntryState::Complete {
                 data_location: DataLocation::Inline(Bytes::new()),
@@ -285,121 +420,8 @@ impl HashContext {
     }
 
     /// Update the entry state in the database, and wait for completion.
-    pub async fn set(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().set(hash, state).await
-    }
-
-    pub async fn get(&self, hash: Hash) -> api::Result<BaoFileHandle> {
-        if hash == Hash::EMPTY {
-            return Ok(self.global.empty.clone());
-        }
-        let res = self
-            .state
-            .get_or_create(|| async {
-                let res = self.db().get(hash).await.map_err(io::Error::other)?;
-                let res = match res {
-                    Some(state) => open_bao_file(&hash, state, &self.global).await,
-                    None => Err(io::Error::new(io::ErrorKind::NotFound, "hash not found")),
-                };
-                Ok((res?, ()))
-            })
-            .await
-            .map_err(api::Error::from);
-        let (res, _) = res?;
-        Ok(res)
-    }
-
-    pub async fn get_or_create(&self, hash: Hash) -> api::Result<BaoFileHandle> {
-        if hash == Hash::EMPTY {
-            return Ok(self.global.empty.clone());
-        }
-        let res = self
-            .state
-            .get_or_create(|| async {
-                let res = self.db().get(hash).await.map_err(io::Error::other)?;
-                let res = match res {
-                    Some(state) => open_bao_file(&hash, state, &self.global).await,
-                    None => Ok(BaoFileHandle::new_partial_mem(
-                        hash,
-                        self.global.options.clone(),
-                    )),
-                };
-                Ok((res?, ()))
-            })
-            .await
-            .map_err(api::Error::from);
-        trace!("{res:?}");
-        let (res, _) = res?;
-        Ok(res)
-    }
-}
-
-async fn open_bao_file(
-    hash: &Hash,
-    state: EntryState<Bytes>,
-    ctx: &TaskContext,
-) -> io::Result<BaoFileHandle> {
-    let options = &ctx.options;
-    Ok(match state {
-        EntryState::Complete {
-            data_location,
-            outboard_location,
-        } => {
-            let data = match data_location {
-                DataLocation::Inline(data) => MemOrFile::Mem(data),
-                DataLocation::Owned(size) => {
-                    let path = options.path.data_path(hash);
-                    let file = fs::File::open(&path)?;
-                    MemOrFile::File(FixedSize::new(file, size))
-                }
-                DataLocation::External(paths, size) => {
-                    let Some(path) = paths.into_iter().next() else {
-                        return Err(io::Error::other("no external data path"));
-                    };
-                    let file = fs::File::open(&path)?;
-                    MemOrFile::File(FixedSize::new(file, size))
-                }
-            };
-            let outboard = match outboard_location {
-                OutboardLocation::NotNeeded => MemOrFile::empty(),
-                OutboardLocation::Inline(data) => MemOrFile::Mem(data),
-                OutboardLocation::Owned => {
-                    let path = options.path.outboard_path(hash);
-                    let file = fs::File::open(&path)?;
-                    MemOrFile::File(file)
-                }
-            };
-            BaoFileHandle::new_complete(*hash, data, outboard, options.clone())
-        }
-        EntryState::Partial { .. } => BaoFileHandle::new_partial_file(*hash, ctx).await?,
-    })
-}
-
-/// An entry for each hash, containing a weak reference to a BaoFileHandle
-/// wrapped in a tokio mutex so handle creation is sequential.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Slot(Arc<tokio::sync::Mutex<Option<BaoFileHandle>>>);
-
-impl Slot {
-    /// Get the handle if it exists and is still alive, otherwise load it from the database.
-    /// If there is nothing in the database, create a new in-memory handle.
-    ///
-    /// `make` will be called if the a live handle does not exist.
-    pub async fn get_or_create<F, Fut, T>(&self, make: F) -> io::Result<(BaoFileHandle, T)>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = io::Result<(BaoFileHandle, T)>>,
-        T: Default,
-    {
-        let mut slot = self.0.lock().await;
-        if let Some(handle) = &*slot {
-            return Ok((handle.clone(), Default::default()));
-        }
-        let handle = make().await;
-        if let Ok((handle, _)) = &handle {
-            *slot = Some(handle.clone());
-        }
-        handle
+    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db().set(self.id, state).await
     }
 }
 
@@ -442,6 +464,16 @@ impl Actor {
             Command::SyncDb(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
+            }
+            Command::WaitIdle(cmd) => {
+                trace!("{cmd:?}");
+                if self.tasks.is_empty() {
+                    // we are currently idle
+                    cmd.tx.send(()).await.ok();
+                } else {
+                    // wait for idle state
+                    self.idle_waiters.push(cmd.tx);
+                }
             }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
@@ -586,6 +618,11 @@ impl Actor {
                 }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     Self::log_task_result(res);
+                    if self.tasks.is_empty() {
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
+                    }
                 }
             }
         }
@@ -602,7 +639,7 @@ impl Actor {
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         trace!(
             "creating data directory: {}",
             options.path.data_path.display()
@@ -625,12 +662,6 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            empty: BaoFileHandle::new_complete(
-                Hash::EMPTY,
-                MemOrFile::empty(),
-                MemOrFile::empty(),
-                options,
-            ),
             protect,
         });
         rt.spawn(db_actor.run());
@@ -641,15 +672,19 @@ impl Actor {
             tasks: JoinSet::new(),
             handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
             temp_tags: Default::default(),
+            idle_waiters: Vec::new(),
             _rt: rt,
         })
     }
 }
 
 trait HashSpecificCommand: HashSpecific + Send + 'static {
+    /// Handle the command on success by spawning a task into the per-hash context.
     fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
 
-    fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
+    /// Opportunity to send an error if spawning fails due to the task being busy (inbox full)
+    /// or dead (e.g. panic in one of the running tasks).
+    fn on_error(self, arg: SpawnArg<EmParams>) -> impl Future<Output = ()> + Send + 'static;
 
     async fn spawn(
         self,
@@ -658,25 +693,24 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
     ) where
         Self: Sized,
     {
+        let span = tracing::Span::current();
         let task = manager
-            .spawn_boxed(
-                self.hash(),
-                Box::new(|x| {
-                    Box::pin(async move {
-                        match x {
-                            SpawnArg::Active(state) => {
-                                self.handle(state).await;
-                            }
-                            SpawnArg::Busy => {
-                                self.on_error().await;
-                            }
-                            SpawnArg::Dead => {
-                                self.on_error().await;
-                            }
+            .spawn(self.hash(), |arg| {
+                async move {
+                    match arg {
+                        SpawnArg::Active(state) => {
+                            self.handle(state).await;
                         }
-                    })
-                }),
-            )
+                        SpawnArg::Busy => {
+                            self.on_error(arg).await;
+                        }
+                        SpawnArg::Dead => {
+                            self.on_error(arg).await;
+                        }
+                    }
+                }
+                .instrument(span)
+            })
             .await;
         if let Some(task) = task {
             tasks.spawn(task);
@@ -686,33 +720,70 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 
 impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
-        observe(self, ctx).await
+        ctx.observe(self).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
-        export_path(self, ctx).await
+        ctx.export_path(self).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx
+            .send(ExportProgressItem::Error(api::Error::from(err)))
+            .await
+            .ok();
+    }
 }
 impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
-        export_bao(self, ctx).await
+        ctx.export_bao(self).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx
+            .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(err)))
+            .await
+            .ok();
+    }
 }
 impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
-        export_ranges(self, ctx).await
+        ctx.export_ranges(self).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx
+            .send(ExportRangesItem::Error(api::Error::from(err)))
+            .await
+            .ok();
+    }
 }
 impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
-        import_bao(self, ctx).await
+        ctx.import_bao(self).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.tx.send(Err(api::Error::from(err))).await.ok();
+    }
 }
 impl HashSpecific for (TempTag, ImportEntryMsg) {
     fn hash(&self) -> Hash {
@@ -722,9 +793,16 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
     async fn handle(self, ctx: HashContext) {
         let (tt, cmd) = self;
-        finish_import(cmd, tt, ctx).await
+        ctx.finish_import(cmd, tt).await
     }
-    async fn on_error(self) {}
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => io::Error::other("entity is dead"),
+            _ => unreachable!(),
+        };
+        self.1.tx.send(AddProgressItem::Error(err)).await.ok();
+    }
 }
 
 struct RtWrapper(Option<tokio::runtime::Runtime>);
@@ -781,24 +859,156 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn finish_import(cmd: ImportEntryMsg, mut tt: TempTag, ctx: HashContext) {
-    let res = match finish_import_impl(cmd.inner, ctx).await {
-        Ok(()) => {
-            // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-            // it will be cleaned up when either the process exits or scope ends
-            if cmd.tx.is_rpc() {
-                trace!("leaking temp tag {}", tt.hash_and_format());
-                tt.leak();
-            }
-            AddProgressItem::Done(tt)
-        }
-        Err(cause) => AddProgressItem::Error(cause),
-    };
-    cmd.tx.send(res).await.ok();
+/// The minimal API you need to implement for an entity for a store to work.
+trait EntityApi {
+    /// Import from a stream of n0 bao encoded data.
+    async fn import_bao(&self, cmd: ImportBaoMsg);
+    /// Finish an import from a local file or memory.
+    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
+    /// Observe the bitfield of the entry.
+    async fn observe(&self, cmd: ObserveMsg);
+    /// Export byte ranges of the entry as data
+    async fn export_ranges(&self, cmd: ExportRangesMsg);
+    /// Export chunk ranges of the entry as a n0 bao encoded stream.
+    async fn export_bao(&self, cmd: ExportBaoMsg);
+    /// Export the entry to a local file.
+    async fn export_path(&self, cmd: ExportPathMsg);
+    /// Persist the entry at the end of its lifecycle.
+    async fn persist(&self);
 }
 
-async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::Result<()> {
+/// A more opinionated API that can be used as a helper to save implementation
+/// effort when implementing the EntityApi trait.
+trait SyncEntityApi: EntityApi {
+    /// Load the entry state from the database. This must make sure that it is
+    /// not run concurrently, so if load is called multiple times, all but one
+    /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
+    async fn load(&self);
+
+    /// Get a synchronous reader for the data file.
+    fn data_reader(&self) -> impl ReadBytesAt;
+
+    /// Get a synchronous reader for the outboard file.
+    fn outboard_reader(&self) -> impl ReadAt;
+
+    /// Get the best known size of the data file.
+    fn current_size(&self) -> io::Result<u64>;
+
+    /// Get the bitfield of the entry.
+    fn bitfield(&self) -> io::Result<Bitfield>;
+
+    /// Write a batch of content items to the entry.
+    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+}
+
+/// The high level entry point per entry.
+impl EntityApi for HashContext {
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn import_bao(&self, cmd: ImportBaoMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let ImportBaoMsg {
+            inner: ImportBaoRequest { size, .. },
+            rx,
+            tx,
+            ..
+        } = cmd;
+        let res = import_bao_impl(self, size, rx).await;
+        trace!("{res:?}");
+        tx.send(res).await.ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn observe(&self, cmd: ObserveMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        BaoFileStorageSubscriber::new(self.state.subscribe())
+            .forward(cmd.tx)
+            .await
+            .ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_ranges(&self, mut cmd: ExportRangesMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        if let Err(cause) = export_ranges_impl(self, cmd.inner, &mut cmd.tx).await {
+            cmd.tx
+                .send(ExportRangesItem::Error(cause.into()))
+                .await
+                .ok();
+        }
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_bao(&self, mut cmd: ExportBaoMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        if let Err(cause) = export_bao_impl(self, cmd.inner, &mut cmd.tx).await {
+            // if the entry is in state NonExisting, this will be an io error with
+            // kind NotFound. So we must not wrap this somehow but pass it on directly.
+            cmd.tx
+                .send(bao_tree::io::EncodeError::Io(cause).into())
+                .await
+                .ok();
+        }
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_path(&self, cmd: ExportPathMsg) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let ExportPathMsg { inner, mut tx, .. } = cmd;
+        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
+            tx.send(cause.into()).await.ok();
+        }
+    }
+
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
+        trace!("{cmd:?}");
+        self.load().await;
+        let res = match finish_import_impl(self, cmd.inner).await {
+            Ok(()) => {
+                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
+                // it will be cleaned up when either the process exits or scope ends
+                if cmd.tx.is_rpc() {
+                    trace!("leaking temp tag {}", tt.hash_and_format());
+                    tt.leak();
+                }
+                AddProgressItem::Done(tt)
+            }
+            Err(cause) => AddProgressItem::Error(cause),
+        };
+        cmd.tx.send(res).await.ok();
+    }
+
+    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
+    async fn persist(&self) {
+        self.state.send_if_modified(|guard| {
+            let hash = &self.id;
+            let BaoFileStorage::Partial(fs) = guard.take() else {
+                return false;
+            };
+            let path = self.global.options.path.bitfield_path(hash);
+            trace!("writing bitfield for hash {} to {}", hash, path.display());
+            if let Err(cause) = fs.sync_all(&path) {
+                error!(
+                    "failed to write bitfield for {} at {}: {:?}",
+                    hash,
+                    path.display(),
+                    cause
+                );
+            }
+            false
+        });
+    }
+}
+
+async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
+    if ctx.id == Hash::EMPTY {
+        return Ok(()); // nothing to do for the empty hash
+    }
     let ImportEntry {
         source,
         hash,
@@ -817,14 +1027,14 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
             debug_assert!(!options.is_inlined_data(*size));
         }
     }
-    let guard = ctx.lock().await;
-    let handle = guard.as_ref().map(|x| x.clone());
+    ctx.load().await;
+    let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
     //   the entry exists in the db, but we don't have a handle
     //   the entry does not exist at all.
     // convert the import source to a data location and drop the open files
-    ctx.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
+    ctx.protect([BaoFilePart::Data, BaoFilePart::Outboard]);
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
@@ -868,56 +1078,37 @@ async fn finish_import_impl(import_data: ImportEntry, ctx: HashContext) -> io::R
             OutboardLocation::Owned
         }
     };
-    if let Some(handle) = handle {
-        let data = match &data_location {
-            DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
-            DataLocation::Owned(size) => {
-                let path = ctx.options().path.data_path(&hash);
-                let file = fs::File::open(&path)?;
-                MemOrFile::File(FixedSize::new(file, *size))
-            }
-            DataLocation::External(paths, size) => {
-                let Some(path) = paths.iter().next() else {
-                    return Err(io::Error::other("no external data path"));
-                };
-                let file = fs::File::open(path)?;
-                MemOrFile::File(FixedSize::new(file, *size))
-            }
-        };
-        let outboard = match &outboard_location {
-            OutboardLocation::NotNeeded => MemOrFile::empty(),
-            OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
-            OutboardLocation::Owned => {
-                let path = ctx.options().path.outboard_path(&hash);
-                let file = fs::File::open(&path)?;
-                MemOrFile::File(file)
-            }
-        };
-        handle.complete(data, outboard);
-    }
+    let data = match &data_location {
+        DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
+        DataLocation::Owned(size) => {
+            let path = ctx.options().path.data_path(&hash);
+            let file = fs::File::open(&path)?;
+            MemOrFile::File(FixedSize::new(file, *size))
+        }
+        DataLocation::External(paths, size) => {
+            let Some(path) = paths.iter().next() else {
+                return Err(io::Error::other("no external data path"));
+            };
+            let file = fs::File::open(path)?;
+            MemOrFile::File(FixedSize::new(file, *size))
+        }
+    };
+    let outboard = match &outboard_location {
+        OutboardLocation::NotNeeded => MemOrFile::empty(),
+        OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
+        OutboardLocation::Owned => {
+            let path = ctx.options().path.outboard_path(&hash);
+            let file = fs::File::open(&path)?;
+            MemOrFile::File(file)
+        }
+    };
+    handle.complete(data, outboard);
     let state = EntryState::Complete {
         data_location,
         outboard_location,
     };
-    ctx.update_await(hash, state).await?;
+    ctx.update_await(state).await?;
     Ok(())
-}
-
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn import_bao(cmd: ImportBaoMsg, ctx: HashContext) {
-    trace!("{cmd:?}");
-    let ImportBaoMsg {
-        inner: ImportBaoRequest { size, hash },
-        rx,
-        tx,
-        ..
-    } = cmd;
-    let res = match ctx.get_or_create(hash).await {
-        Ok(handle) => import_bao_impl(size, rx, handle, ctx).await,
-        Err(cause) => Err(cause),
-    };
-    trace!("{res:?}");
-    tx.send(res).await.ok();
 }
 
 fn chunk_range(leaf: &Leaf) -> ChunkRanges {
@@ -927,23 +1118,18 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 async fn import_bao_impl(
+    ctx: &HashContext,
     size: NonZeroU64,
     mut rx: mpsc::Receiver<BaoContentItem>,
-    handle: BaoFileHandle,
-    ctx: HashContext,
 ) -> api::Result<()> {
-    trace!(
-        "importing bao: {} {} bytes",
-        handle.hash().fmt_short(),
-        size
-    );
+    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
         // if the batch is not empty, the last item is a leaf and the current item is a parent, write the batch
         if !batch.is_empty() && batch[batch.len() - 1].is_leaf() && item.is_parent() {
             let bitfield = Bitfield::new_unchecked(ranges, size.into());
-            handle.write_batch(&batch, &bitfield, &ctx.global).await?;
+            ctx.write_batch(&batch, &bitfield).await?;
             batch.clear();
             ranges = ChunkRanges::empty();
         }
@@ -959,49 +1145,23 @@ async fn import_bao_impl(
     }
     if !batch.is_empty() {
         let bitfield = Bitfield::new_unchecked(ranges, size.into());
-        handle.write_batch(&batch, &bitfield, &ctx.global).await?;
+        ctx.write_batch(&batch, &bitfield).await?;
     }
     Ok(())
 }
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn observe(cmd: ObserveMsg, ctx: HashContext) {
-    let Ok(handle) = ctx.get_or_create(cmd.hash).await else {
-        return;
-    };
-    handle.subscribe().forward(cmd.tx).await.ok();
-}
-
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn export_ranges(mut cmd: ExportRangesMsg, ctx: HashContext) {
-    match ctx.get(cmd.hash).await {
-        Ok(handle) => {
-            if let Err(cause) = export_ranges_impl(cmd.inner, &mut cmd.tx, handle).await {
-                cmd.tx
-                    .send(ExportRangesItem::Error(cause.into()))
-                    .await
-                    .ok();
-            }
-        }
-        Err(cause) => {
-            cmd.tx.send(ExportRangesItem::Error(cause)).await.ok();
-        }
-    }
-}
-
 async fn export_ranges_impl(
+    ctx: &HashContext,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
-    handle: BaoFileHandle,
 ) -> io::Result<()> {
     let ExportRangesRequest { ranges, hash } = cmd;
     trace!(
-        "export_ranges: exporting ranges: {hash} {ranges:?} size={}",
-        handle.current_size()?
+        "exporting ranges: {hash} {ranges:?} size={}",
+        ctx.current_size()?
     );
-    debug_assert!(handle.hash() == hash, "hash mismatch");
-    let bitfield = handle.bitfield()?;
-    let data = handle.data_reader();
+    let bitfield = ctx.bitfield()?;
+    let data = ctx.data_reader();
     let size = bitfield.size();
     for range in ranges.iter() {
         let range = match range {
@@ -1031,59 +1191,29 @@ async fn export_ranges_impl(
     Ok(())
 }
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn export_bao(mut cmd: ExportBaoMsg, ctx: HashContext) {
-    match ctx.get(cmd.hash).await {
-        Ok(handle) => {
-            if let Err(cause) = export_bao_impl(cmd.inner, &mut cmd.tx, handle).await {
-                cmd.tx
-                    .send(bao_tree::io::EncodeError::Io(io::Error::other(cause)).into())
-                    .await
-                    .ok();
-            }
-        }
-        Err(cause) => {
-            let crate::api::Error::Io(cause) = cause;
-            cmd.tx
-                .send(bao_tree::io::EncodeError::Io(cause).into())
-                .await
-                .ok();
-        }
-    }
-}
-
 async fn export_bao_impl(
+    ctx: &HashContext,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
-    handle: BaoFileHandle,
-) -> anyhow::Result<()> {
+) -> io::Result<()> {
     let ExportBaoRequest { ranges, hash, .. } = cmd;
-    debug_assert!(handle.hash() == hash, "hash mismatch");
-    let outboard = handle.outboard()?;
+    let outboard = ctx.outboard()?;
     let size = outboard.tree.size();
-    if size == 0 && hash != Hash::EMPTY {
+    if size == 0 && cmd.hash != Hash::EMPTY {
         // we have no data whatsoever, so we stop here
         return Ok(());
     }
     trace!("exporting bao: {hash} {ranges:?} size={size}",);
-    let data = handle.data_reader();
+    let data = ctx.data_reader();
     let tx = BaoTreeSender::new(tx);
     traverse_ranges_validated(data, outboard, &ranges, tx).await?;
     Ok(())
 }
 
-#[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-async fn export_path(cmd: ExportPathMsg, ctx: HashContext) {
-    let ExportPathMsg { inner, mut tx, .. } = cmd;
-    if let Err(cause) = export_path_impl(inner, &mut tx, ctx).await {
-        tx.send(cause.into()).await.ok();
-    }
-}
-
 async fn export_path_impl(
+    ctx: &HashContext,
     cmd: ExportPathRequest,
     tx: &mut mpsc::Sender<ExportProgressItem>,
-    ctx: HashContext,
 ) -> api::Result<()> {
     let ExportPathRequest { mode, target, .. } = cmd;
     if !target.is_absolute() {
@@ -1095,8 +1225,7 @@ async fn export_path_impl(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    let _guard = ctx.lock().await;
-    let state = ctx.get_entry_state(cmd.hash).await?;
+    let state = ctx.get_entry_state().await?;
     let (data_location, outboard_location) = match state {
         Some(EntryState::Complete {
             data_location,
@@ -1113,18 +1242,21 @@ async fn export_path_impl(
         }
     };
     trace!("exporting {} to {}", cmd.hash.to_hex(), target.display());
-    let data = match data_location {
-        DataLocation::Inline(data) => MemOrFile::Mem(data),
-        DataLocation::Owned(size) => {
-            MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size))
-        }
-        DataLocation::External(paths, size) => MemOrFile::File((
-            paths
-                .into_iter()
-                .next()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no external data path"))?,
-            size,
-        )),
+    let (data, mut external) = match data_location {
+        DataLocation::Inline(data) => (MemOrFile::Mem(data), vec![]),
+        DataLocation::Owned(size) => (
+            MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
+            vec![],
+        ),
+        DataLocation::External(paths, size) => (
+            MemOrFile::File((
+                paths.first().cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "no external data path")
+                })?,
+                size,
+            )),
+            paths,
+        ),
     };
     let size = match &data {
         MemOrFile::Mem(data) => data.len() as u64,
@@ -1140,31 +1272,50 @@ async fn export_path_impl(
         }
         MemOrFile::File((source_path, size)) => match mode {
             ExportMode::Copy => {
-                let source = fs::File::open(&source_path)?;
-                let mut target = fs::File::create(&target)?;
-                copy_with_progress(&source, size, &mut target, tx).await?
+                let res = reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
+                trace!(
+                    "exported {} to {}, {res:?}",
+                    source_path.display(),
+                    target.display()
+                );
             }
             ExportMode::TryReference => {
-                match std::fs::rename(&source_path, &target) {
-                    Ok(()) => {}
-                    Err(cause) => {
-                        const ERR_CROSS: i32 = 18;
-                        if cause.raw_os_error() == Some(ERR_CROSS) {
-                            let source = fs::File::open(&source_path)?;
-                            let mut target = fs::File::create(&target)?;
-                            copy_with_progress(&source, size, &mut target, tx).await?;
-                        } else {
-                            return Err(cause.into());
+                if !external.is_empty() {
+                    // the file already exists externally, so we need to copy it.
+                    // if the OS supports reflink, we might as well use that.
+                    let res =
+                        reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
+                    trace!(
+                        "exported {} also to {}, {res:?}",
+                        source_path.display(),
+                        target.display()
+                    );
+                    external.push(target);
+                    external.sort();
+                    external.dedup();
+                    external.truncate(MAX_EXTERNAL_PATHS);
+                } else {
+                    // the file was previously owned, so we can just move it.
+                    // if that fails with ERR_CROSS, we fall back to copy.
+                    match std::fs::rename(&source_path, &target) {
+                        Ok(()) => {}
+                        Err(cause) => {
+                            const ERR_CROSS: i32 = 18;
+                            if cause.raw_os_error() == Some(ERR_CROSS) {
+                                reflink_or_copy_with_progress(&source_path, &target, size, tx)
+                                    .await?;
+                            } else {
+                                return Err(cause.into());
+                            }
                         }
                     }
-                }
-                ctx.set(
-                    cmd.hash,
-                    EntryState::Complete {
-                        data_location: DataLocation::External(vec![target], size),
-                        outboard_location,
-                    },
-                )
+                    external.push(target);
+                };
+                // setting the new entry state will also take care of deleting the owned data file!
+                ctx.set(EntryState::Complete {
+                    data_location: DataLocation::External(external, size),
+                    outboard_location,
+                })
                 .await?;
             }
         },
@@ -1175,11 +1326,50 @@ async fn export_path_impl(
     Ok(())
 }
 
-async fn copy_with_progress(
+trait CopyProgress: RpcMessage {
+    fn from_offset(offset: u64) -> Self;
+}
+
+impl CopyProgress for ExportProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        ExportProgressItem::CopyProgress(offset)
+    }
+}
+
+impl CopyProgress for AddProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        AddProgressItem::CopyProgress(offset)
+    }
+}
+
+#[derive(Debug)]
+enum CopyResult {
+    Reflinked,
+    Copied,
+}
+
+async fn reflink_or_copy_with_progress(
+    from: impl AsRef<Path>,
+    to: impl AsRef<Path>,
+    size: u64,
+    tx: &mut mpsc::Sender<impl CopyProgress>,
+) -> io::Result<CopyResult> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+    if reflink_copy::reflink(from, to).is_ok() {
+        return Ok(CopyResult::Reflinked);
+    }
+    let source = fs::File::open(from)?;
+    let mut target = fs::File::create(to)?;
+    copy_with_progress(source, size, &mut target, tx).await?;
+    Ok(CopyResult::Copied)
+}
+
+async fn copy_with_progress<T: CopyProgress>(
     file: impl ReadAt,
     size: u64,
     target: &mut impl Write,
-    tx: &mut mpsc::Sender<ExportProgressItem>,
+    tx: &mut mpsc::Sender<T>,
 ) -> io::Result<()> {
     let mut offset = 0;
     let mut buf = vec![0u8; 1024 * 1024];
@@ -1188,7 +1378,7 @@ async fn copy_with_progress(
         let buf: &mut [u8] = &mut buf[..remaining];
         file.read_exact_at(offset, buf)?;
         target.write_all(buf)?;
-        tx.try_send(ExportProgressItem::CopyProgress(offset))
+        tx.try_send(T::from_offset(offset))
             .await
             .map_err(|_e| io::Error::other(""))?;
         yield_now().await;
@@ -1199,7 +1389,7 @@ async fn copy_with_progress(
 
 impl FsStore {
     /// Load or create a new store.
-    pub async fn load(root: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub async fn load(root: impl AsRef<Path>) -> Result<Self> {
         let path = root.as_ref();
         let db_path = path.join("blobs.db");
         let options = Options::new(path);
@@ -1207,9 +1397,15 @@ impl FsStore {
     }
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
-    pub async fn load_with_opts(db_path: PathBuf, options: Options) -> anyhow::Result<FsStore> {
+    pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
+        static THREAD_NR: AtomicU64 = AtomicU64::new(0);
         let rt = tokio::runtime::Builder::new_multi_thread()
-            .thread_name("iroh-blob-store")
+            .thread_name_fn(|| {
+                format!(
+                    "iroh-blob-store-{}",
+                    THREAD_NR.fetch_add(1, Ordering::Relaxed)
+                )
+            })
             .enable_time()
             .build()?;
         let handle = rt.handle().clone();
@@ -1225,7 +1421,8 @@ impl FsStore {
                 fs_commands_tx.clone(),
                 Arc::new(options),
             ))
-            .await??;
+            .await
+            .anyerr()??;
         handle.spawn(actor.run());
         let store = FsStore::new(commands_tx.into(), fs_commands_tx);
         if let Some(config) = gc_config {
@@ -1248,6 +1445,12 @@ impl FsStore {
 pub struct FsStore {
     sender: ApiClient,
     db: tokio::sync::mpsc::Sender<InternalCommand>,
+}
+
+impl From<FsStore> for Store {
+    fn from(value: FsStore) -> Self {
+        Store::from_sender(value.sender)
+    }
 }
 
 impl Deref for FsStore {
@@ -1275,7 +1478,7 @@ impl FsStore {
         }
     }
 
-    pub async fn dump(&self) -> anyhow::Result<()> {
+    pub async fn dump(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.db
             .send(
@@ -1285,8 +1488,9 @@ impl FsStore {
                 }
                 .into(),
             )
-            .await?;
-        rx.await??;
+            .await
+            .anyerr()?;
+        rx.await.anyerr()??;
         Ok(())
     }
 }
@@ -1296,10 +1500,7 @@ pub mod tests {
     use core::panic;
     use std::collections::{HashMap, HashSet};
 
-    use bao_tree::{
-        io::{outboard::PreOrderMemOutboard, round_up_to_chunks_groups},
-        ChunkRanges,
-    };
+    use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
     use n0_future::{stream, Stream, StreamExt};
     use testresult::TestResult;
     use walkdir::WalkDir;
@@ -1308,8 +1509,8 @@ pub mod tests {
     use crate::{
         api::blobs::Bitfield,
         store::{
-            util::{read_checksummed, SliceInfoExt, Tag},
-            HashAndFormat, IROH_BLOCK_SIZE,
+            util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
+            IROH_BLOCK_SIZE,
         },
     };
 
@@ -1324,17 +1525,6 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
-
-    /// Create n0 flavoured bao. Note that this can be used to request ranges below a chunk group size,
-    /// which can not be exported via bao because we don't store hashes below the chunk group level.
-    pub fn create_n0_bao(data: &[u8], ranges: &ChunkRanges) -> anyhow::Result<(Hash, Vec<u8>)> {
-        let outboard = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
-        let mut encoded = Vec::new();
-        let size = data.len() as u64;
-        encoded.extend_from_slice(&size.to_le_bytes());
-        bao_tree::io::sync::encode_ranges_validated(data, &outboard, ranges, &mut encoded)?;
-        Ok((outboard.root.into(), encoded))
-    }
 
     pub fn round_up_request(size: u64, ranges: &ChunkRanges) -> ChunkRanges {
         let last_chunk = ChunkNum::chunks(size);
@@ -1354,7 +1544,7 @@ pub mod tests {
     fn create_n0_bao_full(
         data: &[u8],
         ranges: &ChunkRanges,
-    ) -> anyhow::Result<(Hash, ChunkRanges, Vec<u8>)> {
+    ) -> n0_error::Result<(Hash, ChunkRanges, Vec<u8>)> {
         let ranges = round_up_request(data.len() as u64, ranges);
         let (hash, encoded) = create_n0_bao(data, &ranges)?;
         Ok((hash, ranges, encoded))
@@ -1374,7 +1564,7 @@ pub mod tests {
             let ranges = ChunkRanges::all();
             let (hash, bao) = create_n0_bao(&data, &ranges)?;
             let obs = store.observe(hash);
-            let task = tokio::spawn(async move {
+            let task = n0_future::task::spawn(async move {
                 obs.await_completion().await?;
                 api::Result::Ok(())
             });
@@ -1415,7 +1605,7 @@ pub mod tests {
             let stream = bytes_to_stream(expected.clone(), 1023);
             let obs = store.observe(expected_hash);
             let tt = store.add_stream(stream).await.temp_tag().await?;
-            assert_eq!(expected_hash, *tt.hash());
+            assert_eq!(expected_hash, tt.hash());
             // we must at some point see completion, otherwise the test will hang
             obs.await_completion().await?;
             let actual = store.get_bytes(expected_hash).await?;
@@ -1427,7 +1617,7 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
-    async fn test_import_bytes() -> TestResult<()> {
+    async fn test_import_bytes_simple() -> TestResult<()> {
         tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
@@ -1856,10 +2046,11 @@ pub mod tests {
             .await?
             .collect::<HashSet<_>>()
             .await;
-        assert!(tts.contains(tt1.hash_and_format()));
-        assert!(tts.contains(tt2.hash_and_format()));
+        assert!(tts.contains(&tt1.hash_and_format()));
+        assert!(tts.contains(&tt2.hash_and_format()));
         drop(batch);
         store.sync_db().await?;
+        store.wait_idle().await?;
         let tts = store
             .tags()
             .list_temp_tags()
@@ -1867,8 +2058,8 @@ pub mod tests {
             .collect::<HashSet<_>>()
             .await;
         // temp tag went out of scope, so it does not work anymore
-        assert!(!tts.contains(tt1.hash_and_format()));
-        assert!(!tts.contains(tt2.hash_and_format()));
+        assert!(!tts.contains(&tt1.hash_and_format()));
+        assert!(!tts.contains(&tt2.hash_and_format()));
         drop(tt1);
         drop(tt2);
         Ok(())
@@ -1901,29 +2092,29 @@ pub mod tests {
             let data = vec![0u8; size];
             let data = Bytes::from(data);
             let tt = store.add_bytes(data.clone()).temp_tag().await?;
-            data_by_hash.insert(*tt.hash(), data);
+            data_by_hash.insert(tt.hash(), data);
             hashes.push(tt);
         }
         store.sync_db().await?;
         for tt in &hashes {
-            let hash = *tt.hash();
+            let hash = tt.hash();
             let path = testdir.path().join(format!("{hash}.txt"));
             store.export(hash, path).await?;
         }
         for tt in &hashes {
             let hash = tt.hash();
             let data = store
-                .export_bao(*hash, ChunkRanges::all())
+                .export_bao(hash, ChunkRanges::all())
                 .data_to_vec()
                 .await
                 .unwrap();
-            assert_eq!(data, data_by_hash[hash].to_vec());
+            assert_eq!(data, data_by_hash[&hash].to_vec());
             let bao = store
-                .export_bao(*hash, ChunkRanges::all())
+                .export_bao(hash, ChunkRanges::all())
                 .bao_to_vec()
                 .await
                 .unwrap();
-            bao_by_hash.insert(*hash, bao);
+            bao_by_hash.insert(hash, bao);
         }
         store.dump().await?;
 
@@ -1958,7 +2149,6 @@ pub mod tests {
             if path.is_file() {
                 if let Some(file_ext) = path.extension() {
                     if file_ext.to_string_lossy().to_lowercase() == ext {
-                        println!("Deleting: {}", path.display());
                         fs::remove_file(path)?;
                     }
                 }
