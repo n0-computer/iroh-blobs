@@ -16,7 +16,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
 };
 
 use iroh::{
@@ -26,6 +25,7 @@ use iroh::{
 use n0_error::{e, stack_error};
 use n0_future::{
     future::{self},
+    time::Duration,
     FuturesUnordered, MaybeFuture, Stream, StreamExt,
 };
 use tokio::sync::{

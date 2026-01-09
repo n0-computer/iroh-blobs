@@ -2,7 +2,7 @@ use std::{collections::HashSet, pin::Pin, sync::Arc};
 
 use bao_tree::ChunkRanges;
 use genawaiter::sync::{Co, Gen};
-use n0_future::{Stream, StreamExt};
+use n0_future::{time::Duration, Stream, StreamExt};
 use tracing::{debug, error, info, warn};
 
 use crate::{api::Store, Hash, HashAndFormat};
@@ -134,7 +134,7 @@ fn gc_sweep<'a>(
 #[derive(derive_more::Debug, Clone)]
 pub struct GcConfig {
     /// Interval in which to run garbage collection.
-    pub interval: std::time::Duration,
+    pub interval: Duration,
     /// Optional callback to manually add protected blobs.
     ///
     /// The callback is called before each garbage collection run. It gets a `&mut HashSet<Hash>`

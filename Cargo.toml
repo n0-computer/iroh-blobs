@@ -28,7 +28,6 @@ hex = "0.4.3"
 serde = "1.0.217"
 postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
 data-encoding = "2.8.0"
-chrono = "0.4.39"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
 iroh = { version = "0.95", default-features = false }
@@ -42,6 +41,14 @@ redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 n0-error = "0.1.2"
 nested_enum_utils = "0.2.3"
+
+# non-wasm-in-browser dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+chrono = { version = "0.4.39" }
+
+# wasm-in-browser dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }

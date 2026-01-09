@@ -199,7 +199,7 @@ impl From<EncodeError> for Error {
     fn from(value: EncodeError) -> Self {
         match value {
             EncodeError::Io(cause) => Self::Io(cause),
-            _ => Self::other(value),
+            _ => Self::Io(io::Error::other(value)),
         }
     }
 }

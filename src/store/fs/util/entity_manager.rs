@@ -819,10 +819,10 @@ mod tests {
                 atomic::{AtomicUsize, Ordering},
                 Arc, Mutex,
             },
-            time::Instant,
         };
 
         use atomic_refcell::AtomicRefCell;
+        use n0_future::time::Instant;
 
         use super::*;
 
@@ -1070,10 +1070,10 @@ mod tests {
             collections::HashSet,
             path::{Path, PathBuf},
             sync::{Arc, Mutex},
-            time::Instant,
         };
 
         use atomic_refcell::AtomicRefCell;
+        use n0_future::time::Instant;
 
         use super::*;
 
