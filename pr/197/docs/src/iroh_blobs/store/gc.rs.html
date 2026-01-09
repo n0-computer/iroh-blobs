@@ -2,7 +2,7 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>bao_tree::ChunkRanges;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>genawaiter::sync::{Co, Gen};
-<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>n0_future::{Stream, StreamExt};
+<a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>n0_future::{time::Duration, Stream, StreamExt};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>tracing::{debug, error, info, warn};
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use crate</span>::{api::Store, Hash, HashAndFormat};
@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a></span><span class="attr">#[derive(derive_more::Debug, Clone)]
 <a href=#135 id=135 data-nosnippet>135</a></span><span class="kw">pub struct </span>GcConfig {
 <a href=#136 id=136 data-nosnippet>136</a>    <span class="doccomment">/// Interval in which to run garbage collection.
-<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>interval: std::time::Duration,
+<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>interval: Duration,
 <a href=#138 id=138 data-nosnippet>138</a>    <span class="doccomment">/// Optional callback to manually add protected blobs.
 <a href=#139 id=139 data-nosnippet>139</a>    ///
 <a href=#140 id=140 data-nosnippet>140</a>    /// The callback is called before each garbage collection run. It gets a `&amp;mut HashSet&lt;Hash&gt;`
