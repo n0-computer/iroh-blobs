@@ -11,6 +11,9 @@ keywords = ["hashing", "quic", "blake3", "streaming"]
 # Sadly this also needs to be updated in .github/workflows/ci.yml
 rust-version = "1.85"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(iroh_blobs_docsrs)'] }
+
 [dependencies]
 bao-tree = { version = "0.16", features = ["experimental-mixed", "tokio_fsm", "validate", "serde"], default-features = false }
 bytes = { version = "1", features = ["serde"] }
@@ -71,6 +74,10 @@ anyhow = "1.0.100"
 
 [build-dependencies]
 cfg_aliases = "0.2.1"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "iroh_blobs_docsrs"]
 
 [features]
 hide-proto-docs = []
