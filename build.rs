@@ -6,4 +6,7 @@ fn main() {
         // Convenience aliases
         wasm_browser: { all(target_family = "wasm", target_os = "unknown") },
     }
+
+    // Declare custom cfg for docs.rs
+    println!("cargo::rustc-check-cfg=cfg(iroh_blobs_docsrs)");
 }

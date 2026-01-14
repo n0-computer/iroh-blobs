@@ -72,6 +72,10 @@ anyhow = "1.0.100"
 [build-dependencies]
 cfg_aliases = "0.2.1"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "iroh_blobs_docsrs"]
+
 [features]
 hide-proto-docs = []
 metrics = []

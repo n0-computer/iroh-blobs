@@ -125,6 +125,7 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::Send { source: e, .. } => e!(ExportBaoError::Send, e),
             irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
             #[cfg(feature = "rpc")]
+            #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
             irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
     }
@@ -177,6 +178,7 @@ impl From<irpc::channel::mpsc::RecvError> for Error {
 }
 
 #[cfg(feature = "rpc")]
+#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
 impl From<irpc::rpc::WriteError> for Error {
     fn from(e: irpc::rpc::WriteError) -> Self {
         Self::Io(e.into())
@@ -248,6 +250,7 @@ impl Store {
 
     /// Connect to a remote store as a rpc client.
     #[cfg(feature = "rpc")]
+    #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
     pub fn connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::quinn(endpoint, addr);
         Store::from_sender(sender)
@@ -255,6 +258,7 @@ impl Store {
 
     /// Listen on a quinn endpoint for incoming rpc connections.
     #[cfg(feature = "rpc")]
+    #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
     pub async fn listen(self, endpoint: quinn::Endpoint) {
         use irpc::rpc::RemoteService;
 

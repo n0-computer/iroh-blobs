@@ -1,3 +1,4 @@
+#![cfg_attr(iroh_blobs_docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 //! # Module docs
 //!

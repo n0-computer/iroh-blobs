@@ -6,6 +6,7 @@
 //! have access to a writeable filesystem.
 use bao_tree::BlockSize;
 #[cfg(feature = "fs-store")]
+#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub mod fs;
 mod gc;
 pub mod mem;
