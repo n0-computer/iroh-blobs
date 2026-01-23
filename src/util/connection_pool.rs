@@ -546,7 +546,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
     use iroh::{
-        discovery::static_provider::StaticProvider,
+        address_lookup::MemoryLookup,
         endpoint::Connection,
         protocol::{AcceptError, ProtocolHandler, Router},
         EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
@@ -612,7 +612,7 @@ mod tests {
         Ok((addr, router))
     }
 
-    async fn echo_servers(n: usize) -> TestResult<(Vec<EndpointId>, Vec<Router>, StaticProvider)> {
+    async fn echo_servers(n: usize) -> TestResult<(Vec<EndpointId>, Vec<Router>, MemoryLookup)> {
         let res = stream::iter(0..n)
             .map(|_| echo_server())
             .buffered_unordered(16)
@@ -621,8 +621,8 @@ mod tests {
         let res: Vec<(EndpointAddr, Router)> = res.into_iter().collect::<TestResult<Vec<_>>>()?;
         let (addrs, routers): (Vec<_>, Vec<_>) = res.into_iter().unzip();
         let ids = addrs.iter().map(|a| a.id).collect::<Vec<_>>();
-        let discovery = StaticProvider::from_endpoint_info(addrs);
-        Ok((ids, routers, discovery))
+        let address_lookup = MemoryLookup::from_endpoint_info(addrs);
+        Ok((ids, routers, address_lookup))
     }
 
     async fn shutdown_routers(routers: Vec<Router>) {
@@ -664,10 +664,10 @@ mod tests {
     #[tokio::test]
     // #[traced_test]
     async fn connection_pool_errors() -> TestResult<()> {
-        // set up static discovery for all addrs
-        let discovery = StaticProvider::new();
+        // set up static address lookup for all addrs
+        let address_lookup = MemoryLookup::new();
         let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
-            .discovery(discovery.clone())
+            .address_lookup(address_lookup.clone())
             .bind()
             .await?;
         let pool = ConnectionPool::new(endpoint, ECHO_ALPN, test_options());
@@ -682,7 +682,7 @@ mod tests {
         {
             let non_listening = SecretKey::from_bytes(&[0; 32]).public();
             // make up fake node info
-            discovery.add_endpoint_info(EndpointAddr {
+            address_lookup.add_endpoint_info(EndpointAddr {
                 id: non_listening,
                 addrs: vec![TransportAddr::Ip("127.0.0.1:12121".parse().unwrap())]
                     .into_iter()
@@ -700,10 +700,10 @@ mod tests {
     // #[traced_test]
     async fn connection_pool_smoke() -> TestResult<()> {
         let n = 32;
-        let (ids, routers, discovery) = echo_servers(n).await?;
+        let (ids, routers, address_lookup) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the endpoint ids
         let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
-            .discovery(discovery.clone())
+            .address_lookup(address_lookup.clone())
             .bind()
             .await?;
         let pool = ConnectionPool::new(endpoint.clone(), ECHO_ALPN, test_options());
@@ -735,10 +735,10 @@ mod tests {
     // #[traced_test]
     async fn connection_pool_idle() -> TestResult<()> {
         let n = 32;
-        let (ids, routers, discovery) = echo_servers(n).await?;
+        let (ids, routers, address_lookup) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the endpoint ids
         let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
-            .discovery(discovery.clone())
+            .address_lookup(address_lookup.clone())
             .bind()
             .await?;
         let pool = ConnectionPool::new(
@@ -767,9 +767,9 @@ mod tests {
     // #[traced_test]
     async fn on_connected_error() -> TestResult<()> {
         let n = 1;
-        let (ids, routers, discovery) = echo_servers(n).await?;
+        let (ids, routers, address_lookup) = echo_servers(n).await?;
         let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
-            .discovery(discovery)
+            .address_lookup(address_lookup)
             .bind()
             .await?;
         let on_connected: OnConnected =
@@ -797,9 +797,9 @@ mod tests {
     // #[traced_test]
     async fn on_connected_direct() -> TestResult<()> {
         let n = 1;
-        let (ids, routers, discovery) = echo_servers(n).await?;
+        let (ids, routers, address_lookup) = echo_servers(n).await?;
         let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
-            .discovery(discovery)
+            .address_lookup(address_lookup)
             .bind()
             .await?;
         let on_connected = |_, conn: Connection| async move {
@@ -835,9 +835,9 @@ mod tests {
     // #[traced_test]
     async fn watch_close() -> TestResult<()> {
         let n = 1;
-        let (ids, routers, discovery) = echo_servers(n).await?;
+        let (ids, routers, address_lookup) = echo_servers(n).await?;
         let endpoint = iroh::Endpoint::empty_builder(RelayMode::Default)
-            .discovery(discovery)
+            .address_lookup(address_lookup)
             .bind()
             .await?;
 

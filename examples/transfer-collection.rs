@@ -8,9 +8,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{
-    discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointAddr, RelayMode,
-};
+use iroh::{address_lookup::MemoryLookup, protocol::Router, Endpoint, EndpointAddr, RelayMode};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -28,9 +26,9 @@ struct Node {
 }
 
 impl Node {
-    async fn new(disc: &StaticProvider) -> Result<Self> {
+    async fn new(disc: &MemoryLookup) -> Result<Self> {
         let endpoint = Endpoint::empty_builder(RelayMode::Default)
-            .discovery(disc.clone())
+            .address_lookup(disc.clone())
             .bind()
             .await?;
 
@@ -108,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     // create a local provider for nodes to discover each other.
     // outside of a development environment, production apps would
     // use `Endpoint::bind()` or a similar method
-    let disc = StaticProvider::new();
+    let disc = MemoryLookup::new();
 
     // create a sending node
     let send_node = Node::new(&disc).await?;
@@ -125,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     // create the receiving node
     let recv_node = Node::new(&disc).await?;
 
-    // add the send node to the discovery provider so the recv node can find it
+    // add the send node to the address lookup provider so the recv node can find it
     disc.add_endpoint_info(send_node_addr.clone());
     // fetch the collection and all contents
     recv_node.get_collection(hash, send_node_addr).await?;

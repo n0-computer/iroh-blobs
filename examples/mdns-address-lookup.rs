@@ -1,4 +1,4 @@
-//! Example that runs an iroh node with local node discovery and no relay server.
+//! Example that runs an iroh node with local node address_lookup and no relay server.
 //!
 //! You can think of this as a local version of [sendme](https://www.iroh.computer/sendme)
 //! that only works for individual files.
@@ -7,16 +7,16 @@
 //! examples feature enabled.**
 //!
 //! Run the follow command to run the "accept" side, that hosts the content:
-//!  $ cargo run --example mdns-discovery --features examples -- accept [FILE_PATH]
+//!  $ cargo run --example mdns-address_lookup --features examples -- accept [FILE_PATH]
 //! Wait for output that looks like the following:
-//!  $ cargo run --example mdns-discovery --features examples -- connect [NODE_ID] [HASH] -o [FILE_PATH]
+//!  $ cargo run --example mdns-address_lookup --features examples -- connect [NODE_ID] [HASH] -o [FILE_PATH]
 //! Run that command on another machine in the same local network, replacing [FILE_PATH] to the path on which you want to save the transferred content.
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Result};
 use clap::{Parser, Subcommand};
 use iroh::{
-    discovery::mdns::MdnsDiscovery, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
+    address_lookup::MdnsAddressLookup, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
 };
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, Hash};
 
@@ -58,11 +58,11 @@ async fn accept(path: &Path) -> Result<()> {
 
     let key = get_or_generate_secret_key()?;
 
-    println!("Starting iroh node with mdns discovery...");
+    println!("Starting iroh node with mdns address lookup...");
     // create a new node
     let endpoint = Endpoint::empty_builder(RelayMode::Default)
         .secret_key(key)
-        .discovery(MdnsDiscovery::builder())
+        .address_lookup(MdnsAddressLookup::builder())
         .relay_mode(RelayMode::Disabled)
         .bind()
         .await?;
@@ -80,7 +80,11 @@ async fn accept(path: &Path) -> Result<()> {
     let absolute = path.canonicalize()?;
     println!("Adding {} as {}...", path.display(), absolute.display());
     let tag = store.add_path(absolute).await?;
-    println!("To fetch the blob:\n\tcargo run --example mdns-discovery --features examples -- connect {} {} -o [FILE_PATH]", node.endpoint().id(), tag.hash);
+    println!(
+        "To fetch the blob:\n\tcargo run --example mdns-address_lookup --features examples -- connect {} {} -o [FILE_PATH]",
+        node.endpoint().id(),
+        tag.hash
+    );
     tokio::signal::ctrl_c().await?;
     node.shutdown().await?;
     Ok(())
@@ -88,14 +92,14 @@ async fn accept(path: &Path) -> Result<()> {
 
 async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result<()> {
     let key = SecretKey::generate(&mut rand::rng());
-    // todo: disable discovery publishing once https://github.com/n0-computer/iroh/issues/3401 is implemented
-    let discovery = MdnsDiscovery::builder();
+    // todo: disable address_lookup publishing once https://github.com/n0-computer/iroh/issues/3401 is implemented
+    let address_lookup = MdnsAddressLookup::builder();
 
-    println!("Starting iroh node with mdns discovery...");
+    println!("Starting iroh node with mdns address_lookup...");
     // create a new node
     let endpoint = Endpoint::empty_builder(RelayMode::Disabled)
         .secret_key(key)
-        .discovery(discovery)
+        .address_lookup(address_lookup)
         .bind()
         .await?;
     let store = MemStore::new();
