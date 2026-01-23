@@ -33,7 +33,7 @@
 
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
-    <span class="comment">// create an iroh endpoint that includes the standard discovery mechanisms
+    <span class="comment">// create an iroh endpoint that includes the standard address lookup mechanisms
     // we've built at number0
     </span><span class="kw">let </span>endpoint = Endpoint::bind().<span class="kw">await</span><span class="question-mark">?</span>;
 
