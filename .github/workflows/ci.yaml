@@ -193,6 +193,7 @@ jobs:
     - uses: taiki-e/install-action@cargo-make
     - run: cargo make format-check
 
+
   check_docs:
     timeout-minutes: 30
     name: Checking docs
@@ -200,18 +201,16 @@ jobs:
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "on"
+      RUSTDOCFLAGS: -Dwarnings
     steps:
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: nightly-2025-09-28
-    - name: Install sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/install@cargo-docs-rs
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
-    - name: Docs
-      run: cargo doc --workspace --all-features --no-deps --document-private-items
-      env:
-        RUSTDOCFLAGS: --cfg docsrs
+      - name: iroh-blobs docs
+        run: cargo docs-rs
 
   clippy_check:
     timeout-minutes: 30
