@@ -151,7 +151,7 @@
 <a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">let </span>boundaries = <span class="self">self</span>.boundaries();
 <a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">if </span>boundaries.is_empty() {
 <a href=#153 id=153 data-nosnippet>153</a>            <span class="prelude-val">Some</span>(RangeSetEntry::min_value())
-<a href=#154 id=154 data-nosnippet>154</a>        } <span class="kw">else if </span>boundaries.len() % <span class="number">2 </span>== <span class="number">0 </span>{
+<a href=#154 id=154 data-nosnippet>154</a>        } <span class="kw">else if </span>boundaries.len().is_multiple_of(<span class="number">2</span>) {
 <a href=#155 id=155 data-nosnippet>155</a>            <span class="prelude-val">Some</span>(boundaries[boundaries.len() - <span class="number">1</span>].clone())
 <a href=#156 id=156 data-nosnippet>156</a>        } <span class="kw">else </span>{
 <a href=#157 id=157 data-nosnippet>157</a>            <span class="prelude-val">None
