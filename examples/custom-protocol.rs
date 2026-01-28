@@ -43,7 +43,7 @@ use std::{
 use anyhow::Result;
 use clap::Parser;
 use iroh::{
-    discovery::pkarr::PkarrResolver,
+    address_lookup::PkarrResolver,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointId,
@@ -86,7 +86,7 @@ async fn listen(text: Vec<String>) -> Result<()> {
     let secret_key = get_or_generate_secret_key()?;
     // Use an in-memory store for this example. You would use a persistent store in production code.
     let store = MemStore::new();
-    // Create an endpoint with the secret key and discovery publishing to the n0 dns server enabled.
+    // Create an endpoint with the secret key and address lookup publishing to the n0 dns server enabled.
     let endpoint = Endpoint::builder().secret_key(secret_key).bind().await?;
     // Build our custom protocol handler. The `builder` exposes access to various subsystems in the
     // iroh node. In our case, we need a blobs client and the endpoint.
@@ -117,11 +117,11 @@ async fn listen(text: Vec<String>) -> Result<()> {
 async fn query(endpoint_id: EndpointId, query: String) -> Result<()> {
     // Build a in-memory node. For production code, you'd want a persistent node instead usually.
     let store = MemStore::new();
-    // Create an endpoint with a random secret key and no discovery publishing.
-    // For a client we just need discovery resolution via the n0 dns server, which
+    // Create an endpoint with a random secret key and no address lookup publishing.
+    // For a client we just need address lookup resolution via the n0 dns server, which
     // the PkarrResolver provides.
     let endpoint = Endpoint::empty_builder(iroh::RelayMode::Default)
-        .discovery(PkarrResolver::n0_dns())
+        .address_lookup(PkarrResolver::n0_dns())
         .bind()
         .await?;
     // Query the remote node.
@@ -269,7 +269,7 @@ pub async fn query_remote(
     query: &str,
 ) -> Result<Vec<Hash>> {
     // Establish a connection to our node.
-    // We use the default node discovery in iroh, so we can connect by endpoint id without
+    // We use the default node address lookup in iroh, so we can connect by endpoint id without
     // providing further information.
     let conn = endpoint.connect(endpoint_id, ALPN).await?;
     let blobs_conn = endpoint.connect(endpoint_id, iroh_blobs::ALPN).await?;

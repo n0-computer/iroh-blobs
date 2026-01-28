@@ -64,7 +64,7 @@ impl SendStream for iroh::endpoint::SendStream {
     }
 
     async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
-        Ok(self.stopped().await?)
+        Ok(iroh::endpoint::SendStream::stopped(self).await?)
     }
 
     fn id(&self) -> u64 {

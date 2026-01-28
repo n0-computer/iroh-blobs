@@ -2,7 +2,7 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iroh::{discovery::static_provider::StaticProvider, SecretKey};
+use iroh::{address_lookup::MemoryLookup, SecretKey};
 use iroh_blobs::{
     api::downloader::Shuffled,
     provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
@@ -265,9 +265,9 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| tempdir.as_ref().unwrap().path().to_path_buf());
     let store = FsStore::load(&path).await?;
     println!("Using store at: {}", path.display());
-    let sp = StaticProvider::new();
+    let sp = MemoryLookup::new();
     let endpoint = iroh::Endpoint::builder()
-        .discovery(sp.clone())
+        .address_lookup(sp.clone())
         .bind()
         .await?;
     let downloader = store.downloader(&endpoint);
