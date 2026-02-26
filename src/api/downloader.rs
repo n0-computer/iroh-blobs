@@ -73,6 +73,19 @@ impl DownloaderActor {
         }
     }
 
+    fn with_pool_options(
+        store: Store,
+        endpoint: Endpoint,
+        pool_options: crate::util::connection_pool::Options,
+    ) -> Self {
+        Self {
+            store,
+            pool: ConnectionPool::new(endpoint, crate::ALPN, pool_options),
+            tasks: JoinSet::new(),
+            running: HashSet::new(),
+        }
+    }
+
     async fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<SwarmMsg>) {
         while let Some(msg) = rx.recv().await {
             match msg {
@@ -343,6 +356,18 @@ impl Downloader {
     pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
         let actor = DownloaderActor::new(store.clone(), endpoint.clone());
+        n0_future::task::spawn(actor.run(rx));
+        Self { client: tx.into() }
+    }
+
+    pub fn with_pool_options(
+        store: &Store,
+        endpoint: &Endpoint,
+        pool_options: crate::util::connection_pool::Options,
+    ) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
+        let actor =
+            DownloaderActor::with_pool_options(store.clone(), endpoint.clone(), pool_options);
         n0_future::task::spawn(actor.run(rx));
         Self { client: tx.into() }
     }
