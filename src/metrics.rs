@@ -2,7 +2,7 @@
 
 use iroh_metrics::{Counter, MetricsGroup};
 
-/// Enum of metrics for the module
+/// Metrics counters for blob transfer and downloader operations.
 #[allow(missing_docs)]
 #[allow(dead_code)]
 #[derive(Debug, Default, MetricsGroup)]

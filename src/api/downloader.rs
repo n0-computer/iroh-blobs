@@ -33,7 +33,7 @@ use crate::{
 /// provider already delivered so the next one only needs to provide the
 /// remainder.
 ///
-/// Create one via [`crate::api::Store::downloader`] and keep it alive for the
+/// Create one via [`Store::downloader`] and keep it alive for the
 /// lifetime of your download workload; do not create it ad hoc per-request
 /// because it owns connection state.
 #[derive(Debug, Clone)]

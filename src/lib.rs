@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
 //! # Module overview
 //!
 //! The crate is designed to be used from the [iroh] crate, though it can also

@@ -162,6 +162,7 @@ impl<W: SendStream> SendStream for &mut W {
     }
 }
 
+/// Adapts any [`AsyncReadRecvStreamExtra`] into a [`RecvStream`].
 #[derive(Debug)]
 pub struct AsyncReadRecvStream<R>(R);
 
@@ -182,6 +183,7 @@ pub trait AsyncReadRecvStreamExtra: Send {
 }
 
 impl<R> AsyncReadRecvStream<R> {
+    /// Wrap an inner value in an `AsyncReadRecvStream`.
     pub fn new(inner: R) -> Self {
         Self(inner)
     }
@@ -285,12 +287,14 @@ pub trait AsyncWriteSendStreamExtra: Send {
 }
 
 impl<W: AsyncWriteSendStreamExtra> AsyncWriteSendStream<W> {
+    /// Wrap an inner value in an `AsyncWriteSendStream`.
     pub fn new(inner: W) -> Self {
         Self(inner)
     }
 }
 
 impl<W: AsyncWriteSendStreamExtra> AsyncWriteSendStream<W> {
+    /// Unwrap and return the inner value.
     pub fn into_inner(self) -> W {
         self.0
     }
@@ -324,14 +328,17 @@ impl<W: AsyncWriteSendStreamExtra> SendStream for AsyncWriteSendStream<W> {
     }
 }
 
+/// Adapts a [`RecvStream`] into an [`AsyncStreamReader`].
 #[derive(Debug)]
 pub struct RecvStreamAsyncStreamReader<R>(R);
 
 impl<R: RecvStream> RecvStreamAsyncStreamReader<R> {
+    /// Wrap a [`RecvStream`] in a `RecvStreamAsyncStreamReader`.
     pub fn new(inner: R) -> Self {
         Self(inner)
     }
 
+    /// Unwrap and return the inner [`RecvStream`].
     pub fn into_inner(self) -> R {
         self.0
     }

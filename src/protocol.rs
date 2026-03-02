@@ -410,12 +410,19 @@ pub const ALPN: &[u8] = b"/iroh-bytes/4";
 pub enum Request {
     /// A get request for a blob or collection
     Get(GetRequest),
+    /// A request to observe the availability bitfield of a blob.
     Observe(ObserveRequest),
+    /// Reserved slot for future request types.
     Slot2,
+    /// Reserved slot for future request types.
     Slot3,
+    /// Reserved slot for future request types.
     Slot4,
+    /// Reserved slot for future request types.
     Slot5,
+    /// Reserved slot for future request types.
     Slot6,
+    /// Reserved slot for future request types.
     Slot7,
     /// The inverse of a get request - push data to the provider
     ///
@@ -423,29 +430,40 @@ pub enum Request {
     /// they don't have write access to the store or don't want to ingest
     /// unknown data.
     Push(PushRequest),
-    /// Get multiple blobs in a single request, from a single provider
+    /// Get multiple blobs in a single request, from a single provider.
     ///
-    /// This is identical to a [`GetRequest`] for a [`crate::hashseq::HashSeq`], but the provider
-    /// does not need to have the hash seq.
+    /// This is identical to a [`GetRequest`] for a hash sequence, but the
+    /// provider does not need to have the hash sequence blob itself.
     GetMany(GetManyRequest),
 }
 
 /// This must contain the request types in the same order as the full requests
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Copy, MaxSize)]
 pub enum RequestType {
+    /// Corresponds to [`Request::Get`].
     Get,
+    /// Corresponds to [`Request::Observe`].
     Observe,
+    /// Reserved slot for future request types.
     Slot2,
+    /// Reserved slot for future request types.
     Slot3,
+    /// Reserved slot for future request types.
     Slot4,
+    /// Reserved slot for future request types.
     Slot5,
+    /// Reserved slot for future request types.
     Slot6,
+    /// Reserved slot for future request types.
     Slot7,
+    /// Corresponds to [`Request::Push`].
     Push,
+    /// Corresponds to [`Request::GetMany`].
     GetMany,
 }
 
 impl Request {
+    /// Read a request from an async stream, returning the request and its serialized byte count.
     pub async fn read_async<R: crate::util::RecvStream>(
         reader: &mut R,
     ) -> io::Result<(Self, usize)> {
@@ -493,10 +511,18 @@ impl Request {
     }
 }
 
-/// A get request
+/// A request to download one or more blobs from a provider.
+///
+/// A `GetRequest` identifies the root blob by its BLAKE3 hash and specifies
+/// which chunk ranges to fetch from the root and from each child blob.  For a
+/// single raw blob the ranges sequence has one element (the root ranges).  For
+/// a [`HashSeq`] the first element covers the root hash-sequence blob and
+/// subsequent elements cover each child in order.
+///
+/// [`HashSeq`]: crate::hashseq::HashSeq
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Hash)]
 pub struct GetRequest {
-    /// blake3 hash
+    /// The BLAKE3 hash of the root blob or hash sequence to request.
     pub hash: Hash,
     /// The range of data to request
     ///
@@ -514,10 +540,12 @@ impl From<HashAndFormat> for GetRequest {
 }
 
 impl GetRequest {
+    /// Create a new [`GetRequestBuilder`] for constructing a request incrementally.
     pub fn builder() -> GetRequestBuilder {
         GetRequestBuilder::default()
     }
 
+    /// Returns the [`HashAndFormat`] describing the content this request targets.
     pub fn content(&self) -> HashAndFormat {
         HashAndFormat {
             hash: self.hash,
@@ -567,6 +595,7 @@ impl GetRequest {
 pub struct PushRequest(GetRequest);
 
 impl PushRequest {
+    /// Create a new push request for the given hash and chunk ranges.
     pub fn new(hash: Hash, ranges: ChunkRangesSeq) -> Self {
         Self(GetRequest::new(hash, ranges))
     }
@@ -604,10 +633,12 @@ impl<I: Into<Hash>> FromIterator<I> for GetManyRequest {
 }
 
 impl GetManyRequest {
+    /// Create a new get-many request for the given hashes and chunk ranges.
     pub fn new(hashes: Vec<Hash>, ranges: ChunkRangesSeq) -> Self {
         Self { hashes, ranges }
     }
 
+    /// Create a new [`GetManyRequestBuilder`](builder::GetManyRequestBuilder) for constructing a request incrementally.
     pub fn builder() -> builder::GetManyRequestBuilder {
         builder::GetManyRequestBuilder::default()
     }
@@ -623,6 +654,7 @@ pub struct ObserveRequest {
 }
 
 impl ObserveRequest {
+    /// Create a new observe request for all chunk ranges of the given hash.
     pub fn new(hash: Hash) -> Self {
         Self {
             hash,
@@ -631,9 +663,12 @@ impl ObserveRequest {
     }
 }
 
+/// A single observation update sent by the provider in response to an [`ObserveRequest`].
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub struct ObserveItem {
+    /// The current total size of the blob in bytes.
     pub size: u64,
+    /// The chunk ranges that are currently available.
     pub ranges: ChunkRanges,
 }
 
@@ -722,11 +757,17 @@ impl TryFrom<VarInt> for Closed {
     }
 }
 
+/// Extension methods for [`ChunkRanges`] to construct common range patterns.
 pub trait ChunkRangesExt {
+    /// Returns a range containing only the last possible chunk (used as a sentinel).
     fn last_chunk() -> Self;
+    /// Returns a range containing exactly the single chunk at `offset`.
     fn chunk(offset: u64) -> Self;
+    /// Returns a chunk range covering the bytes described by `ranges`.
     fn bytes(ranges: impl RangeBounds<u64>) -> Self;
+    /// Returns a chunk range for the given range of chunk indices.
     fn chunks(ranges: impl RangeBounds<u64>) -> Self;
+    /// Returns a chunk range covering the chunk that contains byte `offset`.
     fn offset(offset: u64) -> Self;
 }
 
@@ -789,6 +830,7 @@ where
     }
 }
 
+/// Builder types for constructing protocol requests incrementally.
 pub mod builder {
     use std::collections::BTreeMap;
 
@@ -800,11 +842,13 @@ pub mod builder {
         Hash,
     };
 
+    /// Builder for a [`ChunkRangesSeq`] that accumulates per-offset chunk ranges.
     #[derive(Debug, Clone, Default)]
     pub struct ChunkRangesSeqBuilder {
         ranges: BTreeMap<u64, ChunkRanges>,
     }
 
+    /// Builder for a [`GetRequest`] that accumulates per-offset chunk ranges.
     #[derive(Debug, Clone, Default)]
     pub struct GetRequestBuilder {
         builder: ChunkRangesSeqBuilder,
@@ -901,6 +945,7 @@ pub mod builder {
         }
     }
 
+    /// Builder for a [`GetManyRequest`] that accumulates per-hash chunk ranges.
     #[derive(Debug, Clone, Default)]
     pub struct GetManyRequestBuilder {
         ranges: BTreeMap<Hash, ChunkRanges>,

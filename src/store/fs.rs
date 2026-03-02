@@ -1476,6 +1476,7 @@ impl FsStore {
         }
     }
 
+    /// Dump the current database state to stdout for debugging purposes.
     pub async fn dump(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.db
@@ -1493,6 +1494,7 @@ impl FsStore {
     }
 }
 
+/// Test utilities for the filesystem store, exposed for use by integration tests.
 #[cfg(test)]
 pub mod tests {
     use core::panic;
@@ -1524,6 +1526,7 @@ pub mod tests {
         1024 * 1024 * 8, // data file, outboard file
     ];
 
+    /// Round up the given chunk ranges to aligned chunk-group boundaries for the given data size.
     pub fn round_up_request(size: u64, ranges: &ChunkRanges) -> ChunkRanges {
         let last_chunk = ChunkNum::chunks(size);
         let data_range = ChunkRanges::from(..last_chunk);
@@ -2137,6 +2140,7 @@ pub mod tests {
         Ok(())
     }
 
+    /// Recursively delete all files with the given extension under `root_dir`.
     pub fn delete_rec(root_dir: impl AsRef<Path>, extension: &str) -> Result<(), std::io::Error> {
         // Remove leading dot if present, so we have just the extension
         let ext = extension.trim_start_matches('.').to_lowercase();
@@ -2156,6 +2160,7 @@ pub mod tests {
         Ok(())
     }
 
+    /// Print a sorted directory tree under `path` to stdout, showing file sizes.
     pub fn dump_dir(path: impl AsRef<Path>) -> io::Result<()> {
         let mut entries: Vec<_> = WalkDir::new(&path)
             .into_iter()
@@ -2180,6 +2185,7 @@ pub mod tests {
         Ok(())
     }
 
+    /// Print a sorted directory tree under `path` to stdout, including the contents of data files.
     pub fn dump_dir_full(path: impl AsRef<Path>) -> io::Result<()> {
         let mut entries: Vec<_> = WalkDir::new(&path)
             .into_iter()
@@ -2228,12 +2234,14 @@ pub mod tests {
         Ok(())
     }
 
+    /// Print a visual representation of which chunks in a file are non-zero to stdout.
     pub fn dump_file<P: AsRef<Path>>(path: P, chunk_size: u64) -> io::Result<()> {
         let bits = file_bits(path, chunk_size)?;
         println!("{}", print_bitfield_ansi(bits));
         Ok(())
     }
 
+    /// Read a file in `chunk_size`-byte blocks and return whether each block contains any non-zero byte.
     pub fn file_bits(path: impl AsRef<Path>, chunk_size: u64) -> io::Result<Vec<bool>> {
         let file = fs::File::open(&path)?;
         let file_size = file.metadata()?.len();

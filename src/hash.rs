@@ -232,8 +232,9 @@ impl MaxSize for Hash {
 ///
 /// `Raw` is the default and covers the vast majority of use cases. `HashSeq`
 /// is needed when you want to represent a collection of blobs with a single
-/// root hash; see [`crate::format::collection::Collection`] for a higher-level
-/// abstraction built on top of it.
+/// root hash; see [`Collection`] for a higher-level abstraction built on top of it.
+///
+/// [`Collection`]: crate::format::collection::Collection
 #[derive(
     Clone,
     Copy,

@@ -865,6 +865,7 @@ struct ImportEntry {
     tx: mpsc::Sender<AddProgressItem>,
 }
 
+/// A reader that provides byte-level access to the data portion of a BAO file in memory.
 pub struct DataReader(BaoFileHandle);
 
 impl ReadBytesAt for DataReader {
@@ -874,6 +875,7 @@ impl ReadBytesAt for DataReader {
     }
 }
 
+/// A reader that provides outboard hash-pair access to a BAO file in memory.
 pub struct OutboardReader {
     hash: blake3::Hash,
     tree: BaoTree,
@@ -916,9 +918,12 @@ struct State {
     empty_hash: BaoFileHandle,
 }
 
+/// Storage backing for a BAO file, either partially or fully downloaded.
 #[derive(Debug, derive_more::From)]
 pub enum BaoFileStorage {
+    /// The file is partially available; some chunk ranges may still be missing.
     Partial(PartialMemStorage),
+    /// The file is fully available in memory.
     Complete(CompleteStorage),
 }
 
@@ -932,6 +937,7 @@ impl BaoFileStorage {
     }
 }
 
+/// Inner shared state of a [`BaoFileHandle`].
 #[derive(Debug)]
 pub struct BaoFileHandleInner {
     state: watch::Sender<BaoFileStorage>,
@@ -943,6 +949,7 @@ pub struct BaoFileHandleInner {
 pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
 
 impl BaoFileHandle {
+    /// Create a new partial handle for the given hash with no data yet available.
     pub fn new_partial(hash: Hash) -> Self {
         let (state, _) = watch::channel(BaoFileStorage::Partial(PartialMemStorage {
             data: SparseMemFile::new(),
@@ -953,22 +960,27 @@ impl BaoFileHandle {
         Self(Arc::new(BaoFileHandleInner { state, hash }))
     }
 
+    /// Returns the BLAKE3 hash identifying the content stored in this handle.
     pub fn hash(&self) -> Hash {
         self.hash
     }
 
+    /// Returns the current availability bitfield for this file.
     pub fn bitfield(&self) -> Bitfield {
         self.0.state.borrow().bitfield()
     }
 
+    /// Subscribe to changes in the storage state, receiving a new bitfield on each update.
     pub fn subscribe(&self) -> BaoFileStorageSubscriber {
         BaoFileStorageSubscriber::new(self.0.state.subscribe())
     }
 
+    /// Create a [`DataReader`] that reads raw bytes from this file's data region.
     pub fn data_reader(&self) -> DataReader {
         DataReader(self.clone())
     }
 
+    /// Create an [`OutboardReader`] that reads hash pairs from this file's outboard region.
     pub fn outboard_reader(&self) -> OutboardReader {
         let entry = self.0.state.borrow();
         let hash = self.hash.into();
@@ -1010,6 +1022,7 @@ impl BaoFileStorage {
     }
 }
 
+/// In-memory storage for a fully downloaded BAO blob.
 #[derive(Debug, Clone)]
 pub struct CompleteStorage {
     pub(crate) data: Bytes,
@@ -1017,6 +1030,7 @@ pub struct CompleteStorage {
 }
 
 impl CompleteStorage {
+    /// Compute the BLAKE3 hash and create a `CompleteStorage` from the given raw data bytes.
     pub fn create(data: Bytes) -> (Hash, Self) {
         let outboard = PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE);
         let hash = outboard.root().into();
@@ -1025,10 +1039,12 @@ impl CompleteStorage {
         (hash, entry)
     }
 
+    /// Create a new `CompleteStorage` from pre-computed data and outboard bytes.
     pub fn new(data: Bytes, outboard: Bytes) -> Self {
         Self { data, outboard }
     }
 
+    /// Returns the total size of the stored data in bytes.
     pub fn size(&self) -> u64 {
         self.data.len() as u64
     }
@@ -1046,11 +1062,13 @@ fn print_outboard(hashes: &[u8]) {
     }
 }
 
+/// A subscriber that receives [`BaoFileStorage`] state updates as they are written.
 pub struct BaoFileStorageSubscriber {
     receiver: watch::Receiver<BaoFileStorage>,
 }
 
 impl BaoFileStorageSubscriber {
+    /// Create a new subscriber from a watch channel receiver.
     pub fn new(receiver: watch::Receiver<BaoFileStorage>) -> Self {
         Self { receiver }
     }

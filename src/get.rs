@@ -76,16 +76,16 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
     derive_more::DerefMut,
 )]
 pub struct Stats {
-    /// Counters
+    /// Byte and chunk counters accumulated during the transfer.
     #[deref]
     #[deref_mut]
     pub counters: RequestCounters,
-    /// The time it took to transfer the data
+    /// Total elapsed wall-clock time of the transfer.
     pub elapsed: Duration,
 }
 
 impl Stats {
-    /// Transfer rate in megabits per second
+    /// Returns the transfer rate in megabits per second.
     pub fn mbits(&self) -> f64 {
         let data_len_bit = self.total_bytes_read() * 8;
         data_len_bit as f64 / (1000. * 1000.) / self.elapsed.as_secs_f64()
@@ -260,6 +260,7 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtInitial::next`]
+    #[allow(missing_docs)]
     #[stack_error(derive, add_meta, from_sources)]
     pub enum InitialNextError {
         #[error("open: {source}")]
@@ -291,6 +292,7 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtConnected::next`]
+    #[allow(missing_docs)]
     #[stack_error(derive, add_meta)]
     pub enum ConnectedNextError {
         /// Error when serializing the request
@@ -500,6 +502,7 @@ pub mod fsm {
     }
 
     /// Error that you can get from [`AtBlobHeader::next`]
+    #[allow(missing_docs)]
     #[stack_error(derive, add_meta)]
     pub enum AtBlobHeaderNextError {
         /// Eof when reading the size header
@@ -647,25 +650,39 @@ pub mod fsm {
         ChunkNotFound {},
         /// A parent was not found or invalid, so the provider stopped sending data
         #[error("parent not found {node:?}")]
-        ParentNotFound { node: TreeNode },
+        ParentNotFound {
+            /// The tree node that was not found.
+            node: TreeNode,
+        },
         /// A parent was not found or invalid, so the provider stopped sending data
         #[error("chunk not found {num}")]
-        LeafNotFound { num: ChunkNum },
+        LeafNotFound {
+            /// The chunk number that was not found.
+            num: ChunkNum,
+        },
         /// The hash of a parent did not match the expected hash
         #[error("parent hash mismatch: {node:?}")]
-        ParentHashMismatch { node: TreeNode },
+        ParentHashMismatch {
+            /// The tree node whose hash did not match.
+            node: TreeNode,
+        },
         /// The hash of a leaf did not match the expected hash
         #[error("leaf hash mismatch: {num}")]
-        LeafHashMismatch { num: ChunkNum },
+        LeafHashMismatch {
+            /// The chunk number whose hash did not match.
+            num: ChunkNum,
+        },
         /// Error when reading from the stream
         #[error("read: {source}")]
         Read {
+            /// The underlying I/O error.
             #[error(std_err)]
             source: io::Error,
         },
         /// A generic io error
         #[error("io: {source}")]
         Write {
+            /// The underlying I/O error.
             #[error(std_err)]
             source: io::Error,
         },
@@ -776,7 +793,7 @@ pub mod fsm {
             self.misc.ranges_iter.offset()
         }
 
-        /// Current stats
+        /// Returns the current transfer statistics accumulated so far for this blob.
         pub fn stats(&self) -> Stats {
             Stats {
                 counters: self.misc.counters,
@@ -969,6 +986,7 @@ pub mod fsm {
         /// Generic io error
         #[error(transparent)]
         Read {
+            /// The underlying I/O error.
             #[error(std_err)]
             source: io::Error,
         },

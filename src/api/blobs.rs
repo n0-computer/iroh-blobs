@@ -83,9 +83,12 @@ impl<T: Into<Bytes>> From<(T, BlobFormat)> for AddBytesOptions {
 
 /// API for local blob operations: importing, exporting, observing, and listing.
 ///
-/// Obtain a `Blobs` reference from a [`crate::api::Store`] via [`Deref`] or
-/// [`crate::api::Store::blobs`]. `Blobs` is a cheap ref-cast over an RPC
-/// client, so cloning it is cheap.
+/// Obtain a `Blobs` reference from a [`Store`] via [`Deref`] or
+/// [`Store::blobs`]. `Blobs` is a cheap ref-cast over an RPC client, so
+/// cloning it is cheap.
+///
+/// [`Store`]: crate::api::Store
+/// [`Store::blobs`]: crate::api::Store::blobs
 ///
 /// Most operations return a progress handle (e.g. [`AddProgress`],
 /// [`ExportProgress`]) which implement [`IntoFuture`] for a single-await
@@ -128,7 +131,8 @@ impl Blobs {
     ///
     /// Any access to parts of the blob that are not present will result in an error.
     ///
-    /// Example:
+    /// # Examples
+    ///
     /// ```rust
     /// use iroh_blobs::{store::mem::MemStore, api::blobs::Blobs};
     /// use tokio::io::AsyncReadExt;
@@ -419,16 +423,23 @@ impl Blobs {
         Err(io::Error::other("unexpected end of stream").into())
     }
 
-    /// Get the entire blob into a Bytes
+    /// Downloads and returns the entire blob as a [`bytes::Bytes`] buffer.
     ///
-    /// This will run out of memory when called for very large blobs, so be careful!
+    /// All blob data is verified via BAO streaming before being returned.
+    /// Avoid calling this on very large blobs; it loads the entire content into
+    /// process memory at once.
     pub async fn get_bytes(&self, hash: impl Into<Hash>) -> super::ExportBaoResult<Bytes> {
         self.export_bao(hash.into(), ChunkRanges::all())
             .data_to_bytes()
             .await
     }
 
-    /// Observe the bitfield of the given hash.
+    /// Returns a live-updating handle for the availability bitfield of a blob.
+    ///
+    /// The returned [`ObserveProgress`] yields the current [`Bitfield`]
+    /// immediately, then streams updates whenever the store's knowledge of that
+    /// blob changes (for example, as chunks arrive during a download).  The
+    /// stream ends when the blob is complete or deleted.
     pub fn observe(&self, hash: impl Into<Hash>) -> ObserveProgress {
         self.observe_with_opts(ObserveOptions { hash: hash.into() })
     }

@@ -77,6 +77,7 @@ pub enum ThrottleMode {
     Intercept,
 }
 
+/// The reason a request was aborted by the event handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AbortReason {
     /// The request was aborted because a limit was exceeded. It is OK to try again later.
@@ -88,12 +89,18 @@ pub enum AbortReason {
 /// Errors that can occur when sending progress updates.
 #[stack_error(derive, add_meta, from_sources)]
 pub enum ProgressError {
+    /// The transfer was aborted because a rate limit was reached.
     #[error("limit")]
     Limit {},
+    /// The transfer was aborted due to insufficient permissions.
     #[error("permission")]
     Permission {},
+    /// An internal RPC error occurred while sending progress updates.
     #[error(transparent)]
-    Internal { source: irpc::Error },
+    Internal {
+        /// The underlying RPC error.
+        source: irpc::Error,
+    },
 }
 
 impl From<ProgressError> for io::Error {
@@ -106,7 +113,9 @@ impl From<ProgressError> for io::Error {
     }
 }
 
+/// Trait for error types that carry a QUIC error code for stream reset or connection close.
 pub trait HasErrorCode {
+    /// Returns the QUIC variable-length integer error code associated with this error.
     fn code(&self) -> VarInt;
 }
 
@@ -121,6 +130,7 @@ impl HasErrorCode for ProgressError {
 }
 
 impl ProgressError {
+    /// Returns a short ASCII reason string suitable for use in a QUIC RESET_STREAM frame.
     pub fn reason(&self) -> &'static [u8] {
         match self {
             ProgressError::Limit { .. } => b"limit",
@@ -157,7 +167,9 @@ impl From<irpc::channel::SendError> for ProgressError {
     }
 }
 
+/// Result type for event handler callbacks that may abort a request.
 pub type EventResult = Result<(), AbortReason>;
+/// Result type for progress-reporting calls from within a request handler.
 pub type ClientResult = Result<(), ProgressError>;
 
 /// Event mask to configure which events are sent to the event handler.
@@ -176,7 +188,7 @@ pub struct EventMask {
     pub push: RequestMode,
     /// Observe request event mask
     pub observe: ObserveMode,
-    /// throttling is somewhat costly, so you can disable it completely
+    /// Throttle mode for supported request types. Throttling adds overhead, so disable it when not needed.
     pub throttle: ThrottleMode,
 }
 
@@ -224,6 +236,7 @@ impl<T> Deref for Notify<T> {
     }
 }
 
+/// Sends provider events to a registered event handler.
 #[derive(Debug, Default, Clone)]
 pub struct EventSender {
     mask: EventMask,
@@ -242,6 +255,7 @@ enum RequestUpdates {
     Disabled(#[allow(dead_code)] mpsc::Sender<RequestUpdate>),
 }
 
+/// Tracks per-request progress and optionally applies throttling.
 #[derive(Debug)]
 pub struct RequestTracker {
     updates: RequestUpdates,
@@ -323,6 +337,7 @@ impl EventSender {
         inner: None,
     };
 
+    /// Create a new event sender that forwards events to the given channel with the given mask.
     pub fn new(client: tokio::sync::mpsc::Sender<ProviderMessage>, mask: EventMask) -> Self {
         Self {
             mask,
@@ -330,6 +345,7 @@ impl EventSender {
         }
     }
 
+    /// Create a new event sender and return it paired with the receiving end of the channel.
     pub fn channel(
         capacity: usize,
         mask: EventMask,
@@ -526,6 +542,7 @@ impl EventSender {
     }
 }
 
+/// RPC protocol definition for provider events and callbacks.
 #[rpc_requests(message = ProviderMessage, rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ProviderProto {
@@ -584,14 +601,19 @@ mod proto {
 
     use crate::{provider::TransferStats, Hash};
 
+    /// Notification that a new client has connected.
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ClientConnected {
+        /// Unique identifier for this connection.
         pub connection_id: u64,
+        /// The endpoint ID of the connecting peer, if available.
         pub endpoint_id: Option<EndpointId>,
     }
 
+    /// Notification that a client connection has been closed.
     #[derive(Debug, Serialize, Deserialize)]
     pub struct ConnectionClosed {
+        /// Unique identifier for the closed connection.
         pub connection_id: u64,
     }
 
@@ -617,30 +639,39 @@ mod proto {
         pub size: u64,
     }
 
+    /// Progress notification emitted after each chunk is sent during a transfer.
     #[derive(Debug, Serialize, Deserialize)]
     pub struct TransferProgress {
         /// The end offset of the chunk that was sent.
         pub end_offset: u64,
     }
 
+    /// Notification that a blob transfer has started.
     #[derive(Debug, Serialize, Deserialize)]
     pub struct TransferStarted {
+        /// The index of this blob within the request (0 for root, 1+ for children).
         pub index: u64,
+        /// The hash of the blob being transferred.
         pub hash: Hash,
+        /// The size of the blob in bytes.
         pub size: u64,
     }
 
+    /// Notification that a blob transfer completed successfully.
     #[derive(Debug, Serialize, Deserialize)]
     pub struct TransferCompleted {
+        /// Transfer statistics for the completed blob.
         pub stats: Box<TransferStats>,
     }
 
+    /// Notification that a blob transfer was aborted before completion.
     #[derive(Debug, Serialize, Deserialize)]
     pub struct TransferAborted {
+        /// Transfer statistics accumulated up to the point of abort.
         pub stats: Box<TransferStats>,
     }
 
-    /// Stream of updates for a single request
+    /// Ordered stream of status updates for a single in-progress request.
     #[derive(Debug, Serialize, Deserialize, derive_more::From)]
     pub enum RequestUpdate {
         /// Start of transfer for a blob, mandatory event

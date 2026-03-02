@@ -15,9 +15,18 @@ use crate::{
     BlobFormat, Hash,
 };
 
-/// A collection of blobs
+/// An ordered, named set of blobs stored as a linked hash sequence.
 ///
-/// Note that the format is subject to change.
+/// A `Collection` is serialized as two blobs: a metadata blob containing the
+/// entry names and a root blob (a [`HashSeq`]) whose first element points to
+/// the metadata blob and whose remaining elements are the hashes of the
+/// collection entries in order.  The root blob's hash and the
+/// [`BlobFormat::HashSeq`] format together form the collection's
+/// [`HashAndFormat`] content identifier.
+///
+/// Note that the on-disk format is subject to change.
+///
+/// [`HashAndFormat`]: crate::HashAndFormat
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, Default)]
 pub struct Collection {
     /// Links to the blobs in this collection
@@ -64,9 +73,14 @@ impl IntoIterator for Collection {
     }
 }
 
-/// A simple store trait for loading blobs
+/// A minimal read-only store abstraction for loading blob content by hash.
+///
+/// This trait exists so that [`Collection`] loading logic can be tested and
+/// used independently of the full [`Store`] type.
 pub trait SimpleStore {
-    /// Load a blob from the store
+    /// Loads and returns the raw bytes of the blob identified by `hash`.
+    ///
+    /// Returns an error if the hash is not present in the store.
     fn load(&self, hash: Hash) -> impl Future<Output = Result<Bytes>> + Send + '_;
 }
 
@@ -76,9 +90,12 @@ impl SimpleStore for crate::api::Store {
     }
 }
 
-/// Metadata for a collection
+/// The serialized metadata blob for a [`Collection`].
 ///
-/// This is the wire format for the metadata blob.
+/// This is the postcard-encoded wire format stored as the first child blob of
+/// every collection hash sequence.  It contains a fixed magic header and the
+/// ordered list of entry names, which are zipped with the remaining hashes in
+/// the sequence to reconstruct the full collection.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct CollectionMeta {
     header: [u8; 13], // Must contain "CollectionV0."

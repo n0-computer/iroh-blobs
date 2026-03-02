@@ -400,14 +400,16 @@ where
     (from, to)
 }
 
-/// List all temp tags
+/// Request to create a temporary tag protecting `value` within `scope`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateTempTagRequest {
+    /// The batch scope this temp tag belongs to.
     pub scope: Scope,
+    /// The hash and format to protect.
     pub value: HashAndFormat,
 }
 
-/// List all temp tags
+/// Request to list all active temporary tags.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListTempTagsRequest;
 
@@ -463,13 +465,16 @@ impl DeleteTagsRequest {
 /// Options for creating a tag or setting it to a new value.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetTagRequest {
+    /// The name of the tag to create or overwrite.
     pub name: Tag,
+    /// The hash and format the tag will point to.
     pub value: HashAndFormat,
 }
 
-/// Options for creating a tag
+/// Options for creating a new tag with an auto-generated name.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateTagRequest {
+    /// The hash and format the new tag will point to.
     pub value: HashAndFormat,
 }
 

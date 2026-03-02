@@ -33,6 +33,7 @@ use crate::{
     util::{RecvStream, RecvStreamExt, SendStream, SendStreamExt},
     Hash,
 };
+/// Event types and infrastructure for provider-side progress notifications.
 pub mod events;
 use events::EventSender;
 
@@ -264,7 +265,7 @@ impl WriteProgress for WriterContext {
 /// Wrapper for a [`quinn::SendStream`] with additional per request information.
 #[derive(Debug)]
 pub struct ProgressWriter<W: SendStream = DefaultWriter> {
-    /// The quinn::SendStream to write to
+    /// The underlying send stream.
     pub inner: W,
     pub(crate) context: WriterContext,
 }
@@ -327,9 +328,13 @@ pub async fn handle_connection(
 
 /// Describes how to handle errors for a stream.
 pub trait ErrorHandler {
+    /// The async stream writer type used by this handler.
     type W: AsyncStreamWriter;
+    /// The async stream reader type used by this handler.
     type R: AsyncStreamReader;
+    /// Stop the reader with the given error code.
     fn stop(reader: &mut Self::R, code: VarInt) -> impl Future<Output = ()>;
+    /// Reset the writer with the given error code.
     fn reset(writer: &mut Self::W, code: VarInt) -> impl Future<Output = ()>;
 }
 
@@ -378,6 +383,7 @@ async fn handle_read_result<R: RecvStream, T, E: HasErrorCode>(
     }
 }
 
+/// Dispatch an incoming request stream to the appropriate handler.
 pub async fn handle_stream<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
@@ -393,15 +399,20 @@ pub async fn handle_stream<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
+/// Error type for get request handling.
 #[stack_error(derive, add_meta, from_sources)]
 pub enum HandleGetError {
+    /// An error occurred while exporting BAO-encoded data.
     #[error(transparent)]
     ExportBao {
+        /// The underlying export error.
         #[error(std_err)]
         source: ExportBaoError,
     },
+    /// The root blob is not a valid hash sequence.
     #[error("Invalid hash sequence")]
     InvalidHashSeq {},
+    /// A child offset in the request is out of range.
     #[error("Invalid offset")]
     InvalidOffset {},
 }
@@ -466,6 +477,7 @@ async fn handle_get_impl<W: SendStream>(
     Ok(())
 }
 
+/// Handle an incoming get request over a bidirectional stream.
 pub async fn handle_get<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
@@ -479,10 +491,15 @@ pub async fn handle_get<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
+/// Error type for get-many request handling.
 #[stack_error(derive, add_meta, from_sources)]
 pub enum HandleGetManyError {
+    /// An error occurred while exporting BAO-encoded data.
     #[error(transparent)]
-    ExportBao { source: ExportBaoError },
+    ExportBao {
+        /// The underlying export error.
+        source: ExportBaoError,
+    },
 }
 
 impl HasErrorCode for HandleGetManyError {
@@ -515,6 +532,7 @@ async fn handle_get_many_impl<W: SendStream>(
     Ok(())
 }
 
+/// Handle an incoming get-many request over a bidirectional stream.
 pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
@@ -528,16 +546,24 @@ pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
+/// Error type for push request handling.
 #[stack_error(derive, add_meta, from_sources)]
 pub enum HandlePushError {
+    /// An error occurred while exporting BAO-encoded data.
     #[error(transparent)]
-    ExportBao { source: ExportBaoError },
-
+    ExportBao {
+        /// The underlying export error.
+        source: ExportBaoError,
+    },
+    /// The root blob is not a valid hash sequence.
     #[error("Invalid hash sequence")]
     InvalidHashSeq {},
-
+    /// An error occurred while reading the incoming request.
     #[error(transparent)]
-    Request { source: RequestError },
+    Request {
+        /// The underlying request read error.
+        source: RequestError,
+    },
 }
 
 impl HasErrorCode for HandlePushError {
@@ -588,6 +614,7 @@ async fn handle_push_impl<R: RecvStream>(
     Ok(())
 }
 
+/// Handle an incoming push request over a bidirectional stream.
 pub async fn handle_push<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
@@ -615,13 +642,18 @@ pub(crate) async fn send_blob<W: SendStream>(
         .await
 }
 
+/// Error type for observe request handling.
 #[stack_error(derive, add_meta, std_sources, from_sources)]
 pub enum HandleObserveError {
+    /// The observe stream was closed before the request could complete.
     #[error("observe stream closed")]
     ObserveStreamClosed {},
-
+    /// The remote end closed its side of the stream.
     #[error(transparent)]
-    RemoteClosed { source: io::Error },
+    RemoteClosed {
+        /// The underlying I/O error.
+        source: io::Error,
+    },
 }
 
 impl HasErrorCode for HandleObserveError {
@@ -680,6 +712,7 @@ async fn send_observe_item<W: SendStream>(
     Ok(())
 }
 
+/// Handle an incoming observe request over a bidirectional stream.
 pub async fn handle_observe<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
@@ -693,6 +726,7 @@ pub async fn handle_observe<R: RecvStream, W: SendStream>(
     Ok(())
 }
 
+/// A wrapper around a [`RecvStream`] that tracks transfer progress and notifies the event system.
 pub struct ProgressReader<R: RecvStream = DefaultReader> {
     inner: R,
     context: ReaderContext,

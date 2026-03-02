@@ -8,7 +8,8 @@ use crate::get::fsm::{
     AtBlobHeaderNextError, AtClosingNextError, ConnectedNextError, DecodeError, InitialNextError,
 };
 
-/// Failures for a get operation
+/// Errors that can occur during a low-level blob get (download) operation.
+#[allow(missing_docs)]
 #[stack_error(derive, add_meta)]
 pub enum GetError {
     #[error(transparent)]
@@ -48,6 +49,8 @@ pub enum GetError {
 }
 
 impl GetError {
+    /// Returns the QUIC application error code from the remote side, if the
+    /// failure was caused by a stream reset or connection close with a code.
     pub fn iroh_error_code(&self) -> Option<VarInt> {
         if let Some(ReadError::Reset(code)) = self
             .remote_read()
@@ -72,6 +75,7 @@ impl GetError {
         }
     }
 
+    /// Returns the IO error from writing to the remote, if the failure had that cause.
     pub fn remote_write(&self) -> Option<&io::Error> {
         match self {
             Self::ConnectedNext {
@@ -82,6 +86,7 @@ impl GetError {
         }
     }
 
+    /// Returns the IO error from opening the stream, if the failure had that cause.
     pub fn open(&self) -> Option<&io::Error> {
         match self {
             Self::InitialNext {
@@ -92,6 +97,7 @@ impl GetError {
         }
     }
 
+    /// Returns the IO error from reading from the remote, if the failure had that cause.
     pub fn remote_read(&self) -> Option<&io::Error> {
         match self {
             Self::AtBlobHeaderNext {
@@ -110,6 +116,7 @@ impl GetError {
         }
     }
 
+    /// Returns the IO error from writing to local storage, if the failure had that cause.
     pub fn local_write(&self) -> Option<&io::Error> {
         match self {
             Self::Decode {
@@ -121,4 +128,5 @@ impl GetError {
     }
 }
 
+/// Result type for low-level blob get operations.
 pub type GetResult<T> = std::result::Result<T, GetError>;

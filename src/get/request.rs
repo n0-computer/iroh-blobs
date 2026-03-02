@@ -48,11 +48,13 @@ impl IntoFuture for GetBlobResult {
 }
 
 impl GetBlobResult {
+    /// Awaits the complete download and returns all blob data as a single [`Bytes`] buffer.
     pub async fn bytes(self) -> GetResult<Bytes> {
         let (bytes, _) = self.bytes_and_stats().await?;
         Ok(bytes)
     }
 
+    /// Awaits the complete download and returns the blob data together with transfer statistics.
     pub async fn bytes_and_stats(mut self) -> GetResult<(Bytes, Stats)> {
         let mut parts = Vec::new();
         let stats = loop {
@@ -101,7 +103,7 @@ impl Stream for GetBlobResult {
 #[derive(Debug)]
 #[enum_conversions()]
 pub enum GetBlobItem {
-    /// Content
+    /// A verified BAO content item (size header or leaf chunk).
     Item(BaoContentItem),
     /// Request completed successfully
     Done(Stats),
@@ -109,6 +111,10 @@ pub enum GetBlobItem {
     Error(GetError),
 }
 
+/// Downloads a single raw blob from `connection` and streams its verified content.
+///
+/// Returns a [`GetBlobResult`] that can be iterated for individual [`GetBlobItem`]s
+/// or awaited directly to collect all data into a [`bytes::Bytes`] buffer.
 pub fn get_blob(connection: Connection, hash: Hash) -> GetBlobResult {
     let generator = Gen::new(|co| async move {
         if let Err(cause) = get_blob_impl(&connection, &hash, &co).await {

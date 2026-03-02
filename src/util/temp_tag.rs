@@ -39,7 +39,7 @@ impl AsRef<Hash> for TempTag {
 /// protecting a collection means protecting the blob and all its children,
 /// whereas protecting a raw blob only protects the blob itself.
 pub trait TagCounter: TagDrop + Sized {
-    /// Called on creation of a temp tag
+    /// Called when a new [`TempTag`] for `inner` is created.
     fn on_create(&self, inner: &HashAndFormat);
 
     /// Get this as a weak reference for use in temp tags
@@ -58,7 +58,7 @@ pub trait TagCounter: TagDrop + Sized {
 /// Trait used from temp tags to notify an abstract store that a temp tag is
 /// being dropped.
 pub trait TagDrop: std::fmt::Debug + Send + Sync + 'static {
-    /// Called on drop
+    /// Called when a [`TempTag`] for `inner` is dropped, signalling that the content may be unreferenced.
     fn on_drop(&self, inner: &HashAndFormat);
 }
 
@@ -97,17 +97,17 @@ impl TempTag {
         }
     }
 
-    /// The hash of the pinned item
+    /// Returns the hash of the pinned item.
     pub fn hash(&self) -> Hash {
         self.inner.hash
     }
 
-    /// The format of the pinned item
+    /// Returns the format of the pinned item.
     pub fn format(&self) -> BlobFormat {
         self.inner.format
     }
 
-    /// The hash and format of the pinned item
+    /// Returns the hash and format of the pinned item.
     pub fn hash_and_format(&self) -> HashAndFormat {
         self.inner
     }

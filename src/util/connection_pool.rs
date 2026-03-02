@@ -34,6 +34,7 @@ use tokio::sync::{
 };
 use tracing::{debug, error, info, trace};
 
+/// Callback invoked when a new outbound connection is established, before it is handed to a caller.
 pub type OnConnected =
     Arc<dyn Fn(&Endpoint, &Connection) -> n0_future::future::Boxed<io::Result<()>> + Send + Sync>;
 
@@ -122,10 +123,14 @@ pub enum PoolConnectError {
     TooManyConnections {},
     /// Error during connect
     #[error(transparent)]
-    ConnectError { source: Arc<ConnectError> },
+    ConnectError {
+        /// The underlying connection error.
+        source: Arc<ConnectError>,
+    },
     /// Error during on_connect callback
     #[error(transparent)]
     OnConnectError {
+        /// The underlying I/O error from the callback.
         #[error(std_err)]
         source: Arc<io::Error>,
     },
@@ -422,6 +427,7 @@ pub struct ConnectionPool {
 }
 
 impl ConnectionPool {
+    /// Create a new connection pool for the given endpoint and ALPN protocol.
     pub fn new(endpoint: Endpoint, alpn: &[u8], options: Options) -> Self {
         let (actor, tx) = Actor::new(endpoint, alpn, options);
 

@@ -7,7 +7,11 @@ use tracing::{debug, error, info, warn};
 
 use crate::{api::Store, Hash, HashAndFormat};
 
-/// An event related to GC
+/// An event emitted during the mark phase of a GC cycle.
+///
+/// The mark phase traverses all reachable blobs starting from tagged roots and
+/// builds the set of live hashes. Events are yielded for diagnostic tracing and
+/// for unrecoverable errors that abort the cycle.
 #[derive(Debug)]
 pub enum GcMarkEvent {
     /// A custom event (info)
@@ -18,7 +22,11 @@ pub enum GcMarkEvent {
     Error(crate::api::Error),
 }
 
-/// An event related to GC
+/// An event emitted during the sweep phase of a GC cycle.
+///
+/// The sweep phase iterates over all stored blobs and deletes any that are not
+/// in the live set produced by the mark phase. Events are yielded for diagnostic
+/// tracing and for unrecoverable errors that abort the cycle.
 #[derive(Debug)]
 pub enum GcSweepEvent {
     /// A custom event (debug)

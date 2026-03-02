@@ -20,6 +20,11 @@ fn chunk_ranges_empty() -> &'static ChunkRanges {
     CHUNK_RANGES_EMPTY.get_or_init(ChunkRanges::empty)
 }
 
+/// A compact, ordered sequence of chunk range specs, one per blob in a hash sequence.
+///
+/// Each entry pairs a blob index with the [`ChunkRanges`] to request from that blob.
+/// Entries are stored in ascending index order; the last entry's ranges apply to all
+/// subsequent blobs until the end of the sequence (or until an empty range terminates it).
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]
 pub struct ChunkRangesSeq(pub(crate) SmallVec<[(u64, ChunkRanges); 2]>);
@@ -51,6 +56,7 @@ impl std::ops::Index<u64> for ChunkRangesSeq {
 }
 
 impl ChunkRangesSeq {
+    /// Returns an empty sequence that selects no chunks from any blob.
     pub const fn empty() -> Self {
         Self(SmallVec::new_const())
     }
@@ -122,6 +128,7 @@ impl ChunkRangesSeq {
         }
     }
 
+    /// Returns `true` if this sequence selects chunks from a single blob (the root).
     pub fn is_blob(&self) -> bool {
         #[allow(clippy::match_like_matches_macro)]
         match self.as_single() {
@@ -171,6 +178,9 @@ impl ChunkRangesSeq {
             .unwrap_or_default()
     }
 
+    /// Returns an infinite iterator over the chunk ranges in this sequence.
+    ///
+    /// When the sequence ends, the last range is repeated forever.
     pub fn iter_infinite(&self) -> ChunkRangesSeqIterInfinite<'_> {
         ChunkRangesSeqIterInfinite {
             current: chunk_ranges_empty(),
@@ -179,6 +189,7 @@ impl ChunkRangesSeq {
         }
     }
 
+    /// Returns a finite iterator over the explicitly stored chunk ranges in this sequence.
     pub fn iter(&self) -> ChunkRangesSeqIter<'_> {
         ChunkRangesSeqIter {
             current: chunk_ranges_empty(),
@@ -311,6 +322,7 @@ impl<'a> NonEmptyRequestRangeSpecIter<'a> {
         self.count
     }
 
+    /// Returns `true` if the underlying infinite iterator has reached its final repeating range.
     pub fn is_at_end(&mut self) -> bool {
         self.inner.is_at_end()
     }
