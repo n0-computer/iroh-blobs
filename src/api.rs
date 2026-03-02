@@ -1,17 +1,19 @@
-//! The user facing API of the store.
+//! The user-facing store API.
 //!
-//! This API is both for interacting with an in-process store and for interacting
-//! with a remote store via rpc calls.
+//! This module works the same whether the store lives in the same process or
+//! on a remote node reached over RPC. The entry point is [`Store`].
 //!
-//! The entry point for the api is the [`Store`] struct. There are several ways
-//! to obtain a `Store` instance: it is available via [`Deref`]
-//! from the different store implementations
-//! (e.g. [`MemStore`](crate::store::mem::MemStore)
-//! and [`FsStore`](crate::store::fs::FsStore)) as well as on the
-//! [`BlobsProtocol`](crate::BlobsProtocol) iroh protocol handler.
+//! ## Getting a `Store`
 //!
-//! You can also [`connect`](Store::connect) to a remote store that is listening
-//! to rpc requests.
+//! - Deref from [`crate::store::mem::MemStore`] or [`crate::store::fs::FsStore`].
+//! - Deref from [`crate::BlobsProtocol`] when you have a running iroh router.
+//! - [`Store::connect`] to talk to a remote store over QUIC (requires the
+//!   `rpc` feature).
+//!
+//! ## Sub-APIs
+//!
+//! `Store` itself derefs to [`blobs::Blobs`] for convenience. The other
+//! namespaces are accessed via [`Store::tags`] and [`Store::remote`].
 use std::{io, ops::Deref};
 
 use bao_tree::io::EncodeError;
@@ -32,6 +34,11 @@ pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
 pub(crate) type ApiClient = irpc::Client<proto::Request>;
 
+/// Error returned by store operations that go through the RPC layer.
+///
+/// An operation can fail either because the RPC transport itself broke
+/// (`Rpc` variant) or because the store reported a logical error (`Inner`
+/// variant).
 #[allow(missing_docs)]
 #[non_exhaustive]
 #[stack_error(derive, add_meta)]
@@ -71,8 +78,14 @@ impl From<irpc::channel::mpsc::RecvError> for RequestError {
     }
 }
 
+/// Result type for operations that go through the RPC layer.
 pub type RequestResult<T> = std::result::Result<T, RequestError>;
 
+/// Error returned during a BAO-format export.
+///
+/// BAO exports involve streaming data from the store, so there are several
+/// distinct failure points: send/receive channel errors, one-shot sync errors,
+/// and IO errors from encoding the BAO stream.
 #[allow(missing_docs)]
 #[non_exhaustive]
 #[stack_error(derive, add_meta, from_sources)]
@@ -130,16 +143,24 @@ impl From<irpc::Error> for ExportBaoError {
     }
 }
 
+/// Result type for BAO-format export operations.
 pub type ExportBaoResult<T> = std::result::Result<T, ExportBaoError>;
 
+/// The primary error type for store operations.
+///
+/// All store errors ultimately wrap an [`std::io::Error`]. This lets them be
+/// passed across RPC boundaries and composed with other IO code without
+/// custom serialization logic for every variant.
 #[derive(Serialize, Deserialize)]
 #[stack_error(derive, std_sources, from_sources)]
 pub enum Error {
+    /// An IO error from the store or transport layer.
     #[serde(with = "crate::util::serde::io_error_serde")]
     Io(#[error(source)] io::Error),
 }
 
 impl Error {
+    /// Creates an `Error` from an [`io::ErrorKind`] and a message.
     pub fn io(
         kind: io::ErrorKind,
         msg: impl Into<Box<dyn std::error::Error + Send + Sync>>,
@@ -147,6 +168,7 @@ impl Error {
         Self::Io(io::Error::new(kind, msg.into()))
     }
 
+    /// Creates an `Error` wrapping `msg` as `io::ErrorKind::Other`.
     pub fn other<E>(msg: E) -> Self
     where
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
@@ -204,9 +226,17 @@ impl From<EncodeError> for Error {
     }
 }
 
+/// Result type for store operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// The main entry point for the store API.
+///
+/// `Store` is a cheap-to-clone handle (essentially an RPC client). It derefs
+/// to [`blobs::Blobs`], so blob operations can be called directly on the store.
+/// Tag management is available via [`Store::tags`], and single-node downloads
+/// via [`Store::remote`].
+///
+/// See the [module documentation](self) for ways to obtain a `Store`.
 #[derive(Debug, Clone, ref_cast::RefCast)]
 #[repr(transparent)]
 pub struct Store {
@@ -264,12 +294,22 @@ impl Store {
         irpc::rpc::listen::<Request>(endpoint, handler).await
     }
 
+    /// Flushes any pending writes to durable storage.
+    ///
+    /// For the filesystem store this commits any outstanding redb transactions.
+    /// For the memory store this is a no-op.
     pub async fn sync_db(&self) -> RequestResult<()> {
         let msg = SyncDbRequest;
         self.client.rpc(msg).await??;
         Ok(())
     }
 
+    /// Shuts the store down cleanly.
+    ///
+    /// Flushes in-flight writes and frees all store resources. Any subsequent
+    /// calls on this `Store` handle or clones of it will fail. When the store
+    /// is embedded in an [`iroh::protocol::Router`], the router's shutdown
+    /// calls this automatically.
     pub async fn shutdown(&self) -> irpc::Result<()> {
         let msg = ShutdownRequest;
         self.client.rpc(msg).await?;

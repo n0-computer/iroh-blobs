@@ -1,33 +1,59 @@
 #![doc = include_str!("../README.md")]
-//! # Module docs
+//! # Module overview
 //!
-//! The crate is designed to be used from the [iroh] crate.
+//! The crate is designed to be used from the [iroh] crate, though it can also
+//! be used standalone.
 //!
 //! It implements a [protocol] for streaming content-addressed data transfer using
 //! [BLAKE3] verified streaming.
 //!
-//! It also provides a [store] module for storage of blobs and outboards,
-//! as well as a [persistent](crate::store::fs) and a [memory](crate::store::mem)
-//! store implementation.
+//! ## Stores
 //!
-//! To implement a server, the [provider] module provides helpers for handling
-//! connections and individual requests given a store.
+//! It also provides a [store] module for storage of blobs and outboards.
+//! Three store implementations are available:
 //!
-//! To perform get requests, the [get] module provides utilities to perform
-//! requests and store the result in a store, as well as a low level state
-//! machine for executing requests.
+//! - [`store::mem::MemStore`] — mutable in-memory store; suitable for small
+//!   datasets or tests.
+//! - [`store::readonly_mem::ReadonlyMemStore`] — immutable in-memory store;
+//!   populated at construction time, no writes allowed afterwards.
+//! - [`store::fs::FsStore`] — persistent filesystem store backed by `redb`;
+//!   enabled with the `fs-store` feature.
 //!
-//! The client API is available in the [api] module. You can get a client
-//! either from one of the [store] implementations, or from the [BlobsProtocol]
-//! via a
+//! ## Client API
 //!
-//! The [downloader](api::downloader) module provides a component to download blobs from
-//! multiple sources and store them in a store.
+//! The client API is available in the [api] module. A [`api::Store`] handle can
+//! be obtained by dereffing any of the store implementations, or by connecting
+//! to a remote store with [`api::Store::connect`].
 //!
-//! # Features:
+//! The handle gives access to three namespaced sub-APIs:
 //!
-//! - `fs-store`: Enables the filesystem based store implementation. This comes with a few additional dependencies such as `redb` and `reflink-copy`.
-//! - `metrics`: Enables prometheus metrics for stores and the protocol.
+//! - [`api::blobs::Blobs`] — local blob operations (import, export, observe, …)
+//! - [`api::tags::Tags`] — tag management (set, list, delete, rename, …)
+//! - [`api::remote::Remote`] — downloads from a *single* remote node
+//!
+//! For downloads from *multiple* nodes with automatic failover see
+//! [`api::downloader::Downloader`].
+//!
+//! ## Server side
+//!
+//! To serve blobs over an iroh p2p connection, attach a [`BlobsProtocol`]
+//! handler to an [`iroh::protocol::Router`]. See [`net_protocol`] for details
+//! and a self-contained example.
+//!
+//! For lower-level server helpers (handling individual connections or requests),
+//! see the [provider] module.
+//!
+//! ## Low-level get state machine
+//!
+//! The [get] module exposes a step-by-step state machine (`get::fsm`) for
+//! executing range requests against a remote node and writing the verified data
+//! into a store.
+//!
+//! ## Features
+//!
+//! - `fs-store`: Enables the filesystem store. Pulls in `redb` and
+//!   `reflink-copy`.
+//! - `metrics`: Enables Prometheus metrics for stores and the protocol.
 //!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf
 //! [iroh]: https://docs.rs/iroh

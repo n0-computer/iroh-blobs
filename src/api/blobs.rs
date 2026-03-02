@@ -62,10 +62,12 @@ use crate::{
     BlobFormat, Hash, HashAndFormat,
 };
 
-/// Options for adding bytes.
+/// Options for adding bytes to the store.
 #[derive(Debug)]
 pub struct AddBytesOptions {
+    /// The bytes to import.
     pub data: Bytes,
+    /// The format to use for the imported blob.
     pub format: BlobFormat,
 }
 
@@ -79,7 +81,15 @@ impl<T: Into<Bytes>> From<(T, BlobFormat)> for AddBytesOptions {
     }
 }
 
-/// Blobs API
+/// API for local blob operations: importing, exporting, observing, and listing.
+///
+/// Obtain a `Blobs` reference from a [`crate::api::Store`] via [`Deref`] or
+/// [`crate::api::Store::blobs`]. `Blobs` is a cheap ref-cast over an RPC
+/// client, so cloning it is cheap.
+///
+/// Most operations return a progress handle (e.g. [`AddProgress`],
+/// [`ExportProgress`]) which implement [`IntoFuture`] for a single-await
+/// result, or expose a `.stream()` method for detailed progress events.
 #[derive(Debug, Clone, ref_cast::RefCast)]
 #[repr(transparent)]
 pub struct Blobs {
@@ -91,6 +101,15 @@ impl Blobs {
         Self::ref_cast(sender)
     }
 
+    /// Opens a batch scope for adding blobs.
+    ///
+    /// Within a batch, blobs added via [`Batch::add_bytes`] etc. are protected
+    /// from garbage collection for the duration of the batch. When the `Batch`
+    /// is dropped, the protection is released and any unreferenced blobs may be
+    /// collected.
+    ///
+    /// Use this when you need to add multiple blobs and then create a tag
+    /// referencing all of them atomically.
     pub async fn batch(&self) -> irpc::Result<Batch<'_>> {
         let msg = BatchRequest;
         trace!("{msg:?}");
@@ -161,6 +180,10 @@ impl Blobs {
         .await
     }
 
+    /// Imports bytes from a byte slice into the store as a raw blob.
+    ///
+    /// This copies the slice into a `Bytes` before sending. For owned data,
+    /// prefer [`Blobs::add_bytes`] to avoid the copy.
     pub fn add_slice(&self, data: impl AsRef<[u8]>) -> AddProgress<'_> {
         let options = ImportBytesRequest {
             data: Bytes::copy_from_slice(data.as_ref()),
@@ -170,6 +193,10 @@ impl Blobs {
         self.add_bytes_impl(options)
     }
 
+    /// Imports bytes into the store as a raw blob.
+    ///
+    /// For format control (e.g. importing as `HashSeq`), use
+    /// [`Blobs::add_bytes_with_opts`].
     pub fn add_bytes(&self, data: impl Into<bytes::Bytes>) -> AddProgress<'_> {
         let options = ImportBytesRequest {
             data: data.into(),
@@ -179,6 +206,7 @@ impl Blobs {
         self.add_bytes_impl(options)
     }
 
+    /// Imports bytes into the store with full control over format and other options.
     pub fn add_bytes_with_opts(&self, options: impl Into<AddBytesOptions>) -> AddProgress<'_> {
         let options = options.into();
         let request = ImportBytesRequest {
@@ -214,6 +242,7 @@ impl Blobs {
         AddProgress::new(self, stream)
     }
 
+    /// Imports a file from the filesystem with full control over import mode and format.
     pub fn add_path_with_opts(&self, options: impl Into<AddPathOptions>) -> AddProgress<'_> {
         let options = options.into();
         self.add_path_with_opts_impl(ImportPathRequest {
@@ -249,6 +278,10 @@ impl Blobs {
         AddProgress::new(self, stream)
     }
 
+    /// Imports a file from the filesystem as a raw blob.
+    ///
+    /// The file is copied into the store. For other import modes (e.g. move or
+    /// reflink), use [`Blobs::add_path_with_opts`].
     pub fn add_path(&self, path: impl AsRef<Path>) -> AddProgress<'_> {
         self.add_path_with_opts(AddPathOptions {
             path: path.as_ref().to_owned(),
@@ -257,6 +290,10 @@ impl Blobs {
         })
     }
 
+    /// Imports data from an async byte stream into the store as a raw blob.
+    ///
+    /// The stream is consumed in chunks. Use this when the data comes from a
+    /// source that does not fit in memory all at once.
     pub async fn add_stream(
         &self,
         data: impl Stream<Item = io::Result<Bytes>> + Send + Sync + 'static,
@@ -299,6 +336,13 @@ impl Blobs {
         AddProgress::new(self, stream)
     }
 
+    /// Exports byte ranges from a blob.
+    ///
+    /// Ranges are given in bytes. The returned progress handle yields
+    /// [`ExportRangesItem`] events; note that the store rounds up to chunk
+    /// boundaries (16 KiB), so you may receive slightly more data than
+    /// requested. Use [`ExportRangesProgress::concatenate`] to collect the
+    /// ranges into a single buffer, clipped to the exact requested bounds.
     pub fn export_ranges(
         &self,
         hash: impl Into<Hash>,
@@ -310,6 +354,7 @@ impl Blobs {
         })
     }
 
+    /// Exports byte ranges from a blob with full control over options.
     pub fn export_ranges_with_opts(&self, options: ExportRangesOptions) -> ExportRangesProgress {
         trace!("{options:?}");
         ExportRangesProgress::new(
@@ -318,6 +363,10 @@ impl Blobs {
         )
     }
 
+    /// Exports a blob in BAO-encoded format with full control over options.
+    ///
+    /// `local_update_cap` controls the internal channel buffer size; 32 is a
+    /// reasonable default for most cases.
     pub fn export_bao_with_opts(
         &self,
         options: ExportBaoOptions,
@@ -327,6 +376,14 @@ impl Blobs {
         ExportBaoProgress::new(self.client.server_streaming(options, local_update_cap))
     }
 
+    /// Exports a blob in BAO-encoded format for the specified chunk ranges.
+    ///
+    /// The BAO encoding includes size headers and BLAKE3 hash tree nodes
+    /// needed to verify each leaf. This is the format consumed by
+    /// [`Blobs::import_bao_bytes`] on the receiving side.
+    ///
+    /// `ranges` are expressed in BLAKE3 chunk units (1024 bytes each), not
+    /// bytes. Use `ChunkRanges::all()` to export the full blob.
     pub fn export_bao(
         &self,
         hash: impl Into<Hash>,
@@ -376,6 +433,7 @@ impl Blobs {
         self.observe_with_opts(ObserveOptions { hash: hash.into() })
     }
 
+    /// Observes the bitfield of a blob with full control over options.
     pub fn observe_with_opts(&self, options: ObserveOptions) -> ObserveProgress {
         trace!("{:?}", options);
         if options.hash == Hash::EMPTY {
@@ -388,11 +446,16 @@ impl Blobs {
         ObserveProgress::new(self.client.server_streaming(options, 32))
     }
 
+    /// Exports a blob to the filesystem with full control over options.
     pub fn export_with_opts(&self, options: ExportOptions) -> ExportProgress {
         trace!("{:?}", options);
         ExportProgress::new(self.client.server_streaming(options, 32))
     }
 
+    /// Exports a blob to a file on the filesystem.
+    ///
+    /// The blob is copied to `target`. For other export modes (e.g. move or
+    /// reflink), use [`Blobs::export_with_opts`].
     pub fn export(&self, hash: impl Into<Hash>, target: impl AsRef<Path>) -> ExportProgress {
         let options = ExportOptions {
             hash: hash.into(),
@@ -485,18 +548,25 @@ impl Blobs {
         Ok(())
     }
 
+    /// Lists all blobs currently stored.
+    ///
+    /// Yields the hash of each complete or partial blob. Use
+    /// [`BlobsListProgress::hashes`] to collect them into a `Vec`, or
+    /// [`BlobsListProgress::stream`] to iterate lazily.
     pub fn list(&self) -> BlobsListProgress {
         let msg = ListRequest;
         let client = self.client.clone();
         BlobsListProgress::new(client.server_streaming(msg, 32))
     }
 
+    /// Returns the storage status of a blob: complete, partial, or not found.
     pub async fn status(&self, hash: impl Into<Hash>) -> irpc::Result<BlobStatus> {
         let hash = hash.into();
         let msg = BlobStatusRequest { hash };
         self.client.rpc(msg).await
     }
 
+    /// Returns `true` if the store holds a complete blob for the given hash.
     pub async fn has(&self, hash: impl Into<Hash>) -> irpc::Result<bool> {
         match self.status(hash).await? {
             BlobStatus::Complete { .. } => Ok(true),
@@ -512,7 +582,10 @@ impl Blobs {
     }
 }
 
-/// A progress handle for a batch scoped add operation.
+/// A progress handle for an add operation that runs inside a [`Batch`] scope.
+///
+/// Like [`AddProgress`] but, when awaited, returns a [`TempTag`] that is
+/// protected until the enclosing batch is dropped.
 pub struct BatchAddProgress<'a>(AddProgress<'a>);
 
 impl<'a> IntoFuture for BatchAddProgress<'a> {
@@ -526,24 +599,39 @@ impl<'a> IntoFuture for BatchAddProgress<'a> {
 }
 
 impl<'a> BatchAddProgress<'a> {
+    /// Completes the add and writes a persistent tag with the given name.
+    ///
+    /// Returns the [`HashAndFormat`] of the stored blob.
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
         self.0.with_named_tag(name).await
     }
 
+    /// Completes the add and writes an auto-named persistent tag.
+    ///
+    /// Returns [`TagInfo`] with the generated tag name and the blob's hash.
     pub async fn with_tag(self) -> RequestResult<TagInfo> {
         self.0.with_tag().await
     }
 
+    /// Returns the underlying stream of [`AddProgressItem`] events.
     pub async fn stream(self) -> impl Stream<Item = AddProgressItem> {
         self.0.stream().await
     }
 
+    /// Completes the add and returns a batch-scoped [`TempTag`].
+    ///
+    /// The blob is protected from GC until the enclosing batch is dropped.
     pub async fn temp_tag(self) -> RequestResult<TempTag> {
         self.0.temp_tag().await
     }
 }
 
-/// A batch of operations that modify the blob store.
+/// A scope in which blobs added are protected from garbage collection.
+///
+/// Created by [`Blobs::batch`]. All blobs added within a batch are kept alive
+/// until the `Batch` is dropped, at which point protection is released.
+/// This lets you add multiple blobs and then tag them atomically without
+/// risking GC between additions.
 pub struct Batch<'a> {
     scope: Scope,
     blobs: &'a Blobs,
@@ -551,6 +639,7 @@ pub struct Batch<'a> {
 }
 
 impl<'a> Batch<'a> {
+    /// Imports bytes into the store as a raw blob, protected within this batch.
     pub fn add_bytes(&self, data: impl Into<Bytes>) -> BatchAddProgress<'_> {
         let options = ImportBytesRequest {
             data: data.into(),
@@ -560,6 +649,7 @@ impl<'a> Batch<'a> {
         BatchAddProgress(self.blobs.add_bytes_impl(options))
     }
 
+    /// Imports bytes with explicit format options, protected within this batch.
     pub fn add_bytes_with_opts(&self, options: impl Into<AddBytesOptions>) -> BatchAddProgress<'_> {
         let options = options.into();
         BatchAddProgress(self.blobs.add_bytes_impl(ImportBytesRequest {
@@ -569,6 +659,7 @@ impl<'a> Batch<'a> {
         }))
     }
 
+    /// Imports bytes from a byte slice as a raw blob, protected within this batch.
     pub fn add_slice(&self, data: impl AsRef<[u8]>) -> BatchAddProgress<'_> {
         let options = ImportBytesRequest {
             data: Bytes::copy_from_slice(data.as_ref()),
@@ -578,6 +669,7 @@ impl<'a> Batch<'a> {
         BatchAddProgress(self.blobs.add_bytes_impl(options))
     }
 
+    /// Imports a file from the filesystem with explicit options, protected within this batch.
     pub fn add_path_with_opts(&self, options: impl Into<AddPathOptions>) -> BatchAddProgress<'_> {
         let options = options.into();
         BatchAddProgress(self.blobs.add_path_with_opts_impl(ImportPathRequest {
@@ -588,6 +680,10 @@ impl<'a> Batch<'a> {
         }))
     }
 
+    /// Creates a batch-scoped [`TempTag`] for a blob that was added externally.
+    ///
+    /// Use this to protect a blob that you added via other means (e.g. via
+    /// a download) within the lifetime of this batch.
     pub async fn temp_tag(&self, value: impl Into<HashAndFormat>) -> irpc::Result<TempTag> {
         let value = value.into();
         let msg = CreateTempTagRequest {
@@ -598,11 +694,14 @@ impl<'a> Batch<'a> {
     }
 }
 
-/// Options for adding data from a file system path.
+/// Options for importing data from a filesystem path.
 #[derive(Debug)]
 pub struct AddPathOptions {
+    /// Path to the file to import.
     pub path: PathBuf,
+    /// The format to assign to the imported blob.
     pub format: BlobFormat,
+    /// How to move the file into the store (copy, move, or reflink).
     pub mode: ImportMode,
 }
 
@@ -639,6 +738,9 @@ impl<'a> AddProgress<'a> {
         }
     }
 
+    /// Completes the import and returns a globally-scoped [`TempTag`] protecting the blob.
+    ///
+    /// The blob is protected from GC for as long as the `TempTag` is alive.
     pub async fn temp_tag(self) -> RequestResult<TempTag> {
         let mut stream = self.inner;
         while let Some(item) = stream.next().await {
@@ -651,6 +753,9 @@ impl<'a> AddProgress<'a> {
         Err(io::Error::other("unexpected end of stream").into())
     }
 
+    /// Completes the import and writes a persistent tag with the given name.
+    ///
+    /// Returns the [`HashAndFormat`] of the stored blob.
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
@@ -661,6 +766,9 @@ impl<'a> AddProgress<'a> {
         Ok(haf)
     }
 
+    /// Completes the import and writes an auto-named persistent tag.
+    ///
+    /// Returns [`TagInfo`] containing the generated tag name and the blob's hash.
     pub async fn with_tag(self) -> RequestResult<TagInfo> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
@@ -672,14 +780,16 @@ impl<'a> AddProgress<'a> {
         Ok(TagInfo { name, hash, format })
     }
 
+    /// Returns the underlying stream of raw [`AddProgressItem`] progress events.
     pub async fn stream(self) -> impl Stream<Item = AddProgressItem> {
         self.inner
     }
 }
 
-/// Options for an async reader for blobs that supports AsyncRead and AsyncSeek.
+/// Options for creating a [`BlobReader`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReaderOptions {
+    /// The hash of the blob to read.
     pub hash: Hash,
 }
 
@@ -716,6 +826,11 @@ impl ObserveProgress {
         }
     }
 
+    /// Waits until the blob is fully downloaded and returns the complete bitfield.
+    ///
+    /// This drives the stream until a [`Bitfield`] with `is_complete()` is
+    /// received, then returns it. If the stream ends before that, an error is
+    /// returned.
     pub async fn await_completion(self) -> RequestResult<Bitfield> {
         let mut stream = self.stream().await?;
         while let Some(item) = stream.next().await {
@@ -773,6 +888,7 @@ impl ExportProgress {
         }
     }
 
+    /// Returns the underlying stream of raw [`ExportProgressItem`] progress events.
     pub async fn stream(self) -> impl Stream<Item = ExportProgressItem> {
         Gen::new(|co| async move {
             let mut rx = match self.inner.await {
@@ -788,6 +904,7 @@ impl ExportProgress {
         })
     }
 
+    /// Drives the export to completion and returns the number of bytes written.
     pub async fn finish(self) -> RequestResult<u64> {
         let mut rx = self.inner.await?;
         let mut size = None;
@@ -807,9 +924,14 @@ impl ExportProgress {
     }
 }
 
-/// A handle for an ongoing bao import operation.
+/// A handle for an ongoing BAO import operation.
+///
+/// Send verified [`bao_tree::io::BaoContentItem`]s to the store via `tx`.
+/// Drop `tx` when done, then await `rx` to learn whether the import succeeded.
 pub struct ImportBaoHandle {
+    /// Channel for sending BAO content items (leaves and parent nodes) to the store.
     pub tx: mpsc::Sender<BaoContentItem>,
+    /// Receives the import result once `tx` is dropped.
     pub rx: oneshot::Receiver<super::Result<()>>,
 }
 
@@ -828,7 +950,10 @@ impl ImportBaoHandle {
     }
 }
 
-/// A progress handle for a blobs list operation.
+/// A progress handle for a [`Blobs::list`] operation.
+///
+/// Use [`BlobsListProgress::hashes`] to collect all hashes at once, or
+/// [`BlobsListProgress::stream`] to iterate lazily.
 pub struct BlobsListProgress {
     inner: future::Boxed<irpc::Result<mpsc::Receiver<super::Result<Hash>>>>,
 }
@@ -842,6 +967,7 @@ impl BlobsListProgress {
         }
     }
 
+    /// Collects all blob hashes into a `Vec`.
     pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
         let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
         let mut hashes = Vec::new();
@@ -851,6 +977,7 @@ impl BlobsListProgress {
         Ok(hashes)
     }
 
+    /// Returns a lazy stream of blob hashes.
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = super::Result<Hash>>> {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
@@ -1002,6 +1129,7 @@ impl ExportBaoProgress {
         self.hashes_with_index().map(|x| x.map(|(_, hash)| hash))
     }
 
+    /// Collects the full BAO-encoded bytes (size header + hash tree + leaves) into a `Vec`.
     pub async fn bao_to_vec(self) -> RequestResult<Vec<u8>> {
         let mut data = Vec::new();
         let mut stream = self.into_byte_stream();
@@ -1011,6 +1139,7 @@ impl ExportBaoProgress {
         Ok(data)
     }
 
+    /// Collects the raw data payload (leaves only, no hash-tree headers) into `Bytes`.
     pub async fn data_to_bytes(self) -> super::ExportBaoResult<Bytes> {
         let mut rx = self.inner.await?;
         let mut data = Vec::new();
@@ -1036,6 +1165,7 @@ impl ExportBaoProgress {
         }
     }
 
+    /// Collects the raw data payload into a `Vec<u8>`.
     pub async fn data_to_vec(self) -> super::ExportBaoResult<Vec<u8>> {
         let mut rx = self.inner.await?;
         let mut data = Vec::new();
@@ -1053,6 +1183,7 @@ impl ExportBaoProgress {
         Ok(data)
     }
 
+    /// Writes the full BAO-encoded stream (size header, hash-tree nodes, and leaves) to `target`.
     pub async fn write<W: AsyncStreamWriter>(self, target: &mut W) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
         while let Some(item) = rx.recv().await? {
@@ -1113,6 +1244,10 @@ impl ExportBaoProgress {
         Ok(())
     }
 
+    /// Returns the BAO stream as a stream of raw byte chunks.
+    ///
+    /// Each chunk is either the 8-byte size header, a 64-byte hash-tree parent
+    /// node, or a data leaf. The chunks arrive in BAO wire order.
     pub fn into_byte_stream(self) -> impl Stream<Item = super::Result<Bytes>> {
         self.stream().filter_map(|item| match item {
             EncodedItem::Size(size) => {
@@ -1131,6 +1266,10 @@ impl ExportBaoProgress {
         })
     }
 
+    /// Returns the underlying stream of [`EncodedItem`]s.
+    ///
+    /// Items arrive in BAO order: size header first, then interleaved hash-tree
+    /// parents and data leaves, ending with a `Done` or `Error` sentinel.
     pub fn stream(self) -> impl Stream<Item = EncodedItem> {
         Gen::new(|co| async move {
             let mut rx = match self.inner.await {

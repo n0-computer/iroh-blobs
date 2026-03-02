@@ -69,6 +69,10 @@ impl Deref for BlobsProtocol {
 }
 
 impl BlobsProtocol {
+    /// Creates a new `BlobsProtocol` backed by `store`.
+    ///
+    /// Pass `Some(sender)` for `events` to receive transfer events, or `None`
+    /// to discard them.
     pub fn new(store: &Store, events: Option<EventSender>) -> Self {
         Self {
             inner: Arc::new(BlobsInner {
@@ -78,6 +82,7 @@ impl BlobsProtocol {
         }
     }
 
+    /// Returns a reference to the underlying [`Store`].
     pub fn store(&self) -> &Store {
         &self.inner.store
     }

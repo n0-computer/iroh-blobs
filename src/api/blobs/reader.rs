@@ -48,6 +48,7 @@ impl BlobReader {
         }
     }
 
+    /// Returns the hash of the blob this reader is reading.
     pub fn hash(&self) -> &Hash {
         &self.options.hash
     }

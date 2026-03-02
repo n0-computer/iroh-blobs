@@ -30,6 +30,7 @@ impl Tags {
         Self::ref_cast(sender)
     }
 
+    /// Lists all active temporary tags as a stream of their [`HashAndFormat`] values.
     pub async fn list_temp_tags(&self) -> irpc::Result<impl Stream<Item = HashAndFormat>> {
         let options = ListTempTagsRequest;
         trace!("{:?}", options);
@@ -58,12 +59,18 @@ impl Tags {
         Ok(stream.next().await.transpose()?)
     }
 
+    /// Sets a tag with full control over options.
     pub async fn set_with_opts(&self, options: SetOptions) -> super::RequestResult<()> {
         trace!("{:?}", options);
         self.client.rpc(options).await??;
         Ok(())
     }
 
+    /// Sets a tag by name to the given [`HashAndFormat`].
+    ///
+    /// If the tag already exists it is overwritten. Tags keep their associated
+    /// blobs alive during garbage collection, so setting a tag is how you
+    /// durably anchor a piece of content.
     pub async fn set(
         &self,
         name: impl AsRef<[u8]>,
@@ -179,12 +186,18 @@ impl Tags {
         .await
     }
 
+    /// Creates a new tag with full control over options and returns its generated name.
     pub async fn create_with_opts(&self, options: CreateOptions) -> super::RequestResult<Tag> {
         trace!("{:?}", options);
         let rx = self.client.rpc(options);
         Ok(rx.await??)
     }
 
+    /// Creates a new persistent tag with an auto-generated name and returns that name.
+    ///
+    /// Unlike [`Tags::set`], you do not choose the name. The store picks a
+    /// unique one. This is useful when you just want durable protection for a
+    /// blob and do not care about the tag name.
     pub async fn create(&self, value: impl Into<HashAndFormat>) -> super::RequestResult<Tag> {
         self.create_with_opts(CreateOptions {
             value: value.into(),
@@ -192,6 +205,11 @@ impl Tags {
         .await
     }
 
+    /// Creates a globally-scoped [`TempTag`] that protects `value` from GC.
+    ///
+    /// Unlike persistent tags, a `TempTag` vanishes when dropped. Use it to
+    /// protect a blob while you are working on it, then either drop it or
+    /// convert it to a persistent tag with [`Tags::create`] or [`Tags::set`].
     pub async fn temp_tag(&self, value: impl Into<HashAndFormat>) -> irpc::Result<TempTag> {
         let value = value.into();
         let msg = CreateTempTagRequest {

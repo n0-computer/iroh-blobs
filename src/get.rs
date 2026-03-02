@@ -39,14 +39,20 @@ pub use error::{GetError, GetResult};
 type DefaultReader = iroh::endpoint::RecvStream;
 type DefaultWriter = iroh::endpoint::SendStream;
 
+/// A pair of send and receive streams for a single QUIC bidi-stream.
 pub struct StreamPair<R: RecvStream = DefaultReader, W: SendStream = DefaultWriter> {
+    /// Stable identifier of the QUIC connection this stream belongs to.
     pub connection_id: u64,
+    /// Timestamp at which this stream pair was created, used for statistics.
     pub t0: Instant,
+    /// The incoming (receive) half of the bidi-stream.
     pub recv: R,
+    /// The outgoing (send) half of the bidi-stream.
     pub send: W,
 }
 
 impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
+    /// Creates a new `StreamPair`, recording `Instant::now()` as the start time.
     pub fn new(connection_id: u64, recv: R, send: W) -> Self {
         Self {
             t0: Instant::now(),
@@ -85,10 +91,12 @@ impl Stats {
         data_len_bit as f64 / (1000. * 1000.) / self.elapsed.as_secs_f64()
     }
 
+    /// Returns the total bytes read (payload plus overhead).
     pub fn total_bytes_read(&self) -> u64 {
         self.payload_bytes_read + self.other_bytes_read
     }
 
+    /// Adds the counters and elapsed time from `that` into `self`.
     pub fn combine(&mut self, that: &Stats) {
         self.payload_bytes_written += that.payload_bytes_written;
         self.other_bytes_written += that.other_bytes_written;
@@ -303,6 +311,7 @@ pub mod fsm {
     }
 
     impl<R: RecvStream, W: SendStream> AtConnected<R, W> {
+        /// Creates a new `AtConnected` state from an already-opened stream pair.
         pub fn new(
             start: Instant,
             reader: R,
@@ -965,6 +974,7 @@ pub mod fsm {
         },
     }
 
+    /// Byte counters accumulated during a request.
     #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
     pub struct RequestCounters {
         /// payload bytes written

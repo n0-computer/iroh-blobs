@@ -66,11 +66,23 @@ use crate::{
     BlobFormat, Hash, HashAndFormat,
 };
 
+/// Configuration options for the in-memory store.
 #[derive(Debug, Default)]
 pub struct Options {
+    /// Optional garbage collection configuration.
     pub gc_config: Option<GcConfig>,
 }
 
+/// A mutable, fully-featured in-memory blob store.
+///
+/// `MemStore` holds all blob data in process memory. It supports all store
+/// operations including tags, temp tags, garbage collection, and BAO-verified
+/// streaming. Because data lives in RAM, the total amount of content you can
+/// store is bounded by available memory.
+///
+/// Create a store with [`MemStore::new`] or [`MemStore::new_with_opts`] if you
+/// want to enable garbage collection. The store runs a background actor that
+/// handles all operations; cloning it is cheap (it clones the channel sender).
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct MemStore {
@@ -111,14 +123,16 @@ enum TaskResult {
 }
 
 impl MemStore {
-    pub fn from_sender(client: ApiClient) -> Self {
+    pub(crate) fn from_sender(client: ApiClient) -> Self {
         Self { client }
     }
 
+    /// Creates a new, empty in-memory store with no GC enabled.
     pub fn new() -> Self {
         Self::new_with_opts(Options::default())
     }
 
+    /// Creates a new in-memory store with the given options.
     pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
         n0_future::task::spawn(

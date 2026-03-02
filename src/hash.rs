@@ -1,4 +1,4 @@
-//! The blake3 hash used in Iroh.
+//! BLAKE3 hash types used throughout iroh-blobs.
 
 use std::{borrow::Borrow, fmt, str::FromStr};
 
@@ -10,7 +10,20 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::store::util::DD;
 
-/// Hash type used throughout.
+/// A 32-byte BLAKE3 hash used as a content address for blobs.
+///
+/// Two blobs with the same `Hash` are guaranteed to have identical bytes.
+///
+/// ## Text format
+///
+/// `Display` and `FromStr` use lowercase hex (64 chars). The [`Hash::fmt_short`]
+/// helper returns a 10-char prefix useful in log messages where full hashes
+/// would be too noisy.
+///
+/// ## Serialization
+///
+/// Human-readable formats (e.g. JSON) encode the hash as a lowercase hex
+/// string. Binary formats (e.g. postcard) encode the raw 32-byte array.
 #[derive(PartialEq, Eq, Copy, Clone, Hash)]
 pub struct Hash(blake3::Hash);
 
@@ -21,35 +34,37 @@ impl fmt::Debug for Hash {
 }
 
 impl Hash {
-    /// The hash for the empty byte range (`b""`).
+    /// The hash of the empty byte string `b""`.
     pub const EMPTY: Hash = Hash::from_bytes([
         175, 19, 73, 185, 245, 249, 161, 166, 160, 64, 77, 234, 54, 220, 201, 73, 155, 203, 37,
         201, 173, 193, 18, 183, 204, 154, 147, 202, 228, 31, 50, 98,
     ]);
 
-    /// Calculate the hash of the provided bytes.
+    /// Hashes the provided bytes and returns the resulting `Hash`.
     pub fn new(buf: impl AsRef<[u8]>) -> Self {
         let val = blake3::hash(buf.as_ref());
         Hash(val)
     }
 
-    /// Bytes of the hash.
+    /// Returns the raw 32-byte representation of this hash.
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
 
-    /// Create a `Hash` from its raw bytes representation.
+    /// Creates a `Hash` from its raw 32-byte representation.
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(blake3::Hash::from_bytes(bytes))
     }
 
-    /// Convert the hash to a hex string.
+    /// Returns the hash as a 64-character lowercase hex string.
     pub fn to_hex(&self) -> String {
         self.0.to_hex().to_string()
     }
 
-    /// Convert to a hex string limited to the first 5bytes for a friendly string
-    /// representation of the hash.
+    /// Returns a short 10-character hex prefix of the hash, useful in log messages.
+    ///
+    /// This encodes only the first 5 bytes. It is not collision-resistant, but
+    /// good enough to distinguish hashes in human-readable output.
     pub fn fmt_short(&self) -> ArrayString<10> {
         let mut res = ArrayString::new();
         data_encoding::HEXLOWER
@@ -135,6 +150,10 @@ impl fmt::Display for Hash {
     }
 }
 
+/// Error returned when parsing a [`Hash`] from a string fails.
+///
+/// The input must be either a 64-character lowercase hex string or a
+/// 52-character base32 (no-pad, case-insensitive) string.
 #[allow(missing_docs)]
 #[non_exhaustive]
 #[stack_error(derive, add_meta, std_sources)]
@@ -204,7 +223,17 @@ impl MaxSize for Hash {
     const POSTCARD_MAX_SIZE: usize = 32;
 }
 
-/// A format identifier
+/// The format of a blob: either raw bytes or a sequence of hashes.
+///
+/// Every content address in iroh-blobs is qualified by a format, because the
+/// same 32 bytes could be either an opaque raw blob or the root of a
+/// [`HashSeq`](crate::hashseq::HashSeq). The format tells consumers how to
+/// interpret the content.
+///
+/// `Raw` is the default and covers the vast majority of use cases. `HashSeq`
+/// is needed when you want to represent a collection of blobs with a single
+/// root hash; see [`crate::format::collection::Collection`] for a higher-level
+/// abstraction built on top of it.
 #[derive(
     Clone,
     Copy,
@@ -221,10 +250,10 @@ impl MaxSize for Hash {
     derive_more::Display,
 )]
 pub enum BlobFormat {
-    /// Raw blob
+    /// Raw bytes with no additional structure.
     #[default]
     Raw,
-    /// A sequence of BLAKE3 hashes
+    /// A flat sequence of BLAKE3 hashes, each 32 bytes, no other framing.
     HashSeq,
 }
 
@@ -238,23 +267,28 @@ impl From<BlobFormat> for u64 {
 }
 
 impl BlobFormat {
-    /// Is raw format
+    /// Returns `true` if this is [`BlobFormat::Raw`].
     pub const fn is_raw(&self) -> bool {
         matches!(self, BlobFormat::Raw)
     }
 
-    /// Is hash seq format
+    /// Returns `true` if this is [`BlobFormat::HashSeq`].
     pub const fn is_hash_seq(&self) -> bool {
         matches!(self, BlobFormat::HashSeq)
     }
 }
 
-/// A hash and format pair
+/// A [`Hash`] paired with a [`BlobFormat`], fully identifying a piece of content.
+///
+/// Most content is `Raw`, but collections use `HashSeq` to signal that the
+/// blob's bytes should be interpreted as a sequence of hashes. Carrying the
+/// format together with the hash avoids the need for out-of-band knowledge
+/// about how to interpret content.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, MaxSize, Hash)]
 pub struct HashAndFormat {
-    /// The hash
+    /// The content hash.
     pub hash: Hash,
-    /// The format
+    /// How to interpret the bytes at that hash.
     pub format: BlobFormat,
 }
 
@@ -356,12 +390,12 @@ mod redb_support {
 }
 
 impl HashAndFormat {
-    /// Create a new hash and format pair.
+    /// Creates a `HashAndFormat` from a hash and an explicit format.
     pub fn new(hash: Hash, format: BlobFormat) -> Self {
         Self { hash, format }
     }
 
-    /// Create a new hash and format pair, using the default (raw) format.
+    /// Creates a `HashAndFormat` with [`BlobFormat::Raw`].
     pub fn raw(hash: Hash) -> Self {
         Self {
             hash,
@@ -369,7 +403,7 @@ impl HashAndFormat {
         }
     }
 
-    /// Create a new hash and format pair, using the collection format.
+    /// Creates a `HashAndFormat` with [`BlobFormat::HashSeq`].
     pub fn hash_seq(hash: Hash) -> Self {
         Self {
             hash,

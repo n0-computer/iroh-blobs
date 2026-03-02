@@ -48,6 +48,12 @@ use crate::{
     Hash,
 };
 
+/// A read-only in-memory blob store backed by a fixed set of blobs.
+///
+/// All content must be provided at construction time. Write operations are not
+/// supported and will return an error. Use this store when you need to serve a
+/// small, static set of blobs without touching the filesystem, for example in
+/// tests or as a lightweight embedded provider.
 #[derive(Debug, Clone)]
 pub struct ReadonlyMemStore {
     client: ApiClient,
@@ -364,6 +370,10 @@ async fn export_ranges_impl(
 }
 
 impl ReadonlyMemStore {
+    /// Creates a new `ReadonlyMemStore` pre-populated with `items`.
+    ///
+    /// Each item is hashed with BLAKE3 and stored as a complete blob. Duplicate
+    /// content is deduplicated automatically.
     pub fn new(items: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
         let mut entries = HashMap::new();
         for item in items {

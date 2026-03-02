@@ -173,6 +173,11 @@ pub type ProtectCb = Arc<
         + 'static,
 >;
 
+/// Runs one complete GC cycle: mark live blobs, then sweep dead ones.
+///
+/// `live` is pre-populated with any hashes that should be protected externally
+/// (e.g. by the [`GcConfig::add_protected`] callback). After this function
+/// returns, `live` contains the full set of hashes that survived the cycle.
 pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api::Result<()> {
     debug!(externally_protected = live.len(), "gc: start");
     {
@@ -216,6 +221,11 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
     Ok(())
 }
 
+/// Runs GC indefinitely according to `config`, sleeping between cycles.
+///
+/// This function is normally spawned as a background task by the store
+/// implementations. It loops, sleeping for `config.interval` between cycles,
+/// and stops only if a GC cycle returns an error.
 pub async fn run_gc(store: Store, config: GcConfig) {
     debug!("gc enabled with interval {:?}", config.interval);
     let mut live = HashSet::new();

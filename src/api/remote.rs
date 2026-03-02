@@ -69,6 +69,7 @@ pub struct Remote {
     client: ApiClient,
 }
 
+/// A single event emitted by a get (download) operation.
 #[derive(Debug)]
 pub enum GetProgressItem {
     /// Progress on the payload bytes read.
@@ -100,6 +101,10 @@ impl TryFrom<GetProgressItem> for GetResult<Stats> {
     }
 }
 
+/// A handle to an in-progress get (download) operation.
+///
+/// Await this directly to get the final [`Stats`] (or an error), or call
+/// [`GetProgress::stream`] to observe individual [`GetProgressItem`] events.
 pub struct GetProgress {
     rx: tokio::sync::mpsc::Receiver<GetProgressItem>,
     fut: n0_future::boxed::BoxFuture<()>,
@@ -115,10 +120,12 @@ impl IntoFuture for GetProgress {
 }
 
 impl GetProgress {
+    /// Returns a stream of [`GetProgressItem`] events for this download.
     pub fn stream(self) -> impl Stream<Item = GetProgressItem> {
         into_stream(self.rx, self.fut)
     }
 
+    /// Waits for the download to finish and returns the transfer statistics.
     pub async fn complete(self) -> GetResult<Stats> {
         just_result(self.stream()).await.unwrap_or_else(|| {
             Err(e!(
@@ -129,6 +136,7 @@ impl GetProgress {
     }
 }
 
+/// A single event emitted by a push operation.
 #[derive(Debug)]
 pub enum PushProgressItem {
     /// Progress on the payload bytes read.
@@ -160,6 +168,10 @@ impl TryFrom<PushProgressItem> for Result<Stats> {
     }
 }
 
+/// A handle to an in-progress push (upload) operation.
+///
+/// Await this directly to get the final [`Stats`] (or an error), or call
+/// [`PushProgress::stream`] to observe individual [`PushProgressItem`] events.
 pub struct PushProgress {
     rx: tokio::sync::mpsc::Receiver<PushProgressItem>,
     fut: n0_future::boxed::BoxFuture<()>,
@@ -175,10 +187,12 @@ impl IntoFuture for PushProgress {
 }
 
 impl PushProgress {
+    /// Returns a stream of [`PushProgressItem`] events for this push.
     pub fn stream(self) -> impl Stream<Item = PushProgressItem> {
         into_stream(self.rx, self.fut)
     }
 
+    /// Waits for the push to finish and returns the transfer statistics.
     pub async fn complete(self) -> Result<Stats> {
         just_result(self.stream())
             .await
@@ -438,6 +452,10 @@ impl Remote {
         Store::ref_from_sender(&self.client)
     }
 
+    /// Returns the [`LocalInfo`] for an arbitrary [`GetRequest`].
+    ///
+    /// This is a lower-level variant of [`Remote::local`] that accepts a
+    /// pre-built request rather than just a [`HashAndFormat`].
     pub async fn local_for_request(
         &self,
         request: impl Into<Arc<GetRequest>>,
@@ -499,6 +517,12 @@ impl Remote {
         self.local_for_request(request).await
     }
 
+    /// Fetches `content` from `sp`, skipping data already present in the local store.
+    ///
+    /// This is the recommended high-level method for downloading a blob or hash
+    /// sequence from a single connection. It checks what is available locally via
+    /// [`Remote::local`], computes the missing ranges, and issues a targeted
+    /// request for only those ranges.
     pub fn fetch(
         &self,
         sp: impl GetStreamPair + 'static,
@@ -545,6 +569,11 @@ impl Remote {
         Ok(stats)
     }
 
+    /// Subscribes to availability updates for a blob on a remote node.
+    ///
+    /// Returns a stream of [`Bitfield`] snapshots that the remote sends
+    /// whenever its local state changes. This is useful for monitoring
+    /// download progress on another node.
     pub fn observe(
         &self,
         conn: Connection,
@@ -576,6 +605,10 @@ impl Remote {
         }
     }
 
+    /// Pushes `request` to the remote node over `conn`.
+    ///
+    /// Returns a [`PushProgress`] handle. Note that many nodes reject push
+    /// requests; this is an experimental feature.
     pub fn execute_push(&self, conn: Connection, request: PushRequest) -> PushProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
@@ -641,10 +674,18 @@ impl Remote {
         Ok(Default::default())
     }
 
+    /// Executes a get request without consulting the local store.
+    ///
+    /// Unlike [`Remote::fetch`], this does not skip already-local data. Use it
+    /// when you have already computed the minimal request yourself or when you
+    /// want to force a re-download.
     pub fn execute_get(&self, conn: impl GetStreamPair, request: GetRequest) -> GetProgress {
         self.execute_get_with_opts(conn, request)
     }
 
+    /// Executes a get request with full control over options.
+    ///
+    /// This is the underlying implementation for [`Remote::execute_get`].
     pub fn execute_get_with_opts(
         &self,
         conn: impl GetStreamPair,
@@ -749,6 +790,7 @@ impl Remote {
         Ok(stats)
     }
 
+    /// Fetches multiple independent blobs in one round-trip using `GetManyRequest`.
     pub fn execute_get_many(&self, conn: Connection, request: GetManyRequest) -> GetProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
@@ -861,7 +903,12 @@ pub enum ExecuteError {
     },
 }
 
+/// A source that can be turned into a bidirectional stream pair for a get request.
+///
+/// This is implemented for both an established [`Connection`] (which opens a new
+/// bidi stream on demand) and for a pre-opened [`StreamPair`] (which is used directly).
 pub trait GetStreamPair: Send + 'static {
+    /// Opens (or returns) the bidirectional stream pair.
     fn open_stream_pair(
         self,
     ) -> impl Future<Output = io::Result<StreamPair<impl RecvStream, impl SendStream>>> + Send + 'static;

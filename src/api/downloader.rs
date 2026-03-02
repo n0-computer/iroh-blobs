@@ -25,6 +25,17 @@ use crate::{
     BlobFormat, Hash, HashAndFormat,
 };
 
+/// Downloads blobs from multiple remote nodes with automatic failover.
+///
+/// The `Downloader` is an actor that manages a pool of connections and
+/// dispatches download requests. It tries each provider in the order returned
+/// by the [`ContentDiscovery`] strategy, keeping track of what the previous
+/// provider already delivered so the next one only needs to provide the
+/// remainder.
+///
+/// Create one via [`crate::api::Store::downloader`] and keep it alive for the
+/// lifetime of your download workload; do not create it ad hoc per-request
+/// because it owns connection state.
 #[derive(Debug, Clone)]
 pub struct Downloader {
     client: irpc::Client<SwarmProtocol>,
@@ -44,22 +55,34 @@ struct DownloaderActor {
     running: HashSet<n0_future::task::Id>,
 }
 
+/// Progress updates emitted during a download managed by [`Downloader`].
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DownloadProgressItem {
+    /// A non-recoverable error terminated the download.
     #[serde(skip)]
     Error(n0_error::AnyError),
+    /// The downloader is about to try this provider for the given request.
     TryProvider {
+        /// The provider being tried.
         id: EndpointId,
+        /// The sub-request being attempted.
         request: Arc<GetRequest>,
     },
+    /// The provider could not fulfill the request.
     ProviderFailed {
+        /// The provider that failed.
         id: EndpointId,
+        /// The request that was being attempted.
         request: Arc<GetRequest>,
     },
+    /// A partial (or full) request was completed successfully.
     PartComplete {
+        /// The completed request.
         request: Arc<GetRequest>,
     },
+    /// Cumulative payload bytes downloaded so far.
     Progress(u64),
+    /// The download failed and could not be completed from any provider.
     DownloadError,
 }
 
@@ -195,13 +218,27 @@ fn into_stream<T>(mut recv: tokio::sync::mpsc::Receiver<T>) -> impl Stream<Item 
     })
 }
 
+/// A concrete download request that specifies a finite set of content to fetch.
+///
+/// A `FiniteRequest` is either a single [`GetRequest`] (for structured
+/// range-aware fetching) or a [`GetManyRequest`] (for fetching multiple
+/// independent blobs in one go).
 #[derive(Debug, Serialize, Deserialize, derive_more::From)]
 pub enum FiniteRequest {
+    /// Fetch a single blob or a structured subset of a blob tree.
     Get(GetRequest),
+    /// Fetch multiple independent blobs, each with its own range set.
     GetMany(GetManyRequest),
 }
 
+/// Conversion into a [`FiniteRequest`].
+///
+/// This trait is implemented for the common request types (`GetRequest`,
+/// `GetManyRequest`, `Hash`, `HashAndFormat`) as well as for any iterator
+/// of things that convert to [`Hash`], so you can pass a `Vec<Hash>` directly
+/// to [`Downloader::download`].
 pub trait SupportedRequest {
+    /// Converts this value into a [`FiniteRequest`].
     fn into_request(self) -> FiniteRequest;
 }
 
@@ -240,20 +277,31 @@ impl SupportedRequest for HashAndFormat {
     }
 }
 
+/// A request to register additional providers for a hash.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddProviderRequest {
+    /// The hash whose providers are being registered.
     pub hash: Hash,
+    /// The set of endpoint IDs that are known to have this hash.
     pub providers: Vec<EndpointId>,
 }
 
+/// Options controlling a single download operation.
+///
+/// Use [`DownloadRequest::new`] to construct one, then pass it to
+/// [`Downloader::download_with_opts`].
 #[derive(Debug)]
 pub struct DownloadRequest {
+    /// The content to fetch.
     pub request: FiniteRequest,
+    /// The strategy used to discover and order providers.
     pub providers: Arc<dyn ContentDiscovery>,
+    /// Whether to fetch sub-blobs in parallel across providers.
     pub strategy: SplitStrategy,
 }
 
 impl DownloadRequest {
+    /// Creates a new `DownloadRequest`.
     pub fn new(
         request: impl SupportedRequest,
         providers: impl ContentDiscovery,
@@ -267,9 +315,18 @@ impl DownloadRequest {
     }
 }
 
+/// Controls how multi-blob requests are dispatched across providers.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum SplitStrategy {
+    /// Send the entire request to each provider in sequence.
+    ///
+    /// Each provider must satisfy the whole request before the next is tried.
+    /// Use this when the content is small or comes from a single authoritative source.
     None,
+    /// Split the request into per-blob sub-requests and fetch them in parallel.
+    ///
+    /// Each sub-blob can be fetched from a different provider simultaneously,
+    /// which reduces latency when providers each hold different parts of the data.
     Split,
 }
 
@@ -294,8 +351,15 @@ impl<'de> Deserialize<'de> for DownloadRequest {
     }
 }
 
+/// Alias for [`DownloadRequest`].
 pub type DownloadOptions = DownloadRequest;
 
+/// A handle to an in-progress download.
+///
+/// You can either await `DownloadProgress` directly to wait for completion (via
+/// `IntoFuture`, which returns an error if the download fails), or call
+/// [`DownloadProgress::stream`] to receive individual [`DownloadProgressItem`]
+/// events as the download proceeds.
 pub struct DownloadProgress {
     fut: future::Boxed<irpc::Result<mpsc::Receiver<DownloadProgressItem>>>,
 }
@@ -305,6 +369,7 @@ impl DownloadProgress {
         Self { fut }
     }
 
+    /// Returns a stream of [`DownloadProgressItem`] events for this download.
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = DownloadProgressItem> + Unpin> {
         let rx = self.fut.await?;
         Ok(Box::pin(rx.into_stream().map(|item| match item {
@@ -340,6 +405,11 @@ impl IntoFuture for DownloadProgress {
 }
 
 impl Downloader {
+    /// Creates a new `Downloader` backed by the given [`Store`] and [`Endpoint`].
+    ///
+    /// This spawns a background actor that manages the connection pool and
+    /// dispatches download tasks. Keep the returned `Downloader` alive for the
+    /// duration of your workload; it is cheap to clone.
     pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
         let actor = DownloaderActor::new(store.clone(), endpoint.clone());
@@ -347,6 +417,10 @@ impl Downloader {
         Self { client: tx.into() }
     }
 
+    /// Downloads `request` from `providers` using the default [`SplitStrategy::None`].
+    ///
+    /// Returns a [`DownloadProgress`] handle. Await it to block until the
+    /// download completes, or call `.stream()` to observe per-event progress.
     pub fn download(
         &self,
         request: impl SupportedRequest,
@@ -361,6 +435,10 @@ impl Downloader {
         })
     }
 
+    /// Downloads with full control over options.
+    ///
+    /// This is the most flexible entry point. All other download methods
+    /// delegate to this one.
     pub fn download_with_opts(&self, options: DownloadOptions) -> DownloadProgress {
         let fut = self.client.server_streaming(options, 32);
         DownloadProgress::new(Box::pin(fut))
@@ -486,7 +564,21 @@ async fn execute_get(
 }
 
 /// Trait for pluggable content discovery strategies.
+///
+/// Implement this trait to control how the [`Downloader`] finds the nodes that
+/// hold a given piece of content. The downloader calls `find_providers` once
+/// per request and iterates the returned stream, attempting each provider in
+/// order until the download succeeds.
+///
+/// Any type that implements `Clone + IntoIterator<Item: Into<EndpointId>>`
+/// already satisfies this trait, so passing a `Vec<EndpointId>` works without
+/// any boilerplate.
 pub trait ContentDiscovery: Debug + Send + Sync + 'static {
+    /// Returns a stream of endpoint IDs that may hold `hash`.
+    ///
+    /// The stream may be infinite (e.g. a DHT lookup that keeps returning new
+    /// peers). The downloader stops consuming it as soon as the download
+    /// completes.
     fn find_providers(&self, hash: HashAndFormat) -> n0_future::stream::Boxed<EndpointId>;
 }
 
@@ -502,12 +594,18 @@ where
     }
 }
 
+/// A [`ContentDiscovery`] implementation that returns providers in random order.
+///
+/// Shuffling spreads load across a fixed set of peers when every peer holds
+/// the full content. For partial data or DHT-style lookups, implement
+/// [`ContentDiscovery`] directly instead.
 #[derive(derive_more::Debug)]
 pub struct Shuffled {
     nodes: Vec<EndpointId>,
 }
 
 impl Shuffled {
+    /// Creates a new `Shuffled` provider set from a list of endpoint IDs.
     pub fn new(nodes: Vec<EndpointId>) -> Self {
         Self { nodes }
     }

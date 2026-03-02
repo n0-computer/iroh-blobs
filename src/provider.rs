@@ -69,6 +69,7 @@ pub struct StreamPair<R: RecvStream = DefaultReader, W: SendStream = DefaultWrit
 }
 
 impl StreamPair {
+    /// Accepts the next inbound bidi-stream on `conn` and wraps it in a `StreamPair`.
     pub async fn accept(
         conn: &endpoint::Connection,
         events: EventSender,
@@ -79,10 +80,12 @@ impl StreamPair {
 }
 
 impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
+    /// Returns the stream ID of the receive half.
     pub fn stream_id(&self) -> u64 {
         self.reader.id()
     }
 
+    /// Creates a new `StreamPair`, recording `Instant::now()` as the start time.
     pub fn new(connection_id: u64, reader: R, writer: W, events: EventSender) -> Self {
         Self {
             t0: Instant::now(),
@@ -127,6 +130,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         ))
     }
 
+    /// Converts this `StreamPair` into a `ProgressReader`, closing the write half first.
     pub async fn into_reader(
         mut self,
         tracker: RequestTracker,
@@ -143,6 +147,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         })
     }
 
+    /// Notifies the event system that a [`GetRequest`] has been received and returns a tracker.
     pub async fn get_request(
         &self,
         f: impl FnOnce() -> GetRequest,
@@ -152,6 +157,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
             .await
     }
 
+    /// Notifies the event system that a [`GetManyRequest`] has been received and returns a tracker.
     pub async fn get_many_request(
         &self,
         f: impl FnOnce() -> GetManyRequest,
@@ -161,6 +167,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
             .await
     }
 
+    /// Notifies the event system that a [`PushRequest`] has been received and returns a tracker.
     pub async fn push_request(
         &self,
         f: impl FnOnce() -> PushRequest,
@@ -170,6 +177,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
             .await
     }
 
+    /// Notifies the event system that an [`ObserveRequest`] has been received and returns a tracker.
     pub async fn observe_request(
         &self,
         f: impl FnOnce() -> ObserveRequest,
@@ -179,6 +187,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
             .await
     }
 
+    /// Returns current transfer statistics (with zero payload/output bytes since we have not yet sent anything).
     pub fn stats(&self) -> TransferStats {
         TransferStats {
             payload_bytes_sent: 0,

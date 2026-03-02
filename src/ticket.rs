@@ -122,6 +122,7 @@ impl BlobTicket {
         self.format
     }
 
+    /// Returns the [`HashAndFormat`] pair identifying the content in this ticket.
     pub fn hash_and_format(&self) -> HashAndFormat {
         HashAndFormat {
             hash: self.hash,

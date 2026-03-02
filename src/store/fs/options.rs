@@ -18,6 +18,8 @@ pub struct PathOptions {
 }
 
 impl PathOptions {
+    /// Creates path options rooted at `root`, placing `data` and `temp`
+    /// subdirectories underneath it.
     pub fn new(root: &Path) -> Self {
         Self {
             data_path: root.join("data"),
@@ -25,22 +27,27 @@ impl PathOptions {
         }
     }
 
+    /// Returns the path of the data file for `hash` (`.data` extension).
     pub fn data_path(&self, hash: &Hash) -> PathBuf {
         self.data_path.join(format!("{}.data", hash.to_hex()))
     }
 
+    /// Returns the path of the outboard file for `hash` (`.obao4` extension).
     pub fn outboard_path(&self, hash: &Hash) -> PathBuf {
         self.data_path.join(format!("{}.obao4", hash.to_hex()))
     }
 
+    /// Returns the path of the sizes file for `hash` (`.sizes4` extension).
     pub fn sizes_path(&self, hash: &Hash) -> PathBuf {
         self.data_path.join(format!("{}.sizes4", hash.to_hex()))
     }
 
+    /// Returns the path of the bitfield file for `hash` (`.bitfield` extension).
     pub fn bitfield_path(&self, hash: &Hash) -> PathBuf {
         self.data_path.join(format!("{}.bitfield", hash.to_hex()))
     }
 
+    /// Returns a fresh, unique temp-file path inside the temp directory.
     pub fn temp_file_name(&self) -> PathBuf {
         self.temp_path.join(temp_name())
     }
@@ -115,7 +122,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Create new optinos with the given root path and everything else default.
+    /// Creates new options with the given root path and defaults for everything else.
     pub fn new(root: &Path) -> Self {
         Self {
             path: PathOptions::new(root),
@@ -125,17 +132,17 @@ impl Options {
         }
     }
 
-    // check if the data will be inlined, based on the size of the data
+    /// Returns true if a blob of `data_size` bytes would be stored inline in the database.
     pub fn is_inlined_data(&self, data_size: u64) -> bool {
         data_size <= self.inline.max_data_inlined
     }
 
-    // check if the outboard will be inlined, based on the size of the *outboard*
+    /// Returns true if an outboard of `outboard_size` bytes would be stored inline in the database.
     pub fn is_inlined_outboard(&self, outboard_size: u64) -> bool {
         outboard_size <= self.inline.max_outboard_inlined
     }
 
-    // check if both the data and outboard will be inlined, based on the size of the data
+    /// Returns true if both the data and outboard for a blob of `data_size` bytes would be inlined.
     pub fn is_inlined_all(&self, data_size: u64) -> bool {
         let outboard_size = raw_outboard_size(data_size);
         self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
