@@ -86,3 +86,10 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-metrics = { git = "https://github.com/n0-computer/iroh-metrics.git", branch = "iroh-X" }
+irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "iroh-X" }
+iroh-tickets = { git = "https://github.com/n0-computer/iroh-tickets.git", branch = "iroh-X" }
