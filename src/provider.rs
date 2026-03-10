@@ -8,30 +8,30 @@ use std::{fmt::Debug, future::Future, io};
 use bao_tree::ChunkRanges;
 use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
-use n0_error::{e, stack_error, Result};
+use n0_error::{Result, e, stack_error};
 use n0_future::{
-    time::{Duration, Instant},
     StreamExt,
+    time::{Duration, Instant},
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
-use tracing::{debug, debug_span, Instrument};
+use tracing::{Instrument, debug, debug_span};
 
 use crate::{
+    Hash,
     api::{
-        blobs::{Bitfield, WriteProgress},
         ExportBaoError, ExportBaoResult, RequestError, Store,
+        blobs::{Bitfield, WriteProgress},
     },
     hashseq::HashSeq,
     protocol::{
-        GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
+        ERR_INTERNAL, GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request,
     },
     provider::events::{
         ClientConnected, ClientResult, ConnectionClosed, HasErrorCode, ProgressError,
         RequestTracker,
     },
     util::{RecvStream, RecvStreamExt, SendStream, SendStreamExt},
-    Hash,
 };
 pub mod events;
 use events::EventSender;
@@ -252,10 +252,10 @@ impl WriteProgress for WriterContext {
     }
 }
 
-/// Wrapper for a [`quinn::SendStream`] with additional per request information.
+/// Wrapper for a [`noq::SendStream`] with additional per request information.
 #[derive(Debug)]
 pub struct ProgressWriter<W: SendStream = DefaultWriter> {
-    /// The quinn::SendStream to write to
+    /// The noq::SendStream to write to
     pub inner: W,
     pub(crate) context: WriterContext,
 }
@@ -556,7 +556,7 @@ async fn handle_push_impl<R: RecvStream>(
     let mut request_ranges = request.ranges.iter_infinite();
     let root_ranges = request_ranges.next().expect("infinite iterator");
     if !root_ranges.is_empty() {
-        // todo: send progress from import_bao_quinn or rename to import_bao_quinn_with_progress
+        // todo: send progress from import_bao_noq or rename to import_bao_noq_with_progress
         store
             .import_bao_reader(hash, root_ranges.clone(), &mut reader.inner)
             .await?;

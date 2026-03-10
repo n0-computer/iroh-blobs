@@ -15,19 +15,19 @@ use std::{
 
 pub use bao_tree::io::mixed::EncodedItem;
 use bao_tree::{
-    io::{
-        fsm::{ResponseDecoder, ResponseDecoderNext},
-        BaoContentItem, Leaf,
-    },
     BaoTree, ChunkNum, ChunkRanges,
+    io::{
+        BaoContentItem, Leaf,
+        fsm::{ResponseDecoder, ResponseDecoderNext},
+    },
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
 use iroh_io::AsyncStreamWriter;
 use irpc::channel::{mpsc, oneshot};
 use n0_error::AnyError;
-use n0_future::{future, stream, Stream, StreamExt};
-use range_collections::{range_set::RangeSetRange, RangeSet2};
+use n0_future::{Stream, StreamExt, future, stream};
+use range_collections::{RangeSet2, range_set::RangeSetRange};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
@@ -45,6 +45,7 @@ pub use super::proto::{
     ImportBaoRequest as ImportBaoOptions, ImportMode, ObserveRequest as ObserveOptions,
 };
 use super::{
+    ApiClient, RequestResult, Tags,
     proto::{
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
@@ -52,14 +53,13 @@ use super::{
     },
     remote::HashSeqChunk,
     tags::TagInfo,
-    ApiClient, RequestResult, Tags,
 };
 use crate::{
+    BlobFormat, Hash, HashAndFormat,
     api::proto::{BatchRequest, ImportByteStreamUpdate},
     provider::events::ClientResult,
     store::IROH_BLOCK_SIZE,
-    util::{temp_tag::TempTag, RecvStreamAsyncStreamReader},
-    BlobFormat, Hash, HashAndFormat,
+    util::{RecvStreamAsyncStreamReader, temp_tag::TempTag},
 };
 
 /// Options for adding bytes.
@@ -816,12 +816,12 @@ pub struct ImportBaoHandle {
 impl ImportBaoHandle {
     pub(crate) async fn new(
         fut: impl Future<
-                Output = irpc::Result<(
-                    mpsc::Sender<BaoContentItem>,
-                    oneshot::Receiver<super::Result<()>>,
-                )>,
-            > + Send
-            + 'static,
+            Output = irpc::Result<(
+                mpsc::Sender<BaoContentItem>,
+                oneshot::Receiver<super::Result<()>>,
+            )>,
+        > + Send
+        + 'static,
     ) -> irpc::Result<Self> {
         let (tx, rx) = fut.await?;
         Ok(Self { tx, rx })
@@ -1076,7 +1076,7 @@ impl ExportBaoProgress {
         Ok(())
     }
 
-    /// Write quinn variant that also feeds a progress writer.
+    /// Write noq variant that also feeds a progress writer.
     pub(crate) async fn write_with_progress<W: crate::util::SendStream>(
         self,
         writer: &mut W,
