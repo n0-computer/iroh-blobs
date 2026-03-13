@@ -65,15 +65,10 @@ pub enum DownloadProgressItem {
 
 impl DownloaderActor {
     fn new(store: Store, endpoint: Endpoint) -> Self {
-        Self {
-            store,
-            pool: ConnectionPool::new(endpoint, crate::ALPN, Default::default()),
-            tasks: JoinSet::new(),
-            running: HashSet::new(),
-        }
+        Self::new_with_opts(store, endpoint, Default::default())
     }
 
-    fn with_pool_options(
+    fn new_with_opts(
         store: Store,
         endpoint: Endpoint,
         pool_options: crate::util::connection_pool::Options,
@@ -354,20 +349,16 @@ impl IntoFuture for DownloadProgress {
 
 impl Downloader {
     pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
-        let actor = DownloaderActor::new(store.clone(), endpoint.clone());
-        n0_future::task::spawn(actor.run(rx));
-        Self { client: tx.into() }
+        Self::new_with_opts(store, endpoint, Default::default())
     }
 
-    pub fn with_pool_options(
+    pub fn new_with_opts(
         store: &Store,
         endpoint: &Endpoint,
         pool_options: crate::util::connection_pool::Options,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
-        let actor =
-            DownloaderActor::with_pool_options(store.clone(), endpoint.clone(), pool_options);
+        let actor = DownloaderActor::new_with_opts(store.clone(), endpoint.clone(), pool_options);
         n0_future::task::spawn(actor.run(rx));
         Self { client: tx.into() }
     }
