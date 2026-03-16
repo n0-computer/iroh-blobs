@@ -64,10 +64,6 @@ pub enum DownloadProgressItem {
 }
 
 impl DownloaderActor {
-    fn new(store: Store, endpoint: Endpoint) -> Self {
-        Self::new_with_opts(store, endpoint, Default::default())
-    }
-
     fn new_with_opts(
         store: Store,
         endpoint: Endpoint,
