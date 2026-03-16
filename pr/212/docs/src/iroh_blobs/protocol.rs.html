@@ -378,19 +378,19 @@
 <a href=#378 id=378 data-nosnippet>378</a>    ops::{Bound, RangeBounds},
 <a href=#379 id=379 data-nosnippet>379</a>};
 <a href=#380 id=380 data-nosnippet>380</a>
-<a href=#381 id=381 data-nosnippet>381</a><span class="kw">use </span>bao_tree::{ChunkNum, io::round_up_to_chunks};
+<a href=#381 id=381 data-nosnippet>381</a><span class="kw">use </span>bao_tree::{io::round_up_to_chunks, ChunkNum};
 <a href=#382 id=382 data-nosnippet>382</a><span class="kw">use </span>builder::GetRequestBuilder;
 <a href=#383 id=383 data-nosnippet>383</a><span class="kw">use </span>derive_more::From;
 <a href=#384 id=384 data-nosnippet>384</a><span class="kw">use </span>iroh::endpoint::VarInt;
 <a href=#385 id=385 data-nosnippet>385</a><span class="kw">use </span>postcard::experimental::max_size::MaxSize;
-<a href=#386 id=386 data-nosnippet>386</a><span class="kw">use </span>range_collections::{RangeSet2, range_set::RangeSetEntry};
+<a href=#386 id=386 data-nosnippet>386</a><span class="kw">use </span>range_collections::{range_set::RangeSetEntry, RangeSet2};
 <a href=#387 id=387 data-nosnippet>387</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#388 id=388 data-nosnippet>388</a><span class="kw">mod </span>range_spec;
 <a href=#389 id=389 data-nosnippet>389</a><span class="kw">pub use </span>bao_tree::ChunkRanges;
 <a href=#390 id=390 data-nosnippet>390</a><span class="kw">use </span>n0_error::stack_error;
 <a href=#391 id=391 data-nosnippet>391</a><span class="kw">pub use </span>range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 <a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a><span class="kw">use crate</span>::{BlobFormat, Hash, HashAndFormat, api::blobs::Bitfield, util::RecvStreamExt};
+<a href=#393 id=393 data-nosnippet>393</a><span class="kw">use crate</span>::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 <a href=#394 id=394 data-nosnippet>394</a>
 <a href=#395 id=395 data-nosnippet>395</a><span class="doccomment">/// Maximum message size is limited to 100MiB for now.
 <a href=#396 id=396 data-nosnippet>396</a></span><span class="kw">pub const </span>MAX_MESSAGE_SIZE: usize = <span class="number">1024 </span>* <span class="number">1024</span>;
@@ -796,8 +796,8 @@
 <a href=#796 id=796 data-nosnippet>796</a>
 <a href=#797 id=797 data-nosnippet>797</a>    <span class="kw">use </span><span class="kw">super</span>::ChunkRangesSeq;
 <a href=#798 id=798 data-nosnippet>798</a>    <span class="kw">use crate</span>::{
-<a href=#799 id=799 data-nosnippet>799</a>        Hash,
-<a href=#800 id=800 data-nosnippet>800</a>        protocol::{GetManyRequest, GetRequest},
+<a href=#799 id=799 data-nosnippet>799</a>        protocol::{GetManyRequest, GetRequest},
+<a href=#800 id=800 data-nosnippet>800</a>        Hash,
 <a href=#801 id=801 data-nosnippet>801</a>    };
 <a href=#802 id=802 data-nosnippet>802</a>
 <a href=#803 id=803 data-nosnippet>803</a>    <span class="attr">#[derive(Debug, Clone, Default)]

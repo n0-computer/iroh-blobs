@@ -28,14 +28,14 @@
 <p>Iroh provides a <a href="https://docs.rs/iroh/latest/iroh/protocol/struct.Router.html"><code>Router</code></a> that takes an <a href="https://docs.rs/iroh/latest/iroh/endpoint/struct.Endpoint.html"><code>Endpoint</code></a> and any protocols needed for the application. Similar to a router in webserver library, it runs a loop accepting incoming connections and routes them to the specific protocol handler, based on <code>ALPN</code>.</p>
 <p>Here is a basic example of how to set up <code>iroh-blobs</code> with <code>iroh</code>:</p>
 
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iroh::{protocol::Router, Endpoint};
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iroh::{protocol::Router, Endpoint, endpoint::presets};
 <span class="kw">use </span>iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
 
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
     <span class="comment">// create an iroh endpoint that includes the standard address lookup mechanisms
     // we've built at number0
-    </span><span class="kw">let </span>endpoint = Endpoint::bind().<span class="kw">await</span><span class="question-mark">?</span>;
+    </span><span class="kw">let </span>endpoint = Endpoint::bind(presets::N0).<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="comment">// create a protocol handler using an in-memory blob store.
     </span><span class="kw">let </span>store = MemStore::new();
