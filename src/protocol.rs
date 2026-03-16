@@ -378,19 +378,19 @@ use std::{
     ops::{Bound, RangeBounds},
 };
 
-use bao_tree::{ChunkNum, io::round_up_to_chunks};
+use bao_tree::{io::round_up_to_chunks, ChunkNum};
 use builder::GetRequestBuilder;
 use derive_more::From;
 use iroh::endpoint::VarInt;
 use postcard::experimental::max_size::MaxSize;
-use range_collections::{RangeSet2, range_set::RangeSetEntry};
+use range_collections::{range_set::RangeSetEntry, RangeSet2};
 use serde::{Deserialize, Serialize};
 mod range_spec;
 pub use bao_tree::ChunkRanges;
 use n0_error::stack_error;
 pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 
-use crate::{BlobFormat, Hash, HashAndFormat, api::blobs::Bitfield, util::RecvStreamExt};
+use crate::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
 /// Maximum message size is limited to 100MiB for now.
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
@@ -796,8 +796,8 @@ pub mod builder {
 
     use super::ChunkRangesSeq;
     use crate::{
-        Hash,
         protocol::{GetManyRequest, GetRequest},
+        Hash,
     };
 
     #[derive(Debug, Clone, Default)]

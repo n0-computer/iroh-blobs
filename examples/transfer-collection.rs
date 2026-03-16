@@ -27,7 +27,8 @@ struct Node {
 
 impl Node {
     async fn new(disc: &MemoryLookup) -> Result<Self> {
-        let endpoint = Endpoint::empty_builder(RelayMode::Default)
+        let endpoint = Endpoint::empty_builder()
+            .relay_mode(RelayMode::Default)
             .address_lookup(disc.clone())
             .bind()
             .await?;

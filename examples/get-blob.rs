@@ -29,7 +29,8 @@ async fn main() -> anyhow::Result<()> {
     setup_logging();
     let cli = Cli::parse();
     let ticket = cli.ticket;
-    let endpoint = iroh::Endpoint::empty_builder(iroh::RelayMode::Default)
+    let endpoint = iroh::Endpoint::empty_builder()
+        .relay_mode(iroh::RelayMode::Default)
         .address_lookup(PkarrResolver::n0_dns())
         .bind()
         .await?;

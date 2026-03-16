@@ -2,7 +2,7 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iroh::{address_lookup::MemoryLookup, SecretKey};
+use iroh::{address_lookup::MemoryLookup, endpoint::presets, SecretKey};
 use iroh_blobs::{
     api::downloader::Shuffled,
     provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
@@ -233,7 +233,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         println!("hash_seq {i} {}", info.hash_and_format());
     }
     let secret_key = get_or_generate_secret_key()?;
-    let endpoint = iroh::Endpoint::builder()
+    let endpoint = iroh::Endpoint::builder(presets::N0)
         .secret_key(secret_key)
         .bind()
         .await?;
@@ -266,7 +266,7 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
     let store = FsStore::load(&path).await?;
     println!("Using store at: {}", path.display());
     let sp = MemoryLookup::new();
-    let endpoint = iroh::Endpoint::builder()
+    let endpoint = iroh::Endpoint::builder(presets::N0)
         .address_lookup(sp.clone())
         .bind()
         .await?;

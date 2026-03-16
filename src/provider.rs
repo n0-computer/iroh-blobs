@@ -8,30 +8,30 @@ use std::{fmt::Debug, future::Future, io};
 use bao_tree::ChunkRanges;
 use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
-use n0_error::{Result, e, stack_error};
+use n0_error::{e, stack_error, Result};
 use n0_future::{
-    StreamExt,
     time::{Duration, Instant},
+    StreamExt,
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
-use tracing::{Instrument, debug, debug_span};
+use tracing::{debug, debug_span, Instrument};
 
 use crate::{
-    Hash,
     api::{
-        ExportBaoError, ExportBaoResult, RequestError, Store,
         blobs::{Bitfield, WriteProgress},
+        ExportBaoError, ExportBaoResult, RequestError, Store,
     },
     hashseq::HashSeq,
     protocol::{
-        ERR_INTERNAL, GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request,
+        GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
     },
     provider::events::{
         ClientConnected, ClientResult, ConnectionClosed, HasErrorCode, ProgressError,
         RequestTracker,
     },
     util::{RecvStream, RecvStreamExt, SendStream, SendStreamExt},
+    Hash,
 };
 pub mod events;
 use events::EventSender;
