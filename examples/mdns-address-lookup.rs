@@ -60,7 +60,8 @@ async fn accept(path: &Path) -> Result<()> {
 
     println!("Starting iroh node with mdns address lookup...");
     // create a new node
-    let endpoint = Endpoint::empty_builder(RelayMode::Default)
+    let endpoint = Endpoint::empty_builder()
+        .relay_mode(RelayMode::Default)
         .secret_key(key)
         .address_lookup(MdnsAddressLookup::builder())
         .relay_mode(RelayMode::Disabled)
@@ -97,7 +98,7 @@ async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result
 
     println!("Starting iroh node with mdns address_lookup...");
     // create a new node
-    let endpoint = Endpoint::empty_builder(RelayMode::Disabled)
+    let endpoint = Endpoint::empty_builder()
         .secret_key(key)
         .address_lookup(address_lookup)
         .bind()

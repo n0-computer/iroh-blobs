@@ -323,7 +323,7 @@
 //! Reasons for not retrieving a complete response are two-fold:
 //!
 //! - the connection to the provider was interrupted, or the provider encountered
-//!   an internal error. In this case the provider will close the entire quinn connection.
+//!   an internal error. In this case the provider will close the entire noq connection.
 //!
 //! - the provider does not have the requested data, or discovered on send that the
 //!   requested data is not valid.
