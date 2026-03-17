@@ -20,6 +20,7 @@ pub use partial_mem_storage::PartialMemStorage;
 #[cfg(feature = "fs-store")]
 mod mem_or_file;
 #[cfg(feature = "fs-store")]
+#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub use mem_or_file::{FixedSize, MemOrFile};
 
 /// A named, persistent tag.
