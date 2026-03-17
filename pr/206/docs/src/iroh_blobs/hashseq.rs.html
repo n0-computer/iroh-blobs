@@ -54,7 +54,7 @@
 <a href=#54 id=54 data-nosnippet>54</a><span class="kw">impl </span>HashSeq {
 <a href=#55 id=55 data-nosnippet>55</a>    <span class="doccomment">/// Create a new sequence of hashes.
 <a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub fn </span>new(bytes: Bytes) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#57 id=57 data-nosnippet>57</a>        <span class="kw">if </span>bytes.len() % <span class="number">32 </span>== <span class="number">0 </span>{
+<a href=#57 id=57 data-nosnippet>57</a>        <span class="kw">if </span>bytes.len().is_multiple_of(<span class="number">32</span>) {
 <a href=#58 id=58 data-nosnippet>58</a>            <span class="prelude-val">Some</span>(<span class="self">Self</span>(bytes))
 <a href=#59 id=59 data-nosnippet>59</a>        } <span class="kw">else </span>{
 <a href=#60 id=60 data-nosnippet>60</a>            <span class="prelude-val">None

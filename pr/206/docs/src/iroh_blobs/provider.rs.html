@@ -252,10 +252,10 @@
 <a href=#252 id=252 data-nosnippet>252</a>    }
 <a href=#253 id=253 data-nosnippet>253</a>}
 <a href=#254 id=254 data-nosnippet>254</a>
-<a href=#255 id=255 data-nosnippet>255</a><span class="doccomment">/// Wrapper for a [`quinn::SendStream`] with additional per request information.
+<a href=#255 id=255 data-nosnippet>255</a><span class="doccomment">/// Wrapper for a [`noq::SendStream`] with additional per request information.
 <a href=#256 id=256 data-nosnippet>256</a></span><span class="attr">#[derive(Debug)]
 <a href=#257 id=257 data-nosnippet>257</a></span><span class="kw">pub struct </span>ProgressWriter&lt;W: SendStream = DefaultWriter&gt; {
-<a href=#258 id=258 data-nosnippet>258</a>    <span class="doccomment">/// The quinn::SendStream to write to
+<a href=#258 id=258 data-nosnippet>258</a>    <span class="doccomment">/// The noq::SendStream to write to
 <a href=#259 id=259 data-nosnippet>259</a>    </span><span class="kw">pub </span>inner: W,
 <a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) context: WriterContext,
 <a href=#261 id=261 data-nosnippet>261</a>}
@@ -556,7 +556,7 @@
 <a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">let </span><span class="kw-2">mut </span>request_ranges = request.ranges.iter_infinite();
 <a href=#557 id=557 data-nosnippet>557</a>    <span class="kw">let </span>root_ranges = request_ranges.next().expect(<span class="string">"infinite iterator"</span>);
 <a href=#558 id=558 data-nosnippet>558</a>    <span class="kw">if </span>!root_ranges.is_empty() {
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="comment">// todo: send progress from import_bao_quinn or rename to import_bao_quinn_with_progress
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="comment">// todo: send progress from import_bao_noq or rename to import_bao_noq_with_progress
 <a href=#560 id=560 data-nosnippet>560</a>        </span>store
 <a href=#561 id=561 data-nosnippet>561</a>            .import_bao_reader(hash, root_ranges.clone(), <span class="kw-2">&amp;mut </span>reader.inner)
 <a href=#562 id=562 data-nosnippet>562</a>            .<span class="kw">await</span><span class="question-mark">?</span>;

@@ -251,15 +251,15 @@
 <a href=#251 id=251 data-nosnippet>251</a>    <span class="doccomment">/// Connect to a remote store as a rpc client.
 <a href=#252 id=252 data-nosnippet>252</a>    </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
 <a href=#253 id=253 data-nosnippet>253</a>    #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = <span class="string">"rpc"</span>)))]
-<a href=#254 id=254 data-nosnippet>254</a>    </span><span class="kw">pub fn </span>connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -&gt; <span class="self">Self </span>{
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>sender = irpc::Client::quinn(endpoint, addr);
+<a href=#254 id=254 data-nosnippet>254</a>    </span><span class="kw">pub fn </span>connect(endpoint: noq::Endpoint, addr: std::net::SocketAddr) -&gt; <span class="self">Self </span>{
+<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw">let </span>sender = irpc::Client::noq(endpoint, addr);
 <a href=#256 id=256 data-nosnippet>256</a>        Store::from_sender(sender)
 <a href=#257 id=257 data-nosnippet>257</a>    }
 <a href=#258 id=258 data-nosnippet>258</a>
-<a href=#259 id=259 data-nosnippet>259</a>    <span class="doccomment">/// Listen on a quinn endpoint for incoming rpc connections.
+<a href=#259 id=259 data-nosnippet>259</a>    <span class="doccomment">/// Listen on a noq endpoint for incoming rpc connections.
 <a href=#260 id=260 data-nosnippet>260</a>    </span><span class="attr">#[cfg(feature = <span class="string">"rpc"</span>)]
 <a href=#261 id=261 data-nosnippet>261</a>    #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = <span class="string">"rpc"</span>)))]
-<a href=#262 id=262 data-nosnippet>262</a>    </span><span class="kw">pub async fn </span>listen(<span class="self">self</span>, endpoint: quinn::Endpoint) {
+<a href=#262 id=262 data-nosnippet>262</a>    </span><span class="kw">pub async fn </span>listen(<span class="self">self</span>, endpoint: noq::Endpoint) {
 <a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">use </span>irpc::rpc::RemoteService;
 <a href=#264 id=264 data-nosnippet>264</a>
 <a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">use </span><span class="self">self</span>::proto::Request;
