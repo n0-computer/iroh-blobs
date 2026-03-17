@@ -420,7 +420,7 @@ impl RangeSpec {
         for i in 0..self.0.len() / 2 {
             min += self.0[2 * i + 1];
         }
-        let max = if self.0.len() % 2 != 0 {
+        let max = if !self.0.len().is_multiple_of(2) {
             // spec is open ended
             None
         } else {

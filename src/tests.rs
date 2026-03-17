@@ -3,7 +3,8 @@ use std::{collections::HashSet, io, ops::Range, path::PathBuf};
 use bao_tree::ChunkRanges;
 use bytes::Bytes;
 use iroh::{
-    discovery::static_provider::StaticProvider, protocol::Router, Endpoint, EndpointId, RelayMode,
+    address_lookup::MemoryLookup, endpoint::presets, protocol::Router, Endpoint, EndpointId,
+    RelayMode,
 };
 use irpc::RpcMessage;
 use n0_future::{task::AbortOnDropHandle, StreamExt};
@@ -48,7 +49,7 @@ use crate::{
 //     // println!("stats: {:?}", stats);
 //     // return Ok(());
 
-//     // tell ep2 about the addr of ep1, so we don't need to rely on node discovery
+//     // tell ep2 about the addr of ep1, so we don't need to rely on node address_lookup
 //     r2.endpoint().add_node_addr(addr1.clone())?;
 //     let d1 = Downloader::new(store2.clone(), r2.endpoint().clone());
 //     for (tt, size) in tts.iter().zip(sizes) {
@@ -70,7 +71,7 @@ use crate::{
 //     let tt = store1.add_bytes(test_data(size)).await?;
 //     let addr1 = r1.endpoint().node_addr().await?;
 
-//     // tell ep2 about the addr of ep1, so we don't need to rely on node discovery
+//     // tell ep2 about the addr of ep1, so we don't need to rely on node address_lookup
 //     r2.endpoint().add_node_addr(addr1.clone())?;
 //     // create progress channel - big enough to not block
 //     let (tx, rx) = mpsc::channel(1024 * 1024);
@@ -105,7 +106,7 @@ use crate::{
 //     // b has the data completely
 //     let _tt2: crate::api::TempTag = store2.add_bytes(data).await?;
 
-//     // tell ep3 about the addr of ep1 and ep2, so we don't need to rely on node discovery
+//     // tell ep3 about the addr of ep1 and ep2, so we don't need to rely on node address_lookup
 //     r3.endpoint().add_node_addr(addr1.clone())?;
 //     r3.endpoint().add_node_addr(addr2.clone())?;
 //     // create progress channel - big enough to not block
@@ -142,7 +143,7 @@ use crate::{
 //     // b has the data completely
 //     let _tt2: crate::api::TempTag = store2.add_bytes(data.clone()).await?;
 
-//     // tell ep3 about the addr of ep1 and ep2, so we don't need to rely on node discovery
+//     // tell ep3 about the addr of ep1 and ep2, so we don't need to rely on node address_lookup
 //     r3.endpoint().add_node_addr(addr1.clone())?;
 //     r3.endpoint().add_node_addr(addr2.clone())?;
 //     let range = 10000..20000;
@@ -190,7 +191,7 @@ use crate::{
 //     .await?;
 //     let content = add_test_hash_seq(&store2, sizes).await?;
 
-//     // tell ep3 about the addr of ep1 and ep2, so we don't need to rely on node discovery
+//     // tell ep3 about the addr of ep1 and ep2, so we don't need to rely on node address_lookup
 //     r3.endpoint().add_node_addr(addr1.clone())?;
 //     r3.endpoint().add_node_addr(addr2.clone())?;
 //     // create progress channel - big enough to not block
@@ -492,18 +493,19 @@ async fn check_presence(store: &Store, sizes: &[usize]) -> TestResult<()> {
 
 pub async fn node_test_setup_fs(
     db_path: PathBuf,
-) -> TestResult<(Router, FsStore, PathBuf, StaticProvider)> {
+) -> TestResult<(Router, FsStore, PathBuf, MemoryLookup)> {
     node_test_setup_with_events_fs(db_path, EventSender::DEFAULT).await
 }
 
 pub async fn node_test_setup_with_events_fs(
     db_path: PathBuf,
     events: EventSender,
-) -> TestResult<(Router, FsStore, PathBuf, StaticProvider)> {
+) -> TestResult<(Router, FsStore, PathBuf, MemoryLookup)> {
     let store = crate::store::fs::FsStore::load(&db_path).await?;
-    let sp = StaticProvider::new();
-    let ep = Endpoint::empty_builder(RelayMode::Default)
-        .discovery(sp.clone())
+    let sp = MemoryLookup::new();
+    let ep = Endpoint::empty_builder()
+        .relay_mode(RelayMode::Default)
+        .address_lookup(sp.clone())
         .bind()
         .await?;
     let blobs = BlobsProtocol::new(&store, Some(events));
@@ -511,17 +513,18 @@ pub async fn node_test_setup_with_events_fs(
     Ok((router, store, db_path, sp))
 }
 
-pub async fn node_test_setup_mem() -> TestResult<(Router, MemStore, StaticProvider)> {
+pub async fn node_test_setup_mem() -> TestResult<(Router, MemStore, MemoryLookup)> {
     node_test_setup_with_events_mem(EventSender::DEFAULT).await
 }
 
 pub async fn node_test_setup_with_events_mem(
     events: EventSender,
-) -> TestResult<(Router, MemStore, StaticProvider)> {
+) -> TestResult<(Router, MemStore, MemoryLookup)> {
     let store = MemStore::new();
-    let sp = StaticProvider::new();
-    let ep = Endpoint::empty_builder(RelayMode::Default)
-        .discovery(sp.clone())
+    let sp = MemoryLookup::new();
+    let ep = Endpoint::empty_builder()
+        .relay_mode(RelayMode::Default)
+        .address_lookup(sp.clone())
         .bind()
         .await?;
     let blobs = BlobsProtocol::new(&store, Some(events));
@@ -547,7 +550,7 @@ async fn two_node_test_setup_fs() -> TestResult<(
 
 /// Sets up two nodes with a router and a blob store each.
 ///
-/// Note that this does not configure discovery, so nodes will only find each other
+/// Note that this does not configure address_lookup, so nodes will only find each other
 /// with full node addresses, not just endpoint ids!
 async fn two_node_test_setup_mem() -> TestResult<((Router, MemStore), (Router, MemStore))> {
     let (r1, store1, sp1) = node_test_setup_mem().await?;
@@ -620,14 +623,14 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     let hash_seq = tts.iter().map(|x| x.hash).collect::<HashSeq>();
     let root_tt = store.add_bytes(hash_seq).await?;
     let root = root_tt.hash;
-    let endpoint = Endpoint::bind().await?;
+    let endpoint = Endpoint::bind(presets::N0).await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
     let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::bind().await?;
+    let endpoint2 = Endpoint::bind(presets::N0).await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     let (hs, sizes) = get::request::get_hash_seq_and_sizes(&conn, &root, 1024, None).await?;
     println!("hash seq: {hs:?}");
@@ -651,14 +654,14 @@ async fn node_serve_blobs() -> TestResult<()> {
     for size in sizes {
         tts.push(store.add_bytes(test_data(size)).await?);
     }
-    let endpoint = Endpoint::bind().await?;
+    let endpoint = Endpoint::bind(presets::N0).await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
     let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::bind().await?;
+    let endpoint2 = Endpoint::bind(presets::N0).await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     for size in sizes {
         let expected = test_data(size);
@@ -691,14 +694,14 @@ async fn node_smoke_mem() -> TestResult<()> {
 async fn node_smoke(store: &Store) -> TestResult<()> {
     let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
     let hash = tt.hash();
-    let endpoint = Endpoint::bind().await?;
+    let endpoint = Endpoint::bind(presets::N0).await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
     let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::bind().await?;
+    let endpoint2 = Endpoint::bind(presets::N0).await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     let (size, stats) = get::request::get_unverified_size(&conn, &hash).await?;
     info!("size: {} stats: {:?}", size, stats);

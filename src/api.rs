@@ -251,15 +251,15 @@ impl Store {
     /// Connect to a remote store as a rpc client.
     #[cfg(feature = "rpc")]
     #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
-    pub fn connect(endpoint: quinn::Endpoint, addr: std::net::SocketAddr) -> Self {
-        let sender = irpc::Client::quinn(endpoint, addr);
+    pub fn connect(endpoint: noq::Endpoint, addr: std::net::SocketAddr) -> Self {
+        let sender = irpc::Client::noq(endpoint, addr);
         Store::from_sender(sender)
     }
 
-    /// Listen on a quinn endpoint for incoming rpc connections.
+    /// Listen on a noq endpoint for incoming rpc connections.
     #[cfg(feature = "rpc")]
     #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
-    pub async fn listen(self, endpoint: quinn::Endpoint) {
+    pub async fn listen(self, endpoint: noq::Endpoint) {
         use irpc::rpc::RemoteService;
 
         use self::proto::Request;

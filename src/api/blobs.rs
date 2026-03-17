@@ -1076,7 +1076,7 @@ impl ExportBaoProgress {
         Ok(())
     }
 
-    /// Write quinn variant that also feeds a progress writer.
+    /// Write noq variant that also feeds a progress writer.
     pub(crate) async fn write_with_progress<W: crate::util::SendStream>(
         self,
         writer: &mut W,

@@ -1022,7 +1022,7 @@ impl CompleteStorage {
 
 #[allow(dead_code)]
 fn print_outboard(hashes: &[u8]) {
-    assert!(hashes.len() % 64 == 0);
+    assert!(hashes.len().is_multiple_of(64));
     for chunk in hashes.chunks(64) {
         let left: [u8; 32] = chunk[..32].try_into().unwrap();
         let right: [u8; 32] = chunk[32..].try_into().unwrap();

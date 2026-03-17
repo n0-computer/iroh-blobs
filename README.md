@@ -33,14 +33,14 @@ Iroh provides a [`Router`](https://docs.rs/iroh/latest/iroh/protocol/struct.Rout
 Here is a basic example of how to set up `iroh-blobs` with `iroh`:
 
 ```rust,no_run
-use iroh::{protocol::Router, Endpoint};
+use iroh::{protocol::Router, Endpoint, endpoint::presets};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, ticket::BlobTicket};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // create an iroh endpoint that includes the standard discovery mechanisms
+    // create an iroh endpoint that includes the standard address lookup mechanisms
     // we've built at number0
-    let endpoint = Endpoint::bind().await?;
+    let endpoint = Endpoint::bind(presets::N0).await?;
 
     // create a protocol handler using an in-memory blob store.
     let store = MemStore::new();

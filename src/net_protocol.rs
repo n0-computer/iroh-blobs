@@ -6,7 +6,7 @@
 //!
 //! ```rust
 //! # async fn example() -> n0_error::Result<()> {
-//! use iroh::{protocol::Router, Endpoint};
+//! use iroh::{protocol::Router, Endpoint, endpoint::presets};
 //! use iroh_blobs::{store, ticket::BlobTicket, BlobsProtocol};
 //!
 //! // create a store
@@ -16,7 +16,7 @@
 //! let t = store.add_slice(b"hello world").await?;
 //!
 //! // create an iroh endpoint
-//! let endpoint = Endpoint::bind().await?;
+//! let endpoint = Endpoint::bind(presets::N0).await?;
 //! endpoint.online().await;
 //! let addr = endpoint.addr();
 //!

@@ -80,9 +80,35 @@ impl SimpleStore for crate::api::Store {
 ///
 /// This is the wire format for the metadata blob.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-struct CollectionMeta {
+pub struct CollectionMeta {
     header: [u8; 13], // Must contain "CollectionV0."
     names: Vec<String>,
+}
+
+impl Default for CollectionMeta {
+    fn default() -> Self {
+        Self {
+            header: *Collection::HEADER,
+            names: Vec::default(),
+        }
+    }
+}
+
+impl CollectionMeta {
+    /// Verifies the header is the only valid collection header.
+    pub fn check_header(&self) -> bool {
+        &self.header == Collection::HEADER
+    }
+
+    /// Returns the names in this collection.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// Returns a mutable reference to the names in this collection.
+    pub fn names_mut(&mut self) -> &mut Vec<String> {
+        &mut self.names
+    }
 }
 
 impl Collection {
@@ -136,7 +162,7 @@ impl Collection {
             let (curr, names) = curr.concatenate_into_vec().await?;
             let names = postcard::from_bytes::<CollectionMeta>(&names).anyerr()?;
             n0_error::ensure_any!(
-                names.header == *Self::HEADER,
+                names.check_header(),
                 "expected header {:?}, got {:?}",
                 Self::HEADER,
                 names.header

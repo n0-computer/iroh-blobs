@@ -54,7 +54,7 @@ impl IntoIterator for HashSeq {
 impl HashSeq {
     /// Create a new sequence of hashes.
     pub fn new(bytes: Bytes) -> Option<Self> {
-        if bytes.len() % 32 == 0 {
+        if bytes.len().is_multiple_of(32) {
             Some(Self(bytes))
         } else {
             None
