@@ -396,19 +396,16 @@ impl PartialMemStorage {
 impl BaoFileStorage {
     pub fn bitfield(&self) -> Bitfield {
         match self {
-            BaoFileStorage::Initial => {
-                panic!("initial storage should not be used")
-            }
-            BaoFileStorage::Loading => {
-                panic!("loading storage should not be used")
-            }
+            // Observers can briefly see transitional states while an entry is loading, being
+            // replaced, or after an operation failed. Treating those states as empty keeps observe
+            // streams recoverable until the next update arrives.
+            BaoFileStorage::Initial => Bitfield::empty(),
+            BaoFileStorage::Loading => Bitfield::empty(),
             BaoFileStorage::NonExisting => Bitfield::empty(),
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
             BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
-            BaoFileStorage::Poisoned => {
-                panic!("poisoned storage should not be used")
-            }
+            BaoFileStorage::Poisoned => Bitfield::empty(),
         }
     }
 
@@ -745,5 +742,41 @@ impl BaoFileStorageSubscriber {
             }
             e = self.receiver.changed() => Ok(e.anyerr()?),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use irpc::channel::mpsc;
+    use tokio::sync::watch;
+
+    use super::*;
+
+    #[test]
+    fn bitfield_is_empty_for_transitional_states() {
+        assert_eq!(BaoFileStorage::Initial.bitfield(), Bitfield::empty());
+        assert_eq!(BaoFileStorage::Loading.bitfield(), Bitfield::empty());
+        assert_eq!(BaoFileStorage::Poisoned.bitfield(), Bitfield::empty());
+    }
+
+    #[tokio::test]
+    async fn subscriber_forward_emits_empty_bitfield_for_transitional_state() {
+        let (_state_tx, state_rx) = watch::channel(BaoFileStorage::Loading);
+        let subscriber = BaoFileStorageSubscriber::new(state_rx);
+        let (tx, mut rx) = mpsc::channel(1);
+        let forward = tokio::spawn(async move { subscriber.forward(tx).await });
+
+        let first = rx
+            .recv()
+            .await
+            .expect("receiver should stay open")
+            .expect("subscriber should emit an initial bitfield");
+        assert!(first.is_empty());
+
+        drop(rx);
+        assert!(forward
+            .await
+            .expect("subscriber task should not panic")
+            .is_err());
     }
 }
