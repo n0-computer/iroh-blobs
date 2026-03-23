@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["channel","outboard_with_progress","serde","sink"],"trait":["ChunkRangesExt"]};

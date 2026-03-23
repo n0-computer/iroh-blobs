@@ -1,9 +1,0 @@
-(function() {
-    var implementors = Object.fromEntries([["iroh_blobs",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"iroh_blobs/downloader/struct.DownloadHandle.html\" title=\"struct iroh_blobs::downloader::DownloadHandle\">DownloadHandle</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"iroh_blobs/rpc/client/blobs/struct.AddProgress.html\" title=\"struct iroh_blobs::rpc::client::blobs::AddProgress\">AddProgress</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"iroh_blobs/rpc/client/blobs/struct.DownloadProgress.html\" title=\"struct iroh_blobs::rpc::client::blobs::DownloadProgress\">DownloadProgress</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"iroh_blobs/rpc/client/blobs/struct.ExportProgress.html\" title=\"struct iroh_blobs::rpc::client::blobs::ExportProgress\">ExportProgress</a>"],["impl&lt;T&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"iroh_blobs/util/local_pool/struct.Run.html\" title=\"struct iroh_blobs::util::local_pool::Run\">Run</a>&lt;T&gt;"]]]]);
-    if (window.register_implementors) {
-        window.register_implementors(implementors);
-    } else {
-        window.pending_implementors = implementors;
-    }
-})()
-//{"start":57,"fragment_lengths":[1656]}

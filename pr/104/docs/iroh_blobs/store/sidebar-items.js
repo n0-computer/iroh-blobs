@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["IROH_BLOCK_SIZE"],"mod":["fs","mem","readonly_mem"]};

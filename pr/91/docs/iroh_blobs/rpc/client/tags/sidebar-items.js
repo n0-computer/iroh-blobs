@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["Client","DeleteOptions","ListOptions","TagInfo"],"type":["MemClient"]};
