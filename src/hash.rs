@@ -299,7 +299,9 @@ mod redb_support {
         where
             Self: 'a,
         {
-            let contents: &'a [u8; 32] = data.try_into().unwrap();
+            let contents: &'a [u8; 32] = data
+                .try_into()
+                .expect("redb provided wrong-sized data for Hash (expected 32 bytes)");
             (*contents).into()
         }
 
@@ -335,8 +337,11 @@ mod redb_support {
         where
             Self: 'a,
         {
-            let t: &'a [u8; Self::POSTCARD_MAX_SIZE] = data.try_into().unwrap();
-            postcard::from_bytes(t.as_slice()).unwrap()
+            let t: &'a [u8; Self::POSTCARD_MAX_SIZE] = data
+                .try_into()
+                .expect("redb provided wrong-sized data for HashAndFormat (expected 33 bytes)");
+            postcard::from_bytes(t.as_slice())
+                .expect("redb data failed postcard deserialization for HashAndFormat")
         }
 
         fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
@@ -345,7 +350,8 @@ mod redb_support {
             Self: 'b,
         {
             let mut res = [0u8; 33];
-            postcard::to_slice(&value, &mut res).unwrap();
+            postcard::to_slice(&value, &mut res)
+                .expect("HashAndFormat serialization failed (exceeds 33 bytes)");
             res
         }
 

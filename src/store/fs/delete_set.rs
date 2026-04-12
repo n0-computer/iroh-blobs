@@ -20,6 +20,17 @@ pub(super) enum BaoFilePart {
 ///
 /// The protect handle can be used to protect files from deletion.
 /// The delete handle can be used to create transactions in which files can be marked for deletion.
+///
+/// # Concurrency safety
+///
+/// The protect handle is safe to use concurrently with GC transactions. The
+/// shared `Mutex<DeleteSet>` ensures that:
+/// - If `protect()` is called before `commit()`, the hash is removed from the
+///   delete set and its files are preserved.
+/// - If `protect()` is called after `commit()` (files already deleted), the
+///   protect is a no-op on an empty set, and the import will recreate the files.
+/// - The meta actor processes commands sequentially, so GC and imports cannot
+///   interleave their database operations.
 pub(super) fn pair(options: Arc<PathOptions>) -> (ProtectHandle, DeleteHandle) {
     let ds = Arc::new(Mutex::new(DeleteSet::default()));
     (ProtectHandle(ds.clone()), DeleteHandle::new(ds, options))
