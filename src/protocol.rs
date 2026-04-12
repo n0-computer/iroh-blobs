@@ -392,7 +392,7 @@ pub use range_spec::{ChunkRangesSeq, NonEmptyRequestRangeSpecIter, RangeSpec};
 
 use crate::{api::blobs::Bitfield, util::RecvStreamExt, BlobFormat, Hash, HashAndFormat};
 
-/// Maximum message size is limited to 100MiB for now.
+/// Maximum message size is limited to 1MiB for now.
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// Error code for a permission error
