@@ -735,14 +735,20 @@ mod tests {
     fn range_spec_overflow_returns_none() {
         // Construct a RangeSpec with deltas that overflow u64 when summed
         let spec = RangeSpec(smallvec![u64::MAX, 1]);
-        assert!(spec.to_chunk_ranges().is_none(), "overflowing deltas should return None");
+        assert!(
+            spec.to_chunk_ranges().is_none(),
+            "overflowing deltas should return None"
+        );
     }
 
     #[test]
     fn range_spec_chunks_overflow_returns_none() {
         // Even number of elements: chunks() sums odd-indexed elements
         let spec = RangeSpec(smallvec![0, u64::MAX, 0, 1]);
-        assert!(spec.chunks().is_none(), "overflowing chunk count should return None");
+        assert!(
+            spec.chunks().is_none(),
+            "overflowing chunk count should return None"
+        );
     }
 
     #[test]
@@ -750,12 +756,13 @@ mod tests {
         // Construct a wire-format RangeSpecSeq with overflowing offsets via postcard.
         // The wire format is SmallVec<[(u64, RangeSpec)]> where u64 are delta offsets.
         // We encode two entries with deltas that sum past u64::MAX.
-        let wire_data: Vec<(u64, RangeSpec)> = vec![
-            (u64::MAX, RangeSpec::all()),
-            (1, RangeSpec::all()),
-        ];
+        let wire_data: Vec<(u64, RangeSpec)> =
+            vec![(u64::MAX, RangeSpec::all()), (1, RangeSpec::all())];
         let bytes = postcard::to_stdvec(&wire_data).unwrap();
         let result = postcard::from_bytes::<ChunkRangesSeq>(&bytes);
-        assert!(result.is_err(), "overflowing offsets in wire format should fail deserialization");
+        assert!(
+            result.is_err(),
+            "overflowing offsets in wire format should fail deserialization"
+        );
     }
 }
