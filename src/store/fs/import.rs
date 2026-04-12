@@ -453,26 +453,31 @@ async fn import_path_impl(
             "path must be absolute",
         ));
     }
-    if !path.is_file() && !path.is_symlink() {
+    // Resolve symlinks to their real path to prevent symlink-based attacks
+    // where a symlink could point to sensitive files outside the intended scope.
+    let path = std::fs::canonicalize(&path)?;
+    if !path.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "path is not a file or symlink",
+            "path is not a file",
         ));
     }
 
-    let size = path.metadata()?.len();
+    // Open the file first, then get size from the file descriptor (fstat).
+    // This eliminates the TOCTOU race between checking metadata and opening.
+    let file = OpenOptions::new().read(true).open(&path)?;
+    let size = file.metadata()?.len();
     tx.send(AddProgressItem::Size(size)).await?;
     let import_source = if size <= options.inline.max_data_inlined {
-        let data = std::fs::read(path)?;
+        drop(file);
+        let data = std::fs::read(&path)?;
         tx.send(AddProgressItem::CopyDone).await?;
         ImportSource::Memory(data.into())
     } else if mode == ImportMode::TryReference {
-        // reference where it is. We are going to need the file handle to
-        // compute the outboard, so open it here. If this fails, the import
-        // can't proceed.
-        let file = OpenOptions::new().read(true).open(&path)?;
+        // reference where it is. We already have the file handle open.
         ImportSource::External(path, file, size)
     } else {
+        drop(file);
         let temp_path = options.path.temp_file_name();
         // todo: if reflink works, we don't need progress.
         // But if it does not, it might take a while and we won't get progress.
