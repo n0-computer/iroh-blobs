@@ -21,7 +21,7 @@ fn chunk_ranges_empty() -> &'static ChunkRanges {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[serde(from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]
+#[serde(try_from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]
 pub struct ChunkRangesSeq(pub(crate) SmallVec<[(u64, ChunkRanges); 2]>);
 
 impl std::hash::Hash for ChunkRangesSeq {
@@ -415,10 +415,12 @@ impl RangeSpec {
 
     /// Returns the number of chunks selected by this [`RangeSpec`], as a tuple
     /// with the minimum and maximum number of chunks.
-    pub fn chunks(&self) -> (u64, Option<u64>) {
-        let mut min = 0;
+    ///
+    /// Returns `None` if the internal deltas overflow when summed.
+    pub fn chunks(&self) -> Option<(u64, Option<u64>)> {
+        let mut min: u64 = 0;
         for i in 0..self.0.len() / 2 {
-            min += self.0[2 * i + 1];
+            min = min.checked_add(self.0[2 * i + 1])?;
         }
         let max = if !self.0.len().is_multiple_of(2) {
             // spec is open ended
@@ -426,28 +428,31 @@ impl RangeSpec {
         } else {
             Some(min)
         };
-        (min, max)
+        Some((min, max))
     }
 
     /// Creates a [`ChunkRanges`] from this [`RangeSpec`].
-    pub fn to_chunk_ranges(&self) -> ChunkRanges {
+    ///
+    /// Returns `None` if the internal deltas overflow `u64` when summed,
+    /// which indicates a malformed or malicious `RangeSpec`.
+    pub fn to_chunk_ranges(&self) -> Option<ChunkRanges> {
         // this is zero allocation for single ranges
         // todo: optimize this in range collections
         let mut ranges = ChunkRanges::empty();
-        let mut current = ChunkNum(0);
+        let mut current: u64 = 0;
         let mut on = false;
         for &width in self.0.iter() {
-            let next = current + width;
+            let next = current.checked_add(width)?;
             if on {
-                ranges |= ChunkRanges::from(current..next);
+                ranges |= ChunkRanges::from(ChunkNum(current)..ChunkNum(next));
             }
             current = next;
             on = !on;
         }
         if on {
-            ranges |= ChunkRanges::from(current..);
+            ranges |= ChunkRanges::from(ChunkNum(current)..);
         }
-        ranges
+        Some(ranges)
     }
 }
 
@@ -458,9 +463,10 @@ impl fmt::Debug for RangeSpec {
         } else if self.is_empty() {
             write!(f, "empty")
         } else if !f.alternate() {
-            f.debug_list()
-                .entries(self.to_chunk_ranges().iter())
-                .finish()
+            match self.to_chunk_ranges() {
+                Some(ranges) => f.debug_list().entries(ranges.iter()).finish(),
+                None => write!(f, "<overflow>"),
+            }
         } else {
             f.debug_list().entries(self.0.iter()).finish()
         }
@@ -477,17 +483,32 @@ mod wire {
     #[derive(Deserialize, Serialize)]
     pub struct RangeSpecSeq(SmallVec<[(u64, RangeSpec); 2]>);
 
-    impl From<RangeSpecSeq> for ChunkRangesSeq {
-        fn from(wire: RangeSpecSeq) -> Self {
-            let mut offset = 0;
+    impl TryFrom<RangeSpecSeq> for ChunkRangesSeq {
+        type Error = OverflowError;
+
+        fn try_from(wire: RangeSpecSeq) -> Result<Self, Self::Error> {
+            let mut offset: u64 = 0;
             let mut res = SmallVec::new();
             for (delta, spec) in wire.0.iter() {
-                offset += *delta;
-                res.push((offset, spec.to_chunk_ranges()));
+                offset = offset.checked_add(*delta).ok_or(OverflowError)?;
+                let ranges = spec.to_chunk_ranges().ok_or(OverflowError)?;
+                res.push((offset, ranges));
             }
-            Self(res)
+            Ok(Self(res))
         }
     }
+
+    /// Error returned when deserializing a [`RangeSpecSeq`] with overflowing offsets.
+    #[derive(Debug, Clone, Copy)]
+    pub struct OverflowError;
+
+    impl std::fmt::Display for OverflowError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "overflow in range spec offset computation")
+        }
+    }
+
+    impl std::error::Error for OverflowError {}
 
     impl From<ChunkRangesSeq> for RangeSpecSeq {
         fn from(value: ChunkRangesSeq) -> Self {
@@ -691,7 +712,7 @@ mod tests {
         #[test]
         fn range_spec_roundtrip(ranges in ranges(0..1000)) {
             let spec = RangeSpec::new(&ranges);
-            let ranges2 = spec.to_chunk_ranges();
+            let ranges2 = spec.to_chunk_ranges().expect("valid RangeSpec from valid ChunkRanges should not overflow");
             prop_assert_eq!(ranges, ranges2);
         }
 
@@ -708,5 +729,33 @@ mod tests {
             let actual = range_spec_seq_bytes_roundtrip_impl(&ranges);
             prop_assert_eq!(expected, actual);
         }
+    }
+
+    #[test]
+    fn range_spec_overflow_returns_none() {
+        // Construct a RangeSpec with deltas that overflow u64 when summed
+        let spec = RangeSpec(smallvec![u64::MAX, 1]);
+        assert!(spec.to_chunk_ranges().is_none(), "overflowing deltas should return None");
+    }
+
+    #[test]
+    fn range_spec_chunks_overflow_returns_none() {
+        // Even number of elements: chunks() sums odd-indexed elements
+        let spec = RangeSpec(smallvec![0, u64::MAX, 0, 1]);
+        assert!(spec.chunks().is_none(), "overflowing chunk count should return None");
+    }
+
+    #[test]
+    fn range_spec_seq_overflow_rejected() {
+        // Construct a wire-format RangeSpecSeq with overflowing offsets via postcard.
+        // The wire format is SmallVec<[(u64, RangeSpec)]> where u64 are delta offsets.
+        // We encode two entries with deltas that sum past u64::MAX.
+        let wire_data: Vec<(u64, RangeSpec)> = vec![
+            (u64::MAX, RangeSpec::all()),
+            (1, RangeSpec::all()),
+        ];
+        let bytes = postcard::to_stdvec(&wire_data).unwrap();
+        let result = postcard::from_bytes::<ChunkRangesSeq>(&bytes);
+        assert!(result.is_err(), "overflowing offsets in wire format should fail deserialization");
     }
 }

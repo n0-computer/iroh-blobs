@@ -6,6 +6,12 @@ use n0_error::{anyerr, AnyError};
 
 use crate::Hash;
 
+/// Maximum number of hashes allowed in a [`HashSeq`].
+///
+/// This limits memory usage when parsing hash sequences from untrusted sources.
+/// 1 million hashes = 32MB, which is a generous upper bound for any realistic use.
+pub const MAX_HASHSEQ_ENTRIES: usize = 1024 * 1024;
+
 /// A sequence of links, backed by a [`Bytes`] object.
 #[derive(Clone, derive_more::Into)]
 pub struct HashSeq(Bytes);
@@ -53,8 +59,11 @@ impl IntoIterator for HashSeq {
 
 impl HashSeq {
     /// Create a new sequence of hashes.
+    ///
+    /// Returns `None` if the bytes length is not a multiple of 32 or if
+    /// the sequence exceeds [`MAX_HASHSEQ_ENTRIES`].
     pub fn new(bytes: Bytes) -> Option<Self> {
-        if bytes.len().is_multiple_of(32) {
+        if bytes.len().is_multiple_of(32) && bytes.len() / 32 <= MAX_HASHSEQ_ENTRIES {
             Some(Self(bytes))
         } else {
             None
