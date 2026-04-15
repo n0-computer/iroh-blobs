@@ -636,6 +636,7 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     println!("hash seq: {hs:?}");
     println!("sizes: {sizes:?}");
     r1.shutdown().await?;
+    endpoint2.close().await;
     Ok(())
 }
 
@@ -672,6 +673,7 @@ async fn node_serve_blobs() -> TestResult<()> {
         assert_eq!(actual.len(), expected.len(), "size: {size}");
     }
     r1.shutdown().await?;
+    endpoint2.close().await;
     Ok(())
 }
 
@@ -708,6 +710,7 @@ async fn node_smoke(store: &Store) -> TestResult<()> {
     let data = get::request::get_blob(conn, hash).await?;
     assert_eq!(data.as_ref(), b"hello world");
     r1.shutdown().await?;
+    endpoint2.close().await;
     Ok(())
 }
 

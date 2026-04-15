@@ -141,5 +141,7 @@ async fn main() -> anyhow::Result<()> {
     assert_eq!(send_hashes.len(), recv_hashes.len());
 
     println!("Transfer complete!");
+    send_node.router.shutdown().await?;
+    recv_node.router.shutdown().await?;
     Ok(())
 }

@@ -293,5 +293,6 @@ async fn request(args: RequestArgs) -> anyhow::Result<()> {
         println!("Got {hash}");
     }
     store.dump().await?;
+    endpoint.close().await;
     Ok(())
 }

@@ -337,6 +337,7 @@ async fn main() -> Result<()> {
             router.shutdown().await?;
         }
     }
+    endpoint.close().await;
     Ok(())
 }
 

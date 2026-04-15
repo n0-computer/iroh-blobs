@@ -68,5 +68,6 @@ async fn main() -> anyhow::Result<()> {
         stats
     };
     tracing::info!("Stream done with stats: {stats:?}");
+    endpoint.close().await;
     Ok(())
 }
