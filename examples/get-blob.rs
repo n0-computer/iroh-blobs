@@ -3,7 +3,7 @@ mod common;
 use bao_tree::io::BaoContentItem;
 use clap::Parser;
 use common::setup_logging;
-use iroh::address_lookup::PkarrResolver;
+use iroh::{address_lookup::PkarrResolver, endpoint::presets};
 use iroh_blobs::{get::request::GetBlobItem, ticket::BlobTicket, BlobFormat};
 use n0_future::StreamExt;
 use tokio::io::AsyncWriteExt;
@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     setup_logging();
     let cli = Cli::parse();
     let ticket = cli.ticket;
-    let endpoint = iroh::Endpoint::empty_builder()
+    let endpoint = iroh::Endpoint::builder(presets::Minimal)
         .relay_mode(iroh::RelayMode::Default)
         .address_lookup(PkarrResolver::n0_dns())
         .bind()

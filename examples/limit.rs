@@ -31,7 +31,6 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
-use rand::rng;
 
 use crate::common::get_or_generate_secret_key;
 
@@ -256,9 +255,8 @@ async fn main() -> Result<()> {
             let mut allowed_endpoints = allowed_endpoints.into_iter().collect::<HashSet<_>>();
             if secrets > 0 {
                 println!("Generating {secrets} new secret keys for allowed endpoints:");
-                let mut rand = rng();
                 for _ in 0..secrets {
-                    let secret = SecretKey::generate(&mut rand);
+                    let secret = SecretKey::generate();
                     let public = secret.public();
                     allowed_endpoints.insert(public);
                     println!("IROH_SECRET={}", hex::encode(secret.to_bytes()));
