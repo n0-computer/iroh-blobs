@@ -33,11 +33,11 @@ postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
 data-encoding = "2.8.0"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = { version = "0.97", default-features = false }
+iroh = { version = "0.98", default-features = false }
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.97"
-iroh-tickets = "0.4"
+iroh-base = "0.98"
+iroh-tickets = "0.5"
 irpc = { version = "0.13.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
 iroh-metrics = { version = "0.38" }
 redb = { version = "2.6.3", optional = true }
@@ -67,7 +67,7 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.97", features = ["address-lookup-mdns"]}
+iroh = { version = "0.98", features = ["address-lookup-mdns"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 anyhow = "1.0.100"
@@ -94,11 +94,3 @@ required-features = ["fs-store"]
 name = "random_store"
 required-features = ["fs-store"]
 
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-iroh-base = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
-noq = { git = "https://github.com/n0-computer/noq", branch = "main" }
-noq-udp = { git = "https://github.com/n0-computer/noq", branch = "main" }
-noq-proto = { git = "https://github.com/n0-computer/noq", branch = "main" }
-portmapper = { git = "https://github.com/n0-computer/net-tools", branch = "main" }
-netwatch = { git = "https://github.com/n0-computer/net-tools", branch = "main" }
