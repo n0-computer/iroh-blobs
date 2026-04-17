@@ -309,12 +309,9 @@ impl LocalInfo {
             return false;
         }
         if let Some(children) = self.children.as_ref() {
-            let mut iter = self.request.ranges.iter_non_empty_infinite();
+            let iter = self.request.ranges.iter_non_empty_infinite();
             let max_child = self.bitfield.validated_size().map(|x| x / 32);
-            loop {
-                let Some((offset, range)) = iter.next() else {
-                    break;
-                };
+            for (offset, range) in iter {
                 if offset == 0 {
                     // skip the root hash
                     continue;
@@ -359,10 +356,7 @@ impl LocalInfo {
             .map(|x| *x + 1)
             .unwrap_or_default();
         let max_offset = self.bitfield.validated_size().map(|x| x / 32);
-        loop {
-            let Some((offset, requested)) = iter.next() else {
-                break;
-            };
+        for (offset, requested) in iter.by_ref() {
             if offset == 0 {
                 // skip the root hash
                 continue;
