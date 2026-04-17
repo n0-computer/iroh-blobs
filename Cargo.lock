@@ -1874,6 +1874,7 @@ dependencies = [
  "derive_more",
  "futures-lite",
  "genawaiter",
+ "getrandom 0.3.4",
  "hex",
  "iroh",
  "iroh-base",

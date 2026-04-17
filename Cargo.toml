@@ -52,6 +52,7 @@ chrono = { version = "0.4.39" }
 # wasm-in-browser dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
