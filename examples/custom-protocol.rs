@@ -123,7 +123,7 @@ async fn query(endpoint_id: EndpointId, query: String) -> Result<()> {
     // Create an endpoint with a random secret key and no address lookup publishing.
     // For a client we just need address lookup resolution via the n0 dns server, which
     // the PkarrResolver provides.
-    let endpoint = Endpoint::empty_builder()
+    let endpoint = Endpoint::builder(presets::Minimal)
         .relay_mode(iroh::RelayMode::Default)
         .address_lookup(PkarrResolver::n0_dns())
         .bind()

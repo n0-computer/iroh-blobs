@@ -1,7 +1,7 @@
 use std::future::IntoFuture;
 
 use n0_future::{stream, StreamExt};
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 
 use crate::{
     api::{blobs::AddBytesOptions, tags::TagInfo, RequestResult, Store},

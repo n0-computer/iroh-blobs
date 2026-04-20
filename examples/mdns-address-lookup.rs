@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{ensure, Result};
 use clap::{Parser, Subcommand};
 use iroh::{
-    address_lookup::MdnsAddressLookup, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey,
+    address_lookup::MdnsAddressLookup, endpoint::presets, protocol::Router, Endpoint, PublicKey,
+    RelayMode, SecretKey,
 };
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, Hash};
 
@@ -60,7 +61,7 @@ async fn accept(path: &Path) -> Result<()> {
 
     println!("Starting iroh node with mdns address lookup...");
     // create a new node
-    let endpoint = Endpoint::empty_builder()
+    let endpoint = Endpoint::builder(presets::Minimal)
         .relay_mode(RelayMode::Default)
         .secret_key(key)
         .address_lookup(MdnsAddressLookup::builder())
@@ -92,13 +93,13 @@ async fn accept(path: &Path) -> Result<()> {
 }
 
 async fn connect(node_id: PublicKey, hash: Hash, out: Option<PathBuf>) -> Result<()> {
-    let key = SecretKey::generate(&mut rand::rng());
+    let key = SecretKey::generate();
     // todo: disable address_lookup publishing once https://github.com/n0-computer/iroh/issues/3401 is implemented
     let address_lookup = MdnsAddressLookup::builder();
 
     println!("Starting iroh node with mdns address_lookup...");
     // create a new node
-    let endpoint = Endpoint::empty_builder()
+    let endpoint = Endpoint::builder(presets::Minimal)
         .secret_key(key)
         .address_lookup(address_lookup)
         .bind()

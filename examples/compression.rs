@@ -224,5 +224,6 @@ async fn main() -> Result<()> {
             }
         }
     }
+    endpoint.close().await;
     Ok(())
 }

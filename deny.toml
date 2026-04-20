@@ -7,9 +7,6 @@ ignore = [
 
 [bans]
 deny = [
-    "aws-lc",
-    "aws-lc-rs",
-    "aws-lc-sys",
     "native-tls",
     "openssl",
 ]
