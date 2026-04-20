@@ -20,7 +20,7 @@ use iroh::endpoint::Connection;
 use n0_error::e;
 use n0_future::{Stream, StreamExt};
 use nested_enum_utils::enum_conversions;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use tokio::sync::mpsc;
 
 use super::{fsm, GetError, GetResult, Stats};

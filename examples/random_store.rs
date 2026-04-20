@@ -13,7 +13,7 @@ use iroh_blobs::{
 use iroh_tickets::endpoint::EndpointTicket;
 use irpc::RpcMessage;
 use n0_future::StreamExt;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, RngExt, SeedableRng};
 use tokio::signal::ctrl_c;
 use tracing::info;
 
