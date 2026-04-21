@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use iroh::{address_lookup::MemoryLookup, protocol::Router, Endpoint, EndpointAddr, RelayMode};
+use iroh::{
+    address_lookup::MemoryLookup, endpoint::presets, protocol::Router, Endpoint, EndpointAddr,
+    RelayMode,
+};
 use iroh_blobs::{
     api::{downloader::Shuffled, Store, TempTag},
     format::collection::Collection,
@@ -27,7 +30,7 @@ struct Node {
 
 impl Node {
     async fn new(disc: &MemoryLookup) -> Result<Self> {
-        let endpoint = Endpoint::empty_builder()
+        let endpoint = Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(disc.clone())
             .bind()
@@ -138,5 +141,7 @@ async fn main() -> anyhow::Result<()> {
     assert_eq!(send_hashes.len(), recv_hashes.len());
 
     println!("Transfer complete!");
+    send_node.router.shutdown().await?;
+    recv_node.router.shutdown().await?;
     Ok(())
 }

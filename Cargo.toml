@@ -1,6 +1,6 @@
 [package]
 name = "iroh-blobs"
-version = "0.99.0"
+version = "0.100.0"
 edition = "2021"
 description = "content-addressed blobs for iroh"
 license = "MIT OR Apache-2.0"
@@ -17,28 +17,29 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(iroh_blobs_docsrs)'] }
 [dependencies]
 bao-tree = { version = "0.16", features = ["experimental-mixed", "tokio_fsm", "validate", "serde"], default-features = false }
 bytes = { version = "1", features = ["serde"] }
+constant_time_eq = "<0.4.3" # pin to avoid MSRV bump
 derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debug", "display", "deref", "deref_mut"] }
 futures-lite = "2.6.0"
-noq = { version = "0.17.0", optional = true }
+noq = { version = "0.18.0", optional = true }
 n0-future = "0.3.0"
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
 tokio = { version = "1.43.0", default-features = false, features = ["sync"] }
 tracing = "0.1.41"
 iroh-io = "0.6.1"
-rand = "0.9.2"
+rand = "0.10.1"
 hex = "0.4.3"
 serde = "1.0.217"
 postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
 data-encoding = "2.8.0"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = { version = "0.97", default-features = false }
+iroh = { version = "0.98", default-features = false }
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "0.97"
-iroh-tickets = "0.4"
-irpc = { version = "0.13.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
+iroh-base = "0.98"
+iroh-tickets = "0.5"
+irpc = { version = "0.14.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
 iroh-metrics = { version = "0.38" }
 redb = { version = "2.6.3", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
@@ -52,6 +53,7 @@ chrono = { version = "0.4.39" }
 # wasm-in-browser dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
@@ -67,7 +69,7 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "0.97", features = ["address-lookup-mdns"]}
+iroh = { version = "0.98", features = ["address-lookup-mdns"]}
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 anyhow = "1.0.100"

@@ -179,7 +179,7 @@ mod tests {
 
     fn make_ticket() -> BlobTicket {
         let hash = Hash::new(b"hi there");
-        let peer = SecretKey::generate(&mut rand::rng()).public();
+        let peer = SecretKey::generate().public();
         let addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
         BlobTicket {
             hash,

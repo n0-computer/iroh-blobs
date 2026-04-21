@@ -666,12 +666,12 @@ mod tests {
     async fn connection_pool_errors() -> TestResult<()> {
         // set up static address lookup for all addrs
         let address_lookup = MemoryLookup::new();
-        let endpoint = iroh::Endpoint::empty_builder()
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(address_lookup.clone())
             .bind()
             .await?;
-        let pool = ConnectionPool::new(endpoint, ECHO_ALPN, test_options());
+        let pool = ConnectionPool::new(endpoint.clone(), ECHO_ALPN, test_options());
         let client = EchoClient { pool };
         {
             let non_existing = SecretKey::from_bytes(&[0; 32]).public();
@@ -694,6 +694,7 @@ mod tests {
             let res = client.echo(non_listening, b"Hello, world!".to_vec()).await;
             assert!(matches!(res, Err(PoolConnectError::Timeout { .. })));
         }
+        endpoint.close().await;
         Ok(())
     }
 
@@ -703,7 +704,7 @@ mod tests {
         let n = 32;
         let (ids, routers, address_lookup) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the endpoint ids
-        let endpoint = iroh::Endpoint::empty_builder()
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(address_lookup.clone())
             .bind()
@@ -728,6 +729,7 @@ mod tests {
             assert_ne!(cid1, cid2);
         }
         shutdown_routers(routers).await;
+        endpoint.close().await;
         Ok(())
     }
 
@@ -739,7 +741,7 @@ mod tests {
         let n = 32;
         let (ids, routers, address_lookup) = echo_servers(n).await?;
         // build a client endpoint that can resolve all the endpoint ids
-        let endpoint = iroh::Endpoint::empty_builder()
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(address_lookup.clone())
             .bind()
@@ -760,6 +762,7 @@ mod tests {
             assert_eq!(res, msg);
         }
         shutdown_routers(routers).await;
+        endpoint.close().await;
         Ok(())
     }
 
@@ -771,7 +774,7 @@ mod tests {
     async fn on_connected_error() -> TestResult<()> {
         let n = 1;
         let (ids, routers, address_lookup) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::empty_builder()
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(address_lookup)
             .bind()
@@ -779,7 +782,7 @@ mod tests {
         let on_connected: OnConnected =
             Arc::new(|_, _| Box::pin(async { Err(io::Error::other("on_connect failed")) }));
         let pool = ConnectionPool::new(
-            endpoint,
+            endpoint.clone(),
             ECHO_ALPN,
             Options {
                 on_connected: Some(on_connected),
@@ -793,6 +796,7 @@ mod tests {
             assert!(matches!(res, Err(PoolConnectError::OnConnectError { .. })));
         }
         shutdown_routers(routers).await;
+        endpoint.close().await;
         Ok(())
     }
 
@@ -802,7 +806,7 @@ mod tests {
     async fn on_connected_direct() -> TestResult<()> {
         let n = 1;
         let (ids, routers, address_lookup) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::empty_builder()
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(address_lookup)
             .bind()
@@ -818,7 +822,7 @@ mod tests {
             Err(io::Error::other("connection closed before becoming direct"))
         };
         let pool = ConnectionPool::new(
-            endpoint,
+            endpoint.clone(),
             ECHO_ALPN,
             test_options().with_on_connected(on_connected),
         );
@@ -829,6 +833,7 @@ mod tests {
             assert!(res.is_ok());
         }
         shutdown_routers(routers).await;
+        endpoint.close().await;
         Ok(())
     }
 
@@ -841,13 +846,13 @@ mod tests {
     async fn watch_close() -> TestResult<()> {
         let n = 1;
         let (ids, routers, address_lookup) = echo_servers(n).await?;
-        let endpoint = iroh::Endpoint::empty_builder()
+        let endpoint = iroh::Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Default)
             .address_lookup(address_lookup)
             .bind()
             .await?;
 
-        let pool = ConnectionPool::new(endpoint, ECHO_ALPN, test_options());
+        let pool = ConnectionPool::new(endpoint.clone(), ECHO_ALPN, test_options());
         let conn = pool.get_or_connect(ids[0]).await?;
         let cid1 = conn.stable_id();
         conn.close(0u32.into(), b"test");
@@ -856,6 +861,7 @@ mod tests {
         let cid2 = conn.stable_id();
         assert_ne!(cid1, cid2);
         shutdown_routers(routers).await;
+        endpoint.close().await;
         Ok(())
     }
 }
