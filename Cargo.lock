@@ -3,21 +3,6 @@
 version = 4
 
 [[package]]
-name = "acto"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "148541f13c28e3e840354ee4d6c99046c10be2c81068bbd23b9e3a38f95a917e"
-dependencies = [
- "parking_lot",
- "pin-project-lite",
- "rustc_version",
- "smol_str",
- "sync_wrapper",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,6 +116,15 @@ name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+
+[[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "arrayref"
@@ -769,7 +763,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 2.0.117",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -1367,9 +1361,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hickory-net"
-version = "0.26.0-beta.4"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e232f503c4cfe3f4ea6594971255ecab9f6a0080c4c8e0e17630cc701322aa4"
+checksum = "0c61c8db47fae51ba9f8f2a2748bd87542acfbe22f2ec9cf9c8ec72d1ee6e9a6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1396,9 +1390,9 @@ dependencies = [
 
 [[package]]
 name = "hickory-proto"
-version = "0.26.0-beta.4"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcca12171ce774c549f35510be702f4da00ef12ca486f0f2acb2ee96f2f5ca0f"
+checksum = "a916d0494600d99ecb15aadfab677ad97c4de559e8f1af0c129353a733ac1fcc"
 dependencies = [
  "data-encoding",
  "idna",
@@ -1416,9 +1410,9 @@ dependencies = [
 
 [[package]]
 name = "hickory-resolver"
-version = "0.26.0-beta.4"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e7d2c928fa078e6640f26cf1b537b212e1688829c3944780025c7084e8bbbf6"
+checksum = "a10bd64d950b4d38ca21e25c8ae230712e4955fb8290cfcb29a5e5dc6017e544"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -1785,9 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "iroh"
-version = "0.98.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936882068af6037912c205ad73ae83e1ab9b81f5bd01200210c90f000e24f4d3"
+version = "0.98.1"
 dependencies = [
  "backon",
  "blake3",
@@ -1827,7 +1819,6 @@ dependencies = [
  "serde",
  "smallvec",
  "strum",
- "swarm-discovery",
  "time",
  "tokio",
  "tokio-stream",
@@ -1841,8 +1832,6 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.98.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "738865784637830fb14204ebd3047922db83bc1816a59027af29579b9c27bd99"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1917,15 +1906,22 @@ dependencies = [
 [[package]]
 name = "iroh-dns"
 version = "0.98.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca474630d1e62ddef83149db6babe6a1055d901df9054349d31b22df99811b92"
 dependencies = [
+ "arc-swap",
+ "cfg_aliases",
  "derive_more",
+ "hickory-resolver",
  "iroh-base",
  "n0-error",
  "n0-future",
+ "rand 0.10.1",
+ "reqwest",
+ "rustls",
  "simple-dns",
  "strum",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1972,8 +1968,6 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.98.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4aa6e9a7277bfbb439739c52b57eb5f9288030983928412022b8e94a43d4d838"
 dependencies = [
  "blake3",
  "bytes",
@@ -3361,9 +3355,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.38"
+version = "0.23.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
+checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "log",
  "once_cell",
@@ -3696,12 +3690,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "smol_str"
-version = "0.1.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fad6c857cbab2627dcf01ec85a623ca4e7dcb5691cbaa3d7fb7653671f0d09c9"
-
-[[package]]
 name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3816,21 +3804,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "swarm-discovery"
-version = "0.6.0-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf5ccbd3c5abd6e7314768de12649c1b0a29bea38fca4370f9408340c0f364a6"
-dependencies = [
- "acto",
- "hickory-proto",
- "rand 0.10.1",
- "socket2",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3917,7 +3890,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
