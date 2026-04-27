@@ -99,7 +99,7 @@ jobs:
         java-version: '17'
 
     - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+      uses: android-actions/setup-android@v4
 
     - name: Setup Android NDK
       uses: arqu/setup-ndk@main
@@ -157,7 +157,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Setup Environment (PR)
         if: ${{ github.event_name == 'pull_request' }}
@@ -189,7 +189,7 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
-    - uses: mozilla-actions/sccache-action@v0.0.9
+    - uses: mozilla-actions/sccache-action@v0.0.10
     - uses: taiki-e/install-action@cargo-make
     - run: cargo make format-check
 
@@ -207,7 +207,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: dtolnay/install@cargo-docs-rs
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: iroh-blobs docs
         run: cargo docs-rs
@@ -224,7 +224,7 @@ jobs:
       with:
         components: clippy
     - name: Install sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     # TODO: We have a bunch of platform-dependent code so should
     #    probably run this job on the full platform matrix
@@ -251,7 +251,7 @@ jobs:
       with:
         toolchain: ${{ env.MSRV }}
     - name: Install sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Check MSRV all features
       run: |
