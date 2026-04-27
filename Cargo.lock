@@ -329,7 +329,7 @@ dependencies = [
  "arrayvec",
  "cc",
  "cfg-if",
- "constant_time_eq 0.4.2",
+ "constant_time_eq",
  "cpufeatures 0.3.0",
 ]
 
@@ -533,12 +533,6 @@ name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
-
-[[package]]
-name = "constant_time_eq"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "constant_time_eq"
@@ -763,7 +757,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1780,6 +1774,7 @@ dependencies = [
 [[package]]
 name = "iroh"
 version = "0.98.1"
+source = "git+https://github.com/n0-computer/iroh?branch=Frando%2Fweak-connection-handle#8d3ec38da11ddee9671cd99647bf6da0b955a7a8"
 dependencies = [
  "backon",
  "blake3",
@@ -1832,6 +1827,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.98.0"
+source = "git+https://github.com/n0-computer/iroh?branch=Frando%2Fweak-connection-handle#8d3ec38da11ddee9671cd99647bf6da0b955a7a8"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1863,7 +1859,7 @@ dependencies = [
  "chrono",
  "clap",
  "concat_const",
- "constant_time_eq 0.3.1",
+ "constant_time_eq",
  "data-encoding",
  "derive_more",
  "futures-lite",
@@ -1906,6 +1902,7 @@ dependencies = [
 [[package]]
 name = "iroh-dns"
 version = "0.98.0"
+source = "git+https://github.com/n0-computer/iroh?branch=Frando%2Fweak-connection-handle#8d3ec38da11ddee9671cd99647bf6da0b955a7a8"
 dependencies = [
  "arc-swap",
  "cfg_aliases",
@@ -1968,6 +1965,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.98.0"
+source = "git+https://github.com/n0-computer/iroh?branch=Frando%2Fweak-connection-handle#8d3ec38da11ddee9671cd99647bf6da0b955a7a8"
 dependencies = [
  "blake3",
  "bytes",
@@ -3890,7 +3888,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

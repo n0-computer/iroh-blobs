@@ -77,10 +77,6 @@ anyhow = "1.0.100"
 [build-dependencies]
 cfg_aliases = "0.2.1"
 
-[patch.crates-io]
-iroh = { path = "/home/bit/Code/rust/worktrees/iroh/astral-linden/iroh/iroh" }
-iroh-base = { path = "/home/bit/Code/rust/worktrees/iroh/astral-linden/iroh/iroh-base" }
-
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "iroh_blobs_docsrs"]
@@ -99,3 +95,8 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "Frando/weak-connection-handle" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "Frando/weak-connection-handle" }
+
