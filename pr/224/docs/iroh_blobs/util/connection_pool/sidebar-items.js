@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConnectionPoolError","PoolConnectError"],"struct":["ConnectionPool","Options"],"type":["OnConnected"]};
