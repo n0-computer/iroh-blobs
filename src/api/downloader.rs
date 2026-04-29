@@ -1,6 +1,6 @@
 //! API for downloads from multiple nodes.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Debug,
     future::{Future, IntoFuture},
     sync::Arc,
@@ -8,9 +8,16 @@ use std::{
 
 use genawaiter::sync::Gen;
 use iroh::{Endpoint, EndpointId};
-use irpc::{channel::mpsc, rpc_requests};
+use irpc::{
+    channel::{mpsc, oneshot},
+    rpc_requests,
+};
 use n0_error::{anyerr, Result};
-use n0_future::{future, stream, task::JoinSet, BufferedStreamExt, Stream, StreamExt};
+use n0_future::{
+    future, stream,
+    task::{JoinError, JoinSet},
+    BufferedStreamExt, Stream, StreamExt,
+};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
 use tracing::instrument::Instrument;
@@ -35,13 +42,18 @@ pub struct Downloader {
 enum SwarmProtocol {
     #[rpc(tx = mpsc::Sender<DownloadProgressItem>)]
     Download(DownloadRequest),
+    #[rpc(tx = oneshot::Sender<()>)]
+    WaitIdle(WaitIdleRequest),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WaitIdleRequest;
 
 struct DownloaderActor {
     store: Store,
     pool: ConnectionPool,
     tasks: JoinSet<()>,
-    running: HashSet<n0_future::task::Id>,
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,28 +85,58 @@ impl DownloaderActor {
             store,
             pool: ConnectionPool::new(endpoint, crate::ALPN, pool_options),
             tasks: JoinSet::new(),
-            running: HashSet::new(),
+            idle_waiters: Vec::new(),
         }
     }
 
     async fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<SwarmMsg>) {
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                SwarmMsg::Download(request) => {
-                    self.spawn(handle_download(
-                        self.store.clone(),
-                        self.pool.clone(),
-                        request,
-                    ));
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    match msg {
+                        SwarmMsg::Download(request) => {
+                            self.spawn(handle_download(
+                                self.store.clone(),
+                                self.pool.clone(),
+                                request,
+                            ));
+                        }
+                        SwarmMsg::WaitIdle(WaitIdleMsg { tx, .. }) => {
+                            if self.tasks.is_empty() {
+                                tx.send(()).await.ok();
+                            } else {
+                                self.idle_waiters.push(tx);
+                            }
+                        }
+                    }
+                }
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    Self::log_task_result(res);
+                    if self.tasks.is_empty() {
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
+                    }
                 }
             }
+        }
+        while let Some(res) = self.tasks.join_next().await {
+            Self::log_task_result(res);
+        }
+    }
+
+    fn log_task_result(res: std::result::Result<(), JoinError>) {
+        match res {
+            Ok(()) => {}
+            Err(e) if e.is_cancelled() => tracing::trace!("download task cancelled: {e}"),
+            Err(e) => tracing::error!("download task failed: {e}"),
         }
     }
 
     fn spawn(&mut self, fut: impl Future<Output = ()> + Send + 'static) {
         let span = tracing::Span::current();
-        let id = self.tasks.spawn(fut.instrument(span)).id();
-        self.running.insert(id);
+        self.tasks.spawn(fut.instrument(span));
     }
 }
 
@@ -377,6 +419,21 @@ impl Downloader {
         let fut = self.client.server_streaming(options, 32);
         DownloadProgress::new(Box::pin(fut))
     }
+
+    /// Wait until the downloader has no in-flight download tasks.
+    ///
+    /// This is mostly useful for tests, where you want to confirm that all
+    /// previously-issued downloads have settled (whether they completed
+    /// successfully or errored out). Note that the downloader is not
+    /// guaranteed to become idle if it is being interacted with concurrently;
+    /// in that case this might wait forever. Also note that once you get the
+    /// callback, the downloader is not guaranteed to still be idle — all this
+    /// tells you is that there was a point in time, between the call and the
+    /// response, where it was idle.
+    pub async fn wait_idle(&self) -> irpc::Result<()> {
+        self.client.rpc(WaitIdleRequest).await?;
+        Ok(())
+    }
 }
 
 /// Split a request into multiple requests that can be run in parallel.
@@ -550,6 +607,7 @@ mod tests {
         hashseq::HashSeq,
         protocol::{GetManyRequest, GetRequest},
         tests::node_test_setup_fs,
+        Hash,
     };
 
     #[tokio::test]
@@ -682,6 +740,55 @@ mod tests {
             .stream()
             .await?;
         while progress.next().await.is_some() {}
+        Ok(())
+    }
+
+    /// Invariant: `DownloaderActor` must reap each `handle_download` task
+    /// from its `JoinSet` as that task finishes, not only on shutdown.
+    /// If steady-state reaping is skipped, every completed download
+    /// retains its tokio task header for the lifetime of the actor and
+    /// the heap grows linearly with download volume — invisible at the
+    /// API surface, since downloads still report progress and finish.
+    ///
+    /// We submit many downloads with an empty provider list so each
+    /// `handle_download` finishes in microseconds with no I/O, then
+    /// assert the actor reaches an idle state via [`Downloader::wait_idle`].
+    /// If the `tasks.join_next()` arm is removed from
+    /// `DownloaderActor::run`'s `select!`, the JoinSet stays full of
+    /// completed-but-not-joined tasks, `tasks.is_empty()` never becomes
+    /// true, and the timeout below fires.
+    ///
+    /// The complementary `idle_waiters` notification path is not
+    /// exercised here: by the time this test calls `wait_idle`, the
+    /// actor has already drained the JoinSet during the per-stream
+    /// awaits, so `wait_idle`'s fast path answers directly.
+    #[tokio::test]
+    async fn downloader_drains_completed_tasks() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let (r, store, _, _) = node_test_setup_fs(testdir.path().join("a")).await?;
+        let swarm = Downloader::new(&store, r.endpoint());
+
+        let n = 1_000;
+        let bogus_hash = Hash::new(b"this hash is not stored anywhere");
+        let mut streams = Vec::with_capacity(n);
+        for _ in 0..n {
+            streams.push(
+                swarm
+                    .download(GetRequest::all(bogus_hash), Shuffled::new(vec![]))
+                    .stream()
+                    .await?,
+            );
+        }
+        for mut s in streams {
+            while s.next().await.is_some() {}
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), swarm.wait_idle())
+            .await
+            .map_err(|_| {
+                "wait_idle did not resolve within 5s — DownloaderActor JoinSet not draining"
+            })??;
+
         Ok(())
     }
 }
