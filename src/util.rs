@@ -1,8 +1,8 @@
 //! Utilities
 pub(crate) mod channel;
-pub mod connection_pool;
 mod stream;
 pub(crate) mod temp_tag;
+pub use iroh_util::connection_pool;
 pub use stream::{
     AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream, AsyncWriteSendStreamExtra,
     RecvStream, RecvStreamAsyncStreamReader, SendStream,
