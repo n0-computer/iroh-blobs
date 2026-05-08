@@ -549,7 +549,7 @@ mod tests {
         address_lookup::MemoryLookup,
         endpoint::{presets, Connection},
         protocol::{AcceptError, ProtocolHandler, Router},
-        EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr, Watcher,
+        EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr,
     };
     use n0_error::{AnyError, Result, StdResultExt};
     use n0_future::{io, stream, BufferedStreamExt, StreamExt};
@@ -812,8 +812,7 @@ mod tests {
             .bind()
             .await?;
         let on_connected = |_, conn: Connection| async move {
-            let paths = conn.paths();
-            let mut stream = paths.stream();
+            let mut stream = conn.paths_stream();
             while let Some(paths) = stream.next().await {
                 if paths.iter().any(|path| path.is_ip()) {
                     return Ok(());

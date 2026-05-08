@@ -12,7 +12,7 @@ use crate::{BlobFormat, Hash, HashAndFormat};
 ///
 /// It is a single item which can be easily serialized and deserialized.
 #[derive(Debug, Clone, PartialEq, Eq, derive_more::Display)]
-#[display("{}", Ticket::serialize(self))]
+#[display("{}", Ticket::encode_string(self))]
 pub struct BlobTicket {
     /// The provider to get a file from.
     addr: EndpointAddr,
@@ -64,7 +64,7 @@ struct Variant0AddrInfo {
 impl Ticket for BlobTicket {
     const KIND: &'static str = "blob";
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn encode_bytes(&self) -> Vec<u8> {
         let data = TicketWireFormat::Variant0(Variant0BlobTicket {
             node: Variant0NodeAddr {
                 endpoint_id: self.addr.id,
@@ -79,7 +79,7 @@ impl Ticket for BlobTicket {
         postcard::to_stdvec(&data).expect("postcard serialization failed")
     }
 
-    fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ParseError> {
+    fn decode_bytes(bytes: &[u8]) -> std::result::Result<Self, ParseError> {
         let res: TicketWireFormat = postcard::from_bytes(bytes)?;
         let TicketWireFormat::Variant0(Variant0BlobTicket { node, format, hash }) = res;
         let mut addr = EndpointAddr::new(node.endpoint_id);
@@ -97,7 +97,7 @@ impl FromStr for BlobTicket {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ticket::deserialize(s)
+        Ticket::decode_string(s)
     }
 }
 
