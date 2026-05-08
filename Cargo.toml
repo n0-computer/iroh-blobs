@@ -9,7 +9,7 @@ repository = "https://github.com/n0-computer/iroh-blobs"
 keywords = ["hashing", "quic", "blake3", "streaming"]
 
 # Sadly this also needs to be updated in .github/workflows/ci.yml
-rust-version = "1.89"
+rust-version = "1.91"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(iroh_blobs_docsrs)'] }
