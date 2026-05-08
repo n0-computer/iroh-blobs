@@ -12,7 +12,7 @@ use bao_tree::BaoTree;
 use bytes::Bytes;
 use irpc::channel::mpsc;
 use n0_error::{anyerr, e, stack_error, AnyError};
-use redb::{Database, DatabaseError, ReadableTable};
+use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
 use crate::{
@@ -34,7 +34,7 @@ mod proto;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables};
-use tracing::{debug, error, info, info_span, trace, warn, Span};
+use tracing::{debug, error, info_span, trace, Span};
 
 use super::{
     delete_set::DeleteHandle,
@@ -513,18 +513,17 @@ impl Actor {
         options: BatchOptions,
     ) -> Result<Self, ActorError> {
         debug!("creating or opening meta database at {}", db_path.display());
-        let mut db = match redb::Database::create(db_path) {
+        let db = match redb::Database::create(db_path) {
             Ok(db) => db,
-            Err(DatabaseError::UpgradeRequired(1)) => {
-                return Err(anyerr!("migration from v1 no longer supported").into());
+            Err(DatabaseError::UpgradeRequired(v)) => {
+                return Err(anyerr!(
+                    "migration from redb v{v} no longer supported; \
+                     upgrade with an older redb version first"
+                )
+                .into());
             }
             Err(err) => return Err(err.into()),
         };
-        match db.upgrade() {
-            Ok(true) => info!("Database was upgraded to redb v3 compatible format"),
-            Ok(false) => {}
-            Err(err) => warn!("Database upgrade to redb v3 compatible format failed: {err:#}"),
-        }
         let tx = db.begin_write()?;
         let ftx = ds.begin_write();
         Tables::new(&tx, &ftx)?;
