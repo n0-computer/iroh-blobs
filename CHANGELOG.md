@@ -2,6 +2,23 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.101.0](https://github.com/n0-computer/iroh-blobs/compare/v0.100.0..0.101.0) - 2026-05-08
+
+### 🐛 Bug Fixes
+
+- *(api/downloader)* Reap completed download tasks ([#225](https://github.com/n0-computer/iroh-blobs/issues/225)) - ([7cc92c7](https://github.com/n0-computer/iroh-blobs/commit/7cc92c7cf84d4f4dab32704e328551212977d2a2))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump the github-actions group across 1 directory with 2 updates ([#223](https://github.com/n0-computer/iroh-blobs/issues/223)) - ([181473a](https://github.com/n0-computer/iroh-blobs/commit/181473a92061c387dddb569e42f3bf17190e8e5a))
+- Update n0 dependencies ([#228](https://github.com/n0-computer/iroh-blobs/issues/228)) - ([dccf825](https://github.com/n0-computer/iroh-blobs/commit/dccf82520665f80a63505c7c661c9c17fe266fb0))
+- Ensure changelog generation - ([192262e](https://github.com/n0-computer/iroh-blobs/commit/192262e5652cc8f6305807e1182620fd0697751b))
+
+### Deps
+
+- Use connection pool from iroh-util ([#229](https://github.com/n0-computer/iroh-blobs/issues/229)) - ([d0ba8d8](https://github.com/n0-computer/iroh-blobs/commit/d0ba8d8f4efa05c80427e688f4b63bca2f6d73c1))
+- Use Redb 4 and remove futures-lite dep ([#230](https://github.com/n0-computer/iroh-blobs/issues/230)) - ([2faaf7d](https://github.com/n0-computer/iroh-blobs/commit/2faaf7dbd4180ad0d70592bd5bfdaf6a47e12b0c))
+
 ## [0.35.0](https://github.com/n0-computer/iroh-blobs/compare/v0.34.1..0.35.0) - 2025-05-12
 
 ### ⛰️  Features
