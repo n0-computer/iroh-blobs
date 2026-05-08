@@ -99,3 +99,7 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "fix-double-close" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "fix-double-close" }

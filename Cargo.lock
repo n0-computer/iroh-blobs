@@ -1789,8 +1789,7 @@ dependencies = [
 [[package]]
 name = "iroh"
 version = "1.0.0-rc.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b98e206e3d3f2642f5c08c413755fc0ac19b54ae1a656af88be03454ce3ed2e6"
+source = "git+https://github.com/n0-computer/iroh?branch=fix-double-close#74ef03842ff2b1ccc213266261d037bebff9e7e6"
 dependencies = [
  "backon",
  "blake3",
@@ -1842,8 +1841,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "1.0.0-rc.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2160a45265eba3bd290ce698f584c9b088bee47e518e9ec4460d5e5888ef660e"
+source = "git+https://github.com/n0-computer/iroh?branch=fix-double-close#74ef03842ff2b1ccc213266261d037bebff9e7e6"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1919,8 +1917,7 @@ dependencies = [
 [[package]]
 name = "iroh-dns"
 version = "1.0.0-rc.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8b6d2946350d398c9d2d795bb99b04f22e8414c8a8ad9c5c3c0c5b7899af9a4"
+source = "git+https://github.com/n0-computer/iroh?branch=fix-double-close#74ef03842ff2b1ccc213266261d037bebff9e7e6"
 dependencies = [
  "arc-swap",
  "cfg_aliases",
@@ -2003,8 +2000,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "1.0.0-rc.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54f490405e42dd2ecf16be18a3587d2665401e94a498094f12322eaa6d5ebb2b"
+source = "git+https://github.com/n0-computer/iroh?branch=fix-double-close#74ef03842ff2b1ccc213266261d037bebff9e7e6"
 dependencies = [
  "blake3",
  "bytes",
