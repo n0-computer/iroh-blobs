@@ -65,7 +65,7 @@ serde_test = "1.0.177"
 tempfile = "3.17.1"
 test-strategy = "0.4.0"
 testresult = "0.4.1"
-tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
@@ -99,3 +99,7 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "fix-double-close" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "fix-double-close" }
