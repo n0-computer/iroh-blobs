@@ -82,6 +82,9 @@ cfg_aliases = "0.2.1"
 all-features = true
 rustdoc-args = ["--cfg", "iroh_blobs_docsrs"]
 
+[package.metadata.release]
+pre-release-hook = ["git", "cliff", "--unreleased", "--tag", "{{version}}", "--prepend", "CHANGELOG.md"]
+
 [features]
 hide-proto-docs = []
 metrics = []
