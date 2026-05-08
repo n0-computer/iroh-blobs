@@ -1878,7 +1878,6 @@ dependencies = [
  "constant_time_eq",
  "data-encoding",
  "derive_more",
- "futures-lite",
  "genawaiter",
  "getrandom 0.4.2",
  "hex",

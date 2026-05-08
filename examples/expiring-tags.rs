@@ -13,7 +13,7 @@ use std::{
 };
 
 use chrono::Utc;
-use futures_lite::StreamExt;
+use n0_future::StreamExt;
 use iroh_blobs::{
     api::{blobs::AddBytesOptions, Store, Tag},
     hashseq::HashSeq,
