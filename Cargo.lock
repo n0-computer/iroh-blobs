@@ -778,7 +778,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1889,6 +1889,7 @@ dependencies = [
  "iroh-metrics",
  "iroh-test",
  "iroh-tickets",
+ "iroh-util",
  "irpc",
  "n0-error 1.0.0-rc.0",
  "n0-future",
@@ -2070,6 +2071,20 @@ dependencies = [
  "n0-error 1.0.0-rc.0",
  "postcard",
  "serde",
+]
+
+[[package]]
+name = "iroh-util"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7705450a124b2b05f7caad505620ab5ac3bf4eb6b85018e6b9bca36329fd031"
+dependencies = [
+ "derive_more",
+ "iroh",
+ "n0-error 1.0.0-rc.0",
+ "n0-future",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
