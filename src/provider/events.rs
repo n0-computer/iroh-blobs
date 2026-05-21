@@ -468,7 +468,7 @@ impl EventSender {
                         request_id,
                     };
                     RequestUpdates::Disabled(
-                        client.unwrap().notify_streaming(Notify(msg), 32).await?,
+                        client.unwrap().notify_streaming(Notify(msg), 8192).await?,
                     )
                 }
                 RequestMode::Intercept if client.is_some() => {
@@ -477,7 +477,7 @@ impl EventSender {
                         connection_id,
                         request_id,
                     };
-                    let (tx, rx) = client.unwrap().client_streaming(msg, 32).await?;
+                    let (tx, rx) = client.unwrap().client_streaming(msg, 8192).await?;
                     // bail out if the request is not allowed
                     rx.await??;
                     RequestUpdates::Disabled(tx)
@@ -488,7 +488,7 @@ impl EventSender {
                         connection_id,
                         request_id,
                     };
-                    RequestUpdates::Active(client.unwrap().notify_streaming(Notify(msg), 32).await?)
+                    RequestUpdates::Active(client.unwrap().notify_streaming(Notify(msg), 8192).await?)
                 }
                 RequestMode::InterceptLog if client.is_some() => {
                     let msg = RequestReceived {
@@ -496,7 +496,7 @@ impl EventSender {
                         connection_id,
                         request_id,
                     };
-                    let (tx, rx) = client.unwrap().client_streaming(msg, 32).await?;
+                    let (tx, rx) = client.unwrap().client_streaming(msg, 8192).await?;
                     // bail out if the request is not allowed
                     rx.await??;
                     RequestUpdates::Active(tx)
