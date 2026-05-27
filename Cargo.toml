@@ -19,7 +19,7 @@ bao-tree = { version = "0.16", features = ["experimental-mixed", "tokio_fsm", "v
 bytes = { version = "1", features = ["serde"] }
 constant_time_eq = "<0.4.3" # pin to avoid MSRV bump
 derive_more = { version = "2.0.1", features = ["from", "try_from", "into", "debug", "display", "deref", "deref_mut"] }
-noq = { version = "=1.0.0-rc.0", optional = true }
+noq = { version = "=1.0.0-rc.1", optional = true }
 n0-future = "0.3.0"
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
@@ -99,3 +99,11 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
+
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "feat-rc-1" }
+iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "feat-rc-1" }
+irpc = { git = "https://github.com/n0-computer/irpc", branch = "feat-iroh-rc-1" }
+iroh-tickets = { git = "https://github.com/n0-computer/iroh-tickets", branch = "feat-iroh-rc-1" }
+iroh-mdns-address-lookup = { git = "https://github.com/n0-computer/iroh-address-lookups", branch = "feat-iroh-rc-1" }
