@@ -33,14 +33,14 @@ postcard = { version = "1.1.1", features = ["experimental-derive", "use-std"] }
 data-encoding = "2.8.0"
 ref-cast = "1.0.24"
 arrayvec = "0.7.6"
-iroh = { version = "=1.0.0-rc.0", default-features = false }
+iroh = { version = "=1.0.0-rc.1", default-features = false }
 self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", features = ["futures03"] }
-iroh-base = "=1.0.0-rc.0"
-iroh-tickets = "=1.0.0-rc.0"
-irpc = { version = "0.15.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
+iroh-base = "=1.0.0-rc.1"
+iroh-tickets = "=1.0.0-rc.1"
+irpc = { version = "0.16.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
 iroh-metrics = { version = "=1.0.0-rc.0" }
-iroh-util = "0.4.0"
+iroh-util = "0.5.0"
 redb = { version = "4.1.0", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 n0-error = "=1.0.0-rc.0"
@@ -69,8 +69,8 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "=1.0.0-rc.0" }
-iroh-mdns-address-lookup = "0.2.0"
+iroh = { version = "=1.0.0-rc.1" }
+iroh-mdns-address-lookup = "0.3.0"
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 anyhow = "1.0.100"
@@ -99,11 +99,3 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store"]
-
-
-[patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh", branch = "feat-rc-1" }
-iroh-base = { git = "https://github.com/n0-computer/iroh", branch = "feat-rc-1" }
-irpc = { git = "https://github.com/n0-computer/irpc", branch = "feat-iroh-rc-1" }
-iroh-tickets = { git = "https://github.com/n0-computer/iroh-tickets", branch = "feat-iroh-rc-1" }
-iroh-mdns-address-lookup = { git = "https://github.com/n0-computer/iroh-address-lookups", branch = "feat-iroh-rc-1" }
