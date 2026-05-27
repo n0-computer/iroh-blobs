@@ -2,6 +2,12 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.102.0](https://github.com/n0-computer/iroh-blobs/compare/v0.101.0..0.102.0) - 2026-05-27
+
+### ⛰️  Features
+
+- [**breaking**] Update to iroh@1.0.0-rc.1 ([#234](https://github.com/n0-computer/iroh-blobs/issues/234)) - ([8933aff](https://github.com/n0-computer/iroh-blobs/commit/8933aff25b6a12461ea2595f1eb913c653f100e5))
+
 ## [0.101.0](https://github.com/n0-computer/iroh-blobs/compare/v0.100.0..0.101.0) - 2026-05-08
 
 ### 🐛 Bug Fixes
