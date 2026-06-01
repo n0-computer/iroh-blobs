@@ -91,7 +91,7 @@ impl Blobs {
         Self::ref_cast(sender)
     }
 
-    /// Create a new batch scope.
+    /// Creates a new batch scope.
     ///
     /// A batch holds open a set of temporary tags that protect blobs from
     /// garbage collection for as long as the batch is alive. When the batch is
@@ -583,6 +583,7 @@ impl<'a> BatchAddProgress<'a> {
 /// // ... perform long-running write or network download here ...
 ///
 /// drop(_guard);
+/// // Any un-upgraded blobs from the batch are now eligible for garbage collection
 /// # Ok(())
 /// # }
 /// ```
@@ -630,7 +631,7 @@ impl<'a> Batch<'a> {
         }))
     }
 
-    /// Pin a hash inside this batch scope, protecting it from garbage collection.
+    /// Pins a hash inside this batch scope, protecting it from garbage collection.
     ///
     /// The returned [`TempTag`] keeps the blob alive until either the tag or
     /// the batch is dropped. This is the recommended way to protect a blob
