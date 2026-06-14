@@ -532,6 +532,37 @@ pub async fn node_test_setup_with_events_mem(
     Ok((router, store, sp))
 }
 
+/// The empty blob is always complete, and `status`/`has` must agree with
+/// `observe`/`export_bao` on every backend.
+async fn empty_hash_is_complete(store: &Store) -> TestResult<()> {
+    use crate::api::blobs::BlobStatus;
+    let status = store.blobs().status(Hash::EMPTY).await?;
+    assert_eq!(status, BlobStatus::Complete { size: 0 });
+    assert!(store.blobs().has(Hash::EMPTY).await?);
+    let observed = store.blobs().observe(Hash::EMPTY).await?;
+    assert!(observed.is_complete());
+    assert_eq!(observed.size(), 0);
+    let exported = store
+        .export_bao(Hash::EMPTY, ChunkRanges::all())
+        .data_to_bytes()
+        .await?;
+    assert!(exported.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_hash_is_complete_mem() -> TestResult<()> {
+    let store = MemStore::new();
+    empty_hash_is_complete(&store).await
+}
+
+#[tokio::test]
+async fn empty_hash_is_complete_fs() -> TestResult<()> {
+    let testdir = tempfile::tempdir()?;
+    let store = FsStore::load(testdir.path().join("db")).await?;
+    empty_hash_is_complete(&store).await
+}
+
 /// Sets up two nodes with a router and a blob store each.
 async fn two_node_test_setup_fs() -> TestResult<(
     TempDir,

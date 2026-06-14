@@ -506,6 +506,10 @@ impl Blobs {
 
     pub async fn status(&self, hash: impl Into<Hash>) -> irpc::Result<BlobStatus> {
         let hash = hash.into();
+        // the empty blob is always complete, regardless of backend state
+        if hash == Hash::EMPTY {
+            return Ok(BlobStatus::Complete { size: 0 });
+        }
         let msg = BlobStatusRequest { hash };
         self.client.rpc(msg).await
     }
