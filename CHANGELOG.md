@@ -2,6 +2,20 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.103.0](https://github.com/n0-computer/iroh-blobs/compare/v0.102.0..0.103.0) - 2026-06-15
+
+### 🐛 Bug Fixes
+
+- Report the empty blob as `Complete` from `status` ([#238](https://github.com/n0-computer/iroh-blobs/issues/238)) - ([e7343de](https://github.com/n0-computer/iroh-blobs/commit/e7343def2a6e11d9d3a5b462c631181db4a48fe1))
+
+### 📚 Documentation
+
+- Add temp_tag pattern for protecting long-running downloads ([#236](https://github.com/n0-computer/iroh-blobs/issues/236)) - ([789f904](https://github.com/n0-computer/iroh-blobs/commit/789f904556c5bdef2ca4f7a682c4afd46e085fc1))
+
+### Deps
+
+- [**breaking**] Update to iroh 1.0 ([#239](https://github.com/n0-computer/iroh-blobs/issues/239)) - ([5a3cfad](https://github.com/n0-computer/iroh-blobs/commit/5a3cfadcde17cecb79e5db1b9d7c398c08c3ae16))
+
 ## [0.102.0](https://github.com/n0-computer/iroh-blobs/compare/v0.101.0..0.102.0) - 2026-05-27
 
 ### ⛰️  Features
