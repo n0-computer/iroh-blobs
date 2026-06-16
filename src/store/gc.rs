@@ -176,7 +176,17 @@ pub type ProtectCb = Arc<
         + 'static,
 >;
 
-pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api::Result<()> {
+/// Runs a single mark-and-sweep garbage collection cycle.
+///
+/// The optional `protect` callback ([`GcConfig::add_protected`]) is invoked after the mark phase,
+/// immediately before the sweep. Capturing the protected set this late is required for correctness:
+/// a reference committed after an earlier snapshot, whose import temp tag was dropped before the
+/// mark phase, would otherwise be missed by both protections and swept while still referenced.
+pub async fn gc_run_once(
+    store: &Store,
+    live: &mut HashSet<Hash>,
+    protect: Option<&ProtectCb>,
+) -> crate::api::Result<()> {
     debug!(externally_protected = live.len(), "gc: start");
     {
         store.clear_protected().await?;
@@ -193,6 +203,16 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
                     error!("error during gc mark: {:?}", err);
                     return Err(err);
                 }
+            }
+        }
+    }
+    // Capture the external protect set after the mark phase, just before the sweep.
+    if let Some(protect) = protect {
+        match (protect)(live).await {
+            ProtectOutcome::Continue => {}
+            ProtectOutcome::Abort => {
+                info!("abort gc run: protect callback indicated abort");
+                return Ok(());
             }
         }
     }
@@ -225,16 +245,7 @@ pub async fn run_gc(store: Store, config: GcConfig) {
     loop {
         live.clear();
         n0_future::time::sleep(config.interval).await;
-        if let Some(ref cb) = config.add_protected {
-            match (cb)(&mut live).await {
-                ProtectOutcome::Continue => {}
-                ProtectOutcome::Abort => {
-                    info!("abort gc run: protect callback indicated abort");
-                    continue;
-                }
-            }
-        }
-        if let Err(e) = gc_run_once(&store, &mut live).await {
+        if let Err(e) = gc_run_once(&store, &mut live, config.add_protected.as_ref()).await {
             error!("error during gc run: {e}");
             break;
         }
@@ -295,7 +306,7 @@ mod tests {
         drop(bt);
         store.tags().delete("h").await?;
         let mut live = HashSet::new();
-        gc_run_once(store, &mut live).await?;
+        gc_run_once(store, &mut live, None).await?;
         // a is protected because we keep the temp tag
         assert!(live.contains(&a));
         assert!(store.has(a).await?);
@@ -344,7 +355,7 @@ mod tests {
             assert!(outboard_path.exists());
             assert!(store.has(ah).await?);
             drop(a);
-            gc_run_once(store, &mut live).await?;
+            gc_run_once(store, &mut live, None).await?;
             assert!(!data_path.exists());
             assert!(!outboard_path.exists());
         }
@@ -365,7 +376,7 @@ mod tests {
             assert!(outboard_path.exists());
             assert!(sizes_path.exists());
             assert!(bitfield_path.exists());
-            gc_run_once(store, &mut live).await?;
+            gc_run_once(store, &mut live, None).await?;
             assert!(!data_path.exists());
             assert!(!outboard_path.exists());
             assert!(!sizes_path.exists());
@@ -411,13 +422,141 @@ mod tests {
         gc_check_deletion(&store).await
     }
 
+    #[tokio::test]
+    async fn gc_protect_race_mem() -> TestResult {
+        tracing_subscriber::fmt::try_init().ok();
+        let store = crate::store::mem::MemStore::default();
+        gc_protect_race(&store).await
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_protect_race_fs() -> TestResult {
+        tracing_subscriber::fmt::try_init().ok();
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db");
+        let store = crate::store::fs::FsStore::load(&db_path).await?;
+        gc_protect_race(&store).await
+    }
+
+    /// A blob whose reference is committed during a GC run is not swept.
+    ///
+    /// Models an iroh-docs-style consumer: committed references are reported via the
+    /// `add_protected` callback, and an import temp tag is held across each commit. The callback
+    /// imports a blob and drops its temp tag without reporting it, modeling a reference committed
+    /// just after the protect snapshot. The blob must survive: `gc_run_once` runs the callback
+    /// after `clear_protected`, so the import is covered by the store's protected set.
+    async fn gc_protect_race(store: &Store) -> TestResult {
+        use tokio::sync::{mpsc, oneshot};
+
+        // A committed reference, protected only via the callback; its import temp tag is dropped.
+        let existing = {
+            let tt = store.blobs().add_slice("existing").temp_tag().await?;
+            let hash = tt.hash();
+            drop(tt);
+            hash
+        };
+
+        // The racy import runs in a separate task: a `ProtectCb` future must be `Sync`, but the
+        // import future is not (the real iroh-docs callback only awaits channels for this reason).
+        let (trigger_tx, mut trigger_rx) = mpsc::channel::<oneshot::Sender<Hash>>(1);
+        let store_writer = store.clone();
+        let writer = tokio::spawn(async move {
+            while let Some(ack) = trigger_rx.recv().await {
+                let tt = store_writer
+                    .blobs()
+                    .add_slice("racy")
+                    .temp_tag()
+                    .await
+                    .expect("import failed");
+                let hash = tt.hash();
+                drop(tt); // temp tag dropped after the (modeled) commit
+                let _ = ack.send(hash);
+            }
+        });
+
+        let cb: ProtectCb = Arc::new(move |live: &mut HashSet<Hash>| {
+            let trigger_tx = trigger_tx.clone();
+            Box::pin(async move {
+                // Snapshot of committed references at callback time.
+                live.insert(existing);
+                // Trigger the racy write and wait for it to complete. Its hash is intentionally
+                // NOT added to `live`, modeling a reference committed just after this snapshot.
+                let (ack_tx, ack_rx) = oneshot::channel();
+                trigger_tx.send(ack_tx).await.expect("writer gone");
+                ack_rx.await.expect("writer gone");
+                ProtectOutcome::Continue
+            })
+        });
+
+        let mut live = HashSet::new();
+        gc_run_once(store, &mut live, Some(&cb)).await?;
+
+        // The racy blob is content-addressed, so its hash is deterministic.
+        let racy = Hash::new("racy");
+        assert!(
+            store.has(existing).await?,
+            "committed reference reported by the callback must survive"
+        );
+        assert!(
+            store.has(racy).await?,
+            "blob imported during the GC run must survive (protected set must be honored)"
+        );
+        drop(writer);
+        Ok(())
+    }
+
+    /// A continuously rewritten entry's blob is never swept while GC runs.
+    ///
+    /// A tight writer loop rewrites a single high-frequency entry while GC runs at a very short
+    /// interval; the blob referenced by the current entry must always resolve.
+    #[tokio::test]
+    async fn gc_protect_race_stress_mem() -> TestResult {
+        use std::sync::Mutex;
+        tracing_subscriber::fmt::try_init().ok();
+
+        // The current entry's blob hash, rewritten every iteration. The protect callback reports
+        // it; the writer asserts it always resolves.
+        let current: Arc<Mutex<Option<Hash>>> = Arc::new(Mutex::new(None));
+        let current_cb = current.clone();
+        let cb: ProtectCb = Arc::new(move |live: &mut HashSet<Hash>| {
+            let current_cb = current_cb.clone();
+            Box::pin(async move {
+                if let Some(h) = *current_cb.lock().unwrap() {
+                    live.insert(h);
+                }
+                ProtectOutcome::Continue
+            })
+        });
+
+        let store = crate::store::mem::MemStore::new_with_opts(crate::store::mem::Options {
+            gc_config: Some(GcConfig {
+                interval: Duration::from_micros(100),
+                add_protected: Some(cb),
+            }),
+        });
+
+        for i in 0..1000u32 {
+            let tt = store.blobs().add_slice(format!("v{i}")).temp_tag().await?;
+            let h = tt.hash();
+            // Commit the entry before dropping the import temp tag, exactly as doc_set does.
+            *current.lock().unwrap() = Some(h);
+            drop(tt);
+            assert!(
+                store.has(h).await?,
+                "iteration {i}: blob referenced by the current entry was swept"
+            );
+        }
+        Ok(())
+    }
+
     async fn gc_check_deletion(store: &Store) -> TestResult {
         let temp_tag = store.add_bytes(b"foo".to_vec()).temp_tag().await?;
         let hash = temp_tag.hash();
         assert_eq!(store.get_bytes(hash).await?.as_ref(), b"foo");
         drop(temp_tag);
         let mut live = HashSet::new();
-        gc_run_once(store, &mut live).await?;
+        gc_run_once(store, &mut live, None).await?;
 
         // check that `get_bytes` returns an error.
         let res = store.get_bytes(hash).await;
