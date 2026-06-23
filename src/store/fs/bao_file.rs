@@ -20,12 +20,12 @@ use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
 use irpc::channel::mpsc;
 use n0_error::{Result, StdResultExt};
-use tokio::sync::watch;
 use tracing::{debug, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     options::{Options, PathOptions},
+    util::watch,
     BaoFilePart,
 };
 use crate::{
