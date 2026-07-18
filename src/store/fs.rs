@@ -99,7 +99,7 @@ use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::{
     api::{
@@ -115,8 +115,8 @@ use crate::{
     store::{
         fs::{
             bao_file::{
-                BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
-                OutboardReader,
+                open_external_data, BaoFileOpenError, BaoFileStorage, BaoFileStorageSubscriber,
+                CompleteStorage, DataReader, OutboardReader,
             },
             util::entity_manager::{self, ActiveEntityState},
         },
@@ -296,9 +296,30 @@ impl SyncEntityApi for HashContext {
                     match self.global.db.get(self.id).await {
                         Ok(state) => match BaoFileStorage::open(state, self).await {
                             Ok(handle) => handle,
-                            Err(_) => BaoFileStorage::Poisoned,
+                            Err(BaoFileOpenError::ExternalDataMissing) => {
+                                debug!(
+                                    hash = %self.id.fmt_short(),
+                                    "external blob data is no longer available"
+                                );
+                                BaoFileStorage::NonExisting
+                            }
+                            Err(BaoFileOpenError::Storage(cause)) => {
+                                error!(
+                                    hash = %self.id.fmt_short(),
+                                    ?cause,
+                                    "failed to open blob storage"
+                                );
+                                BaoFileStorage::Poisoned
+                            }
                         },
-                        Err(_) => BaoFileStorage::Poisoned,
+                        Err(cause) => {
+                            error!(
+                                hash = %self.id.fmt_short(),
+                                ?cause,
+                                "failed to load blob metadata"
+                            );
+                            BaoFileStorage::Poisoned
+                        }
                     }
                 };
                 self.state.send_replace(state);
@@ -991,7 +1012,7 @@ impl EntityApi for HashContext {
     async fn persist(&self) {
         self.state.send_if_modified(|guard| {
             let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
+            let Some(fs) = guard.take_partial() else {
                 return false;
             };
             let path = self.global.options.path.bitfield_path(hash);
@@ -1252,15 +1273,11 @@ async fn export_path_impl(
             MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
             vec![],
         ),
-        DataLocation::External(paths, size) => (
-            MemOrFile::File((
-                paths.first().cloned().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "no external data path")
-                })?,
-                size,
-            )),
-            paths,
-        ),
+        DataLocation::External(paths, size) => {
+            let (source_path, _source) =
+                open_external_data(&paths).map_err(BaoFileOpenError::into_io_error)?;
+            (MemOrFile::File((source_path, size)), paths)
+        }
     };
     let size = match &data {
         MemOrFile::Mem(data) => data.len() as u64,
@@ -1505,7 +1522,7 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        api::blobs::Bitfield,
+        api::blobs::{Bitfield, ExportMode, ExportOptions},
         store::{
             util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
             IROH_BLOCK_SIZE,
@@ -1569,6 +1586,107 @@ pub mod tests {
             store.import_bao_bytes(hash, ranges, bao).await?;
             task.await??;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_external_data_uses_remaining_candidate_after_restart() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let first = testdir.path().join("first.bin");
+        let second = testdir.path().join("second.bin");
+        let exported = testdir.path().join("exported.bin");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            let tag = store.add_bytes(data.clone()).await?;
+            assert_eq!(tag.hash, hash);
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: first.clone(),
+                })
+                .await?;
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: second.clone(),
+                })
+                .await?;
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        fs::remove_file(first)?;
+        let store = FsStore::load(&db_dir).await?;
+        let observed = store.observe(hash).await?;
+        assert!(observed.is_complete());
+        store.export(hash, &exported).await?;
+        assert_eq!(fs::read(exported)?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_missing_external_data_is_recoverable() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let external = testdir.path().join("external.bin");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            let tag = store.add_bytes(data.clone()).await?;
+            assert_eq!(tag.hash, hash);
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: external.clone(),
+                })
+                .await?;
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        fs::remove_file(external)?;
+        let store = FsStore::load(&db_dir).await?;
+        let missing = store.observe(hash).await?;
+        assert!(missing.is_empty());
+
+        let recovered = store.add_bytes(data).await?;
+        assert_eq!(recovered.hash, hash);
+        assert!(store.observe(hash).await?.is_complete());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_missing_owned_data_terminates_observe_without_panicking() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            let tag = store.add_bytes(data).await?;
+            assert_eq!(tag.hash, hash);
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        let data_path = Options::new(&db_dir).path.data_path(&hash);
+        fs::remove_file(data_path)?;
+
+        let store = FsStore::load(&db_dir).await?;
+        assert!(store.observe(hash).await.is_err());
+        store.shutdown().await?;
         Ok(())
     }
 

@@ -3,7 +3,7 @@ use std::{
     fs::{File, OpenOptions},
     io,
     ops::Deref,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use bao_tree::{
@@ -21,7 +21,7 @@ use derive_more::Debug;
 use irpc::channel::mpsc;
 use n0_error::{Result, StdResultExt};
 use tokio::sync::watch;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
@@ -128,6 +128,83 @@ fn max_offset(batch: &[BaoContentItem]) -> u64 {
         })
         .max()
         .unwrap_or(0)
+}
+
+#[derive(Debug)]
+pub(super) enum BaoFileOpenError {
+    ExternalDataMissing,
+    Storage(io::Error),
+}
+
+impl fmt::Display for BaoFileOpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExternalDataMissing => f.write_str("all external data paths are missing"),
+            Self::Storage(cause) => cause.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for BaoFileOpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ExternalDataMissing => None,
+            Self::Storage(cause) => Some(cause),
+        }
+    }
+}
+
+impl From<io::Error> for BaoFileOpenError {
+    fn from(value: io::Error) -> Self {
+        Self::Storage(value)
+    }
+}
+
+impl BaoFileOpenError {
+    pub(super) fn into_io_error(self) -> io::Error {
+        match self {
+            Self::ExternalDataMissing => io::Error::new(
+                io::ErrorKind::NotFound,
+                "all external data paths are missing",
+            ),
+            Self::Storage(cause) => cause,
+        }
+    }
+}
+
+pub(super) fn open_external_data(
+    paths: &[PathBuf],
+) -> std::result::Result<(PathBuf, File), BaoFileOpenError> {
+    if paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "external data location has no paths",
+        )
+        .into());
+    }
+
+    let mut first_storage_error = None;
+    for path in paths {
+        match File::open(path) {
+            Ok(file) => return Ok((path.clone(), file)),
+            Err(cause) if cause.kind() == io::ErrorKind::NotFound => {}
+            Err(cause) if first_storage_error.is_none() => {
+                first_storage_error = Some(io::Error::new(
+                    cause.kind(),
+                    format!(
+                        "failed to open external data path {}: {cause}",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+
+    match first_storage_error {
+        Some(cause) => Err(BaoFileOpenError::Storage(cause)),
+        None => Err(BaoFileOpenError::ExternalDataMissing),
+    }
 }
 
 /// A file storage for an incomplete bao file.
@@ -394,22 +471,17 @@ impl PartialMemStorage {
 }
 
 impl BaoFileStorage {
-    pub fn bitfield(&self) -> Bitfield {
-        match self {
-            BaoFileStorage::Initial => {
-                panic!("initial storage should not be used")
-            }
-            BaoFileStorage::Loading => {
-                panic!("loading storage should not be used")
-            }
-            BaoFileStorage::NonExisting => Bitfield::empty(),
-            BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
-            BaoFileStorage::Partial(x) => x.bitfield.clone(),
-            BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
+    fn observed_bitfield(&self) -> io::Result<Option<Bitfield>> {
+        Ok(match self {
+            BaoFileStorage::Initial | BaoFileStorage::Loading => None,
+            BaoFileStorage::NonExisting => Some(Bitfield::empty()),
+            BaoFileStorage::PartialMem(x) => Some(x.bitfield.clone()),
+            BaoFileStorage::Partial(x) => Some(x.bitfield.clone()),
+            BaoFileStorage::Complete(x) => Some(Bitfield::complete(x.data.size())),
             BaoFileStorage::Poisoned => {
-                panic!("poisoned storage should not be used")
+                return Err(io::Error::other("poisoned storage"));
             }
-        }
+        })
     }
 
     pub(super) fn write_batch(
@@ -519,6 +591,16 @@ impl BaoFileStorage {
     pub fn take(&mut self) -> Self {
         std::mem::replace(self, BaoFileStorage::Poisoned)
     }
+
+    pub(super) fn take_partial(&mut self) -> Option<PartialFileStorage> {
+        if !matches!(self, Self::Partial(_)) {
+            return None;
+        }
+        let Self::Partial(storage) = self.take() else {
+            unreachable!("storage variant was checked before take")
+        };
+        Some(storage)
+    }
 }
 
 /// A cheaply cloneable handle to a bao file.
@@ -574,7 +656,10 @@ impl ReadAt for OutboardReader {
 }
 
 impl BaoFileStorage {
-    pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext) -> io::Result<Self> {
+    pub async fn open(
+        state: Option<EntryState<Bytes>>,
+        ctx: &HashContext,
+    ) -> std::result::Result<Self, BaoFileOpenError> {
         let hash = &ctx.id;
         let options = &ctx.global.options;
         Ok(match state {
@@ -590,10 +675,7 @@ impl BaoFileStorage {
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                     DataLocation::External(paths, size) => {
-                        let Some(path) = paths.into_iter().next() else {
-                            return Err(io::Error::other("no external data path"));
-                        };
-                        let file = std::fs::File::open(&path)?;
+                        let (_, file) = open_external_data(&paths)?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                 };
@@ -708,12 +790,12 @@ impl BaoFileStorageSubscriber {
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
     pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let value = self.receiver.borrow().bitfield();
+        let value = self.next_observed_bitfield(&mut tx).await?;
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
-            let value = self.receiver.borrow().bitfield();
-            tx.send(value.clone()).await?;
+            let value = self.next_observed_bitfield(&mut tx).await?;
+            tx.send(value).await?;
         }
     }
 
@@ -722,18 +804,33 @@ impl BaoFileStorageSubscriber {
     /// Returns an error if sending fails, or if the last sender is dropped
     #[allow(dead_code)]
     pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let value = self.receiver.borrow().bitfield();
+        let value = self.next_observed_bitfield(&mut tx).await?;
         let mut old = value.clone();
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
-            let new = self.receiver.borrow().bitfield();
+            let new = self.next_observed_bitfield(&mut tx).await?;
             let diff = old.diff(&new);
             if diff.is_empty() {
                 continue;
             }
             tx.send(diff).await?;
             old = new;
+        }
+    }
+
+    async fn next_observed_bitfield(
+        &mut self,
+        tx: &mut mpsc::Sender<Bitfield>,
+    ) -> Result<Bitfield> {
+        loop {
+            let value = { self.receiver.borrow().observed_bitfield() }
+                .inspect_err(|cause| warn!(?cause, "terminating observe stream for broken storage"))
+                .anyerr()?;
+            if let Some(value) = value {
+                return Ok(value);
+            }
+            self.update_or_closed(tx).await?;
         }
     }
 
@@ -745,5 +842,114 @@ impl BaoFileStorageSubscriber {
             }
             e = self.receiver.changed() => Ok(e.anyerr()?),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use irpc::channel::mpsc;
+    use testresult::TestResult;
+    use tokio::sync::watch;
+
+    use super::*;
+
+    #[test]
+    fn observe_state_distinguishes_transitional_missing_and_broken() {
+        assert_eq!(BaoFileStorage::Initial.observed_bitfield().unwrap(), None);
+        assert_eq!(BaoFileStorage::Loading.observed_bitfield().unwrap(), None);
+        assert_eq!(
+            BaoFileStorage::NonExisting.observed_bitfield().unwrap(),
+            Some(Bitfield::empty())
+        );
+        assert!(BaoFileStorage::Poisoned.observed_bitfield().is_err());
+    }
+
+    #[test]
+    fn take_partial_does_not_modify_other_states() {
+        let mut complete = BaoFileStorage::Complete(CompleteStorage {
+            data: MemOrFile::Mem(Bytes::from_static(b"complete")),
+            outboard: MemOrFile::empty(),
+        });
+        assert!(complete.take_partial().is_none());
+        assert!(matches!(complete, BaoFileStorage::Complete(_)));
+
+        let mut missing = BaoFileStorage::NonExisting;
+        assert!(missing.take_partial().is_none());
+        assert!(matches!(missing, BaoFileStorage::NonExisting));
+    }
+
+    #[test]
+    fn external_data_uses_the_first_available_candidate() -> TestResult<()> {
+        let temp = tempfile::tempdir()?;
+        let missing = temp.path().join("missing.bin");
+        let available = temp.path().join("available.bin");
+        std::fs::write(&available, b"available")?;
+
+        let (selected, mut file) = open_external_data(&[missing, available.clone()])?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+
+        assert_eq!(selected, available);
+        assert_eq!(data, b"available");
+        Ok(())
+    }
+
+    #[test]
+    fn external_data_distinguishes_missing_from_invalid_metadata() {
+        let temp = tempfile::tempdir().expect("temporary directory should be available");
+        let missing = temp.path().join("missing.bin");
+        assert!(matches!(
+            open_external_data(&[missing]),
+            Err(BaoFileOpenError::ExternalDataMissing)
+        ));
+
+        let Err(BaoFileOpenError::Storage(cause)) = open_external_data(&[]) else {
+            panic!("empty external path metadata must be invalid")
+        };
+        assert_eq!(cause.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn subscriber_waits_for_loading_to_stabilize() {
+        let (state_tx, state_rx) = watch::channel(BaoFileStorage::Loading);
+        let subscriber = BaoFileStorageSubscriber::new(state_rx);
+        let (tx, mut rx) = mpsc::channel(1);
+        let forward = tokio::spawn(async move { subscriber.forward(tx).await });
+
+        tokio::task::yield_now().await;
+        assert!(!forward.is_finished());
+
+        state_tx.send_replace(BaoFileStorage::NonExisting);
+        let first = rx
+            .recv()
+            .await
+            .expect("receiver should stay open")
+            .expect("stable missing state should be emitted");
+        assert!(first.is_empty());
+
+        drop(rx);
+        assert!(forward
+            .await
+            .expect("subscriber task should not panic")
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn subscriber_terminates_for_poisoned_storage() {
+        let (_state_tx, state_rx) = watch::channel(BaoFileStorage::Poisoned);
+        let subscriber = BaoFileStorageSubscriber::new(state_rx);
+        let (tx, mut rx) = mpsc::channel(1);
+        let result = tokio::spawn(async move { subscriber.forward(tx).await })
+            .await
+            .expect("subscriber task should not panic");
+
+        assert!(result.is_err());
+        assert!(rx
+            .recv()
+            .await
+            .expect("local receiver should stay valid")
+            .is_none());
     }
 }
