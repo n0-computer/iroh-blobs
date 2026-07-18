@@ -17,4 +17,8 @@ pub(crate) mod util;
 /// Block size used by iroh, 2^4*1024 = 16KiB
 pub const IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(4);
 
-pub use gc::{gc_run_once, GcConfig, ProtectCb, ProtectOutcome};
+pub(crate) use gc::GcProtectionSet;
+pub use gc::{
+    gc_run_once, gc_run_once_with_late_protection, GcConfig, GcRunOutcome, ProtectCb,
+    ProtectOutcome,
+};

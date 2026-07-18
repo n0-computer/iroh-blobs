@@ -132,14 +132,17 @@ fn max_offset(batch: &[BaoContentItem]) -> u64 {
 
 #[derive(Debug)]
 pub(super) enum BaoFileOpenError {
-    ExternalDataMissing,
-    Storage(io::Error),
+    ExternalDataMissing {
+        paths: Vec<PathBuf>,
+        expected_size: u64,
+    },
+    Storage(BlobStorageFailure),
 }
 
 impl fmt::Display for BaoFileOpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ExternalDataMissing => f.write_str("all external data paths are missing"),
+            Self::ExternalDataMissing { .. } => f.write_str("all external data paths are missing"),
             Self::Storage(cause) => cause.fmt(f),
         }
     }
@@ -148,7 +151,7 @@ impl fmt::Display for BaoFileOpenError {
 impl std::error::Error for BaoFileOpenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::ExternalDataMissing => None,
+            Self::ExternalDataMissing { .. } => None,
             Self::Storage(cause) => Some(cause),
         }
     }
@@ -156,37 +159,66 @@ impl std::error::Error for BaoFileOpenError {
 
 impl From<io::Error> for BaoFileOpenError {
     fn from(value: io::Error) -> Self {
-        Self::Storage(value)
+        Self::Storage(BlobStorageFailure::io("open blob storage", &value))
     }
 }
 
 impl BaoFileOpenError {
     pub(super) fn into_io_error(self) -> io::Error {
         match self {
-            Self::ExternalDataMissing => io::Error::new(
+            Self::ExternalDataMissing { .. } => io::Error::new(
                 io::ErrorKind::NotFound,
                 "all external data paths are missing",
             ),
-            Self::Storage(cause) => cause,
+            Self::Storage(cause) => cause.to_io_error(),
         }
     }
 }
 
 pub(super) fn open_external_data(
     paths: &[PathBuf],
+    expected_size: u64,
 ) -> std::result::Result<(PathBuf, File), BaoFileOpenError> {
     if paths.is_empty() {
-        return Err(io::Error::new(
+        let cause = io::Error::new(
             io::ErrorKind::InvalidData,
             "external data location has no paths",
-        )
-        .into());
+        );
+        return Err(BaoFileOpenError::Storage(BlobStorageFailure::external(
+            "open external blob data",
+            &cause,
+        )));
     }
 
     let mut first_storage_error = None;
     for path in paths {
         match File::open(path) {
-            Ok(file) => return Ok((path.clone(), file)),
+            Ok(file) => match file.metadata() {
+                Ok(metadata) if metadata.len() == expected_size => {
+                    return Ok((path.clone(), file));
+                }
+                Ok(metadata) if first_storage_error.is_none() => {
+                    first_storage_error = Some(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "external data path {} has length {}, expected {expected_size}",
+                            path.display(),
+                            metadata.len()
+                        ),
+                    ));
+                }
+                Ok(_) => {}
+                Err(cause) if first_storage_error.is_none() => {
+                    first_storage_error = Some(io::Error::new(
+                        cause.kind(),
+                        format!(
+                            "failed to inspect external data path {}: {cause}",
+                            path.display()
+                        ),
+                    ));
+                }
+                Err(_) => {}
+            },
             Err(cause) if cause.kind() == io::ErrorKind::NotFound => {}
             Err(cause) if first_storage_error.is_none() => {
                 first_storage_error = Some(io::Error::new(
@@ -202,10 +234,125 @@ pub(super) fn open_external_data(
     }
 
     match first_storage_error {
-        Some(cause) => Err(BaoFileOpenError::Storage(cause)),
-        None => Err(BaoFileOpenError::ExternalDataMissing),
+        Some(cause) => Err(BaoFileOpenError::Storage(BlobStorageFailure::external(
+            "open external blob data",
+            &cause,
+        ))),
+        None => Err(BaoFileOpenError::ExternalDataMissing {
+            paths: paths.to_vec(),
+            expected_size,
+        }),
     }
 }
+
+/// Stable category for a file-store failure confirmed by an availability probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BlobStorageFailureKind {
+    OwnedDataMissing,
+    OwnedOutboardMissing,
+    ExternalDataInvalid,
+    Metadata,
+    Permission,
+    Write,
+    InternalInvariant,
+    Io,
+}
+
+/// A storage failure observed from one stable file-store state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobStorageFailure {
+    pub kind: BlobStorageFailureKind,
+    pub operation: &'static str,
+    pub io_kind: io::ErrorKind,
+    pub detail: String,
+}
+
+impl BlobStorageFailure {
+    fn classified(
+        kind: BlobStorageFailureKind,
+        operation: &'static str,
+        cause: &io::Error,
+    ) -> Self {
+        let kind = if cause.kind() == io::ErrorKind::PermissionDenied {
+            BlobStorageFailureKind::Permission
+        } else {
+            kind
+        };
+        Self {
+            kind,
+            operation,
+            io_kind: cause.kind(),
+            detail: cause.to_string(),
+        }
+    }
+
+    pub(super) fn owned_data(operation: &'static str, cause: &io::Error) -> Self {
+        let kind = if cause.kind() == io::ErrorKind::NotFound {
+            BlobStorageFailureKind::OwnedDataMissing
+        } else {
+            BlobStorageFailureKind::Io
+        };
+        Self::classified(kind, operation, cause)
+    }
+
+    pub(super) fn owned_outboard(operation: &'static str, cause: &io::Error) -> Self {
+        let kind = if cause.kind() == io::ErrorKind::NotFound {
+            BlobStorageFailureKind::OwnedOutboardMissing
+        } else {
+            BlobStorageFailureKind::Io
+        };
+        Self::classified(kind, operation, cause)
+    }
+
+    pub(super) fn external(operation: &'static str, cause: &io::Error) -> Self {
+        Self::classified(
+            BlobStorageFailureKind::ExternalDataInvalid,
+            operation,
+            cause,
+        )
+    }
+
+    pub(super) fn metadata(operation: &'static str, cause: &io::Error) -> Self {
+        Self::classified(BlobStorageFailureKind::Metadata, operation, cause)
+    }
+
+    pub(super) fn write(operation: &'static str, cause: &io::Error) -> Self {
+        Self::classified(BlobStorageFailureKind::Write, operation, cause)
+    }
+
+    pub(super) fn io(operation: &'static str, cause: &io::Error) -> Self {
+        Self::classified(BlobStorageFailureKind::Io, operation, cause)
+    }
+
+    pub(super) fn internal_invariant(operation: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            kind: BlobStorageFailureKind::InternalInvariant,
+            operation,
+            io_kind: io::ErrorKind::Other,
+            detail: detail.into(),
+        }
+    }
+
+    fn state_moved(operation: &'static str) -> Self {
+        Self::internal_invariant(
+            operation,
+            "storage state was moved into an in-flight transition",
+        )
+    }
+
+    pub(super) fn to_io_error(&self) -> io::Error {
+        io::Error::new(self.io_kind, format!("{}: {}", self.operation, self.detail))
+    }
+}
+
+impl fmt::Display for BlobStorageFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.operation, self.detail)
+    }
+}
+
+impl std::error::Error for BlobStorageFailure {}
 
 /// A file storage for an incomplete bao file.
 #[derive(Debug)]
@@ -401,7 +548,7 @@ pub(crate) enum BaoFileStorage {
     Complete(CompleteStorage),
     /// We will get into that state if there is an io error in the middle of an operation,
     /// or after the handle is persisted and no longer usable.
-    Poisoned,
+    Poisoned(BlobStorageFailure),
 }
 
 impl fmt::Debug for BaoFileStorage {
@@ -410,7 +557,7 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::PartialMem(x) => x.fmt(f),
             BaoFileStorage::Partial(x) => x.fmt(f),
             BaoFileStorage::Complete(x) => x.fmt(f),
-            BaoFileStorage::Poisoned => f.debug_struct("Poisoned").finish(),
+            BaoFileStorage::Poisoned(cause) => f.debug_tuple("Poisoned").field(cause).finish(),
             BaoFileStorage::Initial => f.debug_struct("Initial").finish(),
             BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
             BaoFileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
@@ -478,13 +625,40 @@ impl BaoFileStorage {
             BaoFileStorage::PartialMem(x) => Some(x.bitfield.clone()),
             BaoFileStorage::Partial(x) => Some(x.bitfield.clone()),
             BaoFileStorage::Complete(x) => Some(Bitfield::complete(x.data.size())),
-            BaoFileStorage::Poisoned => {
-                return Err(io::Error::other("poisoned storage"));
+            BaoFileStorage::Poisoned(cause) => {
+                return Err(cause.to_io_error());
             }
         })
     }
 
     pub(super) fn write_batch(
+        &mut self,
+        batch: &[BaoContentItem],
+        bitfield: &Bitfield,
+        ctx: &HashContext,
+    ) -> io::Result<Option<EntryState<bytes::Bytes>>> {
+        match self {
+            Self::Complete(_) => return Ok(None),
+            Self::Poisoned(cause) => return Err(cause.to_io_error()),
+            Self::Initial => return Err(io::Error::other("blob storage is not loaded")),
+            Self::Loading => return Err(io::Error::other("blob storage is still loading")),
+            Self::NonExisting | Self::PartialMem(_) | Self::Partial(_) => {}
+        }
+        match self.take().write_batch_owned(batch, bitfield, ctx) {
+            Ok((state, update)) => {
+                *self = state;
+                Ok(update)
+            }
+            Err(cause) => {
+                let failure = BlobStorageFailure::write("write blob batch", &cause);
+                let result = Err(failure.to_io_error());
+                *self = Self::Poisoned(failure);
+                result
+            }
+        }
+    }
+
+    fn write_batch_owned(
         self,
         batch: &[BaoContentItem],
         bitfield: &Bitfield,
@@ -492,7 +666,7 @@ impl BaoFileStorage {
     ) -> io::Result<(Self, Option<EntryState<bytes::Bytes>>)> {
         Ok(match self {
             BaoFileStorage::NonExisting => {
-                Self::new_partial_mem().write_batch(batch, bitfield, ctx)?
+                Self::new_partial_mem().write_batch_owned(batch, bitfield, ctx)?
             }
             BaoFileStorage::PartialMem(mut ms) => {
                 // check if we need to switch to file mode, otherwise write to memory
@@ -551,15 +725,12 @@ impl BaoFileStorage {
                     (fs.into(), None)
                 }
             }
-            BaoFileStorage::Complete(_) => {
-                // we are complete, so just ignore the write
-                // unless there is a bug, this would just write the exact same data
-                (self, None)
+            BaoFileStorage::Complete(_) => unreachable!("complete writes are filtered before take"),
+            BaoFileStorage::Poisoned(_) => {
+                unreachable!("poisoned writes are filtered before take")
             }
-            _ => {
-                // we are poisoned, so just ignore the write
-                (self, None)
-            }
+            BaoFileStorage::Initial => unreachable!("initial writes are filtered before take"),
+            BaoFileStorage::Loading => unreachable!("loading writes are filtered before take"),
         })
     }
 
@@ -581,7 +752,7 @@ impl BaoFileStorage {
                 file.sizes.sync_all()?;
                 Ok(())
             }
-            Self::Poisoned | Self::Initial | Self::Loading => {
+            Self::Poisoned(_) | Self::Initial | Self::Loading => {
                 // we are poisoned, so just ignore the sync
                 Ok(())
             }
@@ -589,7 +760,10 @@ impl BaoFileStorage {
     }
 
     pub fn take(&mut self) -> Self {
-        std::mem::replace(self, BaoFileStorage::Poisoned)
+        std::mem::replace(
+            self,
+            BaoFileStorage::Poisoned(BlobStorageFailure::state_moved("move blob storage state")),
+        )
     }
 
     pub(super) fn take_partial(&mut self) -> Option<PartialFileStorage> {
@@ -609,7 +783,10 @@ impl BaoFileStorage {
 /// the file handle, otherwise the bitfield will not be written to disk and will have
 /// to be reconstructed on next use.
 #[derive(Debug, Clone, Default, derive_more::Deref)]
-pub(crate) struct BaoFileHandle(pub(super) watch::Sender<BaoFileStorage>);
+pub(crate) struct BaoFileHandle(
+    #[deref] pub(super) watch::Sender<BaoFileStorage>,
+    std::sync::Arc<tokio::sync::Mutex<()>>,
+);
 
 impl entity_manager::Reset for BaoFileHandle {
     fn reset(&mut self) {
@@ -628,7 +805,7 @@ impl ReadBytesAt for DataReader {
             BaoFileStorage::PartialMem(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Partial(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Complete(x) => x.data.read_bytes_at(offset, size),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Poisoned(cause) => io::Result::Err(cause.to_io_error()),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
             BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
@@ -647,7 +824,7 @@ impl ReadAt for OutboardReader {
             BaoFileStorage::Complete(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::PartialMem(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Partial(x) => x.outboard.read_at(offset, buf),
-            BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Poisoned(cause) => io::Result::Err(cause.to_io_error()),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
             BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
@@ -671,11 +848,16 @@ impl BaoFileStorage {
                     DataLocation::Inline(data) => MemOrFile::Mem(data),
                     DataLocation::Owned(size) => {
                         let path = options.path.data_path(hash);
-                        let file = std::fs::File::open(&path)?;
+                        let file = std::fs::File::open(&path).map_err(|cause| {
+                            BaoFileOpenError::Storage(BlobStorageFailure::owned_data(
+                                "open owned blob data",
+                                &cause,
+                            ))
+                        })?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                     DataLocation::External(paths, size) => {
-                        let (_, file) = open_external_data(&paths)?;
+                        let (_, file) = open_external_data(&paths, size)?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                 };
@@ -684,7 +866,12 @@ impl BaoFileStorage {
                     OutboardLocation::Inline(data) => MemOrFile::Mem(data),
                     OutboardLocation::Owned => {
                         let path = options.path.outboard_path(hash);
-                        let file = std::fs::File::open(&path)?;
+                        let file = std::fs::File::open(&path).map_err(|cause| {
+                            BaoFileOpenError::Storage(BlobStorageFailure::owned_outboard(
+                                "open owned blob outboard",
+                                &cause,
+                            ))
+                        })?;
                         MemOrFile::File(file)
                     }
                 };
@@ -721,6 +908,16 @@ impl BaoFileStorage {
 }
 
 impl BaoFileHandle {
+    /// Serialize state-and-metadata transitions for one hash.
+    ///
+    /// Reads and observations remain concurrent. Imports, reference-producing
+    /// exports, persistence, and explicit repair use this lock so a metadata
+    /// compare-and-swap cannot invalidate a state transition that is still in
+    /// flight.
+    pub(super) async fn transition(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.1.lock().await
+    }
+
     /// Complete the handle
     pub fn complete(
         &self,
@@ -855,6 +1052,13 @@ mod tests {
 
     use super::*;
 
+    fn test_failure(operation: &'static str) -> BlobStorageFailure {
+        BlobStorageFailure::write(
+            operation,
+            &io::Error::new(io::ErrorKind::PermissionDenied, "test failure"),
+        )
+    }
+
     #[test]
     fn observe_state_distinguishes_transitional_missing_and_broken() {
         assert_eq!(BaoFileStorage::Initial.observed_bitfield().unwrap(), None);
@@ -863,7 +1067,11 @@ mod tests {
             BaoFileStorage::NonExisting.observed_bitfield().unwrap(),
             Some(Bitfield::empty())
         );
-        assert!(BaoFileStorage::Poisoned.observed_bitfield().is_err());
+        let error = BaoFileStorage::Poisoned(test_failure("observe"))
+            .observed_bitfield()
+            .expect_err("broken storage must not be projected as empty progress");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("observe: test failure"));
     }
 
     #[test]
@@ -887,7 +1095,8 @@ mod tests {
         let available = temp.path().join("available.bin");
         std::fs::write(&available, b"available")?;
 
-        let (selected, mut file) = open_external_data(&[missing, available.clone()])?;
+        let (selected, mut file) =
+            open_external_data(&[missing, available.clone()], b"available".len() as u64)?;
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
 
@@ -901,14 +1110,49 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory should be available");
         let missing = temp.path().join("missing.bin");
         assert!(matches!(
-            open_external_data(&[missing]),
-            Err(BaoFileOpenError::ExternalDataMissing)
+            open_external_data(&[missing], 1),
+            Err(BaoFileOpenError::ExternalDataMissing { .. })
         ));
 
-        let Err(BaoFileOpenError::Storage(cause)) = open_external_data(&[]) else {
+        let Err(BaoFileOpenError::Storage(cause)) = open_external_data(&[], 1) else {
             panic!("empty external path metadata must be invalid")
         };
-        assert_eq!(cause.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(cause.kind, BlobStorageFailureKind::ExternalDataInvalid);
+        assert_eq!(cause.io_kind, io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn external_data_skips_truncated_candidate_for_valid_fallback() -> TestResult<()> {
+        let temp = tempfile::tempdir()?;
+        let truncated = temp.path().join("a-truncated.bin");
+        let available = temp.path().join("b-available.bin");
+        std::fs::write(&truncated, b"short")?;
+        std::fs::write(&available, b"expected content")?;
+
+        let (selected, mut file) = open_external_data(
+            &[truncated, available.clone()],
+            b"expected content".len() as u64,
+        )?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+
+        assert_eq!(selected, available);
+        assert_eq!(data, b"expected content");
+        Ok(())
+    }
+
+    #[test]
+    fn external_data_rejects_present_candidate_with_wrong_length() {
+        let temp = tempfile::tempdir().expect("temporary directory should be available");
+        let truncated = temp.path().join("truncated.bin");
+        std::fs::write(&truncated, b"short").expect("fixture should be written");
+
+        let Err(BaoFileOpenError::Storage(cause)) = open_external_data(&[truncated], 42) else {
+            panic!("wrong-length external data must be rejected")
+        };
+        assert_eq!(cause.kind, BlobStorageFailureKind::ExternalDataInvalid);
+        assert_eq!(cause.io_kind, io::ErrorKind::InvalidData);
+        assert!(cause.to_string().contains("expected 42"));
     }
 
     #[tokio::test]
@@ -938,7 +1182,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscriber_terminates_for_poisoned_storage() {
-        let (_state_tx, state_rx) = watch::channel(BaoFileStorage::Poisoned);
+        let (_state_tx, state_rx) =
+            watch::channel(BaoFileStorage::Poisoned(test_failure("subscribe")));
         let subscriber = BaoFileStorageSubscriber::new(state_rx);
         let (tx, mut rx) = mpsc::channel(1);
         let result = tokio::spawn(async move { subscriber.forward(tx).await })

@@ -44,7 +44,7 @@ use crate::{
         ApiClient, TempTag,
     },
     protocol::ChunkRangesExt,
-    store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
+    store::{mem::CompleteStorage, GcProtectionSet, IROH_BLOCK_SIZE},
     Hash,
 };
 
@@ -78,6 +78,7 @@ struct Actor {
     tasks: JoinSet<()>,
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     data: HashMap<Hash, CompleteStorage>,
+    gc_protection: GcProtectionSet,
 }
 
 impl Actor {
@@ -90,6 +91,7 @@ impl Actor {
             commands,
             tasks: JoinSet::new(),
             idle_waiters: Vec::new(),
+            gc_protection: GcProtectionSet::default(),
         }
     }
 
@@ -156,8 +158,12 @@ impl Actor {
                 self.tasks.spawn(export_path(entry, target, tx));
             }
             Command::Batch(_cmd) => {}
-            Command::ClearProtected(cmd) => {
-                cmd.tx.send(Ok(())).await.ok();
+            Command::StartGcProtection(cmd) => {
+                cmd.tx.send(self.gc_protection.start()).await.ok();
+            }
+            Command::FinishGcProtection(cmd) => {
+                let outcome = self.gc_protection.finish(cmd.inner.cycle);
+                cmd.tx.send(Ok(outcome)).await.ok();
             }
             Command::CreateTag(cmd) => {
                 cmd.tx
@@ -212,6 +218,12 @@ impl Actor {
             Command::SetTag(cmd) => {
                 cmd.tx
                     .send(Err(unsupported("set tag not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::CompareAndSwapTag(cmd) => {
+                cmd.tx
+                    .send(Err(unsupported("compare and swap tag not supported").into()))
                     .await
                     .ok();
             }

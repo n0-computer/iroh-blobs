@@ -1,5 +1,5 @@
 //! Protocol for the metadata database.
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 use bytes::Bytes;
 use nested_enum_utils::enum_conversions;
@@ -8,10 +8,13 @@ use tracing::Span;
 use super::{ActorResult, ReadOnlyTables};
 use crate::{
     api::proto::{
-        BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ProcessExitRequest, ShutdownMsg,
-        SyncDbMsg,
+        BlobStatusMsg, DeleteBlobsMsg, FinishGcProtectionMsg, ProcessExitRequest, ShutdownMsg,
+        StartGcProtectionMsg, SyncDbMsg,
     },
-    store::{fs::entry_state::EntryState, util::DD},
+    store::{
+        fs::entry_state::{EntryState, OutboardLocation},
+        util::DD,
+    },
     util::channel::oneshot,
     Hash,
 };
@@ -55,10 +58,19 @@ pub struct Snapshot {
     pub span: Span,
 }
 
+/// Protect a root created after the current GC mark phase.
+#[derive(Debug)]
+pub struct Protect {
+    pub hash: Hash,
+    pub span: Span,
+}
+
 pub struct Update {
     pub hash: Hash,
     pub state: EntryState<Bytes>,
-    /// do I need this? Optional?
+    /// Present when the caller requires acknowledgement after the enclosing
+    /// write transaction has committed. Intermediate download progress may be
+    /// queued without an acknowledgement and is fenced by the final update.
     pub tx: Option<oneshot::Sender<ActorResult<()>>>,
     pub span: Span,
 }
@@ -68,8 +80,38 @@ impl fmt::Debug for Update {
         f.debug_struct("Update")
             .field("hash", &self.hash)
             .field("state", &DD(self.state.fmt_short()))
-            .field("tx", &self.tx.is_some())
+            .field("await_commit", &self.tx.is_some())
             .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalReferenceReconcileOutcome {
+    Retained,
+    Removed,
+    AlreadyAbsent,
+    Changed,
+}
+
+pub struct ReconcileExternalReference {
+    pub hash: Hash,
+    pub expected_paths: Vec<PathBuf>,
+    pub expected_size: u64,
+    pub expected_outboard: Option<OutboardLocation<()>>,
+    pub retained_paths: Vec<PathBuf>,
+    pub tx: oneshot::Sender<ActorResult<ExternalReferenceReconcileOutcome>>,
+    pub span: Span,
+}
+
+impl fmt::Debug for ReconcileExternalReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReconcileExternalReference")
+            .field("hash", &DD(self.hash.to_hex()))
+            .field("expected_paths", &self.expected_paths)
+            .field("expected_size", &self.expected_size)
+            .field("expected_outboard", &self.expected_outboard)
+            .field("retained_paths", &self.retained_paths)
+            .finish_non_exhaustive()
     }
 }
 
@@ -89,6 +131,8 @@ impl fmt::Debug for Set {
     }
 }
 
+/// Modification method: atomically replace a tag when the expected value matches.
+pub use crate::api::proto::CompareAndSwapTagMsg;
 /// Modification method: create a new unique tag and set it to a value.
 pub use crate::api::proto::CreateTagMsg;
 /// Modification method: remove a range of tags.
@@ -106,8 +150,10 @@ pub enum ReadOnlyCommand {
     Get(Get),
     Dump(Dump),
     ListTags(ListTagsMsg),
-    ClearProtected(ClearProtectedMsg),
+    StartGcProtection(StartGcProtectionMsg),
+    FinishGcProtection(FinishGcProtectionMsg),
     GetBlobStatus(BlobStatusMsg),
+    Protect(Protect),
 }
 
 impl ReadOnlyCommand {
@@ -122,8 +168,10 @@ impl ReadOnlyCommand {
             Self::Get(x) => Some(&x.span),
             Self::Dump(x) => Some(&x.span),
             Self::ListTags(x) => x.parent_span_opt(),
-            Self::ClearProtected(x) => x.parent_span_opt(),
+            Self::StartGcProtection(x) => x.parent_span_opt(),
+            Self::FinishGcProtection(x) => x.parent_span_opt(),
             Self::GetBlobStatus(x) => x.parent_span_opt(),
+            Self::Protect(x) => Some(&x.span),
         }
     }
 }
@@ -132,9 +180,11 @@ impl ReadOnlyCommand {
 #[enum_conversions(Command)]
 pub enum ReadWriteCommand {
     Update(Update),
+    ReconcileExternalReference(ReconcileExternalReference),
     Set(Set),
     DeleteBlobw(DeleteBlobsMsg),
     SetTag(SetTagMsg),
+    CompareAndSwapTag(CompareAndSwapTagMsg),
     DeleteTags(DeleteTagsMsg),
     RenameTag(RenameTagMsg),
     CreateTag(CreateTagMsg),
@@ -151,9 +201,11 @@ impl ReadWriteCommand {
     pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
         match self {
             Self::Update(x) => Some(&x.span),
+            Self::ReconcileExternalReference(x) => Some(&x.span),
             Self::Set(x) => Some(&x.span),
             Self::DeleteBlobw(x) => Some(&x.span),
             Self::SetTag(x) => x.parent_span_opt(),
+            Self::CompareAndSwapTag(x) => x.parent_span_opt(),
             Self::DeleteTags(x) => x.parent_span_opt(),
             Self::RenameTag(x) => x.parent_span_opt(),
             Self::CreateTag(x) => x.parent_span_opt(),

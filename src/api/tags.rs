@@ -10,7 +10,7 @@ use tracing::trace;
 pub use super::proto::{
     CreateTagRequest as CreateOptions, DeleteTagsRequest as DeleteOptions,
     ListTagsRequest as ListOptions, RenameTagRequest as RenameOptions, SetTagRequest as SetOptions,
-    TagInfo,
+    TagCompareAndSwapOutcome, TagCompareAndSwapRequest, TagInfo,
 };
 use super::{
     proto::{CreateTempTagRequest, Scope},
@@ -74,6 +74,26 @@ impl Tags {
             value: value.into(),
         })
         .await
+    }
+
+    /// Atomically replace a tag when its current value matches `expected`.
+    ///
+    /// `None` represents an absent tag, so this single operation supports
+    /// delete-if-matches and restore-if-absent without a list/delete race.
+    pub async fn compare_and_swap(
+        &self,
+        name: impl AsRef<[u8]>,
+        expected: Option<HashAndFormat>,
+        value: Option<HashAndFormat>,
+    ) -> super::RequestResult<TagCompareAndSwapOutcome> {
+        Ok(self
+            .client
+            .rpc(TagCompareAndSwapRequest {
+                name: Tag::from(name.as_ref()),
+                expected,
+                value,
+            })
+            .await??)
     }
 
     /// List a range of tags

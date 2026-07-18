@@ -1,19 +1,23 @@
-use std::{collections::HashSet, pin::Pin, sync::Arc};
+use std::{collections::HashSet, convert::Infallible, future::Future, pin::Pin, sync::Arc};
 
 use bao_tree::ChunkRanges;
 use genawaiter::sync::{Co, Gen};
 use n0_future::{time::Duration, Stream, StreamExt};
 use tracing::{debug, error, info, warn};
 
-use crate::{api::Store, Hash, HashAndFormat};
+use crate::{
+    api::{
+        proto::{FinishGcProtectionOutcome, GcProtectionCycleId},
+        Store,
+    },
+    Hash, HashAndFormat,
+};
 
 /// An event related to GC
 #[derive(Debug)]
 pub enum GcMarkEvent {
     /// A custom event (info)
     CustomDebug(String),
-    /// A custom non critical error
-    CustomWarning(String, Option<crate::api::Error>),
     /// An unrecoverable error during GC
     Error(crate::api::Error),
 }
@@ -41,11 +45,6 @@ pub(super) async fn gc_mark_task(
             co.yield_(GcMarkEvent::CustomDebug(format!($($arg)*))).await;
         };
     }
-    macro_rules! warn {
-        ($($arg:tt)*) => {
-            co.yield_(GcMarkEvent::CustomWarning(format!($($arg)*), None)).await;
-        };
-    }
     let mut roots = HashSet::new();
     trace!("traversing tags");
     let mut tags = store.tags().list().await?;
@@ -69,9 +68,7 @@ pub(super) async fn gc_mark_task(
                     Ok(hash) => {
                         live.insert(hash);
                     }
-                    Err(e) => {
-                        warn!("error while traversing hashseq: {e:?}");
-                    }
+                    Err(error) => return Err(crate::api::Error::other(error)),
                 }
             }
         }
@@ -140,14 +137,14 @@ pub struct GcConfig {
     pub interval: Duration,
     /// Optional callback to manually add protected blobs.
     ///
-    /// The callback is called before each garbage collection run. It gets a `&mut HashSet<Hash>`
-    /// and returns a future that returns [`ProtectOutcome`]. All hashes that are added to the
-    /// [`HashSet`] will be protected from garbage collection during this run.
+    /// The callback is called after built-in tags and temporary tags have been marked and
+    /// immediately before sweep. It gets an empty `&mut HashSet<Hash>` and returns a future that
+    /// returns [`ProtectOutcome`]. All hashes added to the set are protected during this run.
     ///
     /// In normal operation, return [`ProtectOutcome::Continue`] from the callback. If you return
     /// [`ProtectOutcome::Abort`], the garbage collection run will be aborted.Use this if your
     /// source of hashes to protect returned an error, and thus garbage collection should be skipped
-    /// completely to not unintentionally delete blobs that should be protected.
+    /// completely to avoid unintentionally deleting blobs that should be protected.
     #[debug("ProtectCallback")]
     pub add_protected: Option<ProtectCb>,
 }
@@ -163,6 +160,105 @@ pub enum ProtectOutcome {
     Abort,
 }
 
+/// Outcome of one garbage-collection cycle with a late protection source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GcRunOutcome<E> {
+    /// Marking, late protection discovery, and sweeping all completed.
+    Completed,
+    /// Protection discovery failed, so sweeping was not attempted.
+    Aborted(E),
+}
+
+/// Store-owned protection state for exactly one active GC cycle.
+#[derive(Debug, Default)]
+pub(crate) struct GcProtectionSet {
+    active_cycle: Option<GcProtectionCycleId>,
+    last_cycle: u64,
+    hashes: HashSet<Hash>,
+}
+
+impl GcProtectionSet {
+    pub fn start(&mut self) -> crate::api::Result<GcProtectionCycleId> {
+        if self.active_cycle.is_some() {
+            return Err(crate::api::Error::other(
+                "another garbage-collection cycle is already active",
+            ));
+        }
+        self.last_cycle = self
+            .last_cycle
+            .checked_add(1)
+            .ok_or_else(|| crate::api::Error::other("garbage-collection cycle id exhausted"))?;
+        let cycle = GcProtectionCycleId::new(self.last_cycle);
+        self.hashes.clear();
+        self.active_cycle = Some(cycle);
+        Ok(cycle)
+    }
+
+    pub fn finish(&mut self, cycle: GcProtectionCycleId) -> FinishGcProtectionOutcome {
+        if self.active_cycle != Some(cycle) {
+            return FinishGcProtectionOutcome::Stale;
+        }
+        self.active_cycle = None;
+        self.hashes.clear();
+        FinishGcProtectionOutcome::Finished
+    }
+
+    pub fn protect(&mut self, hash: Hash) {
+        if self.active_cycle.is_some() {
+            self.hashes.insert(hash);
+        }
+    }
+
+    pub fn contains(&self, hash: &Hash) -> bool {
+        self.active_cycle.is_some() && self.hashes.contains(hash)
+    }
+}
+
+struct GcProtectionGuard {
+    store: Store,
+    cycle: Option<GcProtectionCycleId>,
+}
+
+impl GcProtectionGuard {
+    async fn start(store: &Store) -> crate::api::Result<Self> {
+        let cycle = store.start_gc_protection().await?;
+        Ok(Self {
+            store: store.clone(),
+            cycle: Some(cycle),
+        })
+    }
+
+    async fn finish(mut self) -> crate::api::Result<()> {
+        let cycle = self.cycle.expect("active guard always owns a cycle");
+        let outcome = self.store.finish_gc_protection(cycle).await?;
+        self.cycle = None;
+        if matches!(outcome, FinishGcProtectionOutcome::Stale) {
+            warn!(?cycle, "gc protection cycle was already released");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GcProtectionGuard {
+    fn drop(&mut self) {
+        let Some(cycle) = self.cycle.take() else {
+            return;
+        };
+        let store = self.store.clone();
+        n0_future::task::spawn(async move {
+            match store.finish_gc_protection(cycle).await {
+                Ok(FinishGcProtectionOutcome::Finished | FinishGcProtectionOutcome::Stale) => {}
+                Err(error) => {
+                    error!(
+                        ?cycle,
+                        "failed to release cancelled gc protection cycle: {error}"
+                    )
+                }
+            }
+        });
+    }
+}
+
 /// The type of the garbage collection callback.
 ///
 /// See [`GcConfig::add_protected] for details.
@@ -170,34 +266,71 @@ pub type ProtectCb = Arc<
     dyn for<'a> Fn(
             &'a mut HashSet<Hash>,
         )
-            -> Pin<Box<dyn std::future::Future<Output = ProtectOutcome> + Send + Sync + 'a>>
+            -> Pin<Box<dyn std::future::Future<Output = ProtectOutcome> + Send + 'a>>
         + Send
         + Sync
         + 'static,
 >;
 
+/// Runs one garbage-collection cycle without an external protection source.
+///
+/// Call [`gc_run_once_with_late_protection`] when another durable index owns
+/// references that are not represented by blob tags.
 pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api::Result<()> {
-    debug!(externally_protected = live.len(), "gc: start");
+    match gc_run_once_with_late_protection(store, live, || {
+        std::future::ready(Ok::<HashSet<Hash>, Infallible>(HashSet::new()))
+    })
+    .await?
     {
-        store.clear_protected().await?;
-        let mut stream = gc_mark(store, live);
-        while let Some(ev) = stream.next().await {
-            match ev {
-                GcMarkEvent::CustomDebug(msg) => {
-                    debug!("{}", msg);
-                }
-                GcMarkEvent::CustomWarning(msg, err) => {
-                    warn!("{}: {:?}", msg, err);
-                }
-                GcMarkEvent::Error(err) => {
-                    error!("error during gc mark: {:?}", err);
-                    return Err(err);
+        GcRunOutcome::Completed => Ok(()),
+        GcRunOutcome::Aborted(never) => match never {},
+    }
+}
+
+/// Runs one mark-and-sweep cycle and discovers external roots immediately
+/// before sweeping.
+///
+/// `late_protection` is intentionally a future factory rather than an eagerly
+/// created future: it is not invoked until the store's protection cycle has
+/// started and
+/// tags and temporary tags have been marked. This closes the snapshot window in
+/// which a consumer could commit a reference, drop its import temp tag, and have
+/// the referenced blob swept. Returning `Err` aborts the cycle before sweep.
+pub async fn gc_run_once_with_late_protection<L, F, E>(
+    store: &Store,
+    live: &mut HashSet<Hash>,
+    load_late_protection: L,
+) -> crate::api::Result<GcRunOutcome<E>>
+where
+    L: FnOnce() -> F,
+    F: Future<Output = Result<HashSet<Hash>, E>>,
+{
+    debug!(externally_protected = live.len(), "gc: start");
+    let protection = GcProtectionGuard::start(store).await?;
+    let cycle_result = async {
+        {
+            let mut stream = gc_mark(store, live);
+            while let Some(ev) = stream.next().await {
+                match ev {
+                    GcMarkEvent::CustomDebug(msg) => {
+                        debug!("{}", msg);
+                    }
+                    GcMarkEvent::Error(err) => {
+                        error!("error during gc mark: {:?}", err);
+                        return Err(err);
+                    }
                 }
             }
         }
-    }
-    debug!(total_protected = live.len(), "gc: sweep");
-    {
+        let externally_protected = match load_late_protection().await {
+            Ok(externally_protected) => externally_protected,
+            Err(error) => {
+                info!("abort gc run: late protection discovery failed");
+                return Ok(GcRunOutcome::Aborted(error));
+            }
+        };
+        live.extend(externally_protected);
+        debug!(total_protected = live.len(), "gc: sweep");
         let mut stream = gc_sweep(store, live);
         while let Some(ev) = stream.next().await {
             match ev {
@@ -213,10 +346,21 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
                 }
             }
         }
+        debug!("gc: done");
+        Ok(GcRunOutcome::Completed)
     }
-    debug!("gc: done");
+    .await;
 
-    Ok(())
+    let finish_result = protection.finish().await;
+    match (cycle_result, finish_result) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(_), Err(finish)) => Err(finish),
+        (Err(primary), Err(finish)) => {
+            error!("failed to release gc protection after cycle error: {finish}");
+            Err(primary)
+        }
+    }
 }
 
 pub async fn run_gc(store: Store, config: GcConfig) {
@@ -225,18 +369,28 @@ pub async fn run_gc(store: Store, config: GcConfig) {
     loop {
         live.clear();
         n0_future::time::sleep(config.interval).await;
-        if let Some(ref cb) = config.add_protected {
-            match (cb)(&mut live).await {
-                ProtectOutcome::Continue => {}
-                ProtectOutcome::Abort => {
-                    info!("abort gc run: protect callback indicated abort");
-                    continue;
+        let outcome = if let Some(ref cb) = config.add_protected {
+            let load_late_protection = || async {
+                let mut externally_protected = HashSet::new();
+                match (cb)(&mut externally_protected).await {
+                    ProtectOutcome::Continue => Ok(externally_protected),
+                    ProtectOutcome::Abort => Err(()),
                 }
+            };
+            gc_run_once_with_late_protection(&store, &mut live, load_late_protection).await
+        } else {
+            gc_run_once(&store, &mut live)
+                .await
+                .map(|()| GcRunOutcome::Completed)
+        };
+        match outcome {
+            Ok(GcRunOutcome::Completed) => {}
+            Ok(GcRunOutcome::Aborted(())) => {
+                info!("abort gc run: protect callback indicated abort");
             }
-        }
-        if let Err(e) = gc_run_once(&store, &mut live).await {
-            error!("error during gc run: {e}");
-            break;
+            Err(error) => {
+                error!("error during gc run: {error}");
+            }
         }
     }
 }

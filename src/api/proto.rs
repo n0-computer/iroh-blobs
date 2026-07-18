@@ -118,6 +118,8 @@ pub enum Request {
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<TagCompareAndSwapOutcome>>)]
+    CompareAndSwapTag(TagCompareAndSwapRequest),
     #[rpc(tx = oneshot::Sender<super::Result<u64>>)]
     DeleteTags(DeleteTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
@@ -134,8 +136,10 @@ pub enum Request {
     WaitIdle(WaitIdleRequest),
     #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
-    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
-    ClearProtected(ClearProtectedRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<GcProtectionCycleId>>)]
+    StartGcProtection(StartGcProtectionRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<FinishGcProtectionOutcome>>)]
+    FinishGcProtection(FinishGcProtectionRequest),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -147,8 +151,35 @@ pub struct SyncDbRequest;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShutdownRequest;
 
+/// Identity of one store-owned garbage-collection protection cycle.
+///
+/// The identity makes delayed cleanup idempotent: a cancelled cycle can never
+/// release the protection set of a newer cycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GcProtectionCycleId(u64);
+
+impl GcProtectionCycleId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// Result of releasing a garbage-collection protection cycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FinishGcProtectionOutcome {
+    /// The matching active cycle was released.
+    Finished,
+    /// The cycle had already ended or a newer cycle owns the protection set.
+    Stale,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ClearProtectedRequest;
+pub struct StartGcProtectionRequest;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinishGcProtectionRequest {
+    pub cycle: GcProtectionCycleId,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobStatusRequest {
@@ -465,6 +496,21 @@ impl DeleteTagsRequest {
 pub struct SetTagRequest {
     pub name: Tag,
     pub value: HashAndFormat,
+}
+
+/// Atomically replace a tag only when its current value matches `expected`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TagCompareAndSwapRequest {
+    pub name: Tag,
+    pub expected: Option<HashAndFormat>,
+    pub value: Option<HashAndFormat>,
+}
+
+/// Result of an atomic tag compare-and-swap operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TagCompareAndSwapOutcome {
+    Applied,
+    Mismatch { current: Option<HashAndFormat> },
 }
 
 /// Options for creating a tag
