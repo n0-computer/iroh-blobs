@@ -2,7 +2,12 @@
 
 Base: `iroh-blobs v0.103.0` (`e82cbdcbdac9a78033174aad55e3199b2cf4c0dc`).
 
-Release branch: `syzygy/fs-store-hardening-v0.103.0`.
+**Single iteration branch (mandatory):** `syzygy/fs-store-hardening-v0.103.0`
+
+- All Syzygy fs-store fixes land on this branch only.
+- Do **not** open parallel `syzygy/*`, `fix/fs-store-*`, or version-named side branches for the same patch line.
+- Annotated release tags (`syzygy-v0.103.0-fs-store-recovery.N`) mark snapshots; they do not create a second line of development.
+- Parent Syzygy pins this branch tip via submodule SHA; `.gitmodules` `branch=` must match.
 
 Release line:
 
