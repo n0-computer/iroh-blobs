@@ -835,9 +835,7 @@ impl Drop for RtWrapper {
     fn drop(&mut self) {
         if let Some(rt) = self.0.take() {
             trace!("dropping tokio runtime");
-            tokio::task::block_in_place(|| {
-                drop(rt);
-            });
+            rt.shutdown_background();
             trace!("dropped tokio runtime");
         }
     }
@@ -1511,6 +1509,33 @@ pub mod tests {
             IROH_BLOCK_SIZE,
         },
     };
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_releases_owned_runtime_threads() -> TestResult<()> {
+        let directory = tempfile::tempdir()?;
+        for _ in 0..3 {
+            let store = FsStore::load(directory.path()).await?;
+            store.shutdown().await?;
+            drop(store);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let warmed_threads = fs::read_dir("/proc/self/task")?.count();
+
+        for _ in 0..8 {
+            let store = FsStore::load(directory.path()).await?;
+            store.shutdown().await?;
+            drop(store);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let final_threads = fs::read_dir("/proc/self/task")?.count();
+
+        assert!(
+            final_threads <= warmed_threads + 1,
+            "runtime workers grew across settled shutdowns: warmed={warmed_threads}, final={final_threads}"
+        );
+        Ok(())
+    }
 
     /// Interesting sizes for testing.
     pub const INTERESTING_SIZES: [usize; 8] = [
