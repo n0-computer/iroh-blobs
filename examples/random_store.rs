@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use iroh::{address_lookup::MemoryLookup, endpoint::presets, SecretKey};
 use iroh_blobs::{
     api::downloader::Shuffled,
-    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage},
+    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage, RequestMode},
     store::fs::FsStore,
     test::{add_hash_sequences, create_random_blobs},
     HashAndFormat,
@@ -102,7 +102,14 @@ pub fn get_or_generate_secret_key() -> Result<SecretKey> {
 }
 
 pub fn dump_provider_events(allow_push: bool) -> (tokio::task::JoinHandle<()>, EventSender) {
-    let (tx, mut rx) = EventSender::channel(100, EventMask::ALL_READONLY);
+    let mask = EventMask {
+        // `ALL_READONLY` leaves `push` disabled, which would reject every push before
+        // the handler below ever sees it and make `--allow-push` a no-op. The handler
+        // is the thing that decides, so the mask has to hand the request to it.
+        push: RequestMode::InterceptLog,
+        ..EventMask::ALL_READONLY
+    };
+    let (tx, mut rx) = EventSender::channel(100, mask);
     fn dump_updates<T: RpcMessage>(mut rx: irpc::channel::mpsc::Receiver<T>) {
         tokio::spawn(async move {
             while let Ok(Some(update)) = rx.recv().await {

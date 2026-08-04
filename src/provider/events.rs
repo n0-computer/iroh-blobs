@@ -34,13 +34,35 @@ pub enum ConnectMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ObserveMode {
-    /// We don't get notification of connect events at all.
+    /// We don't get observe request events at all.
     #[default]
     None,
-    /// We get a notification for connect events.
+    /// We get a notification for each observe request.
     Notify,
-    /// We get a request for connect events and can reject incoming connections.
+    /// We get a request for each observe request, and can reject it.
     Intercept,
+    /// Observe requests are completely disabled. All of them will be rejected.
+    ///
+    /// An observe response streams the local bitfield for a hash, i.e. exactly which
+    /// byte ranges of it this node holds, so a locked-down provider needs a way to
+    /// refuse them outright rather than only being able to intercept them.
+    Disabled,
+}
+
+impl From<ObserveMode> for RequestMode {
+    fn from(value: ObserveMode) -> Self {
+        // The `*Log` variants, not the plain ones: an observe request transfers no
+        // blobs, so it never produces per-blob transfer events, and the completion
+        // update is the only update it can ever emit. Mapping to `Notify`/`Intercept`
+        // would make the request tracker `Disabled`, and a handler waiting on
+        // `RequestUpdate::Completed` for an observe request would wait forever.
+        match value {
+            ObserveMode::None => RequestMode::None,
+            ObserveMode::Notify => RequestMode::NotifyLog,
+            ObserveMode::Intercept => RequestMode::InterceptLog,
+            ObserveMode::Disabled => RequestMode::Disabled,
+        }
+    }
 }
 
 /// Request mode for all data related requests.
@@ -435,12 +457,65 @@ impl EventSender {
         Ok(())
     }
 
+    /// A get request was received.
+    pub(crate) async fn get_request(
+        &self,
+        f: impl FnOnce() -> GetRequest,
+        connection_id: u64,
+        request_id: u64,
+    ) -> Result<RequestTracker, ProgressError> {
+        self.request(f, self.mask.get, connection_id, request_id)
+            .await
+    }
+
+    /// A get_many request was received.
+    pub(crate) async fn get_many_request(
+        &self,
+        f: impl FnOnce() -> GetManyRequest,
+        connection_id: u64,
+        request_id: u64,
+    ) -> Result<RequestTracker, ProgressError> {
+        self.request(f, self.mask.get_many, connection_id, request_id)
+            .await
+    }
+
+    /// A push request was received.
+    ///
+    /// Note that a push writes to the local store, which is why
+    /// [`EventMask::DEFAULT`] disables it.
+    pub(crate) async fn push_request(
+        &self,
+        f: impl FnOnce() -> PushRequest,
+        connection_id: u64,
+        request_id: u64,
+    ) -> Result<RequestTracker, ProgressError> {
+        self.request(f, self.mask.push, connection_id, request_id)
+            .await
+    }
+
+    /// An observe request was received.
+    pub(crate) async fn observe_request(
+        &self,
+        f: impl FnOnce() -> ObserveRequest,
+        connection_id: u64,
+        request_id: u64,
+    ) -> Result<RequestTracker, ProgressError> {
+        self.request(f, self.mask.observe.into(), connection_id, request_id)
+            .await
+    }
+
     /// Abstract request, to DRY the 3 to 4 request types.
     ///
     /// DRYing stuff with lots of bounds is no fun at all...
-    pub(crate) async fn request<Req>(
+    ///
+    /// `mode` is the [`RequestMode`] configured for this particular request type.
+    /// It must be passed in by the caller: reading it off the mask here would
+    /// have to pick one field, and so would silently apply the wrong policy to
+    /// the other three request types.
+    async fn request<Req>(
         &self,
         f: impl FnOnce() -> Req,
+        mode: RequestMode,
         connection_id: u64,
         request_id: u64,
     ) -> Result<RequestTracker, ProgressError>
@@ -459,7 +534,7 @@ impl EventSender {
     {
         let client = self.inner.as_ref();
         Ok(self.create_tracker((
-            match self.mask.get {
+            match mode {
                 RequestMode::None => RequestUpdates::None,
                 RequestMode::Notify if client.is_some() => {
                     let msg = RequestReceived {

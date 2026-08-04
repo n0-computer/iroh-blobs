@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io, ops::Range, path::PathBuf};
+use std::{collections::HashSet, io, ops::Range, path::PathBuf, time::Duration};
 
 use bao_tree::ChunkRanges;
 use bytes::Bytes;
@@ -14,12 +14,17 @@ use tokio::sync::{mpsc, watch};
 use tracing::info;
 
 use crate::{
-    api::{blobs::Bitfield, Store},
+    api::{
+        blobs::{Bitfield, BlobStatus},
+        Store,
+    },
     get,
     hashseq::HashSeq,
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
-    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage, RequestUpdate},
+    provider::events::{
+        AbortReason, EventMask, EventSender, ProviderMessage, RequestMode, RequestUpdate,
+    },
     store::{
         fs::{
             tests::{test_data, INTERESTING_SIZES},
@@ -341,11 +346,21 @@ async fn two_nodes_get_many_mem() -> TestResult<()> {
     two_nodes_get_many(r1, &store1, r2, &store2).await
 }
 
+/// [`EventMask::ALL_READONLY`] with push enabled.
+///
+/// There is deliberately no such constant in the crate itself — push writes to the local
+/// store, so enabling it has to be a conscious act by the operator. These tests are that
+/// conscious act: they intercept `PushRequestReceived` and admit the pushing node.
+const ALL_WITH_PUSH: EventMask = EventMask {
+    push: RequestMode::InterceptLog,
+    ..EventMask::ALL_READONLY
+};
+
 fn event_handler(
     allowed_nodes: impl IntoIterator<Item = EndpointId>,
 ) -> (EventSender, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
-    let (events_tx, mut events_rx) = EventSender::channel(16, EventMask::ALL_READONLY);
+    let (events_tx, mut events_rx) = EventSender::channel(16, ALL_WITH_PUSH);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
     let task = AbortOnDropHandle::new(n0_future::task::spawn(async move {
         while let Some(event) = events_rx.recv().await {
@@ -431,6 +446,133 @@ async fn two_nodes_push_blobs_mem() -> TestResult<()> {
     sp1.add_endpoint_info(r2.endpoint().addr());
     sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
+}
+
+/// A push must be refused when the event mask disables it.
+///
+/// [`EventMask::DEFAULT`] sets `push: RequestMode::Disabled` precisely because a push
+/// writes to the local store, so an unauthorized peer must not be able to place blobs of
+/// its choosing into ours.
+///
+/// The pusher cannot observe the refusal: `execute_push_sink` stops its receive stream
+/// and returns `Stats::default()` unconditionally, and the provider handles each stream
+/// in a detached task, so a rejection never surfaces as a connection- or call-level
+/// error. The property under test is therefore the one that actually matters — the blob
+/// must not land in the receiving store. `allow` is a control: pushing the same blob to
+/// a node that permits pushes proves the push path works in this setup, so a passing
+/// "denied" assertion cannot be an artifact of a push that never happened.
+async fn push_is_rejected_when_disabled(
+    pusher: Router,
+    pusher_store: &Store,
+    deny: Router,
+    deny_store: &Store,
+    allow: Router,
+    allow_store: &Store,
+    mut allow_count_rx: watch::Receiver<usize>,
+) -> TestResult<()> {
+    let size = 1024;
+    let tt = pusher_store.add_bytes(test_data(size)).await?;
+    let hash = tt.hash;
+    let request = PushRequest::new(hash, ChunkRangesSeq::root());
+
+    // The connections must outlive the pushes: `execute_push_sink` returns once it has
+    // called `finish()`, but dropping the `Connection` at that point tears down the
+    // still-in-flight stream and the receiver never finishes importing.
+    let mut conns = Vec::new();
+    for target in [&deny, &allow] {
+        let conn = pusher
+            .endpoint()
+            .connect(target.endpoint().addr(), crate::ALPN)
+            .await?;
+        pusher_store
+            .remote()
+            .execute_push_sink(conn.clone(), request.clone(), Drain)
+            .await?;
+        conns.push(conn);
+    }
+
+    // The permissive node completing its push bounds the wait for the denying one:
+    // both were pushed over loopback, the denying one first.
+    allow_count_rx.changed().await?;
+    assert_eq!(
+        allow_store.get_bytes(hash).await?,
+        test_data(size),
+        "control: a node that permits pushes must receive the blob"
+    );
+    // Nothing on the denying node is observable from here — a disabled request type
+    // emits no event, `execute_push_sink` does not wait for the receiver, and the
+    // provider imports on a detached task. Sampling once could therefore run before an
+    // accepted push had landed and pass on a broken mask, so keep sampling for a while:
+    // an accepted push over loopback lands well inside this window. `status`, not
+    // `has`: `has` is only true for a *complete* blob, so a rejection that arrived
+    // after some chunks had already been imported would leave attacker-chosen bytes in
+    // the store and still satisfy the assertion.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        assert_eq!(
+            deny_store.blobs().status(hash).await?,
+            BlobStatus::NotFound,
+            "a push rejected by the event mask must not write to the receiving store"
+        );
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    tokio::try_join!(pusher.shutdown(), deny.shutdown(), allow.shutdown())?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn push_is_rejected_when_disabled_mem() -> TestResult<()> {
+    tracing_subscriber::fmt::try_init().ok();
+    let (r1, store1, sp1) = node_test_setup_mem().await?;
+    // `EventSender::DEFAULT` carries `EventMask::DEFAULT`, i.e. push disabled.
+    let (r_deny, store_deny, sp_deny) = node_test_setup_mem().await?;
+    let (events_tx, count_rx, _task) = event_handler([r1.endpoint().id()]);
+    let (r_allow, store_allow, sp_allow) = node_test_setup_with_events_mem(events_tx).await?;
+    for sp in [&sp1, &sp_deny, &sp_allow] {
+        sp.add_endpoint_info(r1.endpoint().addr());
+        sp.add_endpoint_info(r_deny.endpoint().addr());
+        sp.add_endpoint_info(r_allow.endpoint().addr());
+    }
+    push_is_rejected_when_disabled(
+        r1,
+        &store1,
+        r_deny,
+        &store_deny,
+        r_allow,
+        &store_allow,
+        count_rx,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn push_is_rejected_when_disabled_fs() -> TestResult<()> {
+    tracing_subscriber::fmt::try_init().ok();
+    let testdir = tempfile::tempdir()?;
+    let (r1, store1, _, sp1) = node_test_setup_fs(testdir.path().join("a")).await?;
+    let (r_deny, store_deny, _, sp_deny) = node_test_setup_fs(testdir.path().join("deny")).await?;
+    let (events_tx, count_rx, _task) = event_handler([r1.endpoint().id()]);
+    let (r_allow, store_allow, _, sp_allow) =
+        node_test_setup_with_events_fs(testdir.path().join("allow"), events_tx).await?;
+    for sp in [&sp1, &sp_deny, &sp_allow] {
+        sp.add_endpoint_info(r1.endpoint().addr());
+        sp.add_endpoint_info(r_deny.endpoint().addr());
+        sp.add_endpoint_info(r_allow.endpoint().addr());
+    }
+    push_is_rejected_when_disabled(
+        r1,
+        &store1,
+        r_deny,
+        &store_deny,
+        r_allow,
+        &store_allow,
+        count_rx,
+    )
+    .await
 }
 
 pub async fn add_test_hash_seq(
