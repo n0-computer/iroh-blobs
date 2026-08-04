@@ -34,21 +34,33 @@ pub enum ConnectMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ObserveMode {
-    /// We don't get notification of connect events at all.
+    /// We don't get observe request events at all.
     #[default]
     None,
-    /// We get a notification for connect events.
+    /// We get a notification for each observe request.
     Notify,
-    /// We get a request for connect events and can reject incoming connections.
+    /// We get a request for each observe request, and can reject it.
     Intercept,
+    /// Observe requests are completely disabled. All of them will be rejected.
+    ///
+    /// An observe response streams the local bitfield for a hash, i.e. exactly which
+    /// byte ranges of it this node holds, so a locked-down provider needs a way to
+    /// refuse them outright rather than only being able to intercept them.
+    Disabled,
 }
 
 impl From<ObserveMode> for RequestMode {
     fn from(value: ObserveMode) -> Self {
+        // The `*Log` variants, not the plain ones: an observe request transfers no
+        // blobs, so it never produces per-blob transfer events, and the completion
+        // update is the only update it can ever emit. Mapping to `Notify`/`Intercept`
+        // would make the request tracker `Disabled`, and a handler waiting on
+        // `RequestUpdate::Completed` for an observe request would wait forever.
         match value {
             ObserveMode::None => RequestMode::None,
-            ObserveMode::Notify => RequestMode::Notify,
-            ObserveMode::Intercept => RequestMode::Intercept,
+            ObserveMode::Notify => RequestMode::NotifyLog,
+            ObserveMode::Intercept => RequestMode::InterceptLog,
+            ObserveMode::Disabled => RequestMode::Disabled,
         }
     }
 }
