@@ -33,13 +33,14 @@ use ref_cast::RefCast;
 use smallvec::SmallVec;
 use tracing::{instrument, trace};
 
-use super::{meta::raw_outboard_size, options::Options, TaskContext};
+use super::{meta::raw_outboard_size, options::Options, FinishBuildOutboardMsg, TaskContext};
 use crate::{
     api::{
         blobs::{AddProgressItem, ImportMode},
         proto::{
-            HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest, ImportByteStreamUpdate,
-            ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, Request, Scope,
+            BuildOutboardMsg, HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest,
+            ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest, ImportPathMsg,
+            ImportPathRequest, Request, Scope,
         },
     },
     store::{
@@ -224,6 +225,51 @@ async fn import_bytes_tiny_impl(
 pub async fn import_byte_stream(cmd: ImportByteStreamMsg, ctx: Arc<TaskContext>) {
     let stream = into_stream(cmd.rx);
     import_byte_stream_mid(cmd.inner, cmd.tx, cmd.span, stream, ctx).await
+}
+
+/// Build the BLAKE3 outboard for a stream of bytes without storing the data.
+///
+/// Reuses the import machinery to compute the outboard, then discards the data
+/// (deleting any temp data file) and sends a [`FinishBuildOutboardMsg`] so the
+/// actor stores the outboard as a virtual entry.
+#[instrument(skip_all)]
+pub(crate) async fn build_outboard(cmd: BuildOutboardMsg, ctx: Arc<TaskContext>) {
+    let BuildOutboardMsg {
+        inner,
+        mut tx,
+        rx,
+        span,
+        ..
+    } = cmd;
+    let stream = into_stream(rx);
+    let request = ImportByteStreamRequest {
+        format: inner.format,
+        scope: inner.scope,
+    };
+    let entry = match import_byte_stream_impl(request, &mut tx, stream, ctx.options.clone()).await {
+        Ok(entry) => entry,
+        Err(cause) => {
+            tx.send(cause.into()).await.ok();
+            return;
+        }
+    };
+    let size = entry.source.size();
+    // The data is intentionally not retained. Delete any temp data file.
+    if let ImportSource::TempFile(path, _file, _size) = entry.source {
+        let _ = std::fs::remove_file(&path);
+    }
+    // Keep the outboard as-is (in memory or as a temp file); the finish step
+    // decides whether to inline it or move it to the canonical outboard file.
+    let msg = FinishBuildOutboardMsg {
+        hash: entry.hash,
+        scope: entry.scope,
+        format: entry.format,
+        outboard: entry.outboard,
+        size,
+        tx,
+        span,
+    };
+    ctx.internal_cmd_tx.send(msg.into()).await.ok();
 }
 
 fn into_stream(

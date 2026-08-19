@@ -20,7 +20,7 @@ use n0_future::{io, Stream, StreamExt};
 use ref_cast::RefCast;
 use tracing::{debug, trace};
 
-use super::blobs::{Bitfield, ExportBaoOptions};
+use super::blobs::{Bitfield, ExportBaoOptions, ImportBaoHandle};
 use crate::{
     api::{
         self,
@@ -42,7 +42,7 @@ use crate::{
     provider::events::{ClientResult, ProgressError},
     store::IROH_BLOCK_SIZE,
     util::{
-        sink::{Sink, TokioMpscSenderSink},
+        sink::{Drain, Sink, TokioMpscSenderSink},
         RecvStream, SendStream,
     },
     Hash, HashAndFormat,
@@ -539,6 +539,31 @@ impl Remote {
         Ok(stats)
     }
 
+    /// Download a single blob's verified [`BaoContentItem`]s into a
+    /// caller-provided channel, without importing them into any store.
+    ///
+    /// This is the getter-side half of the virtual blob API: the caller owns
+    /// the receiver side of `item_tx` and processes the verified items itself
+    /// — e.g. keep the [`BaoContentItem::Parent`] nodes as an outboard, feed
+    /// the [`BaoContentItem::Leaf`] data through a transform, and register a
+    /// virtual entry. The blob is not written to the local store.
+    ///
+    /// `hash` identifies a single raw blob (collections / hash sequences are
+    /// not supported here; use [`Self::fetch`] for those).
+    ///
+    /// Returns once the blob has been fully streamed into `item_tx`. The caller
+    /// should drain the receiver to completion; `item_tx` is dropped when the
+    /// blob is done.
+    pub async fn fetch_bao_to(
+        &self,
+        sp: impl GetStreamPair,
+        hash: Hash,
+        item_tx: irpc::channel::mpsc::Sender<BaoContentItem>,
+    ) -> GetResult<Stats> {
+        let request = GetRequest::blob(hash);
+        self.execute_get_bao_to(sp, request, item_tx).await
+    }
+
     pub fn observe(
         &self,
         conn: Connection,
@@ -743,6 +768,62 @@ impl Remote {
         Ok(stats)
     }
 
+    /// Like [`Self::execute_get_sink`] but forwards each blob's verified
+    /// [`BaoContentItem`]s into a caller-provided channel instead of importing
+    /// them into the store.
+    ///
+    /// Only a single raw blob is supported; if the response contains children
+    /// (a hash sequence), an error is returned.
+    pub(crate) async fn execute_get_bao_to(
+        &self,
+        conn: impl GetStreamPair,
+        request: GetRequest,
+        item_tx: irpc::channel::mpsc::Sender<BaoContentItem>,
+    ) -> GetResult<Stats> {
+        let root = request.hash;
+        let conn = conn.open_stream_pair().await.map_err(|e| {
+            e!(
+                GetError::LocalFailure,
+                n0_error::anyerr!("failed to open stream pair: {e}")
+            )
+        })?;
+        let connected =
+            AtConnected::new(conn.t0, conn.recv, conn.send, request, Default::default());
+        trace!("Getting header (bao_to)");
+        let at_closing = match connected
+            .next()
+            .await
+            .map_err(|e| e!(GetError::ConnectedNext, e))?
+        {
+            ConnectedNext::StartRoot(at_start_root) => {
+                let header = at_start_root.next();
+                let end = get_blob_ranges_to(header, root, Drain, item_tx).await?;
+                match end.next() {
+                    EndBlobNext::MoreChildren(_) => {
+                        return Err(e!(
+                            GetError::BadRequest,
+                            n0_error::anyerr!("fetch_bao_to does not support hash sequences")
+                        ));
+                    }
+                    EndBlobNext::Closing(at_closing) => at_closing,
+                }
+            }
+            ConnectedNext::StartChild(_) => {
+                return Err(e!(
+                    GetError::BadRequest,
+                    n0_error::anyerr!("fetch_bao_to does not support hash sequences")
+                ));
+            }
+            ConnectedNext::Closing(at_closing) => at_closing,
+        };
+        let stats = at_closing
+            .next()
+            .await
+            .map_err(|e| e!(GetError::AtClosingNext, e))?;
+        trace!(?stats, "get bao_to done");
+        Ok(stats)
+    }
+
     pub fn execute_get_many(&self, conn: Connection, request: GetManyRequest) -> GetProgress {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let tx2 = tx.clone();
@@ -881,13 +962,46 @@ fn get_buffer_size(size: NonZeroU64) -> usize {
     (size.get() / (IROH_BLOCK_SIZE.bytes() as u64) + 2).min(64) as usize
 }
 
+/// Forward verified [`BaoContentItem`]s from a blob content stream to a channel,
+/// reporting per-item payload byte progress.
+///
+/// This is the shared loop used by both the store-import path
+/// ([`get_blob_ranges_impl`]) and the sink-only path ([`get_blob_ranges_to`]).
+async fn forward_blob_content<R: RecvStream>(
+    mut content: crate::get::fsm::AtBlobContent<R>,
+    mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
+    item_tx: irpc::channel::mpsc::Sender<BaoContentItem>,
+) -> GetResult<AtEndBlob<R>> {
+    let end = loop {
+        match content.next().await {
+            BlobContentNext::More((next, res)) => {
+                let item = res.map_err(|e| e!(GetError::Decode, e))?;
+                progress
+                    .send(next.stats().payload_bytes_read)
+                    .await
+                    .map_err(|e| e!(GetError::LocalFailure, e.into()))?;
+                item_tx
+                    .send(item)
+                    .await
+                    .map_err(|e| e!(GetError::IrpcSend, e))?;
+                content = next;
+            }
+            BlobContentNext::Done(end) => {
+                drop(item_tx);
+                break end;
+            }
+        }
+    };
+    Ok(end)
+}
+
 async fn get_blob_ranges_impl<R: RecvStream>(
     header: AtBlobHeader<R>,
     hash: Hash,
     store: &Store,
-    mut progress: impl Sink<u64, Error = irpc::channel::SendError>,
+    progress: impl Sink<u64, Error = irpc::channel::SendError>,
 ) -> GetResult<AtEndBlob<R>> {
-    let (mut content, size) = header
+    let (content, size) = header
         .next()
         .await
         .map_err(|e| e!(GetError::AtBlobHeaderNext, e))?;
@@ -908,31 +1022,10 @@ async fn get_blob_ranges_impl<R: RecvStream>(
         .import_bao(hash, size, buffer_size)
         .await
         .map_err(|e| e!(GetError::LocalFailure, e.into()))?;
-    let write = async move {
-        GetResult::Ok(loop {
-            match content.next().await {
-                BlobContentNext::More((next, res)) => {
-                    let item = res.map_err(|e| e!(GetError::Decode, e))?;
-                    progress
-                        .send(next.stats().payload_bytes_read)
-                        .await
-                        .map_err(|e| e!(GetError::LocalFailure, e.into()))?;
-                    handle
-                        .tx
-                        .send(item)
-                        .await
-                        .map_err(|e| e!(GetError::IrpcSend, e))?;
-                    content = next;
-                }
-                BlobContentNext::Done(end) => {
-                    drop(handle.tx);
-                    break end;
-                }
-            }
-        })
-    };
+    let ImportBaoHandle { tx, rx } = handle;
+    let write = forward_blob_content(content, progress, tx);
     let complete = async move {
-        handle.rx.await.map_err(|e| {
+        rx.await.map_err(|e| {
             e!(
                 GetError::LocalFailure,
                 n0_error::anyerr!("error reading from import stream: {e}")
@@ -941,6 +1034,37 @@ async fn get_blob_ranges_impl<R: RecvStream>(
     };
     let (_, end) = tokio::try_join!(complete, write)?;
     Ok(end)
+}
+
+/// Like [`get_blob_ranges_impl`] but forwards verified [`BaoContentItem`]s into
+/// a caller-provided channel instead of importing them into a store.
+///
+/// This is the getter-side half of the virtual blob API: a caller can download
+/// a blob's verified items (leaves = data, parents = outboard) and process them
+/// itself — e.g. keep the parents as an outboard, transform the leaves, and
+/// register a virtual entry — without writing the blob into any store.
+async fn get_blob_ranges_to<R: RecvStream>(
+    header: AtBlobHeader<R>,
+    hash: Hash,
+    progress: impl Sink<u64, Error = irpc::channel::SendError>,
+    item_tx: irpc::channel::mpsc::Sender<BaoContentItem>,
+) -> GetResult<AtEndBlob<R>> {
+    let (content, size) = header
+        .next()
+        .await
+        .map_err(|e| e!(GetError::AtBlobHeaderNext, e))?;
+    let Some(_size) = NonZeroU64::new(size) else {
+        return if hash == Hash::EMPTY {
+            let end = content.drain().await.map_err(|e| e!(GetError::Decode, e))?;
+            Ok(end)
+        } else {
+            Err(e!(
+                GetError::Decode,
+                DecodeError::leaf_hash_mismatch(ChunkNum(0))
+            ))
+        };
+    };
+    forward_blob_content(content, progress, item_tx).await
 }
 
 #[derive(Debug)]

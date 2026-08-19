@@ -36,10 +36,10 @@ use crate::{
         self,
         blobs::{Bitfield, ExportProgressItem},
         proto::{
-            self, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
-            ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
-            ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
-            ObserveRequest, WaitIdleMsg,
+            self, AddVirtualMsg, AddVirtualWithOutboardMsg, BlobStatus, BuildOutboardMsg, Command,
+            ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem,
+            ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportByteStreamMsg,
+            ImportBytesMsg, ImportPathMsg, ObserveMsg, ObserveRequest, WaitIdleMsg,
         },
         ApiClient, TempTag,
     },
@@ -118,6 +118,23 @@ impl Actor {
                 tx.send(unsupported("import not supported").into())
                     .await
                     .ok();
+            }
+            Command::BuildOutboard(BuildOutboardMsg { tx, .. }) => {
+                tx.send(unsupported("build_outboard not supported").into())
+                    .await
+                    .ok();
+            }
+            Command::AddVirtual(AddVirtualMsg { tx, .. }) => {
+                tx.send(Err(unsupported("add_virtual not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::AddVirtualWithOutboard(AddVirtualWithOutboardMsg { tx, .. }) => {
+                tx.send(Err(
+                    unsupported("add_virtual_with_outboard not supported").into()
+                ))
+                .await
+                .ok();
             }
             Command::ImportPath(ImportPathMsg { tx, .. }) => {
                 tx.send(unsupported("import not supported").into())
