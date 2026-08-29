@@ -40,7 +40,7 @@ use iroh_blobs::api::Store;
 use iroh_blobs::store::mem::MemStore;
 use iroh_blobs::store::virtual_blob::{DynVirtualSource, Provider, VirtualProviders};
 use iroh_blobs::store::IROH_BLOCK_SIZE;
-use iroh_blobs::{ALPN, BlobsProtocol, Hash};
+use iroh_blobs::{BlobsProtocol, Hash, ALPN};
 use sha2::Sha256;
 
 const PROVIDER_NAME: &str = "example-encrypted-blob-v1";
@@ -113,7 +113,11 @@ impl DemoCipher {
             0x01
         });
         self.aead
-            .encrypt_in_place(aes_gcm::Nonce::from_slice(&self.nonce(seq)), &[], &mut plaintext)
+            .encrypt_in_place(
+                aes_gcm::Nonce::from_slice(&self.nonce(seq)),
+                &[],
+                &mut plaintext,
+            )
             .expect("aes-gcm encryption cannot fail");
         plaintext
     }
@@ -176,7 +180,10 @@ fn decrypt_bytes(key: &BlobKey, ciphertext: &[u8]) -> Result<Vec<u8>> {
         }
         seq += 1;
         offset += take;
-        ensure!(offset < records.len(), "ciphertext ends without final record");
+        ensure!(
+            offset < records.len(),
+            "ciphertext ends without final record"
+        );
     }
     Ok(out)
 }
@@ -276,7 +283,8 @@ async fn main() -> Result<()> {
     //    buffer; for large media, stream the ciphertext through
     //    `store.blobs().build_outboard(..)` instead, which computes the
     //    (hash, outboard) pair incrementally without holding the bytes.
-    let outboard = bao_tree::io::outboard::PreOrderMemOutboard::create(&ciphertext, IROH_BLOCK_SIZE);
+    let outboard =
+        bao_tree::io::outboard::PreOrderMemOutboard::create(&ciphertext, IROH_BLOCK_SIZE);
     store
         .blobs()
         .add_virtual_with_outboard(
@@ -334,7 +342,6 @@ async fn main() -> Result<()> {
         "decrypted back to the original plaintext ({} bytes)",
         plaintext.len()
     );
-
 
     // Negative case: a virtual entry whose provider is not registered serves
     // as not-found to peers, even though the entry itself exists. (Node B's

@@ -110,27 +110,10 @@ pub enum Request {
     ImportBytes(ImportBytesRequest),
     #[rpc(rx = mpsc::Receiver<ImportByteStreamUpdate>, tx = mpsc::Sender<AddProgressItem>)]
     ImportByteStream(ImportByteStreamRequest),
-    /// Build the BLAKE3 outboard for a stream of bytes without storing the data.
-    ///
-    /// The bytes are streamed in via the `rx` channel; the resulting hash and
-    /// size are reported via `AddProgressItem` (with the data discarded). The
-    /// outboard is stored in the store as a *virtual* entry, which can later be
-    /// served by associating it with a provider via `AddVirtual` (see
-    /// [`crate::store::virtual_blob::VirtualProviders`]).
     #[rpc(rx = mpsc::Receiver<ImportByteStreamUpdate>, tx = mpsc::Sender<AddProgressItem>)]
     BuildOutboard(BuildOutboardRequest),
-    /// Associate a virtual entry with the name of the provider that serves it.
-    ///
-    /// The entry must already exist as a virtual entry (its outboard must have
-    /// been computed via `BuildOutboard`). The provider name is stored durably
-    /// with the entry; serving the entry looks up a live provider registered
-    /// under this name (see [`crate::store::virtual_blob::VirtualProviders`])
-    /// and fails with `NotFound` if none is registered.
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     AddVirtual(AddVirtualRequest),
-    /// Create a virtual entry from a caller-supplied bao outboard.
-    ///
-    /// See [`AddVirtualWithOutboardRequest`] for details.
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     AddVirtualWithOutboard(AddVirtualWithOutboardRequest),
     #[rpc(tx = mpsc::Sender<AddProgressItem>)]
@@ -277,9 +260,11 @@ pub struct ImportByteStreamRequest {
 
 /// Request to build an outboard from a stream of bytes without storing the data.
 ///
-/// The bytes are streamed in as [`ImportByteStreamUpdate`] on the request's
-/// `rx` channel; progress and the final result are reported as
-/// [`AddProgressItem`] on the `tx` channel.
+/// The bytes are streamed in via the `rx` channel; the resulting hash and
+/// size are reported via [`AddProgressItem`] (with the data discarded). The
+/// outboard is stored in the store as a *virtual* entry, which can later be
+/// served by associating it with a provider via `AddVirtual` (see
+/// [`crate::store::virtual_blob::VirtualProviders`]).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildOutboardRequest {
     pub format: BlobFormat,
@@ -293,6 +278,12 @@ pub enum ImportByteStreamUpdate {
 }
 
 /// Associate a virtual entry with the name of the provider that serves it.
+///
+/// The entry must already exist as a virtual entry (its outboard must have
+/// been computed via `BuildOutboard`). The provider name is stored durably
+/// with the entry; serving the entry looks up a live provider registered
+/// under this name (see [`crate::store::virtual_blob::VirtualProviders`])
+/// and fails with `NotFound` if none is registered.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddVirtualRequest {
     /// The hash of the virtual entry.

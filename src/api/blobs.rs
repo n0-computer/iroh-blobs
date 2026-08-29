@@ -314,17 +314,6 @@ impl Blobs {
     }
 
     /// Build the BLAKE3 outboard for a stream of bytes without storing the data.
-    ///
-    /// The returned [`AddProgress`] reports the size and, on completion, a
-    /// [`TempTag`] protecting the resulting *virtual* entry — an entry that has
-    /// the outboard but no stored data. Associate it with a provider via
-    /// [`Self::add_virtual`], and register that provider in
-    /// [`crate::store::virtual_blob::VirtualProviders`] to serve it.
-    ///
-    /// This is the "build" half of the two-layer virtual blob API; the "add"
-    /// half attaches a random-access data source. Building is a sequential pass
-    /// (`Stream`), while serving is random-access (`ReadBytesAt`), so the two
-    /// take different source objects.
     pub async fn build_outboard(
         &self,
         data: impl Stream<Item = io::Result<Bytes>> + Send + Sync + 'static,
@@ -389,28 +378,28 @@ impl Blobs {
         };
         self.client.rpc(msg).await??;
         Ok(())
-}
+    }
 
-/// Create a virtual entry from a caller-supplied bao outboard.
-///
-/// This is the getter-side counterpart of [`Self::fetch_bao_to`]: collect the
-/// verified parent items into the standard pre-order outboard serialization
-/// and install them here together with the expected size. The entry behaves
-/// exactly like one created via [`Self::build_outboard`]; name a provider via
-/// `provider` (the same name later passed to [`crate::store::virtual_blob::VirtualProviders::register`])
-/// to serve it.
-///
-/// The `outboard` must be the standard pre-order serialization for `size`
-/// (empty when the blob fits in a single chunk); its length is validated
-/// against `size`. An entry that already exists as stored (`Complete`) or
-/// partial data is rejected; an existing virtual or missing entry is set.
-pub async fn add_virtual_with_outboard(
+    /// Create a virtual entry from a caller-supplied bao outboard.
+    ///
+    /// This is the getter-side counterpart of [`Self::fetch_bao_to`]: collect the
+    /// verified parent items into the standard pre-order outboard serialization
+    /// and install them here together with the expected size. The entry behaves
+    /// exactly like one created via [`Self::build_outboard`]; name a provider via
+    /// `provider` (the same name later passed to [`crate::store::virtual_blob::VirtualProviders::register`])
+    /// to serve it.
+    ///
+    /// The `outboard` must be the standard pre-order serialization for `size`
+    /// (empty when the blob fits in a single chunk); its length is validated
+    /// against `size`. An entry that already exists as stored (`Complete`) or
+    /// partial data is rejected; an existing virtual or missing entry is set.
+    pub async fn add_virtual_with_outboard(
         &self,
         hash: impl Into<Hash>,
         size: u64,
         outboard: impl Into<Bytes>,
         provider: impl Into<String>,
-) -> super::RequestResult<()> {
+    ) -> super::RequestResult<()> {
         let msg = AddVirtualWithOutboardRequest {
             hash: hash.into(),
             size,
@@ -419,7 +408,7 @@ pub async fn add_virtual_with_outboard(
         };
         self.client.rpc(msg).await??;
         Ok(())
-}
+    }
 
     pub fn export_ranges(
         &self,

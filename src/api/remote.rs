@@ -539,7 +539,7 @@ impl Remote {
         Ok(stats)
     }
 
-    /// Download a single blob's verified [`BaoContentItem`]s into a
+    /// Download (a byte range of) a single blob's verified [`BaoContentItem`]s into a
     /// caller-provided channel, without importing them into any store.
     ///
     /// This is the getter-side half of the virtual blob API: the caller owns
@@ -548,19 +548,41 @@ impl Remote {
     /// the [`BaoContentItem::Leaf`] data through a transform, and register a
     /// virtual entry. The blob is not written to the local store.
     ///
+    /// `ranges` limits the transfer to the given chunk (byte) ranges of the
+    /// blob, e.g. a single window for a seek, or a suffix for a resuming
+    /// download. Only chunks overlapping the requested ranges are delivered,
+    /// but every leaf is verified against `hash` as usual, so a resumed
+    /// download trusts the same root as an uninterrupted one. Use
+    /// [`ChunkRanges::all`] for the whole blob.
+    ///
+    /// ## Resume caveat
+    ///
+    /// Unlike store-importing transfers ([`Self::fetch`]), this primitive
+    /// keeps no receiver-side state: a cancelled call retains nothing, and
+    /// resuming is the caller's job. Track transform-space progress (the
+    /// transform's own record or byte watermark), persist whatever durable
+    /// state the transform needs, then call this again with the missing
+    /// ranges. This asymmetry is inherent: the transferred representation
+    /// (this blob's chunk space) and the caller's imported representation
+    /// generally have different framing - different chunk boundaries and
+    /// possibly different lengths - so a store bitfield of the imported
+    /// representation cannot be translated into request ranges of the
+    /// transferred one.
+    ///
     /// `hash` identifies a single raw blob (collections / hash sequences are
     /// not supported here; use [`Self::fetch`] for those).
     ///
-    /// Returns once the blob has been fully streamed into `item_tx`. The caller
-    /// should drain the receiver to completion; `item_tx` is dropped when the
-    /// blob is done.
+    /// Returns once the requested ranges have been streamed into `item_tx`.
+    /// The caller should drain the receiver to completion; `item_tx` is
+    /// dropped when the blob is done.
     pub async fn fetch_bao_to(
         &self,
         sp: impl GetStreamPair,
         hash: Hash,
+        ranges: impl Into<bao_tree::ChunkRanges>,
         item_tx: irpc::channel::mpsc::Sender<BaoContentItem>,
     ) -> GetResult<Stats> {
-        let request = GetRequest::blob(hash);
+        let request = GetRequest::blob_ranges(hash, ranges.into());
         self.execute_get_bao_to(sp, request, item_tx).await
     }
 

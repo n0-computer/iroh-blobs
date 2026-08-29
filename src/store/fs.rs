@@ -104,11 +104,10 @@ use tracing::{error, instrument, trace, Span};
 use crate::{
     api::{
         proto::{
-            self, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, Command,
-            CreateTempTagMsg, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, HashSpecific, ImportBaoMsg,
-            ImportBaoRequest, ObserveMsg, Scope, AddVirtualWithOutboardMsg,
-            AddVirtualWithOutboardRequest,
+            self, bitfield::is_validated, AddVirtualWithOutboardMsg, AddVirtualWithOutboardRequest,
+            BatchMsg, BatchResponse, Bitfield, Command, CreateTempTagMsg, ExportBaoMsg,
+            ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem, ExportRangesMsg,
+            ExportRangesRequest, HashSpecific, ImportBaoMsg, ImportBaoRequest, ObserveMsg, Scope,
         },
         ApiClient,
     },
@@ -1215,7 +1214,10 @@ async fn add_virtual_with_outboard(cmd: AddVirtualWithOutboardMsg, ctx: Arc<Task
         }
     };
     if let Some(state) = existing {
-        if matches!(state.value(), EntryState::Complete { .. } | EntryState::Partial { .. }) {
+        if matches!(
+            state.value(),
+            EntryState::Complete { .. } | EntryState::Partial { .. }
+        ) {
             tx.send(Err(crate::api::Error::io(
                 io::ErrorKind::InvalidInput,
                 "entry already exists as stored data",

@@ -284,7 +284,10 @@ async fn fetch_bao_to_downloads_verified_items() -> TestResult<()> {
         (assembled, parents)
     });
 
-    let _stats = store2.remote().fetch_bao_to(conn, hash, tx).await?;
+    let _stats = store2
+        .remote()
+        .fetch_bao_to(conn, hash, bao_tree::ChunkRanges::all(), tx)
+        .await?;
     let (assembled, parents) = consumer.await?;
 
     assert_eq!(
@@ -296,6 +299,73 @@ async fn fetch_bao_to_downloads_verified_items() -> TestResult<()> {
     assert!(
         parents > 0,
         "expected non-empty outboard for a multi-chunk blob"
+    );
+
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
+}
+
+/// `fetch_bao_to` with explicit ranges: only the requested chunk window is
+/// delivered (a seek), and the received leaves are byte-identical to that
+/// window of the original blob. This is the primitive a transform receiver
+/// uses to resume from its own progress watermark.
+#[tokio::test]
+async fn fetch_bao_to_ranged_window() -> TestResult<()> {
+    use bao_tree::io::BaoContentItem;
+
+    let ((r1, store1), (r2, _store2)) = two_node_test_setup_mem().await?;
+    // 1 KiB = one blake3 chunk; 1 MiB = 1024 chunks.
+    let data = test_data(1024 * 1024);
+    let hash = Hash::new(data.clone());
+    let _tt = store1.add_bytes(data.clone()).await?;
+
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+
+    // Chunk ranges are 1 KiB blake3-chunk units: request chunks 2..5 =
+    // bytes [2048, 5120).
+    let start_byte = 2u64 * 1024;
+    let end_byte = 5u64 * 1024;
+    use bao_tree::ChunkNum;
+    let ranges = bao_tree::ChunkRanges::from(ChunkNum(2)..ChunkNum(5));
+
+    let (tx, mut rx) = irpc::channel::mpsc::channel::<BaoContentItem>(64);
+    let consumer = tokio::spawn(async move {
+        let mut assembled = Vec::new();
+        let mut first_offset = None;
+        let mut last_end = 0u64;
+        while let Ok(Some(item)) = rx.recv().await {
+            match item {
+                BaoContentItem::Leaf(leaf) => {
+                    let off = leaf.offset;
+                    first_offset.get_or_insert(off);
+                    last_end = off + leaf.data.len() as u64;
+                    assembled.extend_from_slice(&leaf.data);
+                }
+                BaoContentItem::Parent(_) => {}
+            }
+        }
+        (assembled, first_offset, last_end)
+    });
+
+    let stats = _store2
+        .remote()
+        .fetch_bao_to(conn, hash, ranges, tx)
+        .await?;
+    assert_eq!(
+        stats.payload_bytes_read as u64,
+        end_byte - start_byte,
+        "only the requested window must be transferred"
+    );
+    let (assembled, first_offset, last_end) = consumer.await?;
+    assert_eq!(first_offset.unwrap_or(0), start_byte);
+    assert_eq!(last_end, end_byte);
+    assert_eq!(
+        assembled.as_slice(),
+        &data.as_ref()[start_byte as usize..end_byte as usize],
+        "window bytes must match the original blob"
     );
 
     tokio::try_join!(r1.shutdown(), r2.shutdown())?;
@@ -319,8 +389,12 @@ impl crate::store::virtual_blob::Provider for TestBytesProvider {
 }
 
 /// Sets up a mem node that exposes its [`crate::store::virtual_blob::VirtualProviders`] handle.
-async fn node_test_setup_mem_with_virtuals(
-) -> TestResult<(Router, MemStore, MemoryLookup, crate::store::virtual_blob::VirtualProviders)> {
+async fn node_test_setup_mem_with_virtuals() -> TestResult<(
+    Router,
+    MemStore,
+    MemoryLookup,
+    crate::store::virtual_blob::VirtualProviders,
+)> {
     let (store, virtuals) = MemStore::new_with_virtuals(Default::default());
     let sp = MemoryLookup::new();
     let ep = Endpoint::builder(presets::Minimal)
@@ -368,7 +442,10 @@ async fn two_nodes_get_virtual_blob_served_from_outboard() -> TestResult<()> {
         .connect(r1.endpoint().addr(), crate::ALPN)
         .await?;
     let (item_tx, mut item_rx) = irpc::channel::mpsc::channel::<BaoContentItem>(64);
-    let stats = store2.remote().fetch_bao_to(conn_b_a, hash, item_tx).await?;
+    let stats = store2
+        .remote()
+        .fetch_bao_to(conn_b_a, hash, bao_tree::ChunkRanges::all(), item_tx)
+        .await?;
     assert!(stats.payload_bytes_read > 0);
     let mut leaves = Vec::new();
     let mut outboard = Vec::new();
@@ -383,7 +460,10 @@ async fn two_nodes_get_virtual_blob_served_from_outboard() -> TestResult<()> {
         }
     }
     assert_eq!(leaves, data.as_ref(), "reassembled leaves must match");
-    assert!(!outboard.is_empty(), "multi-chunk blob must have an outboard");
+    assert!(
+        !outboard.is_empty(),
+        "multi-chunk blob must have an outboard"
+    );
 
     // Install the virtual entry from the received outboard.
     store2
@@ -407,9 +487,7 @@ async fn two_nodes_get_virtual_blob_served_from_outboard() -> TestResult<()> {
     // node C must be able to GET the blob from node B.
     virtuals2.register(
         "test-provider",
-        Arc::new(TestBytesProvider {
-            data: data.clone(),
-        }),
+        Arc::new(TestBytesProvider { data: data.clone() }),
     )?;
     store3.remote().fetch(conn_c_b, hash).await?;
     let got = store3.get_bytes(hash).await?;
@@ -424,8 +502,8 @@ async fn two_nodes_get_virtual_blob_served_from_outboard() -> TestResult<()> {
 /// canonical outboard file location - and all three serve correctly.
 #[tokio::test]
 async fn add_virtual_with_outboard_fs_placement() -> TestResult<()> {
-    use std::sync::Arc;
     use crate::store::virtual_blob::{DynVirtualSource, Provider};
+    use std::sync::Arc;
 
     struct FixedProvider(Bytes);
     impl Provider for FixedProvider {

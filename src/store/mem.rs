@@ -291,7 +291,8 @@ impl Actor {
             }) => {
                 // The outboard must match the size: one 64-byte hash pair per
                 // non-root tree node, and nothing at all for a single-chunk blob.
-                let res = if outboard.len() as u64 != BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
+                let res = if outboard.len() as u64
+                    != BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
                 {
                     Err(api::Error::io(
                         io::ErrorKind::InvalidInput,
@@ -299,18 +300,21 @@ impl Actor {
                     ))
                 } else {
                     let entry = self.get_or_create_entry(hash);
-                    let modified = entry.0.state.send_if_modified(|state: &mut BaoFileStorage| {
-                        // Stored data takes precedence over a virtual source.
-                        if matches!(state.deref(), BaoFileStorage::Complete(_)) {
-                            return false;
-                        }
-                        *state = BaoFileStorage::Virtual(VirtualStorage::new(
-                            outboard.clone(),
-                            size,
-                            provider.clone(),
-                        ));
-                        true
-                    });
+                    let modified = entry
+                        .0
+                        .state
+                        .send_if_modified(|state: &mut BaoFileStorage| {
+                            // Stored data takes precedence over a virtual source.
+                            if matches!(state.deref(), BaoFileStorage::Complete(_)) {
+                                return false;
+                            }
+                            *state = BaoFileStorage::Virtual(VirtualStorage::new(
+                                outboard.clone(),
+                                size,
+                                provider.clone(),
+                            ));
+                            true
+                        });
                     if modified {
                         Ok(())
                     } else {
