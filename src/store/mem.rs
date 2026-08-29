@@ -39,15 +39,18 @@ use tokio::sync::watch;
 use tracing::{error, info, instrument, trace, Instrument};
 
 use super::util::{BaoTreeSender, PartialMemStorage};
+use super::virtual_blob::{DynReadBytesAt, VirtualProviders};
 use crate::{
     api::{
         self,
         blobs::{AddProgressItem, Bitfield, BlobStatus, ExportProgressItem},
         proto::{
-            BatchMsg, BatchResponse, BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, Command,
-            CreateTagMsg, CreateTagRequest, CreateTempTagMsg, DeleteBlobsMsg, DeleteTagsMsg,
-            DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
+            AddVirtualMsg, AddVirtualRequest, AddVirtualWithOutboardMsg,
+            AddVirtualWithOutboardRequest, BatchMsg, BatchResponse, BlobDeleteRequest,
+            BlobStatusMsg, BlobStatusRequest, BuildOutboardMsg, Command, CreateTagMsg,
+            CreateTagRequest, CreateTempTagMsg, DeleteBlobsMsg, DeleteTagsMsg, DeleteTagsRequest,
+            ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem,
+            ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
             ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
             ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
@@ -107,7 +110,19 @@ impl Default for MemStore {
 enum TaskResult {
     Unit(()),
     Import(Result<ImportEntry>),
+    BuildOutboard(Result<BuildOutboardResult>),
     Scope(Scope),
+}
+
+/// The result of [`build_outboard`]: the computed hash, the outboard bytes, the
+/// total size, and the channels needed to finish registration.
+struct BuildOutboardResult {
+    hash: Hash,
+    outboard: Bytes,
+    size: u64,
+    scope: Scope,
+    format: BlobFormat,
+    tx: mpsc::Sender<AddProgressItem>,
 }
 
 impl MemStore {
@@ -119,8 +134,9 @@ impl MemStore {
         Self::new_with_opts(Options::default())
     }
 
-    pub fn new_with_opts(opts: Options) -> Self {
+    pub fn new_with_virtuals(opts: Options) -> (Self, VirtualProviders) {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
+        let virtuals = VirtualProviders::new();
         n0_future::task::spawn(
             Actor {
                 commands: receiver,
@@ -134,6 +150,7 @@ impl MemStore {
                 temp_tags: Default::default(),
                 protected: Default::default(),
                 idle_waiters: Default::default(),
+                virtuals: virtuals.clone(),
             }
             .run(),
         );
@@ -143,7 +160,11 @@ impl MemStore {
             n0_future::task::spawn(run_gc(store.deref().clone(), gc_config));
         }
 
-        store
+        (store, virtuals)
+    }
+
+    pub fn new_with_opts(opts: Options) -> Self {
+        Self::new_with_virtuals(opts).0
     }
 }
 
@@ -158,6 +179,8 @@ struct Actor {
     // idle waiters
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     protected: HashSet<Hash>,
+    /// Live providers for virtual blobs, keyed by provider name.
+    virtuals: VirtualProviders,
 }
 
 impl Actor {
@@ -216,6 +239,93 @@ impl Actor {
             Command::ImportByteStream(ImportByteStreamMsg { inner, tx, rx, .. }) => {
                 self.spawn(import_byte_stream(inner.scope, inner.format, rx, tx));
             }
+            Command::BuildOutboard(BuildOutboardMsg { inner, tx, rx, .. }) => {
+                self.spawn(build_outboard(inner.scope, inner.format, rx, tx));
+            }
+            Command::AddVirtual(AddVirtualMsg {
+                inner: AddVirtualRequest { hash, provider },
+                tx,
+                ..
+            }) => match self.get(&hash) {
+                Some(entry) => {
+                    let modified = entry
+                        .0
+                        .state
+                        .send_if_modified(|state: &mut BaoFileStorage| {
+                            if let BaoFileStorage::Virtual(v) = state {
+                                v.provider = provider.clone();
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    let res = if modified {
+                        Ok(())
+                    } else {
+                        Err(api::Error::io(
+                            io::ErrorKind::InvalidInput,
+                            "entry is not virtual",
+                        ))
+                    };
+                    tx.send(res).await.ok();
+                }
+                None => {
+                    tx.send(Err(api::Error::io(
+                        io::ErrorKind::NotFound,
+                        "no virtual entry for hash",
+                    )))
+                    .await
+                    .ok();
+                }
+            },
+            Command::AddVirtualWithOutboard(AddVirtualWithOutboardMsg {
+                inner:
+                    AddVirtualWithOutboardRequest {
+                        hash,
+                        size,
+                        outboard,
+                        provider,
+                    },
+                tx,
+                ..
+            }) => {
+                // The outboard must match the size: one 64-byte hash pair per
+                // non-root tree node, and nothing at all for a single-chunk blob.
+                let res = if outboard.len() as u64
+                    != BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
+                {
+                    Err(api::Error::io(
+                        io::ErrorKind::InvalidInput,
+                        "outboard length does not match blob size",
+                    ))
+                } else {
+                    let entry = self.get_or_create_entry(hash);
+                    let modified = entry
+                        .0
+                        .state
+                        .send_if_modified(|state: &mut BaoFileStorage| {
+                            // Stored data takes precedence over a virtual source.
+                            if matches!(state.deref(), BaoFileStorage::Complete(_)) {
+                                return false;
+                            }
+                            *state = BaoFileStorage::Virtual(VirtualStorage::new(
+                                outboard.clone(),
+                                size,
+                                provider.clone(),
+                            ));
+                            true
+                        });
+                    if modified {
+                        Ok(())
+                    } else {
+                        Err(api::Error::io(
+                            io::ErrorKind::InvalidInput,
+                            "entry already exists as stored data",
+                        ))
+                    }
+                };
+                tx.send(res).await.ok();
+            }
             Command::ImportPath(cmd) => {
                 self.spawn(import_path(cmd));
             }
@@ -225,7 +335,8 @@ impl Actor {
                 ..
             }) => {
                 let entry = self.get(&hash);
-                self.spawn(export_bao(entry, ranges, tx))
+                let virtuals = self.virtuals.clone();
+                self.spawn(export_bao(entry, ranges, tx, virtuals))
             }
             Command::ExportPath(cmd) => {
                 let entry = self.get(&cmd.hash);
@@ -477,6 +588,47 @@ impl Actor {
         import_data.tx.send(AddProgressItem::Done(tt)).await.ok();
     }
 
+    /// Finish a [`build_outboard`] task: store the computed outboard as a
+    /// virtual entry (no data) and protect it with a temp tag.
+    ///
+    /// If an entry already exists as `Complete` or `Virtual`, it is left
+    /// untouched (store-before-virtual precedence).
+    async fn finish_build_outboard(&mut self, res: Result<BuildOutboardResult>) {
+        let r = match res {
+            Ok(r) => r,
+            Err(e) => {
+                error!("build_outboard failed: {e}");
+                return;
+            }
+        };
+        let entry = self.get_or_create_entry(r.hash);
+        entry
+            .0
+            .state
+            .send_if_modified(|state: &mut BaoFileStorage| {
+                // Only convert a fresh or in-progress Partial entry. A Complete
+                // entry (data already stored) or an existing Virtual entry is left
+                // untouched: stored data takes precedence over a virtual source.
+                if matches!(state.deref(), BaoFileStorage::Partial(_)) {
+                    *state = BaoFileStorage::Virtual(VirtualStorage::new(
+                        r.outboard.clone(),
+                        r.size,
+                        String::new(),
+                    ));
+                    return true;
+                }
+                false
+            });
+        let tt = self.temp_tags.create(
+            r.scope,
+            HashAndFormat {
+                hash: r.hash,
+                format: r.format,
+            },
+        );
+        r.tx.send(AddProgressItem::Done(tt)).await.ok();
+    }
+
     fn log_task_result(&self, res: Result<TaskResult, JoinError>) -> Option<TaskResult> {
         match res {
             Ok(x) => Some(x),
@@ -511,6 +663,9 @@ impl Actor {
                     match res {
                         TaskResult::Import(res) => {
                             self.finish_import(res).await;
+                        }
+                        TaskResult::BuildOutboard(res) => {
+                            self.finish_build_outboard(res).await;
                         }
                         TaskResult::Scope(scope) => {
                             self.temp_tags.end_scope(scope);
@@ -685,6 +840,7 @@ async fn export_bao(
     entry: Option<BaoFileHandle>,
     ranges: ChunkRanges,
     mut sender: mpsc::Sender<EncodedItem>,
+    virtuals: VirtualProviders,
 ) {
     let Some(entry) = entry else {
         let err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, "hash not found"));
@@ -692,12 +848,95 @@ async fn export_bao(
         return;
     };
     tracing::Span::current().record("hash", tracing::field::display(entry.hash));
-    let data = entry.data_reader();
     let outboard = entry.outboard_reader();
-    let tx = BaoTreeSender::new(&mut sender);
-    traverse_ranges_validated(data, outboard, &ranges, tx)
-        .await
-        .ok();
+    let is_virtual = matches!(entry.0.state.borrow().deref(), BaoFileStorage::Virtual(_));
+    if is_virtual {
+        // Serve a virtual entry via the provider named in the entry. The
+        // outboard comes from the entry; the data comes from the provider via
+        // `VirtualProviders`. An entry whose provider is not registered (or
+        // whose provider has no data for this hash) is served as not found.
+        let provider_name = match entry.0.state.borrow().deref() {
+            BaoFileStorage::Virtual(v) => v.provider.clone(),
+            _ => unreachable!("checked above"),
+        };
+        let Some(provider) = virtuals.get(&provider_name) else {
+            let err = EncodeError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no provider registered for virtual entry",
+            ));
+            sender.send(err.into()).await.ok();
+            return;
+        };
+        let Some(source) = provider.reader_for(&entry.hash) else {
+            let err = EncodeError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                "provider has no data for virtual entry",
+            ));
+            sender.send(err.into()).await.ok();
+            return;
+        };
+        let tx = BaoTreeSender::new(&mut sender);
+        traverse_ranges_validated(DynReadBytesAt(source), outboard, &ranges, tx)
+            .await
+            .ok();
+    } else {
+        let data = entry.data_reader();
+        let tx = BaoTreeSender::new(&mut sender);
+        traverse_ranges_validated(data, outboard, &ranges, tx)
+            .await
+            .ok();
+    }
+}
+
+/// Build the BLAKE3 outboard for a stream of bytes without storing the data.
+///
+/// The bytes are accumulated, the outboard and root hash are computed, and the
+/// data is then discarded. The result is stored as a virtual entry by
+/// [`Actor::finish_build_outboard`].
+async fn build_outboard(
+    scope: Scope,
+    format: BlobFormat,
+    mut rx: mpsc::Receiver<ImportByteStreamUpdate>,
+    tx: mpsc::Sender<AddProgressItem>,
+) -> Result<BuildOutboardResult> {
+    let mut res = Vec::new();
+    loop {
+        match rx.recv().await {
+            Ok(Some(ImportByteStreamUpdate::Bytes(data))) => {
+                res.extend_from_slice(&data);
+                tx.send(AddProgressItem::CopyProgress(res.len() as u64))
+                    .await?;
+            }
+            Ok(Some(ImportByteStreamUpdate::Done)) => break,
+            Ok(None) => {
+                return Err(api::Error::io(
+                    io::ErrorKind::UnexpectedEof,
+                    "byte stream ended unexpectedly",
+                )
+                .into());
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+    }
+    tx.send(AddProgressItem::Size(res.len() as u64)).await?;
+    tx.send(AddProgressItem::CopyDone).await?;
+    let outboard = PreOrderMemOutboard::create(&res, IROH_BLOCK_SIZE);
+    let hash: Hash = outboard.root.into();
+    let size = res.len() as u64;
+    let outboard_bytes: Bytes = outboard.data.into();
+    // The data is intentionally not retained; a virtual entry stores only the
+    // outboard and is served from a registered live data source.
+    drop(res);
+    Ok(BuildOutboardResult {
+        hash,
+        outboard: outboard_bytes,
+        size,
+        scope,
+        format,
+        tx,
+    })
 }
 
 #[instrument(skip_all, fields(hash = %entry.hash.fmt_short()))]
@@ -906,6 +1145,32 @@ struct State {
 pub enum BaoFileStorage {
     Partial(PartialMemStorage),
     Complete(CompleteStorage),
+    /// A virtual entry: the outboard is stored, but the data is not. The data
+    /// is served on demand by the provider named in the entry, registered in
+    /// [`VirtualProviders`].
+    Virtual(VirtualStorage),
+}
+
+/// Stored outboard for a virtual blob, with no data.
+#[derive(Debug, Clone)]
+pub struct VirtualStorage {
+    pub(crate) outboard: Bytes,
+    pub(crate) size: u64,
+    /// The name of the provider that serves this entry's data.
+    pub(crate) provider: String,
+}
+
+impl VirtualStorage {
+    pub fn new(outboard: Bytes, size: u64, provider: String) -> Self {
+        Self {
+            outboard,
+            size,
+            provider,
+        }
+    }
+    pub fn size(&self) -> u64 {
+        self.size
+    }
 }
 
 impl BaoFileStorage {
@@ -914,6 +1179,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.bitfield.clone(),
             Self::Complete(entry) => Bitfield::complete(entry.size()),
+            Self::Virtual(entry) => Bitfield::complete(entry.size()),
         }
     }
 }
@@ -936,6 +1202,16 @@ impl BaoFileHandle {
             size: SizeInfo::default(),
             bitfield: Bitfield::empty(),
         }));
+        Self(Arc::new(BaoFileHandleInner { state, hash }))
+    }
+
+    /// Create a virtual entry handle: outboard stored, no data.
+    pub fn new_virtual(hash: Hash, outboard: Bytes, size: u64) -> Self {
+        let (state, _) = watch::channel(BaoFileStorage::Virtual(VirtualStorage::new(
+            outboard,
+            size,
+            String::new(),
+        )));
         Self(Arc::new(BaoFileHandleInner { state, hash }))
     }
 
@@ -978,6 +1254,10 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.data.as_ref(),
             Self::Complete(entry) => &entry.data,
+            // A virtual entry has no stored data; it is served from a live
+            // source. This is only reached via `DataReader`, which is not used
+            // for virtual entries (see `export_bao`).
+            Self::Virtual(_) => &[],
         }
     }
 
@@ -985,6 +1265,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.outboard.as_ref(),
             Self::Complete(entry) => &entry.outboard,
+            Self::Virtual(entry) => &entry.outboard,
         }
     }
 
@@ -992,6 +1273,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.current_size(),
             Self::Complete(entry) => entry.size(),
+            Self::Virtual(entry) => entry.size(),
         }
     }
 }
@@ -1087,10 +1369,10 @@ impl BaoFileStorageSubscriber {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::store::virtual_blob::{DynVirtualSource, Provider};
     use n0_future::StreamExt;
     use testresult::TestResult;
-
-    use super::*;
 
     #[tokio::test]
     async fn smoke() -> TestResult<()> {
@@ -1122,6 +1404,142 @@ mod tests {
             .await?;
         assert_eq!(exported, exported2);
 
+        Ok(())
+    }
+
+    /// A provider that serves a fixed set of bytes for any hash.
+    #[derive(Clone)]
+    struct TestProvider {
+        data: Bytes,
+    }
+
+    impl TestProvider {
+        fn new(data: Bytes) -> Self {
+            Self { data }
+        }
+    }
+
+    impl Provider for TestProvider {
+        fn reader_for(&self, _hash: &Hash) -> Option<DynVirtualSource> {
+            Some(Arc::new(self.data.clone()))
+        }
+    }
+
+    /// A virtual blob: build the outboard from a stream without storing data,
+    /// associate a provider, register it, and serve it. The served bytes must
+    /// be byte-identical to a normally-stored blob of the same content, and
+    /// must round-trip back to the original data through `import_bao`.
+    #[tokio::test]
+    async fn virtual_blob_roundtrip() -> TestResult<()> {
+        use std::sync::Arc;
+
+        let data = Bytes::from(
+            (0..1024 * 64)
+                .map(|i| (i & 0xff) as u8)
+                .collect::<Vec<u8>>(),
+        );
+        let (store, virtuals) = MemStore::new_with_virtuals(Options::default());
+
+        // Build the outboard from a stream of the data, without storing it.
+        let stream = n0_future::stream::iter(vec![Ok::<_, io::Error>(data.clone())]);
+        let tt = store.build_outboard(stream).await.temp_tag().await?;
+        let hash = tt.hash();
+
+        // An entry with no provider declared is served as not found.
+        let err: crate::api::Error = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await
+            .unwrap_err()
+            .into();
+        assert!(
+            matches!(err, crate::api::Error::Io(e) if e.kind() == io::ErrorKind::NotFound),
+            "virtual entry without a provider must serve as not found"
+        );
+
+        // Declaring a provider that is not registered is still not found.
+        store.add_virtual(hash, "test-provider").await?;
+        let err: crate::api::Error = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await
+            .unwrap_err()
+            .into();
+        assert!(
+            matches!(err, crate::api::Error::Io(e) if e.kind() == io::ErrorKind::NotFound),
+            "virtual entry with an unregistered provider must serve as not found"
+        );
+
+        // Register the provider and serve.
+        virtuals.register("test-provider", Arc::new(TestProvider::new(data.clone())))?;
+        let exported_virtual = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await?;
+
+        // Serving the virtual entry must match a normal stored blob exactly.
+        let store2 = MemStore::new();
+        let tt2 = store2.add_bytes(data.clone()).temp_tag().await?;
+        assert_eq!(tt2.hash(), hash, "hashes must match for identical content");
+        let exported_stored = store2
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await?;
+        assert_eq!(
+            exported_virtual, exported_stored,
+            "virtual export must be byte-identical to stored export"
+        );
+
+        // The encoded bytes round-trip through import_bao back to the data.
+        let store3 = MemStore::new();
+        store3
+            .import_bao_bytes(hash, ChunkRanges::all(), exported_virtual.clone())
+            .await?;
+        let got = store3.get_bytes(hash).await?;
+        assert_eq!(got, data, "round-tripped data must match the original");
+
+        Ok(())
+    }
+    /// A stored (Complete) blob must win over a virtual entry for the same hash.
+    ///
+    /// Storing a blob then building an outboard for the same hash is a no-op
+    /// on the entry (it stays `Complete`), so attaching a provider correctly
+    /// errors and serving uses the stored data.
+    #[tokio::test]
+    async fn virtual_entry_does_not_shadow_stored_blob() -> TestResult<()> {
+        let data = Bytes::from(
+            (0..1024 * 32)
+                .map(|i| (i & 0xff) as u8)
+                .collect::<Vec<u8>>(),
+        );
+        let (store, _virtuals) = MemStore::new_with_virtuals(Options::default());
+
+        // Store the blob normally (Complete).
+        let tt = store.add_bytes(data.clone()).temp_tag().await?;
+        let hash = tt.hash();
+
+        // build_outboard for the same hash is a no-op on the entry, which
+        // stays Complete (store-before-virtual precedence).
+        let stream = n0_future::stream::iter(vec![Ok::<_, io::Error>(data.clone())]);
+        let _tt2 = store.build_outboard(stream).await.temp_tag().await?;
+
+        // The entry is not virtual, so a provider cannot be attached.
+        assert!(
+            store.add_virtual(hash, "test-provider").await.is_err(),
+            "add_virtual must fail for a stored (non-virtual) entry"
+        );
+
+        // Serving uses the stored data.
+        let exported = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await?;
+        let store2 = MemStore::new();
+        store2
+            .import_bao_bytes(hash, ChunkRanges::all(), exported)
+            .await?;
+        let got = store2.get_bytes(hash).await?;
+        assert_eq!(got, data, "stored data must be served");
         Ok(())
     }
 }

@@ -89,6 +89,8 @@ impl fmt::Debug for Set {
     }
 }
 
+/// Modification method: associate a virtual entry with a provider name.
+pub use crate::api::proto::AddVirtualMsg;
 /// Modification method: create a new unique tag and set it to a value.
 pub use crate::api::proto::CreateTagMsg;
 /// Modification method: remove a range of tags.
@@ -135,6 +137,7 @@ pub enum ReadWriteCommand {
     Set(Set),
     DeleteBlobw(DeleteBlobsMsg),
     SetTag(SetTagMsg),
+    AddVirtual(AddVirtualMsg),
     DeleteTags(DeleteTagsMsg),
     RenameTag(RenameTagMsg),
     CreateTag(CreateTagMsg),
@@ -154,6 +157,7 @@ impl ReadWriteCommand {
             Self::Set(x) => Some(&x.span),
             Self::DeleteBlobw(x) => Some(&x.span),
             Self::SetTag(x) => x.parent_span_opt(),
+            Self::AddVirtual(x) => x.parent_span_opt(),
             Self::DeleteTags(x) => x.parent_span_opt(),
             Self::RenameTag(x) => x.parent_span_opt(),
             Self::CreateTag(x) => x.parent_span_opt(),

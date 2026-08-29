@@ -168,7 +168,7 @@ pub enum EntryState<I = ()> {
         outboard_location: OutboardLocation<I>,
     },
     /// Partial entries are entries for which we know the hash, but don't have
-    /// all the data. They are created when syncing from somewhere else by hash.
+    /// all the data. They are created when syncing from somewhere by hash.
     ///
     /// As such they are always owned. There is also no inline storage for them.
     /// Non short lived partial entries always live in the file system, and for
@@ -180,6 +180,21 @@ pub enum EntryState<I = ()> {
         /// E.g. a giant file where we just requested the last chunk.
         size: Option<u64>,
     },
+    /// A virtual entry: the outboard is stored, but the data is not. The data
+    /// is served on demand by a provider registered in
+    /// [`crate::store::virtual_blob::VirtualProviders`] under the entry's
+    /// provider name.
+    Virtual {
+        /// Location of the outboard.
+        outboard_location: OutboardLocation<I>,
+        /// The total size of the (unstored) data.
+        size: u64,
+        /// The name of the provider that serves this entry's data.
+        ///
+        /// Set via [`crate::api::blobs::Blobs::add_virtual`]. Empty until then;
+        /// an entry without a provider name is served as not found.
+        provider: String,
+    },
 }
 
 impl<I> EntryState<I> {
@@ -189,6 +204,11 @@ impl<I> EntryState<I> {
 
     pub fn is_partial(&self) -> bool {
         matches!(self, Self::Partial { .. })
+    }
+
+    /// True for a virtual entry (outboard stored, data served from a live source).
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, Self::Virtual { .. })
     }
 }
 
@@ -210,6 +230,14 @@ impl<I: AsRef<[u8]>> EntryState<I> {
                 outboard_location.fmt_short()
             ),
             Self::Partial { size } => format!("Partial {{ size: {size:?} }}"),
+            Self::Virtual {
+                outboard_location,
+                size,
+                provider,
+            } => format!(
+                "Virtual {{ outboard: {}, size: {size}, provider: {provider:?} }}",
+                outboard_location.fmt_short()
+            ),
         }
     }
 }
@@ -263,6 +291,15 @@ impl EntryState {
                 };
                 Ok(Self::Partial { size })
             }
+            // A complete entry has real data, which always wins over a virtual
+            // (data-less) entry.
+            (a @ Self::Complete { .. }, Self::Virtual { .. }) => Ok(a),
+            (Self::Virtual { .. }, b @ Self::Complete { .. }) => Ok(b),
+            // A virtual entry is preferable to a partial one (it is servable).
+            (a @ Self::Virtual { .. }, Self::Partial { .. }) => Ok(a),
+            (Self::Partial { .. }, b @ Self::Virtual { .. }) => Ok(b),
+            // Two virtual entries for the same hash are equivalent; keep `old`.
+            (a @ Self::Virtual { .. }, Self::Virtual { .. }) => Ok(a),
         }
     }
 }

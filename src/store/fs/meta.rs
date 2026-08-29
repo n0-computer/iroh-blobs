@@ -20,9 +20,9 @@ use crate::{
         self,
         blobs::BlobStatus,
         proto::{
-            BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            AddVirtualMsg, AddVirtualRequest, BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest,
+            ClearProtectedMsg, CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg,
+            ListRequest, ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -223,6 +223,18 @@ fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
             }
         }
         EntryState::Partial { size } => EntryState::Partial { size },
+        EntryState::Virtual {
+            outboard_location,
+            size,
+            provider,
+        } => {
+            let outboard_location = load_outboard(tables, outboard_location, &hash)?;
+            EntryState::Virtual {
+                outboard_location,
+                size,
+                provider,
+            }
+        }
     };
     tx.send(GetResult {
         state: Ok(Some(entry)),
@@ -323,6 +335,7 @@ async fn handle_get_blob_status(
                 DataLocation::External(_, size) => BlobStatus::Complete { size },
             },
             EntryState::Partial { size } => BlobStatus::Partial { size },
+            EntryState::Virtual { size, .. } => BlobStatus::Complete { size },
         },
         None => BlobStatus::NotFound,
     };
@@ -399,6 +412,22 @@ fn handle_update(
             )
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
+        EntryState::Virtual {
+            outboard_location,
+            size,
+            provider,
+        } => {
+            let (outboard_location, outboard) = outboard_location.split_inline_data();
+            (
+                EntryState::Virtual {
+                    outboard_location,
+                    size,
+                    provider,
+                },
+                None,
+                outboard,
+            )
+        }
     };
     let state = match old_entry_opt {
         Some(old) => {
@@ -458,6 +487,22 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
             )
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
+        EntryState::Virtual {
+            outboard_location,
+            size,
+            provider,
+        } => {
+            let (outboard_location, outboard) = outboard_location.split_inline_data();
+            (
+                EntryState::Virtual {
+                    outboard_location,
+                    size,
+                    provider,
+                },
+                None,
+                outboard,
+            )
+        }
     };
     tables
         .blobs
@@ -614,6 +659,20 @@ impl Actor {
                             ],
                         );
                     }
+                    EntryState::Virtual {
+                        outboard_location, ..
+                    } => {
+                        trace!("delete {hash}: currently virtual. will be deleted.");
+                        match outboard_location {
+                            OutboardLocation::Inline(_) => {
+                                tables.inline_outboard.remove(hash)?;
+                            }
+                            OutboardLocation::Owned => {
+                                tables.ftx.delete(hash, [BaoFilePart::Outboard]);
+                            }
+                            OutboardLocation::NotNeeded => {}
+                        }
+                    }
                 }
             }
         }
@@ -699,6 +758,54 @@ impl Actor {
         Ok(())
     }
 
+    /// Set the provider name of a virtual entry (see
+    /// [`crate::api::blobs::Blobs::add_virtual`]).
+    async fn add_virtual(
+        protected: &mut HashSet<Hash>,
+        tables: &mut Tables<'_>,
+        cmd: AddVirtualMsg,
+    ) -> ActorResult<()> {
+        trace!("{cmd:?}");
+        let AddVirtualMsg {
+            inner: AddVirtualRequest { hash, provider },
+            tx,
+            ..
+        } = cmd;
+        let entry = match tables.blobs.get(hash)?.map(|e| e.value()) {
+            Some(EntryState::Virtual {
+                outboard_location,
+                size,
+                ..
+            }) => EntryState::Virtual {
+                outboard_location,
+                size,
+                provider,
+            },
+            Some(_) => {
+                tx.send(Err(api::Error::io(
+                    io::ErrorKind::InvalidInput,
+                    "entry is not virtual",
+                )))
+                .await
+                .ok();
+                return Ok(());
+            }
+            None => {
+                tx.send(Err(api::Error::io(
+                    io::ErrorKind::NotFound,
+                    "no virtual entry for hash",
+                )))
+                .await
+                .ok();
+                return Ok(());
+            }
+        };
+        protected.insert(hash);
+        tables.blobs.insert(hash, entry)?;
+        tx.send(Ok(())).await.ok();
+        Ok(())
+    }
+
     async fn handle_readwrite(
         protected: &mut HashSet<Hash>,
         tables: &mut Tables<'_>,
@@ -716,6 +823,7 @@ impl Actor {
             ReadWriteCommand::Set(cmd) => handle_set(cmd, protected, tables),
             ReadWriteCommand::DeleteBlobw(cmd) => Self::delete(protected, tables, cmd).await,
             ReadWriteCommand::SetTag(cmd) => Self::set_tag(tables, cmd).await,
+            ReadWriteCommand::AddVirtual(cmd) => Self::add_virtual(protected, tables, cmd).await,
             ReadWriteCommand::CreateTag(cmd) => Self::create_tag(tables, cmd).await,
             ReadWriteCommand::DeleteTags(cmd) => Self::delete_tags(tables, cmd).await,
             ReadWriteCommand::RenameTag(cmd) => Self::rename_tag(tables, cmd).await,

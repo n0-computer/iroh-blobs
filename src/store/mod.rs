@@ -13,6 +13,8 @@ pub mod mem;
 pub mod readonly_mem;
 mod test;
 pub(crate) mod util;
+/// Live data sources for virtual blobs.
+pub mod virtual_blob;
 
 /// Block size used by iroh, 2^4*1024 = 16KiB
 pub const IROH_BLOCK_SIZE: BlockSize = BlockSize::from_chunk_log(4);
