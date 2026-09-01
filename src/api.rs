@@ -30,11 +30,7 @@ pub mod tags;
 use crate::{api::proto::WaitIdleRequest, provider::events::ProgressError};
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
-/// The local rpc client type backing an in-process [`Store`].
-///
-/// Public so that external crates can implement custom store backends:
-/// serve the [`proto::Request`] protocol on a local channel and wrap the
-/// client end with [`Store::local`].
+/// The type of the local rpc client backing a [`Store`].
 pub type ApiClient = irpc::Client<proto::Request>;
 
 #[allow(missing_docs)]
@@ -301,17 +297,7 @@ impl Store {
         Ok(())
     }
 
-    /// Create a store API from a custom local rpc client.
-    ///
-    /// This is the extension point for custom store backends implemented
-    /// outside of this crate (e.g. browser storage): spawn an actor serving
-    /// the [`proto::Request`] protocol and wrap the client end:
-    ///
-    /// ```ignore
-    /// let (tx, rx) = tokio::sync::mpsc::channel(32);
-    /// // spawn your actor on `rx` ...
-    /// let store = iroh_blobs::api::Store::local(tx.into());
-    /// ```
+    /// Create a store from a custom local rpc client.
     pub fn local(client: ApiClient) -> Self {
         Self { client }
     }
