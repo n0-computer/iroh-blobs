@@ -30,7 +30,8 @@ pub mod tags;
 use crate::{api::proto::WaitIdleRequest, provider::events::ProgressError};
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
-pub(crate) type ApiClient = irpc::Client<proto::Request>;
+/// The type of the local rpc client backing a [`Store`].
+pub type ApiClient = irpc::Client<proto::Request>;
 
 #[allow(missing_docs)]
 #[non_exhaustive]
@@ -296,8 +297,13 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn from_sender(client: ApiClient) -> Self {
+    /// Create a store from a custom local rpc client.
+    pub fn local(client: ApiClient) -> Self {
         Self { client }
+    }
+
+    pub(crate) fn from_sender(client: ApiClient) -> Self {
+        Self::local(client)
     }
 
     pub(crate) fn ref_from_sender(client: &ApiClient) -> &Self {
