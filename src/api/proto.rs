@@ -38,7 +38,11 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod bitfield;
 pub use bitfield::Bitfield;
 
-use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
+use crate::{
+    store::{util::Tag, virtual_blob::SyncReader},
+    util::temp_tag::TempTag,
+    BlobFormat, Hash, HashAndFormat,
+};
 
 #[allow(dead_code)]
 pub(crate) trait HashSpecific {
@@ -73,6 +77,12 @@ impl HashSpecific for ExportRangesMsg {
     }
 }
 
+impl HashSpecific for SyncReaderMsg {
+    fn hash(&self) -> crate::Hash {
+        self.inner.hash
+    }
+}
+
 impl HashSpecific for ExportPathMsg {
     fn hash(&self) -> crate::Hash {
         self.inner.hash
@@ -102,6 +112,8 @@ pub enum Request {
     ExportBao(ExportBaoRequest),
     #[rpc(tx = mpsc::Sender<ExportRangesItem>)]
     ExportRanges(ExportRangesRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<Option<SyncReader>>>)]
+    SyncReader(SyncReaderRequest),
     #[rpc(tx = mpsc::Sender<Bitfield>)]
     Observe(ObserveRequest),
     #[rpc(tx = oneshot::Sender<BlobStatus>)]
@@ -237,6 +249,16 @@ pub struct ExportBaoRequest {
 pub struct ExportRangesRequest {
     pub hash: Hash,
     pub ranges: RangeSet2<u64>,
+}
+
+/// Acquire a synchronous random-access reader over the stored data of an entry.
+///
+/// Served only for entries whose data is complete. The reply carries the reader
+/// plus the entry's length in octets. The reply is a local-only value; see
+/// [`SyncReader`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncReaderRequest {
+    pub hash: Hash,
 }
 
 /// Export a file to a target path.

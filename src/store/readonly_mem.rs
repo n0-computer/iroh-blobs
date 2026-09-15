@@ -10,6 +10,7 @@ use std::{
     io::{self, Write},
     ops::Deref,
     path::PathBuf,
+    sync::Arc,
 };
 
 use bao_tree::{
@@ -44,7 +45,11 @@ use crate::{
         ApiClient, TempTag,
     },
     protocol::ChunkRangesExt,
-    store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
+    store::{
+        mem::CompleteStorage,
+        virtual_blob::{DynVirtualSource, SyncReader},
+        IROH_BLOCK_SIZE,
+    },
     Hash,
 };
 
@@ -244,6 +249,19 @@ impl Actor {
             Command::ExportRanges(cmd) => {
                 let entry = self.data.get(&cmd.inner.hash).cloned();
                 self.tasks.spawn(export_ranges(cmd, entry));
+            }
+            Command::SyncReader(cmd) => {
+                // Entries in this store are complete by construction.
+                let res = match self.data.get(&cmd.inner.hash) {
+                    Some(entry) => {
+                        let reader: DynVirtualSource = Arc::new(entry.data.clone());
+                        Ok(Some(SyncReader::new(reader, entry.data.len() as u64)))
+                    }
+                    None => Ok(None),
+                };
+                self.tasks.spawn(async move {
+                    cmd.tx.send(res).await.ok();
+                });
             }
         }
         None

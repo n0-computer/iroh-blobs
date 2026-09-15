@@ -49,7 +49,7 @@ use super::{
         AddVirtualRequest, AddVirtualWithOutboardRequest, BatchResponse, BlobStatusRequest,
         BuildOutboardRequest, ClearProtectedRequest, CreateTempTagRequest, ExportBaoRequest,
         ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest, ImportBytesRequest,
-        ImportPathRequest, ListRequest, Scope,
+        ImportPathRequest, ListRequest, Scope, SyncReaderRequest,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -58,7 +58,7 @@ use super::{
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
     provider::events::ClientResult,
-    store::IROH_BLOCK_SIZE,
+    store::{virtual_blob::SyncReader, IROH_BLOCK_SIZE},
     util::{temp_tag::TempTag, RecvStreamAsyncStreamReader},
     BlobFormat, Hash, HashAndFormat,
 };
@@ -617,6 +617,40 @@ impl Blobs {
             BlobStatus::Complete { .. } => Ok(true),
             _ => Ok(false),
         }
+    }
+
+    /// Acquire a synchronous random-access reader over the stored data of a blob,
+    /// together with the blob's length in octets.
+    ///
+    /// Acquiring the reader is async, reading from it is not: the returned
+    /// reader reads straight from the store's storage for that hash and never
+    /// sends a message to the store actor. That makes it usable from code that
+    /// must not await - in particular from a [`ReadBytesAt`] implementation that
+    /// the store is already calling into, where awaiting would mean calling back
+    /// into the actor that is currently serving us.
+    ///
+    /// Returns `Ok(None)` if the blob is absent, or if its data is not complete:
+    /// a partially present blob has no stable contents to read, so a caller that
+    /// needs whole contents (e.g. to re-encode them) must not be handed one.
+    ///
+    /// The reader is independent of the store actor: it stays usable while the
+    /// caller holds it. It reads through to whatever the store has for that hash,
+    /// so if the entry is garbage collected concurrently, later reads fail with
+    /// an io error rather than returning stale data.
+    ///
+    /// Readers are local values and cannot be obtained from a remote store; see
+    /// [`SyncReader`].
+    ///
+    /// [`ReadBytesAt`]: bao_tree::io::mixed::ReadBytesAt
+    /// [`SyncReader`]: crate::store::virtual_blob::SyncReader
+    pub async fn sync_reader(&self, hash: impl Into<Hash>) -> RequestResult<Option<SyncReader>> {
+        let hash = hash.into();
+        // The empty blob is complete regardless of backend state, like in `status`.
+        if hash == Hash::EMPTY {
+            return Ok(Some(SyncReader::new(std::sync::Arc::new(Bytes::new()), 0)));
+        }
+        let msg = SyncReaderRequest { hash };
+        Ok(self.client.rpc(msg).await??)
     }
 
     #[allow(dead_code)]

@@ -35,6 +35,73 @@ use crate::Hash;
 /// A boxed, thread-safe live data source for a virtual blob.
 pub type DynVirtualSource = Arc<dyn ReadBytesAt + Send + Sync>;
 
+/// A synchronous random-access reader over the stored data of an entry, together
+/// with the entry's length in octets. Returned by
+/// [`Store::sync_reader`](crate::api::Store::sync_reader).
+///
+/// Reads are synchronous and go straight to the storage the store keeps for that
+/// hash; they never send a message to the store actor. That makes a reader usable
+/// from a [`ReadBytesAt`] implementation that the store is already calling into,
+/// where awaiting would mean re-entering the actor that is serving us.
+///
+/// A reader is a **local** value: it reads through the storage of the store that
+/// produced it, in this process. There is no meaningful way to serialize one, so
+/// the serde impls below deliberately fail. Asking a *remote* store for a reader
+/// is therefore an error rather than a silent lie, while local stores - which
+/// pass the value directly over an in-process channel - never serialize it.
+#[derive(Clone)]
+pub struct SyncReader {
+    reader: DynVirtualSource,
+    len: u64,
+}
+
+impl SyncReader {
+    /// Create a reader over `reader`, reporting `len` octets of data.
+    pub fn new(reader: DynVirtualSource, len: u64) -> Self {
+        Self { reader, len }
+    }
+
+    /// The length of the entry's stored data in octets.
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    /// Whether the entry's stored data is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl ReadBytesAt for SyncReader {
+    fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
+        self.reader.read_bytes_at(offset, size)
+    }
+}
+
+impl std::fmt::Debug for SyncReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncReader")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl serde::Serialize for SyncReader {
+    fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom(SYNC_READER_IS_LOCAL))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SyncReader {
+    fn deserialize<D: serde::Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+        Err(serde::de::Error::custom(SYNC_READER_IS_LOCAL))
+    }
+}
+
+/// Error text for attempts to move a [`SyncReader`] across a transport.
+const SYNC_READER_IS_LOCAL: &str =
+    "a sync reader reads a local store's storage and cannot be sent over a transport";
+
 /// A provider of data for virtual blobs.
 ///
 /// A provider is registered under an application-chosen name and can be asked

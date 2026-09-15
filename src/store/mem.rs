@@ -39,7 +39,7 @@ use tokio::sync::watch;
 use tracing::{error, info, instrument, trace, Instrument};
 
 use super::util::{BaoTreeSender, PartialMemStorage};
-use super::virtual_blob::{DynReadBytesAt, VirtualProviders};
+use super::virtual_blob::{DynReadBytesAt, DynVirtualSource, SyncReader, VirtualProviders};
 use crate::{
     api::{
         self,
@@ -54,7 +54,7 @@ use crate::{
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
             ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
             ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
+            SetTagRequest, ShutdownMsg, SyncDbMsg, SyncReaderMsg, SyncReaderRequest, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -517,6 +517,32 @@ impl Actor {
             Command::ExportRanges(cmd) => {
                 let entry = self.get(&cmd.hash);
                 self.spawn(export_ranges(cmd, entry));
+            }
+            Command::SyncReader(SyncReaderMsg {
+                inner: SyncReaderRequest { hash },
+                tx,
+                ..
+            }) => {
+                let res = match self.get(&hash) {
+                    Some(entry) => {
+                        let storage = entry.state.borrow();
+                        // A virtual entry reports a complete bitfield but stores no
+                        // data, so its reader would fail every read. Only stored,
+                        // complete data is handed out.
+                        let usable = storage.bitfield().is_complete()
+                            && !matches!(&*storage, BaoFileStorage::Virtual(_));
+                        let size = storage.size();
+                        drop(storage);
+                        if usable {
+                            let reader: DynVirtualSource = Arc::new(entry.data_reader());
+                            Ok(Some(SyncReader::new(reader, size)))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    None => Ok(None),
+                };
+                tx.send(res).await.ok();
             }
             Command::SyncDb(SyncDbMsg { tx, .. }) => {
                 tx.send(Ok(())).await.ok();

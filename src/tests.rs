@@ -372,6 +372,145 @@ async fn fetch_bao_to_ranged_window() -> TestResult<()> {
     Ok(())
 }
 
+/// `sync_reader` hands out a synchronous, random-access reader over an entry's
+/// stored data, together with its length. Reads must be byte-exact for windows
+/// that cross the store's internal 16 KiB leaf unit (`IROH_BLOCK_SIZE` =
+/// `BlockSize::from_chunk_log(4)`), must work for the mem and fs stores, and must
+/// report absence rather than hand out a reader with nothing stable behind it.
+///
+/// A virtual entry stores only an outboard, so it reports a complete bitfield
+/// while having no data to read: it must be reported as absent here, not handed
+/// out as a reader that fails every read.
+#[tokio::test]
+async fn sync_reader_reads_stored_data() -> TestResult<()> {
+    let mem = MemStore::new();
+    check_sync_reader(&mem, "mem").await?;
+
+    let testdir = tempfile::tempdir()?;
+    let fs = FsStore::load(testdir.path().join("db")).await?;
+    check_sync_reader(&fs, "fs").await?;
+
+    // The readonly store serves the same contract over its in-memory entries.
+    use bao_tree::io::mixed::ReadBytesAt as _;
+    let data = test_data(64 * 1024 + 7);
+    let readonly = crate::store::readonly_mem::ReadonlyMemStore::new([data.clone()]);
+    let reader = readonly
+        .sync_reader(Hash::new(data.clone()))
+        .await?
+        .expect("readonly store entry has a reader");
+    assert_eq!(&reader.read_bytes_at(0, data.len())?, &data);
+
+    Ok(())
+}
+
+/// Shared assertions for any local store kind.
+async fn check_sync_reader(store: &Store, kind: &str) -> TestResult<()> {
+    use bao_tree::io::mixed::ReadBytesAt;
+
+    // Three leaf units plus a partial tail: windows straddle leaf boundaries.
+    let size = 3 * 16 * 1024 + 517;
+    let data = test_data(size);
+    let hash = Hash::new(data.clone());
+    let _tt = store.blobs().add_bytes(data.clone()).await?;
+
+    let reader = store
+        .sync_reader(hash)
+        .await?
+        .unwrap_or_else(|| panic!("{kind}: a complete blob must have a reader"));
+    assert_eq!(reader.len(), size as u64, "{kind}: length must be reported");
+    assert!(!reader.is_empty(), "{kind}: non-empty blob");
+
+    let windows: [(u64, usize); 6] = [
+        (0, 4096),
+        (0, 16 * 1024),
+        // straddles the first leaf boundary
+        (16 * 1024 - 10, 20),
+        // a full leaf unit from a mid-leaf offset
+        (16 * 1024 + 7, 16 * 1024),
+        // the tail
+        (size as u64 - 517, 517),
+        // last byte alone
+        (size as u64 - 1, 1),
+    ];
+    for (offset, len) in windows {
+        let got = reader.read_bytes_at(offset, len)?;
+        assert_eq!(
+            got.as_ref(),
+            &data[offset as usize..offset as usize + len],
+            "{kind}: window ({offset}, {len}) must match the stored data"
+        );
+    }
+
+    // A read at or past the end must not invent data: either an empty read or an
+    // io error, never bytes from outside the blob.
+    for offset in [size as u64, size as u64 + 5] {
+        match reader.read_bytes_at(offset, 16) {
+            Ok(bytes) => assert!(
+                bytes.is_empty(),
+                "{kind}: read at {offset} past the end returned {} bytes",
+                bytes.len()
+            ),
+            Err(err) => assert_eq!(
+                err.kind(),
+                io::ErrorKind::UnexpectedEof,
+                "{kind}: unexpected error kind past the end"
+            ),
+        }
+    }
+
+    // A small blob exercises the inline path (fs keeps small data in the
+    // database rather than in a data file); a large one the file path.
+    let small = test_data(1024);
+    let small_hash = Hash::new(small.clone());
+    let _tt = store.blobs().add_bytes(small.clone()).await?;
+    let small_reader = store
+        .sync_reader(small_hash)
+        .await?
+        .unwrap_or_else(|| panic!("{kind}: a complete blob must have a reader"));
+    assert_eq!(
+        small_reader.len(),
+        small.len() as u64,
+        "{kind}: small length"
+    );
+    assert_eq!(
+        small_reader.read_bytes_at(0, small.len())?.as_ref(),
+        small.as_ref(),
+        "{kind}: small blob must read back exactly"
+    );
+
+    // Absent blob.
+    assert!(
+        store
+            .sync_reader(Hash::new(b"never stored"))
+            .await?
+            .is_none(),
+        "{kind}: absent blob has no reader"
+    );
+
+    // Virtual entry: complete bitfield, no stored data.
+    let virtual_data = test_data(64 * 1024);
+    let virtual_hash = Hash::new(virtual_data.clone());
+    let outboard = bao_tree::io::outboard::PreOrderMemOutboard::create(
+        &virtual_data,
+        crate::store::IROH_BLOCK_SIZE,
+    );
+    store
+        .blobs()
+        .add_virtual_with_outboard(
+            virtual_hash,
+            virtual_data.len() as u64,
+            outboard.data,
+            "sync-reader-test",
+        )
+        .await?;
+    assert!(
+        store.sync_reader(virtual_hash).await?.is_none(),
+        "{kind}: a virtual entry has no stored data to read"
+    );
+
+    Ok(())
+}
+
 /// A provider that serves a fixed set of bytes for any hash.
 #[derive(Clone)]
 struct TestBytesProvider {

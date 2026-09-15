@@ -108,6 +108,7 @@ use crate::{
             BatchMsg, BatchResponse, Bitfield, Command, CreateTempTagMsg, ExportBaoMsg,
             ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem, ExportRangesMsg,
             ExportRangesRequest, HashSpecific, ImportBaoMsg, ImportBaoRequest, ObserveMsg, Scope,
+            SyncReaderMsg,
         },
         ApiClient,
     },
@@ -122,7 +123,7 @@ use crate::{
         },
         gc::run_gc,
         util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
-        virtual_blob::{DynReadBytesAt, VirtualProviders},
+        virtual_blob::{DynReadBytesAt, DynVirtualSource, SyncReader, VirtualProviders},
         IROH_BLOCK_SIZE,
     },
     util::{
@@ -588,6 +589,10 @@ impl Actor {
                 trace!("{cmd:?}");
                 cmd.spawn(&mut self.handles, &mut self.tasks).await;
             }
+            Command::SyncReader(cmd) => {
+                trace!("{cmd:?}");
+                cmd.spawn(&mut self.handles, &mut self.tasks).await;
+            }
             Command::ImportBao(cmd) => {
                 trace!("{cmd:?}");
                 cmd.spawn(&mut self.handles, &mut self.tasks).await;
@@ -783,6 +788,45 @@ impl HashSpecificCommand for ObserveMsg {
         ctx.observe(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+}
+
+impl HashSpecificCommand for SyncReaderMsg {
+    async fn handle(self, ctx: HashContext) {
+        trace!("{self:?}");
+        ctx.load().await;
+        let res = sync_reader(&ctx);
+        self.tx.send(res).await.ok();
+    }
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let err = match arg {
+            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
+            SpawnArg::Dead => err_entity_dead(),
+            _ => unreachable!(),
+        };
+        self.tx.send(Err(api::Error::from(err))).await.ok();
+    }
+}
+
+/// Build a synchronous reader over the entry's stored data, plus its length.
+///
+/// Only a complete entry is served. The reader owns what it reads: either the
+/// inlined bytes, or a fresh handle to the canonical data file. The cheaper
+/// `DataReader` cannot be used here because it reads through the entity's live
+/// state, which is poisoned as soon as the per-hash context is released - and a
+/// reader handed to a caller outlives this command by design.
+fn sync_reader(ctx: &HashContext) -> api::Result<Option<SyncReader>> {
+    let storage = ctx.state.borrow();
+    let BaoFileStorage::Complete(complete) = &*storage else {
+        // Not (yet) complete, virtual (outboard only, no data), or gone.
+        return Ok(None);
+    };
+    let data: MemOrFile<Bytes, FixedSize<fs::File>> = match &complete.data {
+        MemOrFile::Mem(bytes) => MemOrFile::Mem(bytes.clone()),
+        MemOrFile::File(file) => MemOrFile::File(file.try_clone()?),
+    };
+    let size = data.size();
+    let reader: DynVirtualSource = Arc::new(data);
+    Ok(Some(SyncReader::new(reader, size)))
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {

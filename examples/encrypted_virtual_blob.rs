@@ -38,7 +38,7 @@ use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh_blobs::api::Store;
 use iroh_blobs::store::mem::MemStore;
-use iroh_blobs::store::virtual_blob::{DynVirtualSource, Provider, VirtualProviders};
+use iroh_blobs::store::virtual_blob::{DynVirtualSource, Provider};
 use iroh_blobs::store::IROH_BLOCK_SIZE;
 use iroh_blobs::{BlobsProtocol, Hash, ALPN};
 use sha2::Sha256;
