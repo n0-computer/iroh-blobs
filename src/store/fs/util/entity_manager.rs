@@ -488,6 +488,12 @@ mod main_actor {
             None
         }
 
+        /// Whether entity notifications still need processing, possibly
+        /// restarting an actor with commands queued while it was persisting.
+        pub fn has_pending_events(&self) -> bool {
+            !self.internal_recv.is_empty()
+        }
+
         /// Send a shutdown command to all live entity actors.
         pub async fn shutdown(self) {
             for handle in self.live.values() {

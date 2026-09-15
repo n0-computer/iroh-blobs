@@ -41,12 +41,95 @@ made correct by a consumer retry:
    newer cycle.
 6. Tag planning followed by unconditional delete can erase a concurrent tag
    replacement.
+7. Store shutdown only forwards a database RPC while discarding the main
+   actor, database actor, and GC task handles. The dedicated runtime is owned
+   by the actor itself, so a successful reply cannot prove resource release.
 
 These failures live in the entity actor, metadata actor, and GC primitive. An
 outer timeout, polling loop, or unconditional re-fetch would only hide invalid
 state transitions and create a second owner.
 
 ## Patch contracts
+
+### Connection-owned provider streams
+
+`provider::handle_connection` keeps its concurrent stream futures in one
+`FuturesUnordered`, rather than detaching a Tokio task for each request. A
+connection close, cancellation, or handler drop therefore destroys all of its
+stream futures in the same ownership boundary. Stream panics stay isolated
+with `catch_unwind`, as they were with separate tasks.
+
+The consumer cannot repair this by awaiting `Router::shutdown`: the router
+joins the connection handler, but the upstream handler discarded the stream
+task handles. Pending QUIC streams retain the connection sender and ultimately
+the UDP socket, even after the outer handler exits. `Store::shutdown` is a
+storage acknowledgement and does not own these network tasks.
+
+The regression cases in `src/tests/provider.rs` verify that aborting the outer
+handler or closing the connection drops two intercepted requests before
+returning and permits immediate UDP rebinding. A third case leaves one request
+gated while another request on the same connection completes, preserving
+concurrent I/O. The patch uses the existing `n0_future::FuturesUnordered` and
+does not change protocol framing, storage, or public APIs.
+
+Focused verification from the parent workspace:
+
+```bash
+cargo test -p iroh-blobs --lib tests::provider
+cargo test -p syzygy-net-node-runtime --lib
+cargo test -p syzygy-net --lib tests::shutdown
+```
+
+### File-store shutdown ownership
+
+`FsStore::shutdown(&self)` retains and joins the actual main-actor,
+database-actor, GC, and dedicated-runtime handles. External generic `Store`
+clients and FS-specific senders anchor the same owner, so consuming an
+`FsStore` into a `Store`, cloning the generic client, or dropping the original
+`FsStore` does not terminate a still-owned runtime. Actor internals and GC use
+unanchored senders; the retained close future holds only a weak command sender
+and cannot keep its own owner alive.
+
+The first poll fences off new external commands and stops and joins GC. It
+then requests shutdown while joining both actors. The main actor rejects
+queued external work and drains started operations, import-completion messages,
+and entity-recycle notifications. The database remains available through final
+entity persistence and drops before acknowledging shutdown. Last, a retained
+blocking task drops the dedicated runtime and waits for its async and blocking
+workers to exit. Started streams must finish or be released for graceful drain
+to complete.
+
+Concurrent callers borrow one close future. Cancelling a waiter leaves that
+future and its real handles in the owner for the next waiter. Success or the
+complete failure list is cached once, and every later waiter receives the same
+result. Actor, database, GC panic, request, and runtime-join errors are recorded
+without skipping the remaining joins. `ShutdownError::causes()` preserves the
+original errors and their stage context. The existing `irpc::Result<()>` return
+type is retained: an RPC receive error contains an `io::Error`, whose
+`get_ref()` exposes the shared `ShutdownError`.
+
+The generic `Store::shutdown()` RPC also enters orderly actor/database drain
+and fences new work, but it does not join the dedicated runtime. Calling it
+first causes a later initial `FsStore::shutdown()` request to fail against the
+closed receiver; that failure is preserved after every resource is joined.
+Dropping the last external owner without awaiting shutdown uses Tokio's
+background shutdown path and makes no synchronous completion guarantee.
+Initialization errors and initialization-task panics join the runtime before
+`load_with_opts` returns an error; cancelling and dropping that entire load
+future uses the same emergency drop boundary.
+
+The regressions in `src/tests/store/fs.rs` cover database reopening with old
+clients still present, active import drain, generic-client owner lifetime,
+GC-cycle release on last-client drop, cancelled and concurrent waits on a real
+blocked runtime worker, GC panic preservation, and failed-RPC error caching.
+Use these focused filters in the parent workspace or its isolated patch
+validation harness, then run the consuming store-owner and node-runtime suites:
+
+```bash
+cargo test -p iroh-blobs --lib tests::store::fs::
+cargo test -p iroh-blobs --lib store::fs::tests::
+cargo test -p iroh-blobs --lib tests::provider::
+```
 
 ### Stable file-storage state
 

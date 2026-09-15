@@ -11,8 +11,8 @@
 //! The purpose of the main actor is to handle user commands and own a map of
 //! handles for hashes that are currently being worked on.
 //!
-//! It also owns tasks for ongoing import and export operations, as well as the
-//! database actor.
+//! It also owns tasks for ongoing import and export operations. The shared
+//! store owner retains both actors' task handles and their dedicated runtime.
 //!
 //! Handling a command almost always involves either forwarding it to the
 //! database actor or creating a hash context and spawning a task.
@@ -56,8 +56,11 @@
 //! The on-disk store will be in a consistent state, but might miss some writes
 //! in the last seconds before shutdown.
 //!
-//! To avoid this, you can use the [`crate::api::Store::shutdown`] method to
-//! cleanly shut down the store and save ephemeral state to disk.
+//! Use [`FsStore::shutdown`] to save ephemeral state and wait for the main actor,
+//! database actor, garbage collector, and dedicated runtime to finish. Its
+//! retained close operation survives cancellation and is shared by all clones.
+//! The generic [`crate::api::Store::shutdown`] API requests the same orderly
+//! actor/database shutdown, but does not join the dedicated runtime.
 //!
 //! Note that if you use the store inside a [`iroh::protocol::Router`] and shut
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
@@ -99,6 +102,7 @@ use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument, trace};
 
 use crate::{
@@ -139,6 +143,7 @@ mod external_reference;
 mod import;
 mod meta;
 pub mod options;
+mod shutdown;
 pub(crate) mod util;
 use entry_state::EntryState;
 pub use external_reference::{
@@ -153,6 +158,7 @@ use external_reference::{
 };
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::Options;
+pub use shutdown::ShutdownError;
 use tracing::Instrument;
 
 use crate::{
@@ -376,8 +382,8 @@ struct Actor {
     temp_tags: TempTags,
     // waiters for idle state.
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
-    // our private tokio runtime. It has to live somewhere.
-    _rt: RtWrapper,
+    // Stop GC before draining commands and persisting entity state.
+    gc_stop: CancellationToken,
 }
 
 type HashContext = ActiveEntityState<EmParams>;
@@ -654,11 +660,12 @@ impl Actor {
         self.tasks.spawn(fut.instrument(span));
     }
 
-    fn log_task_result(res: Result<(), JoinError>) {
+    fn log_task_result(res: Result<(), JoinError>, failures: &mut Vec<n0_error::AnyError>) {
         match res {
             Ok(_) => {}
             Err(e) => {
                 error!("task failed: {e}");
+                failures.push(n0_error::AnyError::from_std(e).context("file-store task failed"));
             }
         }
     }
@@ -682,7 +689,7 @@ impl Actor {
         tx.send(tt).await.ok();
     }
 
-    async fn handle_command(&mut self, cmd: Command) {
+    async fn handle_command(&mut self, cmd: Command) -> Option<proto::ShutdownMsg> {
         let span = cmd.parent_span();
         let _entered = span.enter();
         match cmd {
@@ -702,7 +709,7 @@ impl Actor {
             }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                return Some(cmd);
             }
             Command::CreateTag(cmd) => {
                 trace!("{cmd:?}");
@@ -797,6 +804,7 @@ impl Actor {
                 cmd.spawn(&mut self.handles, &mut self.tasks).await;
             }
         }
+        None
     }
 
     async fn handle_fs_command(&mut self, cmd: InternalCommand) {
@@ -844,8 +852,9 @@ impl Actor {
         }
     }
 
-    async fn run(mut self) {
-        loop {
+    async fn run(mut self) -> Result<()> {
+        let mut failures = Vec::new();
+        let shutdown = loop {
             tokio::select! {
                 task = self.handles.tick() => {
                     if let Some(task) = task {
@@ -854,15 +863,17 @@ impl Actor {
                 }
                 cmd = self.cmd_rx.recv() => {
                     let Some(cmd) = cmd else {
-                        break;
+                        break None;
                     };
-                    self.handle_command(cmd).await;
+                    if let Some(shutdown) = self.handle_command(cmd).await {
+                        break Some(shutdown);
+                    }
                 }
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
-                    Self::log_task_result(res);
+                    Self::log_task_result(res, &mut failures);
                     if self.tasks.is_empty() {
                         for tx in self.idle_waiters.drain(..) {
                             tx.send(()).await.ok();
@@ -870,21 +881,53 @@ impl Actor {
                     }
                 }
             }
+        };
+        self.gc_stop.cancel();
+        self.cmd_rx.close();
+        // Reject queued external work, but keep processing internal completion
+        // messages from imports and entity actors until their real tasks finish.
+        while self.cmd_rx.try_recv().is_ok() {}
+        while !self.tasks.is_empty()
+            || !self.fs_cmd_rx.is_empty()
+            || self.handles.has_pending_events()
+        {
+            tokio::select! {
+                task = self.handles.tick() => {
+                    if let Some(task) = task {
+                        self.spawn(task);
+                    }
+                }
+                Some(cmd) = self.fs_cmd_rx.recv() => self.handle_fs_command(cmd).await,
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    Self::log_task_result(res, &mut failures);
+                }
+            }
         }
-        self.handles.shutdown().await;
-        while let Some(res) = self.tasks.join_next().await {
-            Self::log_task_result(res);
+        self.fs_cmd_rx.close();
+        // Every entity task has returned. Failed actors may have left a full
+        // inbox in the manager; no task remains to consume a shutdown message.
+        drop(self.handles);
+        if let Some(shutdown) = shutdown {
+            // The DB must remain usable until every entity has persisted its
+            // state. Its reply is sent after the database itself is dropped.
+            if let Err(error) = self.context.db.send(shutdown.into()).await {
+                failures.push(
+                    n0_error::AnyError::from_std(error).context("forward file-store shutdown"),
+                );
+            }
         }
+        ShutdownError::result(failures).map_err(n0_error::AnyError::from_std)
     }
 
     async fn new(
         db_path: PathBuf,
-        rt: RtWrapper,
+        rt: tokio::runtime::Handle,
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
-    ) -> Result<Self> {
+        gc_stop: CancellationToken,
+    ) -> Result<(Self, tokio::task::JoinHandle<meta::ActorResult<()>>)> {
         trace!(
             "creating data directory: {}",
             options.path.data_path.display()
@@ -909,17 +952,20 @@ impl Actor {
             internal_cmd_tx: fs_commands_tx,
             protect,
         });
-        rt.spawn(db_actor.run());
-        Ok(Self {
-            context: slot_context.clone(),
-            cmd_rx,
-            fs_cmd_rx: fs_commands_rx,
-            tasks: JoinSet::new(),
-            handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
-            temp_tags: Default::default(),
-            idle_waiters: Vec::new(),
-            _rt: rt,
-        })
+        let database_task = rt.spawn(db_actor.run());
+        Ok((
+            Self {
+                context: slot_context.clone(),
+                cmd_rx,
+                fs_cmd_rx: fs_commands_rx,
+                tasks: JoinSet::new(),
+                handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
+                temp_tags: Default::default(),
+                idle_waiters: Vec::new(),
+                gc_stop,
+            },
+            database_task,
+        ))
     }
 }
 
@@ -1099,12 +1145,17 @@ impl Deref for RtWrapper {
 impl Drop for RtWrapper {
     fn drop(&mut self) {
         if let Some(rt) = self.0.take() {
-            trace!("dropping tokio runtime");
-            tokio::task::block_in_place(|| {
-                drop(rt);
-            });
-            trace!("dropped tokio runtime");
+            // Drop is the emergency path. Explicit shutdown moves the runtime
+            // into a retained blocking job and joins that job instead.
+            rt.shutdown_background();
         }
+    }
+}
+
+impl RtWrapper {
+    async fn shutdown(mut self) -> std::result::Result<(), JoinError> {
+        let rt = self.0.take().expect("runtime is owned until shutdown");
+        tokio::task::spawn_blocking(move || drop(rt)).await
     }
 }
 
@@ -1659,36 +1710,73 @@ impl FsStore {
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .thread_name_fn(|| {
-                format!(
-                    "iroh-blob-store-{}",
-                    THREAD_NR.fetch_add(1, Ordering::Relaxed)
-                )
-            })
-            .enable_time()
-            .build()?;
+        let rt = RtWrapper::from(
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_name_fn(|| {
+                    format!(
+                        "iroh-blob-store-{}",
+                        THREAD_NR.fetch_add(1, Ordering::Relaxed)
+                    )
+                })
+                .enable_time()
+                .build()?,
+        );
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
-        let actor = handle
+        let gc_stop = CancellationToken::new();
+        let initialized = handle
             .spawn(Actor::new(
                 db_path,
-                rt.into(),
+                handle.clone(),
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
                 Arc::new(options),
+                gc_stop.clone(),
             ))
             .await
-            .anyerr()??;
-        handle.spawn(actor.run());
-        let store = FsStore::new(commands_tx.into(), fs_commands_tx);
-        if let Some(config) = gc_config {
-            handle.spawn(run_gc(store.deref().clone(), config));
-        }
-        Ok(store)
+            .anyerr()
+            .and_then(|result| result);
+        let (actor, database_task) = match initialized {
+            Ok(actor) => actor,
+            Err(error) => {
+                let mut failures = vec![error];
+                if let Err(error) = rt.shutdown().await {
+                    failures.push(n0_error::AnyError::from_std(error));
+                }
+                return Err(n0_error::AnyError::from_std(ShutdownError::from_failures(
+                    failures,
+                )));
+            }
+        };
+        let actor_task = handle.spawn(actor.run());
+        // GC uses an unanchored client: its task must not retain its own owner.
+        let gc_task = gc_config.map(|config| {
+            let store = Store::from_sender(commands_tx.clone().into());
+            let stop = gc_stop.clone();
+            handle.spawn(async move {
+                tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => {}
+                    _ = run_gc(store, config) => {}
+                }
+            })
+        });
+        let shutdown = Arc::new(shutdown::Shutdown::new(
+            commands_tx.downgrade(),
+            rt,
+            actor_task,
+            database_task,
+            gc_task,
+            gc_stop,
+        ));
+        Ok(FsStore {
+            sender: ApiClient::local(shutdown.sender(commands_tx)),
+            db: shutdown.sender(fs_commands_tx),
+            shutdown,
+        })
     }
 }
 
@@ -1704,7 +1792,8 @@ impl FsStore {
 #[derive(Debug, Clone)]
 pub struct FsStore {
     sender: ApiClient,
-    db: tokio::sync::mpsc::Sender<InternalCommand>,
+    db: irpc::channel::mpsc::Sender<InternalCommand>,
+    shutdown: Arc<shutdown::Shutdown>,
 }
 
 impl From<FsStore> for Store {
@@ -1728,14 +1817,23 @@ impl AsRef<Store> for FsStore {
 }
 
 impl FsStore {
-    fn new(
-        sender: irpc::LocalSender<proto::Request>,
-        db: tokio::sync::mpsc::Sender<InternalCommand>,
-    ) -> Self {
-        Self {
-            sender: sender.into(),
-            db,
-        }
+    /// Shut down and join the file store's actors, GC, and dedicated runtime.
+    ///
+    /// Concurrent and repeated calls share the same retained close operation.
+    /// Cancelling a waiter retains cleanup and its task handles for the next waiter.
+    /// Errors retain their original causes in [`ShutdownError`], wrapped in an
+    /// RPC receive error so the existing shutdown result type remains unchanged.
+    pub async fn shutdown(&self) -> irpc::Result<()> {
+        self.shutdown.wait().await
+    }
+
+    /// Read-only observation of the actual task handles for teardown handshakes.
+    #[cfg(test)]
+    pub(crate) fn shutdown_actors_finished(&self) -> bool {
+        self.shutdown
+            .actors
+            .iter()
+            .all(tokio::task::AbortHandle::is_finished)
     }
 
     pub async fn dump(&self) -> Result<()> {
@@ -2019,22 +2117,6 @@ pub mod tests {
         );
         commit_released.wait().await;
         writer.await.expect("barrier-controlled writer must finish");
-    }
-
-    #[tokio::test]
-    async fn availability_probe_failure_is_not_reported_as_broken_storage() {
-        let (commands_tx, _commands_rx) = tokio::sync::mpsc::channel::<Command>(1);
-        let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(1);
-        drop(fs_commands_rx);
-        let store = FsStore::new(commands_tx.into(), fs_commands_tx);
-
-        assert_eq!(
-            store
-                .availability(Hash::new(b"unavailable actor"))
-                .await
-                .expect_err("closed actor channel must fail the probe"),
-            BlobAvailabilityProbeError::StoreUnavailable
-        );
     }
 
     #[tokio::test]

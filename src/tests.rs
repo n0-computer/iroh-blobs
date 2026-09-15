@@ -33,6 +33,8 @@ use crate::{
 };
 
 mod gc_protection;
+mod provider;
+mod store;
 
 // #[tokio::test]
 // #[traced_test]
