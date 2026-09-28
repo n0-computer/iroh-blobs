@@ -37,7 +37,7 @@ jobs:
       uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Generate Docs
-      run: cargo doc --workspace --all-features --no-deps
+      run: cargo doc --locked --workspace --all-features --no-deps
       env:
         RUSTDOCFLAGS: --cfg iroh_docsrs
 
