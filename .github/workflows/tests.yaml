@@ -26,6 +26,10 @@ env:
   CRATES_LIST: "iroh-blobs"
   IROH_FORCE_STAGING_RELAYS: "1"
 
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   build_and_test_nix:
     timeout-minutes: 30
@@ -56,6 +60,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
+        persist-credentials: false
         ref: ${{ inputs.git-ref }}
 
     - name: Install ${{ matrix.rust }} rust
@@ -163,6 +168,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
+        persist-credentials: false
         ref: ${{ inputs.git-ref }}
 
     - name: Install ${{ matrix.rust }}
