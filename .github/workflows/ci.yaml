@@ -181,12 +181,12 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
-          echo "HEAD_COMMIT_SHA=$(git rev-parse origin/${{ github.base_ref }})" >> ${GITHUB_ENV}
+          echo "HEAD_COMMIT_SHA=$(git rev-parse "origin/$GITHUB_BASE_REF")" >> "$GITHUB_ENV"
       - name: Setup Environment (Push)
         if: ${{ github.event_name == 'push' || github.event_name == 'merge_group' }}
         shell: bash
         run: |
-          echo "HEAD_COMMIT_SHA=$(git rev-parse origin/main)" >> ${GITHUB_ENV}
+          echo "HEAD_COMMIT_SHA=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
       - name: Check semver
         # uses: obi1kenobi/cargo-semver-checks-action@v2
         uses: n0-computer/cargo-semver-checks-action@b49de9133f8849bb51cae32c6bdeb19a5c37e61f # feat-baseline
