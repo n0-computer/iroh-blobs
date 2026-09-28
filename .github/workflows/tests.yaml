@@ -24,6 +24,7 @@ env:
   RUSTDOCFLAGS: -Dwarnings
   SCCACHE_CACHE_SIZE: "50G"
   CRATES_LIST: "iroh-blobs"
+  NEXTEST_VERSION: "0.9.80"
   IROH_FORCE_STAGING_RELAYS: "1"
 
 # Default to read-only; jobs that need more grant it explicitly.
@@ -71,7 +72,7 @@ jobs:
     - name: Install cargo-nextest
       uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
       with:
-        tool: nextest@0.9.80
+        tool: nextest@${{ env.NEXTEST_VERSION }}
 
     - name: Install sccache
       uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
@@ -184,14 +185,12 @@ jobs:
         rustup target add $env:RUST_TARGET
         rustup set default-host $env:RUST_TARGET
 
+    # Was a bare Invoke-WebRequest from get.nexte.st with no checksum,
+    # unpacked into ~/.cargo/bin on a long-lived host.
     - name: Install cargo-nextest
-      shell: powershell
-      run: |
-        $tmp = New-TemporaryFile | Rename-Item -NewName { $_ -replace 'tmp$', 'zip' } -PassThru
-        Invoke-WebRequest -OutFile $tmp https://get.nexte.st/latest/windows
-        $outputDir = if ($Env:CARGO_HOME) { Join-Path $Env:CARGO_HOME "bin" } else { "~/.cargo/bin" }
-        $tmp | Expand-Archive -DestinationPath $outputDir -Force
-        $tmp | Remove-Item
+      uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+      with:
+        tool: nextest@${{ env.NEXTEST_VERSION }}
 
     - name: Select features
       run: |
