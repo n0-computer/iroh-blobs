@@ -785,7 +785,7 @@ impl Actor {
     pub async fn run(self) {
         if let Err(error) = self.run_inner().await {
             // Without this actor every store operation fails, so keep the cause.
-            error!(?error, "metadata db actor stopped");
+            error!("metadata db actor stopped: {error:#}");
         }
     }
 

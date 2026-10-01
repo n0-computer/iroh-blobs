@@ -376,7 +376,7 @@ pub async fn handle_stream<R: RecvStream, W: SendStream>(
     let result = dispatch(pair, store).await;
     if let Err(error) = &result {
         // The peer only sees a reset with an error code, so keep the cause.
-        debug!(?error, "stream failed");
+        debug!("stream failed: {error:#}");
     }
     result
 }
