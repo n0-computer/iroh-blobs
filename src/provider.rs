@@ -305,7 +305,15 @@ pub async fn handle_connection(
         while let Ok(pair) = StreamPair::accept(&connection, progress.clone()).await {
             let span = debug_span!("stream", stream_id = %pair.stream_id());
             let store = store.clone();
-            n0_future::task::spawn(handle_stream(pair, store).instrument(span));
+            n0_future::task::spawn(
+                async move {
+                    // The peer only sees a reset with an error code, so keep the cause.
+                    if let Err(error) = handle_stream(pair, store).await {
+                        debug!(?error, "stream failed");
+                    }
+                }
+                .instrument(span),
+            );
         }
         progress
             .connection_closed(|| ConnectionClosed { connection_id })
