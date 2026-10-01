@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["CreateOptions","DeleteOptions","ListOptions","RenameOptions","SetOptions","TagInfo","Tags"]};
