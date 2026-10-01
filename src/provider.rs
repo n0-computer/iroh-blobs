@@ -370,6 +370,18 @@ async fn handle_read_result<R: RecvStream, T, E: HasErrorCode>(
 }
 
 pub async fn handle_stream<R: RecvStream, W: SendStream>(
+    pair: StreamPair<R, W>,
+    store: Store,
+) -> n0_error::Result<()> {
+    let result = dispatch(pair, store).await;
+    if let Err(error) = &result {
+        // The peer only sees a reset with an error code, so keep the cause.
+        debug!("stream failed: {error:#}");
+    }
+    result
+}
+
+async fn dispatch<R: RecvStream, W: SendStream>(
     mut pair: StreamPair<R, W>,
     store: Store,
 ) -> n0_error::Result<()> {
