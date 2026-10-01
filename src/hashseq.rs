@@ -63,10 +63,8 @@ impl HashSeq {
 
     /// Iterate over the hashes in this sequence.
     pub fn iter(&self) -> impl Iterator<Item = Hash> + '_ {
-        self.0.chunks_exact(32).map(|chunk| {
-            let hash: [u8; 32] = chunk.try_into().unwrap();
-            hash.into()
-        })
+        let (hashes, _) = self.0.as_chunks::<32>();
+        hashes.iter().map(|hash| Hash::from(*hash))
     }
 
     /// Get the number of hashes in this sequence.
