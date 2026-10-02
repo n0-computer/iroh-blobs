@@ -8,7 +8,7 @@
 //! For many use cases this can be quite useful, since it does not require write access
 //! to the file system.
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     future::Future,
     io::{self, Write},
     num::NonZeroU64,
@@ -45,20 +45,21 @@ use crate::{
         blobs::{AddProgressItem, Bitfield, BlobStatus, ExportProgressItem},
         proto::{
             BatchMsg, BatchResponse, BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, Command,
-            CreateTagMsg, CreateTagRequest, CreateTempTagMsg, DeleteBlobsMsg, DeleteTagsMsg,
-            DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
-            ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
-            ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
-            ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
+            CompareAndSwapTagMsg, CreateTagMsg, CreateTagRequest, CreateTempTagMsg, DeleteBlobsMsg,
+            DeleteTagsMsg, DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
+            ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
+            ImportBaoMsg, ImportBaoRequest, ImportByteStreamMsg, ImportByteStreamUpdate,
+            ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, ListBlobsMsg,
+            ListTagsMsg, ListTagsRequest, ObserveMsg, ObserveRequest, RenameTagMsg,
+            RenameTagRequest, Scope, SetTagMsg, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            TagCompareAndSwapOutcome, TagCompareAndSwapRequest, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
     },
     protocol::ChunkRangesExt,
     store::{
-        gc::{run_gc, GcConfig},
+        gc::{run_gc, GcConfig, GcProtectionSet},
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
@@ -157,7 +158,7 @@ struct Actor {
     temp_tags: TempTags,
     // idle waiters
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
-    protected: HashSet<Hash>,
+    protected: GcProtectionSet,
 }
 
 impl Actor {
@@ -179,6 +180,7 @@ impl Actor {
                 tx,
                 ..
             }) => {
+                self.protected.protect(hash);
                 let entry = self.get_or_create_entry(hash);
                 self.spawn(import_bao(entry, size, data, tx));
             }
@@ -323,14 +325,43 @@ impl Actor {
                 tx,
                 ..
             }) => {
+                self.protected.protect(value.hash);
                 self.state.tags.insert(tag, value);
                 tx.send(Ok(())).await.ok();
+            }
+            Command::CompareAndSwapTag(CompareAndSwapTagMsg {
+                inner:
+                    TagCompareAndSwapRequest {
+                        name,
+                        expected,
+                        value,
+                    },
+                tx,
+                ..
+            }) => {
+                let current = self.state.tags.get(&name).copied();
+                let outcome = if current == expected {
+                    match value {
+                        Some(value) => {
+                            self.protected.protect(value.hash);
+                            self.state.tags.insert(name, value);
+                        }
+                        None => {
+                            self.state.tags.remove(&name);
+                        }
+                    }
+                    TagCompareAndSwapOutcome::Applied
+                } else {
+                    TagCompareAndSwapOutcome::Mismatch { current }
+                };
+                tx.send(Ok(outcome)).await.ok();
             }
             Command::CreateTag(CreateTagMsg {
                 inner: CreateTagRequest { value },
                 tx,
                 ..
             }) => {
+                self.protected.protect(value.hash);
                 let tag = Tag::auto(SystemTime::now(), |tag| self.state.tags.contains_key(tag));
                 self.state.tags.insert(tag.clone(), value);
                 tx.send(Ok(tag)).await.ok();
@@ -399,9 +430,12 @@ impl Actor {
                 let (id, scope) = self.temp_tags.create_scope();
                 self.spawn(handle_batch(cmd, id, scope));
             }
-            Command::ClearProtected(cmd) => {
-                self.protected.clear();
-                cmd.tx.send(Ok(())).await.ok();
+            Command::StartGcProtection(cmd) => {
+                cmd.tx.send(self.protected.start()).await.ok();
+            }
+            Command::FinishGcProtection(cmd) => {
+                let outcome = self.protected.finish(cmd.inner.cycle);
+                cmd.tx.send(Ok(outcome)).await.ok();
             }
             Command::ExportRanges(cmd) => {
                 let entry = self.get(&cmd.hash);
@@ -439,6 +473,7 @@ impl Actor {
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
         let CreateTempTagMsg { tx, inner, .. } = cmd;
+        self.protected.protect(inner.value.hash);
         let mut tt = self.temp_tags.create(inner.scope, inner.value);
         if tx.is_rpc() {
             tt.leak();
@@ -455,6 +490,10 @@ impl Actor {
             }
         };
         let hash = import_data.outboard.root().into();
+        // Imports completed after a GC mark must survive that cycle even when
+        // their temporary tag is dropped before sweep. The next GC cycle
+        // clears this set before marking.
+        self.protected.protect(hash);
         let entry = self.get_or_create_entry(hash);
         entry
             .0

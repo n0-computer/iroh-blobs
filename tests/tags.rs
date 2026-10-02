@@ -7,7 +7,7 @@ use std::{
 use iroh_blobs::{
     api::{
         self,
-        tags::{TagInfo, Tags},
+        tags::{TagCompareAndSwapOutcome, TagInfo, Tags},
         Store,
     },
     store::{fs::FsStore, mem::MemStore},
@@ -128,6 +128,35 @@ async fn tags_smoke(tags: &Tags) -> TestResult<()> {
 
     let res = tags.rename("y", "z").await;
     assert!(res.is_err());
+
+    let original = HashAndFormat::raw(Hash::new("cas-original"));
+    let replacement = HashAndFormat::raw(Hash::new("cas-replacement"));
+    tags.set("cas", original).await?;
+    assert_eq!(
+        tags.compare_and_swap("cas", Some(replacement), None)
+            .await?,
+        TagCompareAndSwapOutcome::Mismatch {
+            current: Some(original)
+        }
+    );
+    assert_eq!(
+        tags.compare_and_swap("cas", Some(original), Some(replacement))
+            .await?,
+        TagCompareAndSwapOutcome::Applied
+    );
+    assert_eq!(
+        tags.compare_and_swap("cas", Some(replacement), None)
+            .await?,
+        TagCompareAndSwapOutcome::Applied
+    );
+    assert_eq!(
+        tags.compare_and_swap("cas", None, Some(original)).await?,
+        TagCompareAndSwapOutcome::Applied
+    );
+    assert_eq!(
+        tags.get("cas").await?.expect("restored tag").hash,
+        original.hash
+    );
     Ok(())
 }
 

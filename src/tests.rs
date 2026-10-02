@@ -37,6 +37,10 @@ use crate::{
     BlobFormat, Hash, HashAndFormat,
 };
 
+mod gc_protection;
+mod provider;
+mod store;
+
 // #[tokio::test]
 // #[traced_test]
 // async fn two_nodes_blobs_downloader_smoke() -> TestResult<()> {

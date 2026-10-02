@@ -46,9 +46,10 @@ pub use super::proto::{
 };
 use super::{
     proto::{
-        BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
-        ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
-        ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
+        BatchResponse, BlobStatusRequest, CreateTempTagRequest, ExportBaoRequest, ExportRangesItem,
+        FinishGcProtectionOutcome, FinishGcProtectionRequest, GcProtectionCycleId,
+        ImportBaoRequest, ImportByteStreamRequest, ImportBytesRequest, ImportPathRequest,
+        ListRequest, Scope, StartGcProtectionRequest,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -521,11 +522,17 @@ impl Blobs {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn clear_protected(&self) -> RequestResult<()> {
-        let msg = ClearProtectedRequest;
-        self.client.rpc(msg).await??;
-        Ok(())
+    pub(crate) async fn start_gc_protection(&self) -> RequestResult<GcProtectionCycleId> {
+        let msg = StartGcProtectionRequest;
+        Ok(self.client.rpc(msg).await??)
+    }
+
+    pub(crate) async fn finish_gc_protection(
+        &self,
+        cycle: GcProtectionCycleId,
+    ) -> RequestResult<FinishGcProtectionOutcome> {
+        let msg = FinishGcProtectionRequest { cycle };
+        Ok(self.client.rpc(msg).await??)
     }
 }
 

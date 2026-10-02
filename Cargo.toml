@@ -24,6 +24,7 @@ n0-future = "0.3.0"
 range-collections = { version = "0.4.6", features = ["serde"] }
 smallvec = { version = "1", features = ["serde", "const_new"] }
 tokio = { version = "1.43.0", default-features = false, features = ["sync"] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"], optional = true }
 tracing = "0.1.41"
 iroh-io = "0.6.1"
 rand = "0.10.1"
@@ -89,7 +90,7 @@ pre-release-hook = ["git", "cliff", "--unreleased", "--tag", "{{version}}", "--p
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
-fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs"]
+fs-store = ["dep:redb", "dep:reflink-copy", "dep:tokio-util", "bao-tree/fs", "tokio/rt-multi-thread"]
 rpc = ["dep:noq", "irpc/rpc", "irpc/noq_endpoint_setup"]
 
 [[example]]

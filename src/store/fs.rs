@@ -11,8 +11,8 @@
 //! The purpose of the main actor is to handle user commands and own a map of
 //! handles for hashes that are currently being worked on.
 //!
-//! It also owns tasks for ongoing import and export operations, as well as the
-//! database actor.
+//! It also owns tasks for ongoing import and export operations. The shared
+//! store owner retains both actors' task handles and their dedicated runtime.
 //!
 //! Handling a command almost always involves either forwarding it to the
 //! database actor or creating a hash context and spawning a task.
@@ -56,8 +56,11 @@
 //! The on-disk store will be in a consistent state, but might miss some writes
 //! in the last seconds before shutdown.
 //!
-//! To avoid this, you can use the [`crate::api::Store::shutdown`] method to
-//! cleanly shut down the store and save ephemeral state to disk.
+//! Use [`FsStore::shutdown`] to save ephemeral state and wait for the main actor,
+//! database actor, garbage collector, and dedicated runtime to finish. Its
+//! retained close operation survives cancellation and is shared by all clones.
+//! The generic [`crate::api::Store::shutdown`] API requests the same orderly
+//! actor/database shutdown, but does not join the dedicated runtime.
 //!
 //! Note that if you use the store inside a [`iroh::protocol::Router`] and shut
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
@@ -99,7 +102,8 @@ use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, instrument, trace};
 
 use crate::{
     api::{
@@ -115,8 +119,8 @@ use crate::{
     store::{
         fs::{
             bao_file::{
-                BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
-                OutboardReader,
+                open_external_data, BaoFileOpenError, BaoFileStorage, BaoFileStorageSubscriber,
+                CompleteStorage, DataReader, OutboardReader,
             },
             util::entity_manager::{self, ActiveEntityState},
         },
@@ -132,15 +136,29 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
+pub use bao_file::{BlobStorageFailure, BlobStorageFailureKind};
 mod delete_set;
 mod entry_state;
+mod external_reference;
 mod import;
 mod meta;
 pub mod options;
+mod shutdown;
 pub(crate) mod util;
 use entry_state::EntryState;
+pub use external_reference::{
+    ExternalReferenceCandidate, ExternalReferenceCandidateStatus, ExternalReferenceInspection,
+    ExternalReferenceMaintenanceAction, ExternalReferenceMaintenanceError,
+    ExternalReferenceMaintenanceReport, ExternalReferenceOutboardStatus,
+    ExternalReferenceRemovalReason, ExternalReferenceValidation, NonExternalStorageKind,
+};
+use external_reference::{
+    ExternalReferenceMaintenanceMode, MaintainExternalReferenceRequest,
+    ValidateExternalReferenceRequest,
+};
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::Options;
+pub use shutdown::ShutdownError;
 use tracing::Instrument;
 
 use crate::{
@@ -154,6 +172,103 @@ use crate::{
 
 /// Maximum number of external paths we track per blob.
 const MAX_EXTERNAL_PATHS: usize = 8;
+
+/// A point-in-time view of a blob's file-store availability.
+///
+/// This is an atomic snapshot of one loaded file-storage state. `Readable`
+/// means that the data and required outboard were opened successfully and that
+/// the stored ranges are complete; it does not re-hash the content and therefore
+/// must not be interpreted as cryptographic verification. A later read can still
+/// fail if an external file changes after this method returns.
+///
+/// Probing may reconcile metadata when every referenced external path has
+/// disappeared. That reconciliation uses a paths-and-size compare-and-swap and
+/// deliberately preserves persistent tags.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BlobAvailability {
+    Missing,
+    Partial { size: Option<u64> },
+    Readable { size: u64 },
+    Broken(BlobStorageFailure),
+}
+
+impl BlobAvailability {
+    fn from_storage(storage: &BaoFileStorage) -> Self {
+        match storage {
+            BaoFileStorage::NonExisting => Self::Missing,
+            BaoFileStorage::PartialMem(storage) => Self::Partial {
+                size: storage.bitfield().validated_size(),
+            },
+            BaoFileStorage::Partial(storage) => Self::Partial {
+                size: storage.bitfield().validated_size(),
+            },
+            BaoFileStorage::Complete(storage) => Self::Readable {
+                size: storage.size(),
+            },
+            BaoFileStorage::Poisoned(cause) => Self::Broken(cause.clone()),
+            BaoFileStorage::Initial | BaoFileStorage::Loading => {
+                Self::Broken(BlobStorageFailure::internal_invariant(
+                    "snapshot blob availability",
+                    "blob storage remained transitional after load",
+                ))
+            }
+        }
+    }
+}
+
+/// Failure to execute an availability probe.
+///
+/// These variants describe actor/request lifecycle failures. Confirmed storage
+/// failures are returned as [`BlobAvailability::Broken`] instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BlobAvailabilityProbeError {
+    StoreUnavailable,
+    ResponseDropped,
+    EntityBusy,
+    EntityDead,
+}
+
+impl fmt::Display for BlobAvailabilityProbeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::StoreUnavailable => "file-store actor is unavailable",
+            Self::ResponseDropped => "file-store availability response was dropped",
+            Self::EntityBusy => "blob entity is busy",
+            Self::EntityDead => "blob entity is unavailable",
+        })
+    }
+}
+
+impl std::error::Error for BlobAvailabilityProbeError {}
+
+fn retain_healthy_external_candidates(
+    paths: Vec<PathBuf>,
+    newest: PathBuf,
+    expected_size: u64,
+) -> Vec<PathBuf> {
+    let mut candidates = paths
+        .into_iter()
+        .chain(std::iter::once(newest.clone()))
+        .filter(|path| {
+            fs::metadata(path)
+                .map(|metadata| metadata.is_file() && metadata.len() == expected_size)
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+    if candidates.len() <= MAX_EXTERNAL_PATHS {
+        return candidates;
+    }
+
+    candidates.retain(|path| path != &newest);
+    candidates.truncate(MAX_EXTERNAL_PATHS.saturating_sub(1));
+    candidates.push(newest);
+    candidates.sort();
+    candidates
+}
 
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
@@ -171,10 +286,13 @@ fn temp_name() -> String {
 
 #[derive(Debug)]
 #[enum_conversions()]
-pub(crate) enum InternalCommand {
+enum InternalCommand {
     Dump(meta::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
+    Availability(AvailabilityRequest),
+    ValidateExternalReference(ValidateExternalReferenceRequest),
+    MaintainExternalReference(MaintainExternalReferenceRequest),
 }
 
 #[derive(Debug)]
@@ -182,11 +300,23 @@ pub(crate) struct ClearScope {
     pub scope: Scope,
 }
 
+#[derive(Debug)]
+pub(crate) struct AvailabilityRequest {
+    hash: Hash,
+    tx: tokio::sync::oneshot::Sender<
+        std::result::Result<BlobAvailability, BlobAvailabilityProbeError>,
+    >,
+}
+
 impl InternalCommand {
     pub fn parent_span(&self) -> tracing::Span {
         match self {
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
+            Self::Availability(_) => tracing::Span::current(),
+            Self::ValidateExternalReference(_) | Self::MaintainExternalReference(_) => {
+                tracing::Span::current()
+            }
             Self::FinishImport(cmd) => cmd
                 .parent_span_opt()
                 .cloned()
@@ -252,8 +382,8 @@ struct Actor {
     temp_tags: TempTags,
     // waiters for idle state.
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
-    // our private tokio runtime. It has to live somewhere.
-    _rt: RtWrapper,
+    // Stop GC before draining commands and persisting entity state.
+    gc_stop: CancellationToken,
 }
 
 type HashContext = ActiveEntityState<EmParams>;
@@ -291,14 +421,103 @@ impl SyncEntityApi for HashContext {
                         outboard: MemOrFile::empty(),
                     })
                 } else {
-                    // we must assign a new state even in the error case, otherwise
-                    // tasks waiting for loading would stall!
-                    match self.global.db.get(self.id).await {
-                        Ok(state) => match BaoFileStorage::open(state, self).await {
-                            Ok(handle) => handle,
-                            Err(_) => BaoFileStorage::Poisoned,
-                        },
-                        Err(_) => BaoFileStorage::Poisoned,
+                    // We must assign a stable state even in the error case, otherwise
+                    // tasks waiting for loading would stall. A missing external source is
+                    // reconciled in the metadata transaction before it becomes absent in
+                    // memory, so status() and observe() cannot disagree indefinitely.
+                    let mut reload_after_concurrent_change = true;
+                    loop {
+                        let metadata = match self.global.db.get(self.id).await {
+                            Ok(state) => state,
+                            Err(cause) => {
+                                let failure =
+                                    BlobStorageFailure::metadata("load blob metadata", &cause);
+                                error!(
+                                    hash = %self.id.fmt_short(),
+                                    cause = %failure,
+                                    "failed to load blob metadata"
+                                );
+                                break BaoFileStorage::Poisoned(failure);
+                            }
+                        };
+                        match BaoFileStorage::open(metadata, self).await {
+                            Ok(handle) => break handle,
+                            Err(BaoFileOpenError::ExternalDataMissing {
+                                paths,
+                                expected_size,
+                            }) => {
+                                match self
+                                    .global
+                                    .db
+                                    .reconcile_external_reference(
+                                        self.id,
+                                        paths,
+                                        expected_size,
+                                        None,
+                                        Vec::new(),
+                                    )
+                                    .await
+                                {
+                                    Ok(
+                                        meta::ExternalReferenceReconcileOutcome::Removed
+                                        | meta::ExternalReferenceReconcileOutcome::AlreadyAbsent,
+                                    ) => {
+                                        debug!(
+                                            hash = %self.id.fmt_short(),
+                                            "removed stale external blob metadata"
+                                        );
+                                        break BaoFileStorage::NonExisting;
+                                    }
+                                    Ok(meta::ExternalReferenceReconcileOutcome::Changed)
+                                        if reload_after_concurrent_change =>
+                                    {
+                                        reload_after_concurrent_change = false;
+                                    }
+                                    Ok(meta::ExternalReferenceReconcileOutcome::Changed) => {
+                                        let cause = io::Error::other(
+                                            "external blob metadata changed repeatedly during reconciliation",
+                                        );
+                                        break BaoFileStorage::Poisoned(
+                                            BlobStorageFailure::internal_invariant(
+                                                "reconcile external blob metadata",
+                                                cause.to_string(),
+                                            ),
+                                        );
+                                    }
+                                    Ok(meta::ExternalReferenceReconcileOutcome::Retained) => {
+                                        let cause = io::Error::other(
+                                            "missing-reference reconciliation unexpectedly retained paths",
+                                        );
+                                        break BaoFileStorage::Poisoned(
+                                            BlobStorageFailure::internal_invariant(
+                                                "reconcile external blob metadata",
+                                                cause.to_string(),
+                                            ),
+                                        );
+                                    }
+                                    Err(cause) => {
+                                        let failure = BlobStorageFailure::metadata(
+                                            "reconcile external blob metadata",
+                                            &cause,
+                                        );
+                                        error!(
+                                            hash = %self.id.fmt_short(),
+                                            cause = %failure,
+                                            "failed to reconcile stale external blob metadata"
+                                        );
+                                        break BaoFileStorage::Poisoned(failure);
+                                    }
+                                }
+                            }
+                            Err(BaoFileOpenError::Storage(failure)) => {
+                                error!(
+                                    hash = %self.id.fmt_short(),
+                                    cause = %failure,
+                                    "failed to open blob storage"
+                                );
+                                break BaoFileStorage::Poisoned(failure);
+                            }
+                        }
                     }
                 };
                 self.state.send_replace(state);
@@ -318,16 +537,12 @@ impl SyncEntityApi for HashContext {
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
-        self.state.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, self) else {
-                res = Err(io::Error::other("write batch failed"));
-                return false;
-            };
-            res = Ok(update);
-            *state = state1;
-            true
+        self.state.send_modify(|state| {
+            res = state.write_batch(batch, bitfield, self);
         });
         if let Some(update) = res? {
+            // Partial progress is intentionally queued. The final complete
+            // state uses update_await, which is the durable visibility fence.
             self.global.db.update(self.id, update).await?;
         }
         Ok(())
@@ -357,7 +572,7 @@ impl SyncEntityApi for HashContext {
             BaoFileStorage::Complete(mem) => Ok(mem.size()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
             BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Poisoned(cause) => Err(cause.to_io_error()),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
             BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
@@ -370,7 +585,7 @@ impl SyncEntityApi for HashContext {
             BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
             BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
+            BaoFileStorage::Poisoned(cause) => Err(cause.to_io_error()),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
             BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
@@ -379,6 +594,12 @@ impl SyncEntityApi for HashContext {
 }
 
 impl HashContext {
+    async fn availability_snapshot(&self) -> BlobAvailability {
+        self.load().await;
+        let state = self.state.borrow();
+        BlobAvailability::from_storage(state.deref())
+    }
+
     /// The outboard for the file.
     pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
         let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
@@ -439,17 +660,28 @@ impl Actor {
         self.tasks.spawn(fut.instrument(span));
     }
 
-    fn log_task_result(res: Result<(), JoinError>) {
+    fn log_task_result(res: Result<(), JoinError>, failures: &mut Vec<n0_error::AnyError>) {
         match res {
             Ok(_) => {}
             Err(e) => {
                 error!("task failed: {e}");
+                failures.push(n0_error::AnyError::from_std(e).context("file-store task failed"));
             }
         }
     }
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
         let CreateTempTagMsg { tx, inner, .. } = cmd;
+        self.db()
+            .send(
+                meta::Protect {
+                    hash: inner.value.hash,
+                    span: tracing::Span::current(),
+                }
+                .into(),
+            )
+            .await
+            .ok();
         let mut tt = self.temp_tags.create(inner.scope, inner.value);
         if tx.is_rpc() {
             tt.leak();
@@ -457,7 +689,7 @@ impl Actor {
         tx.send(tt).await.ok();
     }
 
-    async fn handle_command(&mut self, cmd: Command) {
+    async fn handle_command(&mut self, cmd: Command) -> Option<proto::ShutdownMsg> {
         let span = cmd.parent_span();
         let _entered = span.enter();
         match cmd {
@@ -477,13 +709,17 @@ impl Actor {
             }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                return Some(cmd);
             }
             Command::CreateTag(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
             Command::SetTag(cmd) => {
+                trace!("{cmd:?}");
+                self.db().send(cmd.into()).await.ok();
+            }
+            Command::CompareAndSwapTag(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
@@ -499,7 +735,11 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
-            Command::ClearProtected(cmd) => {
+            Command::StartGcProtection(cmd) => {
+                trace!("{cmd:?}");
+                self.db().send(cmd.into()).await.ok();
+            }
+            Command::FinishGcProtection(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
@@ -564,6 +804,7 @@ impl Actor {
                 cmd.spawn(&mut self.handles, &mut self.tasks).await;
             }
         }
+        None
     }
 
     async fn handle_fs_command(&mut self, cmd: InternalCommand) {
@@ -577,6 +818,18 @@ impl Actor {
             InternalCommand::ClearScope(cmd) => {
                 trace!("{cmd:?}");
                 self.temp_tags.end_scope(cmd.scope);
+            }
+            InternalCommand::Availability(cmd) => {
+                trace!("{cmd:?}");
+                cmd.spawn(&mut self.handles, &mut self.tasks).await;
+            }
+            InternalCommand::ValidateExternalReference(cmd) => {
+                trace!("{cmd:?}");
+                cmd.spawn(&mut self.handles, &mut self.tasks).await;
+            }
+            InternalCommand::MaintainExternalReference(cmd) => {
+                trace!("{cmd:?}");
+                cmd.spawn(&mut self.handles, &mut self.tasks).await;
             }
             InternalCommand::FinishImport(cmd) => {
                 trace!("{cmd:?}");
@@ -599,8 +852,9 @@ impl Actor {
         }
     }
 
-    async fn run(mut self) {
-        loop {
+    async fn run(mut self) -> Result<()> {
+        let mut failures = Vec::new();
+        let shutdown = loop {
             tokio::select! {
                 task = self.handles.tick() => {
                     if let Some(task) = task {
@@ -609,15 +863,17 @@ impl Actor {
                 }
                 cmd = self.cmd_rx.recv() => {
                     let Some(cmd) = cmd else {
-                        break;
+                        break None;
                     };
-                    self.handle_command(cmd).await;
+                    if let Some(shutdown) = self.handle_command(cmd).await {
+                        break Some(shutdown);
+                    }
                 }
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
-                    Self::log_task_result(res);
+                    Self::log_task_result(res, &mut failures);
                     if self.tasks.is_empty() {
                         for tx in self.idle_waiters.drain(..) {
                             tx.send(()).await.ok();
@@ -625,21 +881,53 @@ impl Actor {
                     }
                 }
             }
+        };
+        self.gc_stop.cancel();
+        self.cmd_rx.close();
+        // Reject queued external work, but keep processing internal completion
+        // messages from imports and entity actors until their real tasks finish.
+        while self.cmd_rx.try_recv().is_ok() {}
+        while !self.tasks.is_empty()
+            || !self.fs_cmd_rx.is_empty()
+            || self.handles.has_pending_events()
+        {
+            tokio::select! {
+                task = self.handles.tick() => {
+                    if let Some(task) = task {
+                        self.spawn(task);
+                    }
+                }
+                Some(cmd) = self.fs_cmd_rx.recv() => self.handle_fs_command(cmd).await,
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    Self::log_task_result(res, &mut failures);
+                }
+            }
         }
-        self.handles.shutdown().await;
-        while let Some(res) = self.tasks.join_next().await {
-            Self::log_task_result(res);
+        self.fs_cmd_rx.close();
+        // Every entity task has returned. Failed actors may have left a full
+        // inbox in the manager; no task remains to consume a shutdown message.
+        drop(self.handles);
+        if let Some(shutdown) = shutdown {
+            // The DB must remain usable until every entity has persisted its
+            // state. Its reply is sent after the database itself is dropped.
+            if let Err(error) = self.context.db.send(shutdown.into()).await {
+                failures.push(
+                    n0_error::AnyError::from_std(error).context("forward file-store shutdown"),
+                );
+            }
         }
+        ShutdownError::result(failures).map_err(n0_error::AnyError::from_std)
     }
 
     async fn new(
         db_path: PathBuf,
-        rt: RtWrapper,
+        rt: tokio::runtime::Handle,
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
-    ) -> Result<Self> {
+        gc_stop: CancellationToken,
+    ) -> Result<(Self, tokio::task::JoinHandle<meta::ActorResult<()>>)> {
         trace!(
             "creating data directory: {}",
             options.path.data_path.display()
@@ -664,17 +952,20 @@ impl Actor {
             internal_cmd_tx: fs_commands_tx,
             protect,
         });
-        rt.spawn(db_actor.run());
-        Ok(Self {
-            context: slot_context.clone(),
-            cmd_rx,
-            fs_cmd_rx: fs_commands_rx,
-            tasks: JoinSet::new(),
-            handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
-            temp_tags: Default::default(),
-            idle_waiters: Vec::new(),
-            _rt: rt,
-        })
+        let database_task = rt.spawn(db_actor.run());
+        Ok((
+            Self {
+                context: slot_context.clone(),
+                cmd_rx,
+                fs_cmd_rx: fs_commands_rx,
+                tasks: JoinSet::new(),
+                handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
+                temp_tags: Default::default(),
+                idle_waiters: Vec::new(),
+                gc_stop,
+            },
+            database_task,
+        ))
     }
 }
 
@@ -723,6 +1014,26 @@ impl HashSpecificCommand for ObserveMsg {
         ctx.observe(self).await
     }
     async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+}
+impl HashSpecific for AvailabilityRequest {
+    fn hash(&self) -> Hash {
+        self.hash
+    }
+}
+impl HashSpecificCommand for AvailabilityRequest {
+    async fn handle(self, ctx: HashContext) {
+        let availability = ctx.availability_snapshot().await;
+        let _ = self.tx.send(Ok(availability));
+    }
+
+    async fn on_error(self, arg: SpawnArg<EmParams>) {
+        let cause = match arg {
+            SpawnArg::Busy => BlobAvailabilityProbeError::EntityBusy,
+            SpawnArg::Dead => BlobAvailabilityProbeError::EntityDead,
+            _ => unreachable!(),
+        };
+        let _ = self.tx.send(Err(cause));
+    }
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
@@ -834,12 +1145,17 @@ impl Deref for RtWrapper {
 impl Drop for RtWrapper {
     fn drop(&mut self) {
         if let Some(rt) = self.0.take() {
-            trace!("dropping tokio runtime");
-            tokio::task::block_in_place(|| {
-                drop(rt);
-            });
-            trace!("dropped tokio runtime");
+            // Drop is the emergency path. Explicit shutdown moves the runtime
+            // into a retained blocking job and joins that job instead.
+            rt.shutdown_background();
         }
+    }
+}
+
+impl RtWrapper {
+    async fn shutdown(mut self) -> std::result::Result<(), JoinError> {
+        let rt = self.0.take().expect("runtime is owned until shutdown");
+        tokio::task::spawn_blocking(move || drop(rt)).await
     }
 }
 
@@ -910,6 +1226,7 @@ impl EntityApi for HashContext {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
+        let _transition = self.state.transition().await;
         self.load().await;
         let ImportBaoMsg {
             inner: ImportBaoRequest { size, .. },
@@ -961,6 +1278,7 @@ impl EntityApi for HashContext {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn export_path(&self, cmd: ExportPathMsg) {
         trace!("{cmd:?}");
+        let _transition = self.state.transition().await;
         self.load().await;
         let ExportPathMsg { inner, mut tx, .. } = cmd;
         if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
@@ -971,6 +1289,7 @@ impl EntityApi for HashContext {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
         trace!("{cmd:?}");
+        let _transition = self.state.transition().await;
         self.load().await;
         let res = match finish_import_impl(self, cmd.inner).await {
             Ok(()) => {
@@ -989,9 +1308,10 @@ impl EntityApi for HashContext {
 
     #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
     async fn persist(&self) {
+        let _transition = self.state.transition().await;
         self.state.send_if_modified(|guard| {
             let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
+            let Some(fs) = guard.take_partial() else {
                 return false;
             };
             let path = self.global.options.path.bitfield_path(hash);
@@ -1106,12 +1426,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             MemOrFile::File(file)
         }
     };
-    handle.complete(data, outboard);
     let state = EntryState::Complete {
         data_location,
         outboard_location,
     };
     ctx.update_await(state).await?;
+    handle.complete(data, outboard);
     Ok(())
 }
 
@@ -1252,15 +1572,11 @@ async fn export_path_impl(
             MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
             vec![],
         ),
-        DataLocation::External(paths, size) => (
-            MemOrFile::File((
-                paths.first().cloned().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "no external data path")
-                })?,
-                size,
-            )),
-            paths,
-        ),
+        DataLocation::External(paths, size) => {
+            let (source_path, _source) =
+                open_external_data(&paths, size).map_err(BaoFileOpenError::into_io_error)?;
+            (MemOrFile::File((source_path, size)), paths)
+        }
     };
     let size = match &data {
         MemOrFile::Mem(data) => data.len() as u64,
@@ -1292,10 +1608,7 @@ async fn export_path_impl(
                         source_path.display(),
                         target.display()
                     );
-                    external.push(target);
-                    external.sort();
-                    external.dedup();
-                    external.truncate(MAX_EXTERNAL_PATHS);
+                    external = retain_healthy_external_candidates(external, target, size);
                 } else {
                     // the file was previously owned, so we can just move it.
                     // if that fails with ERR_CROSS, we fall back to copy.
@@ -1397,36 +1710,73 @@ impl FsStore {
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .thread_name_fn(|| {
-                format!(
-                    "iroh-blob-store-{}",
-                    THREAD_NR.fetch_add(1, Ordering::Relaxed)
-                )
-            })
-            .enable_time()
-            .build()?;
+        let rt = RtWrapper::from(
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_name_fn(|| {
+                    format!(
+                        "iroh-blob-store-{}",
+                        THREAD_NR.fetch_add(1, Ordering::Relaxed)
+                    )
+                })
+                .enable_time()
+                .build()?,
+        );
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
-        let actor = handle
+        let gc_stop = CancellationToken::new();
+        let initialized = handle
             .spawn(Actor::new(
                 db_path,
-                rt.into(),
+                handle.clone(),
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
                 Arc::new(options),
+                gc_stop.clone(),
             ))
             .await
-            .anyerr()??;
-        handle.spawn(actor.run());
-        let store = FsStore::new(commands_tx.into(), fs_commands_tx);
-        if let Some(config) = gc_config {
-            handle.spawn(run_gc(store.deref().clone(), config));
-        }
-        Ok(store)
+            .anyerr()
+            .and_then(|result| result);
+        let (actor, database_task) = match initialized {
+            Ok(actor) => actor,
+            Err(error) => {
+                let mut failures = vec![error];
+                if let Err(error) = rt.shutdown().await {
+                    failures.push(n0_error::AnyError::from_std(error));
+                }
+                return Err(n0_error::AnyError::from_std(ShutdownError::from_failures(
+                    failures,
+                )));
+            }
+        };
+        let actor_task = handle.spawn(actor.run());
+        // GC uses an unanchored client: its task must not retain its own owner.
+        let gc_task = gc_config.map(|config| {
+            let store = Store::from_sender(commands_tx.clone().into());
+            let stop = gc_stop.clone();
+            handle.spawn(async move {
+                tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => {}
+                    _ = run_gc(store, config) => {}
+                }
+            })
+        });
+        let shutdown = Arc::new(shutdown::Shutdown::new(
+            commands_tx.downgrade(),
+            rt,
+            actor_task,
+            database_task,
+            gc_task,
+            gc_stop,
+        ));
+        Ok(FsStore {
+            sender: ApiClient::local(shutdown.sender(commands_tx)),
+            db: shutdown.sender(fs_commands_tx),
+            shutdown,
+        })
     }
 }
 
@@ -1442,7 +1792,8 @@ impl FsStore {
 #[derive(Debug, Clone)]
 pub struct FsStore {
     sender: ApiClient,
-    db: tokio::sync::mpsc::Sender<InternalCommand>,
+    db: irpc::channel::mpsc::Sender<InternalCommand>,
+    shutdown: Arc<shutdown::Shutdown>,
 }
 
 impl From<FsStore> for Store {
@@ -1466,14 +1817,23 @@ impl AsRef<Store> for FsStore {
 }
 
 impl FsStore {
-    fn new(
-        sender: irpc::LocalSender<proto::Request>,
-        db: tokio::sync::mpsc::Sender<InternalCommand>,
-    ) -> Self {
-        Self {
-            sender: sender.into(),
-            db,
-        }
+    /// Shut down and join the file store's actors, GC, and dedicated runtime.
+    ///
+    /// Concurrent and repeated calls share the same retained close operation.
+    /// Cancelling a waiter retains cleanup and its task handles for the next waiter.
+    /// Errors retain their original causes in [`ShutdownError`], wrapped in an
+    /// RPC receive error so the existing shutdown result type remains unchanged.
+    pub async fn shutdown(&self) -> irpc::Result<()> {
+        self.shutdown.wait().await
+    }
+
+    /// Read-only observation of the actual task handles for teardown handshakes.
+    #[cfg(test)]
+    pub(crate) fn shutdown_actors_finished(&self) -> bool {
+        self.shutdown
+            .actors
+            .iter()
+            .all(tokio::task::AbortHandle::is_finished)
     }
 
     pub async fn dump(&self) -> Result<()> {
@@ -1491,6 +1851,96 @@ impl FsStore {
         rx.await.anyerr()??;
         Ok(())
     }
+
+    /// Return an atomic file-store availability snapshot for `hash`.
+    ///
+    /// See [`BlobAvailability`] for the distinction between readable, missing,
+    /// partial, and confirmed-broken storage. Request lifecycle errors are
+    /// returned separately and may be retryable.
+    pub async fn availability(
+        &self,
+        hash: impl Into<Hash>,
+    ) -> std::result::Result<BlobAvailability, BlobAvailabilityProbeError> {
+        let hash = hash.into();
+        if hash == Hash::EMPTY {
+            return Ok(BlobAvailability::Readable { size: 0 });
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.db
+            .send(AvailabilityRequest { hash, tx }.into())
+            .await
+            .map_err(|_| BlobAvailabilityProbeError::StoreUnavailable)?;
+        rx.await
+            .map_err(|_| BlobAvailabilityProbeError::ResponseDropped)?
+    }
+
+    /// Cryptographically validate every external path and its store-owned outboard.
+    ///
+    /// This operation is read-only. Unlike [`Self::availability`], it reads the
+    /// complete candidate content and verifies the stored BAO outboard.
+    pub async fn validate_external_reference(
+        &self,
+        hash: impl Into<Hash>,
+    ) -> std::result::Result<ExternalReferenceInspection, ExternalReferenceMaintenanceError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.db
+            .send(
+                ValidateExternalReferenceRequest {
+                    hash: hash.into(),
+                    tx,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| ExternalReferenceMaintenanceError::StoreUnavailable)?;
+        rx.await
+            .map_err(|_| ExternalReferenceMaintenanceError::ResponseDropped)?
+    }
+
+    /// Validate and repair an external reference with a metadata CAS.
+    ///
+    /// Valid candidates are retained. Missing, wrong-size, hash-mismatched, or
+    /// otherwise invalid candidates are detached from metadata and returned as
+    /// quarantined paths. If the store-owned outboard is broken, the metadata
+    /// entry is removed so normal re-import can rebuild it. Persistent tags are
+    /// preserved and user-owned external files are never moved or deleted.
+    pub async fn repair_external_reference(
+        &self,
+        hash: impl Into<Hash>,
+    ) -> std::result::Result<ExternalReferenceMaintenanceReport, ExternalReferenceMaintenanceError>
+    {
+        self.maintain_external_reference(hash.into(), ExternalReferenceMaintenanceMode::Repair)
+            .await
+    }
+
+    /// Explicitly quarantine one external entry from active store metadata.
+    ///
+    /// The complete content is validated for diagnostics before the entry is
+    /// removed with a metadata CAS. Persistent tags and all user-owned files
+    /// are preserved.
+    pub async fn quarantine_external_reference(
+        &self,
+        hash: impl Into<Hash>,
+    ) -> std::result::Result<ExternalReferenceMaintenanceReport, ExternalReferenceMaintenanceError>
+    {
+        self.maintain_external_reference(hash.into(), ExternalReferenceMaintenanceMode::Quarantine)
+            .await
+    }
+
+    async fn maintain_external_reference(
+        &self,
+        hash: Hash,
+        mode: ExternalReferenceMaintenanceMode,
+    ) -> std::result::Result<ExternalReferenceMaintenanceReport, ExternalReferenceMaintenanceError>
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.db
+            .send(MaintainExternalReferenceRequest { hash, mode, tx }.into())
+            .await
+            .map_err(|_| ExternalReferenceMaintenanceError::StoreUnavailable)?;
+        rx.await
+            .map_err(|_| ExternalReferenceMaintenanceError::ResponseDropped)?
+    }
 }
 
 #[cfg(test)]
@@ -1498,18 +1948,19 @@ pub mod tests {
     use core::panic;
     use std::collections::{HashMap, HashSet};
 
-    use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
+    use bao_tree::{io::round_up_to_chunks_groups, ChunkNum, ChunkRanges};
     use n0_future::{stream, Stream, StreamExt};
     use testresult::TestResult;
     use walkdir::WalkDir;
 
     use super::*;
     use crate::{
-        api::blobs::Bitfield,
+        api::blobs::{Bitfield, BlobStatus, ExportMode, ExportOptions},
         store::{
             util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
             IROH_BLOCK_SIZE,
         },
+        HashAndFormat,
     };
 
     /// Interesting sizes for testing.
@@ -1523,6 +1974,35 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
+
+    #[test]
+    fn external_candidate_retention_keeps_newest_and_drops_unhealthy_paths() -> TestResult<()> {
+        let temp = tempfile::tempdir()?;
+        let expected = b"healthy";
+        let mut paths = Vec::new();
+        for index in 0..10 {
+            let path = temp.path().join(format!("candidate-{index:02}.bin"));
+            fs::write(&path, expected)?;
+            paths.push(path);
+        }
+        let stale = temp.path().join("candidate-stale.bin");
+        paths.push(stale.clone());
+        let newest = temp.path().join("zz-newest.bin");
+        fs::write(&newest, expected)?;
+
+        let retained =
+            retain_healthy_external_candidates(paths, newest.clone(), expected.len() as u64);
+
+        assert_eq!(retained.len(), MAX_EXTERNAL_PATHS);
+        assert!(retained.contains(&newest));
+        assert!(!retained.contains(&stale));
+        assert!(retained.iter().all(|path| {
+            fs::metadata(path)
+                .map(|metadata| metadata.len() == expected.len() as u64)
+                .unwrap_or(false)
+        }));
+        Ok(())
+    }
 
     pub fn round_up_request(size: u64, ranges: &ChunkRanges) -> ChunkRanges {
         let last_chunk = ChunkNum::chunks(size);
@@ -1569,6 +2049,289 @@ pub mod tests {
             store.import_bao_bytes(hash, ranges, bao).await?;
             task.await??;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn availability_distinguishes_missing_partial_and_readable_with_size() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let store = FsStore::load(&db_dir).await?;
+        let partial_data = test_data(100_000);
+        let partial_hash = Hash::new(&partial_data);
+
+        assert_eq!(
+            store.availability(partial_hash).await?,
+            BlobAvailability::Missing
+        );
+
+        let last_chunk = ChunkNum::chunks(partial_data.len() as u64);
+        let ranges = ChunkRanges::from(last_chunk - 1..last_chunk);
+        let (hash, bao) = create_n0_bao(&partial_data, &ranges)?;
+        store.import_bao_bytes(hash, ranges, bao).await?;
+        assert_eq!(
+            store.availability(hash).await?,
+            BlobAvailability::Partial {
+                size: Some(partial_data.len() as u64)
+            }
+        );
+
+        let complete_data = Bytes::from_static(b"complete availability");
+        let complete_hash = Hash::new(&complete_data);
+        store.add_bytes(complete_data.clone()).await?;
+        assert_eq!(
+            store.availability(complete_hash).await?,
+            BlobAvailability::Readable {
+                size: complete_data.len() as u64
+            }
+        );
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn availability_snapshot_stays_coherent_while_metadata_commit_is_pending() {
+        let (state_tx, state_rx) = tokio::sync::watch::channel(BaoFileStorage::new_partial_mem());
+        let state_transitioned = Arc::new(tokio::sync::Barrier::new(2));
+        let commit_released = Arc::new(tokio::sync::Barrier::new(2));
+        let writer_transitioned = state_transitioned.clone();
+        let writer_commit_released = commit_released.clone();
+
+        let writer = tokio::spawn(async move {
+            state_tx.send_replace(BaoFileStorage::new_complete(
+                MemOrFile::Mem(Bytes::from_static(b"complete")),
+                MemOrFile::empty(),
+            ));
+            writer_transitioned.wait().await;
+            writer_commit_released.wait().await;
+        });
+
+        assert!(matches!(
+            BlobAvailability::from_storage(&state_rx.borrow()),
+            BlobAvailability::Partial { .. }
+        ));
+        state_transitioned.wait().await;
+        assert_eq!(
+            BlobAvailability::from_storage(&state_rx.borrow()),
+            BlobAvailability::Readable { size: 8 }
+        );
+        commit_released.wait().await;
+        writer.await.expect("barrier-controlled writer must finish");
+    }
+
+    #[tokio::test]
+    async fn test_external_data_uses_remaining_candidate_after_restart() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let first = testdir.path().join("first.bin");
+        let second = testdir.path().join("second.bin");
+        let exported = testdir.path().join("exported.bin");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            let tag = store.add_bytes(data.clone()).await?;
+            assert_eq!(tag.hash, hash);
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: first.clone(),
+                })
+                .await?;
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: second.clone(),
+                })
+                .await?;
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        fs::remove_file(first)?;
+        let store = FsStore::load(&db_dir).await?;
+        let observed = store.observe(hash).await?;
+        assert!(observed.is_complete());
+        store.export(hash, &exported).await?;
+        assert_eq!(fs::read(exported)?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn availability_does_not_claim_same_length_external_replacement_is_verified(
+    ) -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let external = testdir.path().join("external.bin");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            store.add_bytes(data.clone()).await?;
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: external.clone(),
+                })
+                .await?;
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        fs::write(&external, vec![b'X'; data.len()])?;
+        let store = FsStore::load(&db_dir).await?;
+        assert_eq!(
+            store.availability(hash).await?,
+            BlobAvailability::Readable {
+                size: data.len() as u64
+            },
+            "availability is a cheap readability snapshot, not hash verification"
+        );
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_missing_external_data_is_recoverable() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let external = testdir.path().join("external.bin");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            let tag = store.add_bytes(data.clone()).await?;
+            assert_eq!(tag.hash, hash);
+            store
+                .tags()
+                .set("retained-external", HashAndFormat::raw(hash))
+                .await?;
+            assert!(store.tags().get("retained-external").await?.is_some());
+            store
+                .export_with_opts(ExportOptions {
+                    hash,
+                    mode: ExportMode::TryReference,
+                    target: external.clone(),
+                })
+                .await?;
+            assert!(store.tags().get("retained-external").await?.is_some());
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        fs::remove_file(external)?;
+        let store = FsStore::load(&db_dir).await?;
+        assert!(store.tags().get("retained-external").await?.is_some());
+        let missing = store.observe(hash).await?;
+        assert!(missing.is_empty());
+        assert_eq!(store.status(hash).await?, BlobStatus::NotFound);
+        assert_eq!(
+            store
+                .tags()
+                .get("retained-external")
+                .await?
+                .expect("reconciliation must not delete retention tags")
+                .hash,
+            hash
+        );
+        store.sync_db().await?;
+        store.shutdown().await?;
+
+        let store = FsStore::load(&db_dir).await?;
+        assert_eq!(store.status(hash).await?, BlobStatus::NotFound);
+        assert!(store.observe(hash).await?.is_empty());
+
+        let recovered = store.add_bytes(data).await?;
+        assert_eq!(recovered.hash, hash);
+        assert!(store.observe(hash).await?.is_complete());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_failure_poison_is_visible_to_existing_observer() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let data = test_data(1024 * 16 + 1);
+        let (hash, bao) = create_n0_bao(&data, &ChunkRanges::all())?;
+        let store = FsStore::load(&db_dir).await?;
+        let mut observer = store.observe(hash).stream().await?;
+        assert!(observer
+            .next()
+            .await
+            .expect("observer must publish its initial state")
+            .is_empty());
+
+        let data_path = Options::new(&db_dir).path.data_path(&hash);
+        fs::create_dir_all(&data_path)?;
+        store
+            .import_bao_bytes(hash, ChunkRanges::all(), bao)
+            .await
+            .expect_err("writing into a directory must fail");
+        assert!(observer.next().await.is_none());
+        assert_eq!(store.status(hash).await?, BlobStatus::NotFound);
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_missing_owned_data_terminates_observe_without_panicking() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+
+        {
+            let store = FsStore::load(&db_dir).await?;
+            let tag = store.add_bytes(data).await?;
+            assert_eq!(tag.hash, hash);
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        let data_path = Options::new(&db_dir).path.data_path(&hash);
+        fs::remove_file(data_path)?;
+
+        let store = FsStore::load(&db_dir).await?;
+        let BlobAvailability::Broken(failure) = store.availability(hash).await? else {
+            panic!("missing owned data must remain a typed broken state")
+        };
+        assert_eq!(failure.kind, BlobStorageFailureKind::OwnedDataMissing);
+        assert!(store.observe(hash).await.is_err());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_missing_owned_outboard_is_typed_broken_storage() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let data = test_data(100_000);
+        let hash = Hash::new(&data);
+        let mut options = Options::new(&db_dir);
+        options.inline = options::InlineOptions::NO_INLINE;
+
+        {
+            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+            store.add_bytes(data).await?;
+            store.sync_db().await?;
+            store.shutdown().await?;
+        }
+
+        fs::remove_file(options.path.outboard_path(&hash))?;
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        let BlobAvailability::Broken(failure) = store.availability(hash).await? else {
+            panic!("missing owned outboard must remain a typed broken state")
+        };
+        assert_eq!(failure.kind, BlobStorageFailureKind::OwnedOutboardMissing);
+        store.shutdown().await?;
         Ok(())
     }
 

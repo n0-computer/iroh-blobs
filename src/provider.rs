@@ -3,7 +3,7 @@
 //! Note that while using this API directly is fine, the standard way
 //! to provide data is to just register a [`crate::BlobsProtocol`] protocol
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
-use std::{fmt::Debug, future::Future, io};
+use std::{fmt::Debug, future::Future, io, panic::AssertUnwindSafe};
 
 use bao_tree::ChunkRanges;
 use iroh::endpoint::{self, ConnectionError, VarInt};
@@ -11,7 +11,7 @@ use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_error::{e, stack_error, Result};
 use n0_future::{
     time::{Duration, Instant},
-    StreamExt,
+    FutureExt, FuturesUnordered, StreamExt,
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
@@ -302,11 +302,22 @@ pub async fn handle_connection(
             debug!("closing connection: {cause}");
             return;
         }
-        while let Ok(pair) = StreamPair::accept(&connection, progress.clone()).await {
-            let span = debug_span!("stream", stream_id = %pair.stream_id());
-            let store = store.clone();
-            n0_future::task::spawn(handle_stream(pair, store).instrument(span));
+        // Keep stream futures in their connection's drop boundary. Detached tasks can
+        // retain QUIC streams (and the UDP socket) after the router joins this handler.
+        let mut streams = FuturesUnordered::new();
+        loop {
+            select! {
+                pair = StreamPair::accept(&connection, progress.clone()) => {
+                    let Ok(pair) = pair else { break };
+                    let span = debug_span!("stream", stream_id = %pair.stream_id());
+                    let store = store.clone();
+                    // Preserve the isolation previously provided by a separate task.
+                    streams.push(AssertUnwindSafe(handle_stream(pair, store).instrument(span)).catch_unwind());
+                }
+                Some(_) = streams.next(), if !streams.is_empty() => {}
+            }
         }
+        drop(streams);
         progress
             .connection_closed(|| ConnectionClosed { connection_id })
             .await

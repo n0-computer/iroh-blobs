@@ -12,7 +12,7 @@ use crate::store::util::SliceInfoExt;
 /// or a number of external files conceptually owned by the user.
 ///
 /// Only complete data can be inlined.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DataLocation<I = (), E = ()> {
     /// Data is in the inline_data table.
     Inline(I),
@@ -104,7 +104,7 @@ impl<I, E> DataLocation<I, E> {
 /// Outboards are implementation specific to the store and as such are always owned.
 ///
 /// Only complete outboards can be inlined.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OutboardLocation<I = ()> {
     /// Outboard is in the inline_outboard table.
     Inline(I),
@@ -157,7 +157,7 @@ impl<I> OutboardLocation<I> {
 /// The information about an entry that we keep in the entry table for quick access.
 ///
 /// The exact info to store here is TBD, so usually you should use the accessor methods.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EntryState<I = ()> {
     /// For a complete entry we always know the size. It does not make much sense
     /// to write to a complete entry, so they are much easier to share.
