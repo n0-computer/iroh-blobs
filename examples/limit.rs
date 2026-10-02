@@ -115,6 +115,9 @@ fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
         // with OK or not OK depending on the hash. We do not want detailed
         // events once it has been decided to handle a request.
         get: RequestMode::Intercept,
+        // Get many requests could be used to bypass the hash check, so we
+        // reject them outright.
+        get_many: RequestMode::Disabled,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
@@ -176,6 +179,8 @@ fn limit_max_connections(max_connections: usize) -> EventSender {
 
         fn inc(&self) -> Result<usize, usize> {
             let (c, max) = &*self.0;
+            // TODO: use `try_update` once the MSRV is at least 1.95
+            #[allow(deprecated)]
             c.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 if n >= *max {
                     None
