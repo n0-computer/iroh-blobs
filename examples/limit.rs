@@ -24,8 +24,8 @@ use common::setup_logging;
 use iroh::{endpoint::presets, protocol::Router, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::{
     provider::events::{
-        AbortReason, ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode,
-        ThrottleMode,
+        AbortReason, ConnectMode, EventMask, EventSender, ObserveMode, ProviderMessage,
+        RequestMode, ThrottleMode,
     },
     store::mem::MemStore,
     ticket::BlobTicket,
@@ -114,23 +114,45 @@ fn limit_by_hash(allowed_hashes: HashSet<Hash>) -> EventSender {
         // with OK or not OK depending on the hash. We do not want detailed
         // events once it has been decided to handle a request.
         get: RequestMode::Intercept,
+        // Every mode is per request type, so an allowlist has to cover *all* the
+        // request types that can read the store, not just `get`. Leaving these at
+        // their `DEFAULT` of "no events" would mean the check below is skipped for
+        // them and a peer just asks for the blob by another name.
+        get_many: RequestMode::Intercept,
+        observe: ObserveMode::Intercept,
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
     n0_future::task::spawn(async move {
+        let allowed = |hash: &Hash| {
+            if allowed_hashes.contains(hash) {
+                println!("Request for hash {hash} allowed");
+                Ok(())
+            } else {
+                println!("Request for hash {hash} not allowed");
+                Err(AbortReason::Permission)
+            }
+        };
         while let Some(msg) = rx.recv().await {
-            if let ProviderMessage::GetRequestReceived(msg) = msg {
-                let res = if !msg.request.ranges.is_blob() {
-                    println!("HashSeq request not allowed");
-                    Err(AbortReason::Permission)
-                } else if !allowed_hashes.contains(&msg.request.hash) {
-                    println!("Request for hash {} not allowed", msg.request.hash);
-                    Err(AbortReason::Permission)
-                } else {
-                    println!("Request for hash {} allowed", msg.request.hash);
-                    Ok(())
-                };
-                msg.tx.send(res).await.ok();
+            match msg {
+                ProviderMessage::GetRequestReceived(msg) => {
+                    let res = if !msg.request.ranges.is_blob() {
+                        println!("HashSeq request not allowed");
+                        Err(AbortReason::Permission)
+                    } else {
+                        allowed(&msg.request.hash)
+                    };
+                    msg.tx.send(res).await.ok();
+                }
+                ProviderMessage::GetManyRequestReceived(msg) => {
+                    let res = msg.request.hashes.iter().try_for_each(&allowed);
+                    msg.tx.send(res).await.ok();
+                }
+                ProviderMessage::ObserveRequestReceived(msg) => {
+                    let res = allowed(&msg.request.hash);
+                    msg.tx.send(res).await.ok();
+                }
+                _ => {}
             }
         }
     });

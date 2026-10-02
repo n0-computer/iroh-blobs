@@ -148,7 +148,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         f: impl FnOnce() -> GetRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.reader.id())
+            .get_request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -157,7 +157,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         f: impl FnOnce() -> GetManyRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.reader.id())
+            .get_many_request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -166,7 +166,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         f: impl FnOnce() -> PushRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.reader.id())
+            .push_request(f, self.connection_id, self.reader.id())
             .await
     }
 
@@ -175,7 +175,7 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         f: impl FnOnce() -> ObserveRequest,
     ) -> Result<RequestTracker, ProgressError> {
         self.events
-            .request(f, self.connection_id, self.reader.id())
+            .observe_request(f, self.connection_id, self.reader.id())
             .await
     }
 
