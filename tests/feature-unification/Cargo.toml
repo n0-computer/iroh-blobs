@@ -1,0 +1,12 @@
+[package]
+name = "iroh-blobs-feature-unification"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+iroh-blobs = { path = "../..", default-features = false }
+irpc-iroh = "0.17.0"

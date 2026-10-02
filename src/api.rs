@@ -119,13 +119,13 @@ impl From<ExportBaoError> for Error {
 
 impl From<irpc::Error> for ExportBaoError {
     fn from(e: irpc::Error) -> Self {
+        #[allow(unreachable_patterns)]
         match e {
             irpc::Error::MpscRecv { source: e, .. } => e!(ExportBaoError::MpscRecv, e),
             irpc::Error::OneshotRecv { source: e, .. } => e!(ExportBaoError::OneshotRecv, e),
             irpc::Error::Send { source: e, .. } => e!(ExportBaoError::Send, e),
             irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
-            #[cfg(feature = "rpc")]
-            irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
+            other => e!(ExportBaoError::ExportBaoIo, io::Error::from(other)),
         }
     }
 }

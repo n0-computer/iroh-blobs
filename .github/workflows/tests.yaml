@@ -227,3 +227,19 @@ jobs:
         path: output
         retention-days: 1
         compression-level: 0
+
+  feature_unification:
+    name: Feature unification WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.git-ref }}
+      - name: Install ${{ inputs.rust-version }} Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          targets: wasm32-unknown-unknown
+      - name: Check feature-unification crate
+        run: cargo check --manifest-path tests/feature-unification/Cargo.toml --target wasm32-unknown-unknown
