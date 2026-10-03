@@ -47,18 +47,18 @@ pub(super) async fn gc_mark_task(
         };
     }
     let mut roots = HashSet::new();
+    trace!("traversing temp roots");
+    let mut tts = store.tags().list_temp_tags().await?;
+    while let Some(tt) = tts.next().await {
+        trace!("adding temp root {:?}", tt);
+        roots.insert(tt);
+    }
     trace!("traversing tags");
     let mut tags = store.tags().list().await?;
     while let Some(tag) = tags.next().await {
         let info = tag?;
         trace!("adding root {:?} {:?}", info.name, info.hash_and_format());
         roots.insert(info.hash_and_format());
-    }
-    trace!("traversing temp roots");
-    let mut tts = store.tags().list_temp_tags().await?;
-    while let Some(tt) = tts.next().await {
-        trace!("adding temp root {:?}", tt);
-        roots.insert(tt);
     }
     for HashAndFormat { hash, format } in roots {
         // we need to do this for all formats except raw
