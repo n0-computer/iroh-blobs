@@ -81,6 +81,45 @@ impl CompleteStorage {
     }
 }
 
+/// Storage for a virtual blob: the outboard is stored, but there is no data.
+/// The data is served on demand by a provider registered in
+/// [`crate::store::virtual_blob::VirtualProviders`] under the entry's provider
+/// name.
+pub struct VirtualStorage {
+    /// The outboard, in memory or on disk.
+    pub outboard: MemOrFile<Bytes, File>,
+    /// The total size of the (unstored) data.
+    pub size: u64,
+    /// The name of the provider that serves this entry's data.
+    pub provider: String,
+}
+
+impl VirtualStorage {
+    pub fn new(outboard: MemOrFile<Bytes, File>, size: u64, provider: String) -> Self {
+        Self {
+            outboard,
+            size,
+            provider,
+        }
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn bitfield(&self) -> Bitfield {
+        Bitfield::complete(self.size)
+    }
+}
+
+impl fmt::Debug for VirtualStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VirtualStorage")
+            .field("outboard", &DD(self.outboard.fmt_short()))
+            .field("size", &self.size)
+            .finish()
+    }
+}
 /// Create a file for reading and writing, but *without* truncating the existing
 /// file.
 fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
@@ -322,6 +361,10 @@ pub(crate) enum BaoFileStorage {
     ///
     /// Writing to this is a no-op, since it is already complete.
     Complete(CompleteStorage),
+    /// A virtual entry: the outboard is stored, but the data is not. The data
+    /// is served on demand by the provider named in the entry, registered in
+    /// [`crate::store::virtual_blob::VirtualProviders`].
+    Virtual(VirtualStorage),
     /// We will get into that state if there is an io error in the middle of an operation,
     /// or after the handle is persisted and no longer usable.
     Poisoned,
@@ -333,6 +376,7 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::PartialMem(x) => x.fmt(f),
             BaoFileStorage::Partial(x) => x.fmt(f),
             BaoFileStorage::Complete(x) => x.fmt(f),
+            BaoFileStorage::Virtual(x) => x.fmt(f),
             BaoFileStorage::Poisoned => f.debug_struct("Poisoned").finish(),
             BaoFileStorage::Initial => f.debug_struct("Initial").finish(),
             BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
@@ -406,6 +450,7 @@ impl BaoFileStorage {
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
             BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
+            BaoFileStorage::Virtual(x) => x.bitfield(),
             BaoFileStorage::Poisoned => {
                 panic!("poisoned storage should not be used")
             }
@@ -501,6 +546,7 @@ impl BaoFileStorage {
     fn sync_all(&self) -> io::Result<()> {
         match self {
             Self::Complete(_) => Ok(()),
+            Self::Virtual(_) => Ok(()),
             Self::PartialMem(_) => Ok(()),
             Self::NonExisting => Ok(()),
             Self::Partial(file) => {
@@ -546,6 +592,9 @@ impl ReadBytesAt for DataReader {
             BaoFileStorage::PartialMem(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Partial(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Complete(x) => x.data.read_bytes_at(offset, size),
+            BaoFileStorage::Virtual(_) => Err(io::Error::other(
+                "virtual entry has no stored data; serve via a registered provider",
+            )),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
@@ -563,6 +612,7 @@ impl ReadAt for OutboardReader {
         let guard = self.0.borrow();
         match guard.deref() {
             BaoFileStorage::Complete(x) => x.outboard.read_at(offset, buf),
+            BaoFileStorage::Virtual(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::PartialMem(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Partial(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
@@ -609,6 +659,22 @@ impl BaoFileStorage {
                 Self::new_complete(data, outboard)
             }
             Some(EntryState::Partial { .. }) => Self::new_partial_file(ctx).await?,
+            Some(EntryState::Virtual {
+                outboard_location,
+                size,
+                provider,
+            }) => {
+                let outboard = match outboard_location {
+                    OutboardLocation::NotNeeded => MemOrFile::empty(),
+                    OutboardLocation::Inline(data) => MemOrFile::Mem(data),
+                    OutboardLocation::Owned => {
+                        let path = options.path.outboard_path(hash);
+                        let file = std::fs::File::open(&path)?;
+                        MemOrFile::File(file)
+                    }
+                };
+                Self::Virtual(VirtualStorage::new(outboard, size, provider))
+            }
             None => Self::NonExisting,
         })
     }

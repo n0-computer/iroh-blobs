@@ -258,6 +258,488 @@ async fn two_nodes_get_blobs_mem() -> TestResult<()> {
     two_nodes_get_blobs(r1, &store1, r2, &store2).await
 }
 
+/// `fetch_bao_to` downloads a single blob's verified `BaoContentItem`s into a
+/// caller-provided channel without importing into a store. Reassembling the
+/// leaf items must yield the original bytes; this is the getter-side half of
+/// the virtual blob API.
+#[tokio::test]
+async fn fetch_bao_to_downloads_verified_items() -> TestResult<()> {
+    use bao_tree::io::BaoContentItem;
+
+    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    let data = test_data(1024 * 64);
+    let hash = Hash::new(data.clone());
+    let _tt = store1.add_bytes(data.clone()).await?;
+
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+
+    let (tx, mut rx) = irpc::channel::mpsc::channel::<BaoContentItem>(64);
+    let consumer = tokio::spawn(async move {
+        let mut assembled = Vec::new();
+        let mut parents = 0u64;
+        while let Ok(Some(item)) = rx.recv().await {
+            match item {
+                BaoContentItem::Leaf(leaf) => assembled.extend_from_slice(&leaf.data),
+                BaoContentItem::Parent(_) => parents += 1,
+            }
+        }
+        (assembled, parents)
+    });
+
+    let _stats = store2
+        .remote()
+        .fetch_bao_to(conn, hash, bao_tree::ChunkRanges::all(), tx)
+        .await?;
+    let (assembled, parents) = consumer.await?;
+
+    assert_eq!(
+        assembled.as_slice(),
+        data.as_ref(),
+        "reassembled leaves must match the original blob"
+    );
+    // A 64KiB blob spans multiple bao chunks, so the outboard (parents) is non-empty.
+    assert!(
+        parents > 0,
+        "expected non-empty outboard for a multi-chunk blob"
+    );
+
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
+}
+
+/// `fetch_bao_to` with explicit ranges: only the requested chunk window is
+/// delivered (a seek), and the received leaves are byte-identical to that
+/// window of the original blob. This is the primitive a transform receiver
+/// uses to resume from its own progress watermark.
+#[tokio::test]
+async fn fetch_bao_to_ranged_window() -> TestResult<()> {
+    use bao_tree::io::BaoContentItem;
+
+    let ((r1, store1), (r2, _store2)) = two_node_test_setup_mem().await?;
+    // 1 KiB = one blake3 chunk; 1 MiB = 1024 chunks.
+    let data = test_data(1024 * 1024);
+    let hash = Hash::new(data.clone());
+    let _tt = store1.add_bytes(data.clone()).await?;
+
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+
+    // Chunk ranges are 1 KiB blake3-chunk units: request chunks 2..5 =
+    // bytes [2048, 5120).
+    let start_byte = 2u64 * 1024;
+    let end_byte = 5u64 * 1024;
+    use bao_tree::ChunkNum;
+    let ranges = bao_tree::ChunkRanges::from(ChunkNum(2)..ChunkNum(5));
+
+    let (tx, mut rx) = irpc::channel::mpsc::channel::<BaoContentItem>(64);
+    let consumer = tokio::spawn(async move {
+        let mut assembled = Vec::new();
+        let mut first_offset = None;
+        let mut last_end = 0u64;
+        while let Ok(Some(item)) = rx.recv().await {
+            match item {
+                BaoContentItem::Leaf(leaf) => {
+                    let off = leaf.offset;
+                    first_offset.get_or_insert(off);
+                    last_end = off + leaf.data.len() as u64;
+                    assembled.extend_from_slice(&leaf.data);
+                }
+                BaoContentItem::Parent(_) => {}
+            }
+        }
+        (assembled, first_offset, last_end)
+    });
+
+    let stats = _store2
+        .remote()
+        .fetch_bao_to(conn, hash, ranges, tx)
+        .await?;
+    assert_eq!(
+        stats.payload_bytes_read as u64,
+        end_byte - start_byte,
+        "only the requested window must be transferred"
+    );
+    let (assembled, first_offset, last_end) = consumer.await?;
+    assert_eq!(first_offset.unwrap_or(0), start_byte);
+    assert_eq!(last_end, end_byte);
+    assert_eq!(
+        assembled.as_slice(),
+        &data.as_ref()[start_byte as usize..end_byte as usize],
+        "window bytes must match the original blob"
+    );
+
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
+}
+
+/// `sync_reader` hands out a synchronous, random-access reader over an entry's
+/// stored data, together with its length. Reads must be byte-exact for windows
+/// that cross the store's internal 16 KiB leaf unit (`IROH_BLOCK_SIZE` =
+/// `BlockSize::from_chunk_log(4)`), must work for the mem and fs stores, and must
+/// report absence rather than hand out a reader with nothing stable behind it.
+///
+/// A virtual entry stores only an outboard, so it reports a complete bitfield
+/// while having no data to read: it must be reported as absent here, not handed
+/// out as a reader that fails every read.
+#[tokio::test]
+async fn sync_reader_reads_stored_data() -> TestResult<()> {
+    let mem = MemStore::new();
+    check_sync_reader(&mem, "mem").await?;
+
+    let testdir = tempfile::tempdir()?;
+    let fs = FsStore::load(testdir.path().join("db")).await?;
+    check_sync_reader(&fs, "fs").await?;
+
+    // The readonly store serves the same contract over its in-memory entries.
+    use bao_tree::io::mixed::ReadBytesAt as _;
+    let data = test_data(64 * 1024 + 7);
+    let readonly = crate::store::readonly_mem::ReadonlyMemStore::new([data.clone()]);
+    let reader = readonly
+        .sync_reader(Hash::new(data.clone()))
+        .await?
+        .expect("readonly store entry has a reader");
+    assert_eq!(&reader.read_bytes_at(0, data.len())?, &data);
+
+    Ok(())
+}
+
+/// Shared assertions for any local store kind.
+async fn check_sync_reader(store: &Store, kind: &str) -> TestResult<()> {
+    use bao_tree::io::mixed::ReadBytesAt;
+
+    // Three leaf units plus a partial tail: windows straddle leaf boundaries.
+    let size = 3 * 16 * 1024 + 517;
+    let data = test_data(size);
+    let hash = Hash::new(data.clone());
+    let _tt = store.blobs().add_bytes(data.clone()).await?;
+
+    let reader = store
+        .sync_reader(hash)
+        .await?
+        .unwrap_or_else(|| panic!("{kind}: a complete blob must have a reader"));
+    assert_eq!(reader.len(), size as u64, "{kind}: length must be reported");
+    assert!(!reader.is_empty(), "{kind}: non-empty blob");
+
+    let windows: [(u64, usize); 6] = [
+        (0, 4096),
+        (0, 16 * 1024),
+        // straddles the first leaf boundary
+        (16 * 1024 - 10, 20),
+        // a full leaf unit from a mid-leaf offset
+        (16 * 1024 + 7, 16 * 1024),
+        // the tail
+        (size as u64 - 517, 517),
+        // last byte alone
+        (size as u64 - 1, 1),
+    ];
+    for (offset, len) in windows {
+        let got = reader.read_bytes_at(offset, len)?;
+        assert_eq!(
+            got.as_ref(),
+            &data[offset as usize..offset as usize + len],
+            "{kind}: window ({offset}, {len}) must match the stored data"
+        );
+    }
+
+    // A read at or past the end must not invent data: either an empty read or an
+    // io error, never bytes from outside the blob.
+    for offset in [size as u64, size as u64 + 5] {
+        match reader.read_bytes_at(offset, 16) {
+            Ok(bytes) => assert!(
+                bytes.is_empty(),
+                "{kind}: read at {offset} past the end returned {} bytes",
+                bytes.len()
+            ),
+            Err(err) => assert_eq!(
+                err.kind(),
+                io::ErrorKind::UnexpectedEof,
+                "{kind}: unexpected error kind past the end"
+            ),
+        }
+    }
+
+    // A small blob exercises the inline path (fs keeps small data in the
+    // database rather than in a data file); a large one the file path.
+    let small = test_data(1024);
+    let small_hash = Hash::new(small.clone());
+    let _tt = store.blobs().add_bytes(small.clone()).await?;
+    let small_reader = store
+        .sync_reader(small_hash)
+        .await?
+        .unwrap_or_else(|| panic!("{kind}: a complete blob must have a reader"));
+    assert_eq!(
+        small_reader.len(),
+        small.len() as u64,
+        "{kind}: small length"
+    );
+    assert_eq!(
+        small_reader.read_bytes_at(0, small.len())?.as_ref(),
+        small.as_ref(),
+        "{kind}: small blob must read back exactly"
+    );
+
+    // Absent blob.
+    assert!(
+        store
+            .sync_reader(Hash::new(b"never stored"))
+            .await?
+            .is_none(),
+        "{kind}: absent blob has no reader"
+    );
+
+    // Virtual entry: complete bitfield, no stored data.
+    let virtual_data = test_data(64 * 1024);
+    let virtual_hash = Hash::new(virtual_data.clone());
+    let outboard = bao_tree::io::outboard::PreOrderMemOutboard::create(
+        &virtual_data,
+        crate::store::IROH_BLOCK_SIZE,
+    );
+    store
+        .blobs()
+        .add_virtual_with_outboard(
+            virtual_hash,
+            virtual_data.len() as u64,
+            outboard.data,
+            "sync-reader-test",
+        )
+        .await?;
+    assert!(
+        store.sync_reader(virtual_hash).await?.is_none(),
+        "{kind}: a virtual entry has no stored data to read"
+    );
+
+    Ok(())
+}
+
+/// A provider that serves a fixed set of bytes for any hash.
+#[derive(Clone)]
+struct TestBytesProvider {
+    data: Bytes,
+}
+
+impl crate::store::virtual_blob::Provider for TestBytesProvider {
+    fn reader_for(
+        &self,
+        _hash: &crate::Hash,
+    ) -> Option<crate::store::virtual_blob::DynVirtualSource> {
+        use std::sync::Arc;
+        Some(Arc::new(self.data.clone()))
+    }
+}
+
+/// Sets up a mem node that exposes its [`crate::store::virtual_blob::VirtualProviders`] handle.
+async fn node_test_setup_mem_with_virtuals() -> TestResult<(
+    Router,
+    MemStore,
+    MemoryLookup,
+    crate::store::virtual_blob::VirtualProviders,
+)> {
+    let (store, virtuals) = MemStore::new_with_virtuals(Default::default());
+    let sp = MemoryLookup::new();
+    let ep = Endpoint::builder(presets::Minimal)
+        .relay_mode(RelayMode::Default)
+        .address_lookup(sp.clone())
+        .bind()
+        .await?;
+    let blobs = BlobsProtocol::new(&store, Some(EventSender::DEFAULT));
+    let router = Router::builder(ep).accept(crate::ALPN, blobs).spawn();
+    Ok((router, store, sp, virtuals))
+}
+
+/// Full getter-side virtual flow over the wire: node A stores X normally; node
+/// B fetches X's verified content without importing it, assembles the received
+/// parent items into an outboard, installs it as a virtual entry via
+/// `add_virtual_with_outboard`, and serves X to node C by re-providing the
+/// bytes from its own copy. Node C must receive the correct bytes. Also
+/// covers the negative case: before the provider is registered on B, C's GET
+/// must fail.
+#[tokio::test]
+async fn two_nodes_get_virtual_blob_served_from_outboard() -> TestResult<()> {
+    use bao_tree::io::BaoContentItem;
+    use std::sync::Arc;
+
+    let ((r1, store1), _sp1) = {
+        let (r1, store1, sp1) = node_test_setup_mem().await?;
+        ((r1, store1), sp1)
+    };
+    let (r2, store2, sp2, virtuals2) = node_test_setup_mem_with_virtuals().await?;
+    let (r3, store3, _sp3) = node_test_setup_mem().await?;
+    // tell the nodes about each other so we don't rely on address lookup
+    sp2.add_endpoint_info(r1.endpoint().addr());
+    sp2.add_endpoint_info(r3.endpoint().addr());
+    let _ = _sp1;
+
+    let data = test_data(1024 * 64);
+    let hash = Hash::new(data.clone());
+    store1.add_bytes(data.clone()).temp_tag().await?;
+
+    // Node B fetches X from A without importing: leaves are discarded (the
+    // point of the virtual flow is to not retain them), parents are assembled
+    // into the standard pre-order outboard serialization.
+    let conn_b_a = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+    let (item_tx, mut item_rx) = irpc::channel::mpsc::channel::<BaoContentItem>(64);
+    let stats = store2
+        .remote()
+        .fetch_bao_to(conn_b_a, hash, bao_tree::ChunkRanges::all(), item_tx)
+        .await?;
+    assert!(stats.payload_bytes_read > 0);
+    let mut leaves = Vec::new();
+    let mut outboard = Vec::new();
+    while let Some(Some(item)) = item_rx.recv().await.ok() {
+        match item {
+            BaoContentItem::Leaf(leaf) => leaves.extend_from_slice(&leaf.data),
+            BaoContentItem::Parent(parent) => {
+                outboard.extend_from_slice(parent.pair.0.as_bytes());
+                outboard.extend_from_slice(parent.pair.1.as_bytes());
+            }
+            other => panic!("unexpected content item {other:?}"),
+        }
+    }
+    assert_eq!(leaves, data.as_ref(), "reassembled leaves must match");
+    assert!(
+        !outboard.is_empty(),
+        "multi-chunk blob must have an outboard"
+    );
+
+    // Install the virtual entry from the received outboard.
+    store2
+        .blobs()
+        .add_virtual_with_outboard(hash, data.len() as u64, outboard, "test-provider")
+        .await?;
+
+    // Negative case: no provider registered yet, so serving must fail.
+    let conn_c_b = r3
+        .endpoint()
+        .connect(r2.endpoint().addr(), crate::ALPN)
+        .await?;
+    let err = store3
+        .remote()
+        .fetch(conn_c_b.clone(), hash)
+        .await
+        .unwrap_err();
+    info!(%err, "GET without registered provider failed as expected");
+
+    // Register the provider backing the virtual entry with the bytes, and now
+    // node C must be able to GET the blob from node B.
+    virtuals2.register(
+        "test-provider",
+        Arc::new(TestBytesProvider { data: data.clone() }),
+    )?;
+    store3.remote().fetch(conn_c_b, hash).await?;
+    let got = store3.get_bytes(hash).await?;
+    assert_eq!(got, data, "node C must receive the exact bytes");
+
+    tokio::try_join!(r1.shutdown(), r2.shutdown(), r3.shutdown())?;
+    Ok(())
+}
+
+/// `add_virtual_with_outboard` placement rules on the fs store: empty outboard
+/// needs no file, small outboards are inlined, large outboards go to the
+/// canonical outboard file location - and all three serve correctly.
+#[tokio::test]
+async fn add_virtual_with_outboard_fs_placement() -> TestResult<()> {
+    use crate::store::virtual_blob::{DynVirtualSource, Provider};
+    use std::sync::Arc;
+
+    struct FixedProvider(Bytes);
+    impl Provider for FixedProvider {
+        fn reader_for(&self, _hash: &Hash) -> Option<DynVirtualSource> {
+            Some(Arc::new(self.0.clone()))
+        }
+    }
+
+    let testdir = tempfile::tempdir()?;
+    let options = crate::store::fs::options::Options::new(testdir.path());
+    let (store, virtuals) = crate::store::fs::FsStore::load_with_virtuals(
+        testdir.path().join("blobs.db"),
+        options.clone(),
+    )
+    .await?;
+
+    // single chunk: empty outboard => NotNeeded
+    let small = test_data(1024);
+    let small_hash = Hash::new(small.clone());
+    store
+        .blobs()
+        .add_virtual_with_outboard(small_hash, small.len() as u64, Bytes::new(), "p")
+        .await?;
+
+    // multi-chunk but tiny tree: inline outboard
+    let medium = test_data(256 * 1024);
+    let medium_hash = Hash::new(medium.clone());
+    let medium_outboard =
+        bao_tree::io::outboard::PreOrderMemOutboard::create(&medium, crate::store::IROH_BLOCK_SIZE);
+    store
+        .blobs()
+        .add_virtual_with_outboard(
+            medium_hash,
+            medium.len() as u64,
+            medium_outboard.data.clone(),
+            "p",
+        )
+        .await?;
+    assert!(
+        !options.path.outboard_path(&medium_hash).exists(),
+        "small outboard must be inlined, not written to a file"
+    );
+
+    // large blob: outboard above the default 16KiB inline threshold => file
+    let large = test_data(1024 * 1024 * 8);
+    let large_hash = Hash::new(large.clone());
+    let large_outboard =
+        bao_tree::io::outboard::PreOrderMemOutboard::create(&large, crate::store::IROH_BLOCK_SIZE);
+    store
+        .blobs()
+        .add_virtual_with_outboard(
+            large_hash,
+            large.len() as u64,
+            large_outboard.data.clone(),
+            "p",
+        )
+        .await?;
+    assert!(
+        options.path.outboard_path(&large_hash).exists(),
+        "large outboard must live at the canonical outboard file location"
+    );
+
+    // A stored entry for the same hash must be rejected.
+    let stored = store.blobs().add_bytes(medium.clone()).temp_tag().await?;
+    assert_eq!(stored.hash(), medium_hash);
+    let err = store
+        .blobs()
+        .add_virtual_with_outboard(medium_hash, medium.len() as u64, Bytes::new(), "p")
+        .await
+        .unwrap_err();
+    info!(%err, "adding virtual entry over stored data failed as expected");
+    drop(stored);
+
+    // All three entries must serve byte-identical to normal storage.
+    virtuals.register("p", Arc::new(FixedProvider(small.clone())))?;
+    let served = store
+        .blobs()
+        .export_bao(small_hash, ChunkRanges::all())
+        .bao_to_vec()
+        .await?;
+    let reference = crate::api::Store::from(crate::store::mem::MemStore::new());
+    let tt = reference.add_bytes(small.clone()).temp_tag().await?;
+    let expected = reference
+        .export_bao(tt.hash(), ChunkRanges::all())
+        .bao_to_vec()
+        .await?;
+    assert_eq!(served, expected);
+
+    tokio::try_join!(store.shutdown()).ok();
+    Ok(())
+}
+
 async fn two_nodes_observe(
     r1: Router,
     store1: &Store,

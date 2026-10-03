@@ -57,6 +57,10 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+blake3 = "1"
 hex = "0.4.3"
 iroh-test = "0.31.0"
 proptest = "1.6.0"

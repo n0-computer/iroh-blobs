@@ -46,9 +46,10 @@ pub use super::proto::{
 };
 use super::{
     proto::{
-        BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
-        ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
-        ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
+        AddVirtualRequest, AddVirtualWithOutboardRequest, BatchResponse, BlobStatusRequest,
+        BuildOutboardRequest, ClearProtectedRequest, CreateTempTagRequest, ExportBaoRequest,
+        ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest, ImportBytesRequest,
+        ImportPathRequest, ListRequest, Scope, SyncReaderRequest,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -57,7 +58,7 @@ use super::{
 use crate::{
     api::proto::{BatchRequest, ImportByteStreamUpdate},
     provider::events::ClientResult,
-    store::IROH_BLOCK_SIZE,
+    store::{virtual_blob::SyncReader, IROH_BLOCK_SIZE},
     util::{temp_tag::TempTag, RecvStreamAsyncStreamReader},
     BlobFormat, Hash, HashAndFormat,
 };
@@ -312,6 +313,103 @@ impl Blobs {
         AddProgress::new(self, stream)
     }
 
+    /// Build the BLAKE3 outboard for a stream of bytes without storing the data.
+    pub async fn build_outboard(
+        &self,
+        data: impl Stream<Item = io::Result<Bytes>> + Send + Sync + 'static,
+    ) -> AddProgress<'_> {
+        let inner = BuildOutboardRequest {
+            format: crate::BlobFormat::Raw,
+            scope: Scope::default(),
+        };
+        let client = self.client.clone();
+        let stream = Gen::new(|co| async move {
+            let (sender, mut receiver) = match client.bidi_streaming(inner, 32, 32).await {
+                Ok(x) => x,
+                Err(cause) => {
+                    co.yield_(AddProgressItem::Error(cause.into())).await;
+                    return;
+                }
+            };
+            let recv = async {
+                loop {
+                    match receiver.recv().await {
+                        Ok(Some(item)) => co.yield_(item).await,
+                        Err(cause) => {
+                            co.yield_(AddProgressItem::Error(cause.into())).await;
+                            break;
+                        }
+                        Ok(None) => break,
+                    }
+                }
+            };
+            let send = async {
+                tokio::pin!(data);
+                while let Some(item) = data.next().await {
+                    sender.send(ImportByteStreamUpdate::Bytes(item?)).await?;
+                }
+                sender.send(ImportByteStreamUpdate::Done).await?;
+                n0_error::Ok(())
+            };
+            let _ = tokio::join!(send, recv);
+        });
+        AddProgress::new(self, stream)
+    }
+
+    /// Associate a virtual entry with the name of the provider that serves it.
+    ///
+    /// This is the "add" half of the two-layer virtual blob API; the "build"
+    /// half is [`Self::build_outboard`]. The provider name is stored durably
+    /// with the entry. Serving the entry looks up a live provider registered
+    /// under this name (see
+    /// [`crate::store::virtual_blob::VirtualProviders`]) and fails with
+    /// `NotFound` if none is registered (or if the provider does not serve the
+    /// hash).
+    ///
+    /// Returns an error if there is no virtual entry for `hash`.
+    pub async fn add_virtual(
+        &self,
+        hash: impl Into<Hash>,
+        provider: impl Into<String>,
+    ) -> super::RequestResult<()> {
+        let msg = AddVirtualRequest {
+            hash: hash.into(),
+            provider: provider.into(),
+        };
+        self.client.rpc(msg).await??;
+        Ok(())
+    }
+
+    /// Create a virtual entry from a caller-supplied bao outboard.
+    ///
+    /// This is the getter-side counterpart of [`Self::fetch_bao_to`]: collect the
+    /// verified parent items into the standard pre-order outboard serialization
+    /// and install them here together with the expected size. The entry behaves
+    /// exactly like one created via [`Self::build_outboard`]; name a provider via
+    /// `provider` (the same name later passed to [`crate::store::virtual_blob::VirtualProviders::register`])
+    /// to serve it.
+    ///
+    /// The `outboard` must be the standard pre-order serialization for `size`
+    /// (empty when the blob fits in a single chunk); its length is validated
+    /// against `size`. An entry that already exists as stored (`Complete`) or
+    /// partial data is rejected; an existing virtual or missing entry is set.
+    pub async fn add_virtual_with_outboard(
+        &self,
+        hash: impl Into<Hash>,
+        size: u64,
+        outboard: impl Into<Bytes>,
+        provider: impl Into<String>,
+    ) -> super::RequestResult<()> {
+        let msg = AddVirtualWithOutboardRequest {
+            hash: hash.into(),
+            size,
+            outboard: outboard.into(),
+            provider: provider.into(),
+        };
+        self.client.rpc(msg).await??;
+        Ok(())
+    }
+
     pub fn export_ranges(
         &self,
         hash: impl Into<Hash>,
@@ -519,6 +617,40 @@ impl Blobs {
             BlobStatus::Complete { .. } => Ok(true),
             _ => Ok(false),
         }
+    }
+
+    /// Acquire a synchronous random-access reader over the stored data of a blob,
+    /// together with the blob's length in octets.
+    ///
+    /// Acquiring the reader is async, reading from it is not: the returned
+    /// reader reads straight from the store's storage for that hash and never
+    /// sends a message to the store actor. That makes it usable from code that
+    /// must not await - in particular from a [`ReadBytesAt`] implementation that
+    /// the store is already calling into, where awaiting would mean calling back
+    /// into the actor that is currently serving us.
+    ///
+    /// Returns `Ok(None)` if the blob is absent, or if its data is not complete:
+    /// a partially present blob has no stable contents to read, so a caller that
+    /// needs whole contents (e.g. to re-encode them) must not be handed one.
+    ///
+    /// The reader is independent of the store actor: it stays usable while the
+    /// caller holds it. It reads through to whatever the store has for that hash,
+    /// so if the entry is garbage collected concurrently, later reads fail with
+    /// an io error rather than returning stale data.
+    ///
+    /// Readers are local values and cannot be obtained from a remote store; see
+    /// [`SyncReader`].
+    ///
+    /// [`ReadBytesAt`]: bao_tree::io::mixed::ReadBytesAt
+    /// [`SyncReader`]: crate::store::virtual_blob::SyncReader
+    pub async fn sync_reader(&self, hash: impl Into<Hash>) -> RequestResult<Option<SyncReader>> {
+        let hash = hash.into();
+        // The empty blob is complete regardless of backend state, like in `status`.
+        if hash == Hash::EMPTY {
+            return Ok(Some(SyncReader::new(std::sync::Arc::new(Bytes::new()), 0)));
+        }
+        let msg = SyncReaderRequest { hash };
+        Ok(self.client.rpc(msg).await??)
     }
 
     #[allow(dead_code)]

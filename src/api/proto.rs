@@ -38,7 +38,11 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod bitfield;
 pub use bitfield::Bitfield;
 
-use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
+use crate::{
+    store::{util::Tag, virtual_blob::SyncReader},
+    util::temp_tag::TempTag,
+    BlobFormat, Hash, HashAndFormat,
+};
 
 #[allow(dead_code)]
 pub(crate) trait HashSpecific {
@@ -73,6 +77,12 @@ impl HashSpecific for ExportRangesMsg {
     }
 }
 
+impl HashSpecific for SyncReaderMsg {
+    fn hash(&self) -> crate::Hash {
+        self.inner.hash
+    }
+}
+
 impl HashSpecific for ExportPathMsg {
     fn hash(&self) -> crate::Hash {
         self.inner.hash
@@ -102,6 +112,8 @@ pub enum Request {
     ExportBao(ExportBaoRequest),
     #[rpc(tx = mpsc::Sender<ExportRangesItem>)]
     ExportRanges(ExportRangesRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<Option<SyncReader>>>)]
+    SyncReader(SyncReaderRequest),
     #[rpc(tx = mpsc::Sender<Bitfield>)]
     Observe(ObserveRequest),
     #[rpc(tx = oneshot::Sender<BlobStatus>)]
@@ -110,6 +122,12 @@ pub enum Request {
     ImportBytes(ImportBytesRequest),
     #[rpc(rx = mpsc::Receiver<ImportByteStreamUpdate>, tx = mpsc::Sender<AddProgressItem>)]
     ImportByteStream(ImportByteStreamRequest),
+    #[rpc(rx = mpsc::Receiver<ImportByteStreamUpdate>, tx = mpsc::Sender<AddProgressItem>)]
+    BuildOutboard(BuildOutboardRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
+    AddVirtual(AddVirtualRequest),
+    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
+    AddVirtualWithOutboard(AddVirtualWithOutboardRequest),
     #[rpc(tx = mpsc::Sender<AddProgressItem>)]
     ImportPath(ImportPathRequest),
     #[rpc(tx = mpsc::Sender<ExportProgressItem>)]
@@ -233,6 +251,16 @@ pub struct ExportRangesRequest {
     pub ranges: RangeSet2<u64>,
 }
 
+/// Acquire a synchronous random-access reader over the stored data of an entry.
+///
+/// Served only for entries whose data is complete. The reply carries the reader
+/// plus the entry's length in octets. The reply is a local-only value; see
+/// [`SyncReader`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncReaderRequest {
+    pub hash: Hash,
+}
+
 /// Export a file to a target path.
 ///
 /// For an incomplete file, the size might be truncated and gaps will be filled
@@ -252,10 +280,60 @@ pub struct ImportByteStreamRequest {
     pub scope: Scope,
 }
 
+/// Request to build an outboard from a stream of bytes without storing the data.
+///
+/// The bytes are streamed in via the `rx` channel; the resulting hash and
+/// size are reported via [`AddProgressItem`] (with the data discarded). The
+/// outboard is stored in the store as a *virtual* entry, which can later be
+/// served by associating it with a provider via `AddVirtual` (see
+/// [`crate::store::virtual_blob::VirtualProviders`]).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BuildOutboardRequest {
+    pub format: BlobFormat,
+    pub scope: Scope,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ImportByteStreamUpdate {
     Bytes(Bytes),
     Done,
+}
+
+/// Associate a virtual entry with the name of the provider that serves it.
+///
+/// The entry must already exist as a virtual entry (its outboard must have
+/// been computed via `BuildOutboard`). The provider name is stored durably
+/// with the entry; serving the entry looks up a live provider registered
+/// under this name (see [`crate::store::virtual_blob::VirtualProviders`])
+/// and fails with `NotFound` if none is registered.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AddVirtualRequest {
+    /// The hash of the virtual entry.
+    pub hash: Hash,
+    /// The name of the provider that serves this entry's data.
+    pub provider: String,
+}
+
+/// Create a virtual entry from a caller-supplied bao outboard.
+///
+/// This is the getter-side counterpart to fetching a blob without importing
+/// it ([`crate::api::blobs::Blobs::fetch_bao_to`]): the verified parent items
+/// assemble into the standard pre-order outboard serialization used by this
+/// crate, and are installed here as a virtual entry. The data is not stored;
+/// serving requires associating a provider via `AddVirtual` and registering
+/// it in [`crate::store::virtual_blob::VirtualProviders`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AddVirtualWithOutboardRequest {
+    /// The hash of the blob. Must be the root of `outboard`.
+    pub hash: Hash,
+    /// The size of the (not stored) blob data in bytes.
+    pub size: u64,
+    /// The bao outboard in the standard pre-order serialization, without the
+    /// root node (the same bytes `build_outboard` stores). Empty when the blob
+    /// fits in a single chunk.
+    pub outboard: Bytes,
+    /// The name of the provider that serves this entry's data.
+    pub provider: String,
 }
 
 /// Options for a list operation.

@@ -10,6 +10,7 @@ use std::{
     io::{self, Write},
     ops::Deref,
     path::PathBuf,
+    sync::Arc,
 };
 
 use bao_tree::{
@@ -36,15 +37,19 @@ use crate::{
         self,
         blobs::{Bitfield, ExportProgressItem},
         proto::{
-            self, BlobStatus, Command, ExportBaoMsg, ExportBaoRequest, ExportPathMsg,
-            ExportPathRequest, ExportRangesItem, ExportRangesMsg, ExportRangesRequest,
-            ImportBaoMsg, ImportByteStreamMsg, ImportBytesMsg, ImportPathMsg, ObserveMsg,
-            ObserveRequest, WaitIdleMsg,
+            self, AddVirtualMsg, AddVirtualWithOutboardMsg, BlobStatus, BuildOutboardMsg, Command,
+            ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest, ExportRangesItem,
+            ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportByteStreamMsg,
+            ImportBytesMsg, ImportPathMsg, ObserveMsg, ObserveRequest, WaitIdleMsg,
         },
         ApiClient, TempTag,
     },
     protocol::ChunkRangesExt,
-    store::{mem::CompleteStorage, IROH_BLOCK_SIZE},
+    store::{
+        mem::CompleteStorage,
+        virtual_blob::{DynVirtualSource, SyncReader},
+        IROH_BLOCK_SIZE,
+    },
     Hash,
 };
 
@@ -118,6 +123,23 @@ impl Actor {
                 tx.send(unsupported("import not supported").into())
                     .await
                     .ok();
+            }
+            Command::BuildOutboard(BuildOutboardMsg { tx, .. }) => {
+                tx.send(unsupported("build_outboard not supported").into())
+                    .await
+                    .ok();
+            }
+            Command::AddVirtual(AddVirtualMsg { tx, .. }) => {
+                tx.send(Err(unsupported("add_virtual not supported").into()))
+                    .await
+                    .ok();
+            }
+            Command::AddVirtualWithOutboard(AddVirtualWithOutboardMsg { tx, .. }) => {
+                tx.send(Err(
+                    unsupported("add_virtual_with_outboard not supported").into()
+                ))
+                .await
+                .ok();
             }
             Command::ImportPath(ImportPathMsg { tx, .. }) => {
                 tx.send(unsupported("import not supported").into())
@@ -227,6 +249,19 @@ impl Actor {
             Command::ExportRanges(cmd) => {
                 let entry = self.data.get(&cmd.inner.hash).cloned();
                 self.tasks.spawn(export_ranges(cmd, entry));
+            }
+            Command::SyncReader(cmd) => {
+                // Entries in this store are complete by construction.
+                let res = match self.data.get(&cmd.inner.hash) {
+                    Some(entry) => {
+                        let reader: DynVirtualSource = Arc::new(entry.data.clone());
+                        Ok(Some(SyncReader::new(reader, entry.data.len() as u64)))
+                    }
+                    None => Ok(None),
+                };
+                self.tasks.spawn(async move {
+                    cmd.tx.send(res).await.ok();
+                });
             }
         }
         None
