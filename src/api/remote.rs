@@ -22,11 +22,7 @@ use tracing::{debug, trace};
 
 use super::blobs::{Bitfield, ExportBaoOptions};
 use crate::{
-    api::{
-        self,
-        blobs::{Blobs, WriteProgress},
-        ApiClient, Store,
-    },
+    api::{self, blobs::WriteProgress, ApiClient, Store},
     get::{
         fsm::{
             AtBlobHeader, AtConnected, AtEndBlob, BlobContentNext, ConnectedNext, DecodeError,
@@ -944,13 +940,6 @@ async fn get_blob_ranges_impl<R: RecvStream>(
 }
 
 #[derive(Debug)]
-pub(crate) struct LazyHashSeq {
-    blobs: Blobs,
-    hash: Hash,
-    current_chunk: Option<HashSeqChunk>,
-}
-
-#[derive(Debug)]
 pub(crate) struct HashSeqChunk {
     /// the offset of the first hash in this chunk, in bytes
     offset: u64,
@@ -980,58 +969,6 @@ impl IntoIterator for HashSeqChunk {
 impl HashSeqChunk {
     pub fn base(&self) -> u64 {
         self.offset / 32
-    }
-
-    #[allow(dead_code)]
-    fn get(&self, offset: u64) -> Option<Hash> {
-        let start = self.offset;
-        let end = start + self.chunk.len() as u64;
-        if offset >= start && offset < end {
-            let o = (offset - start) as usize;
-            self.chunk.get(o)
-        } else {
-            None
-        }
-    }
-}
-
-impl LazyHashSeq {
-    #[allow(dead_code)]
-    pub fn new(blobs: Blobs, hash: Hash) -> Self {
-        Self {
-            blobs,
-            hash,
-            current_chunk: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_from_offset(&mut self, offset: u64) -> Result<Option<Hash>> {
-        if offset == 0 {
-            Ok(Some(self.hash))
-        } else {
-            self.get(offset - 1).await
-        }
-    }
-
-    #[allow(dead_code)]
-    pub async fn get(&mut self, child_offset: u64) -> Result<Option<Hash>> {
-        // check if we have the hash in the current chunk
-        if let Some(chunk) = &self.current_chunk {
-            if let Some(hash) = chunk.get(child_offset) {
-                return Ok(Some(hash));
-            }
-        }
-        // load the chunk covering the offset
-        let leaf = self
-            .blobs
-            .export_chunk(self.hash, child_offset * 32)
-            .await?;
-        // return the hash if it is in the chunk, otherwise we are behind the end
-        let hs = HashSeqChunk::try_from(leaf)?;
-        Ok(hs.get(child_offset).inspect(|_hash| {
-            self.current_chunk = Some(hs);
-        }))
     }
 }
 

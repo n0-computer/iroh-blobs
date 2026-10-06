@@ -22,7 +22,7 @@ use crate::{
         blobs::{Bitfield, WriteProgress},
         ExportBaoError, ExportBaoResult, RequestError, Store,
     },
-    hashseq::HashSeq,
+    hashseq::{HashSeq, LazyHashSeq, LazyHashSeqError},
     protocol::{
         GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
     },
@@ -433,6 +433,25 @@ impl HandleGetError {
     }
 }
 
+impl From<LazyHashSeqError> for HandleGetError {
+    fn from(e: LazyHashSeqError) -> Self {
+        match e {
+            LazyHashSeqError::InvalidHashSeq { .. } => e!(HandleGetError::InvalidHashSeq),
+            LazyHashSeqError::Request { source, .. } => {
+                let source = match source {
+                    RequestError::Rpc { source, .. } => source.into(),
+                    // a store error, so keep it apart from network errors
+                    RequestError::Inner {
+                        source: crate::api::Error::Io(e),
+                        ..
+                    } => e!(ExportBaoError::ExportBaoInner, EncodeError::Io(e)),
+                };
+                e!(HandleGetError::ExportBao, source)
+            }
+        }
+    }
+}
+
 /// Whether an export failed because of a problem on our side.
 ///
 /// An io error means writing to the stream failed, so the peer went away. A
@@ -459,28 +478,12 @@ async fn handle_get_impl<W: SendStream>(
 ) -> Result<(), HandleGetError> {
     let hash = request.hash;
     debug!(%hash, "get received request");
-    let mut hash_seq = None;
+    let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), hash);
     for (offset, ranges) in request.ranges.iter_non_empty_infinite() {
         if offset == 0 {
             send_blob(&store, offset, hash, ranges.clone(), writer).await?;
         } else {
-            // todo: this assumes that 1. the hashseq is complete and 2. it is
-            // small enough to fit in memory.
-            //
-            // This should really read the hashseq from the store in chunks,
-            // only where needed, so we can deal with holes and large hashseqs.
-            let hash_seq = match &hash_seq {
-                Some(b) => b,
-                None => {
-                    let bytes = store.get_bytes(hash).await?;
-                    let hs =
-                        HashSeq::try_from(bytes).map_err(|_| e!(HandleGetError::InvalidHashSeq))?;
-                    hash_seq = Some(hs);
-                    hash_seq.as_ref().unwrap()
-                }
-            };
-            let o = usize::try_from(offset - 1).map_err(|_| e!(HandleGetError::InvalidOffset))?;
-            let Some(hash) = hash_seq.get(o) else {
+            let Some(hash) = hash_seq.get(offset - 1).await? else {
                 break;
             };
             send_blob(&store, offset, hash, ranges.clone(), writer).await?;

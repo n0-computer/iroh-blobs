@@ -2,9 +2,12 @@
 use std::fmt::Debug;
 
 use bytes::Bytes;
-use n0_error::{anyerr, AnyError};
+use n0_error::{anyerr, e, stack_error, AnyError};
 
-use crate::Hash;
+use crate::{
+    api::{blobs::Blobs, RequestError},
+    Hash,
+};
 
 /// A sequence of links, backed by a [`Bytes`] object.
 #[derive(Clone, derive_more::Into)]
@@ -113,5 +116,100 @@ impl Iterator for HashSeqIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.pop_front()
+    }
+}
+
+/// Number of hashes [`LazyHashSeq`] reads from the store at a time.
+const WINDOW: u64 = 1024;
+
+/// Error when reading a [`LazyHashSeq`].
+#[stack_error(derive, add_meta, from_sources)]
+pub(crate) enum LazyHashSeqError {
+    #[error(transparent)]
+    Request { source: RequestError },
+    #[error("invalid hash sequence")]
+    InvalidHashSeq {},
+}
+
+/// A hash sequence in the store that is read in windows of [`WINDOW`] hashes,
+/// so it never has to be loaded into memory as a whole.
+///
+/// Optimized for sequential access. Accessing an index outside the current
+/// window loads the window starting at that index.
+#[derive(Debug)]
+pub(crate) struct LazyHashSeq {
+    blobs: Blobs,
+    hash: Hash,
+    /// Index of the first hash in `window`.
+    start: u64,
+    window: HashSeq,
+}
+
+impl LazyHashSeq {
+    pub fn new(blobs: Blobs, hash: Hash) -> Self {
+        Self {
+            blobs,
+            hash,
+            start: 0,
+            window: HashSeq(Bytes::new()),
+        }
+    }
+
+    /// Get the hash at `index`, or `None` if the sequence is shorter.
+    pub async fn get(&mut self, index: u64) -> Result<Option<Hash>, LazyHashSeqError> {
+        let end = self.start + self.window.len() as u64;
+        if index < self.start || index >= end {
+            self.load(index).await?;
+        }
+        let i = usize::try_from(index - self.start).ok();
+        Ok(i.and_then(|i| self.window.get(i)))
+    }
+
+    async fn load(&mut self, index: u64) -> Result<(), LazyHashSeqError> {
+        self.start = index;
+        self.window = HashSeq(Bytes::new());
+        let Some(start) = index.checked_mul(32) else {
+            // no blob is that large
+            return Ok(());
+        };
+        let len = WINDOW * 32;
+        let bytes = self
+            .blobs
+            .export_ranges(self.hash, start..start.saturating_add(len))
+            .concatenate()
+            .await?;
+        self.window =
+            HashSeq::new(bytes.into()).ok_or_else(|| e!(LazyHashSeqError::InvalidHashSeq))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use testresult::TestResult;
+
+    use super::{LazyHashSeq, WINDOW};
+    use crate::{hashseq::HashSeq, store::mem::MemStore, Hash};
+
+    #[tokio::test]
+    async fn lazy_hash_seq() -> TestResult<()> {
+        let store = MemStore::new();
+        let n = WINDOW * 2 + 1;
+        let hashes = (0..n)
+            .map(|i| Hash::new(i.to_le_bytes()))
+            .collect::<Vec<_>>();
+        let hs = hashes.iter().collect::<HashSeq>();
+        let tt = store.add_bytes(hs.into_inner()).await?;
+        let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
+        for (i, hash) in hashes.iter().enumerate() {
+            assert_eq!(lazy.get(i as u64).await?, Some(*hash));
+        }
+        assert_eq!(lazy.get(n).await?, None);
+        assert_eq!(lazy.get(u64::MAX).await?, None);
+        // not a multiple of 32
+        let tt = store.add_bytes(vec![0u8; 33]).await?;
+        let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
+        assert!(lazy.get(0).await.is_err());
+        Ok(())
     }
 }
