@@ -803,6 +803,8 @@ impl<R: RecvStream> ProgressReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use bao_tree::ChunkRanges;
     use iroh::{endpoint::presets, Endpoint, RelayMode};
     use n0_error::{e, AnyError};
@@ -811,13 +813,60 @@ mod tests {
 
     use super::{handle_stream, is_local_export_failure, HandleGetError, StreamPair};
     use crate::{
-        api::ExportBaoError,
+        api::{Error, ExportBaoError, RequestError, Store},
         get,
+        hashseq::{HashSeq, LazyHashSeq, LazyHashSeqError},
         protocol::{ChunkRangesExt, GetRequest},
         provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
         store::{mem::MemStore, util::tests::create_n0_bao},
         Hash, ALPN,
     };
+
+    async fn missing_hashseq_chunk(store: &Store) -> TestResult<()> {
+        let hashes = (0..1000u64)
+            .map(|i| Hash::new(i.to_le_bytes()))
+            .collect::<HashSeq>();
+        let ranges = ChunkRanges::chunk(3);
+        let (hash, bao) = create_n0_bao(&hashes.into_inner(), &ranges)?;
+        store.import_bao_bytes(hash, ranges, bao).await?;
+        let mut lazy = LazyHashSeq::new(store.blobs().clone(), hash);
+        for index in [95, 128] {
+            let error = lazy.get(index).await.expect_err("missing chunk");
+            assert!(
+                matches!(
+                    &error,
+                    LazyHashSeqError::Request {
+                        source: RequestError::Inner { source: Error::Io(cause), .. },
+                        ..
+                    } if cause.kind() == io::ErrorKind::NotFound
+                ),
+                "{error:#}"
+            );
+            let error = HandleGetError::from(error);
+            assert!(!error.is_local_failure(), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_hashseq_chunk_mem() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let store = MemStore::new();
+        missing_hashseq_chunk(&store).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "fs-store")]
+    #[tokio::test]
+    async fn missing_hashseq_chunk_fs() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let testdir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(testdir.path()).await?;
+        missing_hashseq_chunk(&store).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
 
     /// Missing chunks and outboard pairs are normal while a blob is incomplete.
     #[tokio::test]
