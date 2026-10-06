@@ -70,7 +70,7 @@ tracing-test = "0.2.5"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
 iroh = { version = "1.0.0" }
-iroh-mdns-address-lookup = "0.4.0"
+iroh-mdns-address-lookup = "0.6.0"
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
 anyhow = "1.0.100"
@@ -89,7 +89,7 @@ pre-release-hook = ["git", "cliff", "--unreleased", "--tag", "{{version}}", "--p
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
-fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs"]
+fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs", "tokio/rt-multi-thread"]
 rpc = ["dep:noq", "irpc/rpc", "irpc/noq_endpoint_setup"]
 
 [[example]]
