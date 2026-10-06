@@ -193,16 +193,11 @@ impl LazyHashSeq {
 
 #[cfg(test)]
 mod tests {
+    use bao_tree::{ChunkNum, ChunkRanges};
     use testresult::TestResult;
 
-    use bao_tree::{ChunkNum, ChunkRanges};
-
     use super::LazyHashSeq;
-    use crate::{
-        hashseq::HashSeq,
-        store::{mem::MemStore, util::tests::create_n0_bao},
-        Hash,
-    };
+    use crate::{hashseq::HashSeq, store::mem::MemStore, Hash};
 
     #[tokio::test]
     async fn lazy_hash_seq() -> TestResult<()> {
@@ -212,7 +207,7 @@ mod tests {
             .map(|i| Hash::new(i.to_le_bytes()))
             .collect::<Vec<_>>();
         let hs = hashes.iter().collect::<HashSeq>();
-        let tt = store.add_bytes(hs.clone().into_inner()).await?;
+        let tt = store.add_bytes(hs.into_inner()).await?;
         let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
         for (i, hash) in hashes.iter().enumerate() {
             assert_eq!(lazy.get(i as u64).await?, Some(*hash));
@@ -221,11 +216,14 @@ mod tests {
         assert_eq!(lazy.get(u64::MAX).await?, None);
         // only chunk 3, with hashes 96..128, is present, not the rest of its
         // chunk group
-        let store = MemStore::new();
         let ranges = ChunkRanges::from(ChunkNum(3)..ChunkNum(4));
-        let (hash, bao) = create_n0_bao(hs.into_inner().as_ref(), &ranges)?;
-        store.import_bao_bytes(hash, ranges, bao).await?;
-        let mut lazy = LazyHashSeq::new(store.blobs().clone(), hash);
+        let bao = store
+            .export_bao(tt.hash, ranges.clone())
+            .bao_to_vec()
+            .await?;
+        let store = MemStore::new();
+        store.import_bao_bytes(tt.hash, ranges, bao).await?;
+        let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
         assert!(lazy.get(95).await.is_err());
         for i in 96..128 {
             assert_eq!(lazy.get(i).await?, Some(hashes[i as usize]));
