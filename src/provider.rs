@@ -797,21 +797,17 @@ impl<R: RecvStream> ProgressReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io,
-        sync::{Arc, Mutex},
-    };
-
     use iroh::{endpoint::presets, Endpoint, RelayMode};
+    use n0_error::AnyError;
     use n0_future::StreamExt;
     use testresult::TestResult;
 
-    use super::{handle_stream, StreamPair};
+    use super::{handle_stream, HandleGetError, StreamPair};
     use crate::{get, provider::events::EventSender, store::mem::MemStore, Hash, ALPN};
 
     /// Serves a single get request for `hash`, where the client drops the
-    /// response after the first item.
-    async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<()> {
+    /// response after the first item, and returns the provider error.
+    async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<AnyError> {
         let bind = || {
             Endpoint::builder(presets::Minimal)
                 .relay_mode(RelayMode::Disabled)
@@ -829,53 +825,27 @@ mod tests {
         });
         let conn = server.accept().await.expect("incoming").await?;
         let pair = StreamPair::accept(&conn, EventSender::DEFAULT).await?;
-        assert!(handle_stream(pair, (**store).clone()).await.is_err());
+        let error = handle_stream(pair, (**store).clone())
+            .await
+            .expect_err("request fails");
         conn.close(0u32.into(), b"");
         client_task.await??;
-        Ok(())
+        Ok(error)
     }
 
-    /// Log output, shared between the subscriber and the test.
-    #[derive(Clone, Default)]
-    struct Logs(Arc<Mutex<Vec<u8>>>);
-
-    impl io::Write for Logs {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl Logs {
-        fn contain(&self, s: &str) -> bool {
-            String::from_utf8_lossy(&self.0.lock().unwrap()).contains(s)
-        }
-    }
-
-    /// A peer hanging up is not a warning, a failing store is.
+    /// A peer hanging up is not a local failure, a failing store is.
     #[tokio::test]
-    async fn get_failure_log_level() -> TestResult<()> {
-        // capture logs with a thread local subscriber, since other tests set
-        // a global one
-        let logs = Logs::default();
-        let writer = logs.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(move || writer.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+    async fn get_local_failure() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
         let store = MemStore::new();
         let tt = store.add_bytes(vec![0u8; 16 * 1024 * 1024]).await?;
-        serve_one(&store, tt.hash).await?;
-        assert!(logs.contain("stream failed"));
-        assert!(!logs.contain("get request failed"));
+        let error = serve_one(&store, tt.hash).await?;
+        let error = error.downcast_ref::<HandleGetError>().expect("get error");
+        assert!(!error.is_local_failure(), "{error:#}");
         store.shutdown().await?;
-        serve_one(&store, tt.hash).await?;
-        assert!(logs.contain("get request failed"));
+        let error = serve_one(&store, tt.hash).await?;
+        let error = error.downcast_ref::<HandleGetError>().expect("get error");
+        assert!(error.is_local_failure(), "{error:#}");
         Ok(())
     }
 }
