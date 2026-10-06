@@ -89,7 +89,7 @@ pre-release-hook = ["git", "cliff", "--unreleased", "--tag", "{{version}}", "--p
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
-fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs"]
+fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs", "tokio/rt-multi-thread"]
 rpc = ["dep:noq", "irpc/rpc", "irpc/noq_endpoint_setup"]
 
 [[example]]
