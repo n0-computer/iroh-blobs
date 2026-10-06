@@ -5,7 +5,7 @@
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
 use std::{fmt::Debug, future::Future, io};
 
-use bao_tree::ChunkRanges;
+use bao_tree::{io::EncodeError, ChunkRanges};
 use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_error::{e, stack_error, Result};
@@ -15,7 +15,7 @@ use n0_future::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
-use tracing::{debug, debug_span, Instrument};
+use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
     api::{
@@ -423,6 +423,32 @@ impl HasErrorCode for HandleGetError {
     }
 }
 
+impl HandleGetError {
+    /// Whether the request failed because of a problem on our side.
+    fn is_local_failure(&self) -> bool {
+        match self {
+            Self::ExportBao { source, .. } => is_local_export_failure(source),
+            Self::InvalidHashSeq { .. } | Self::InvalidOffset { .. } => false,
+        }
+    }
+}
+
+/// Whether an export failed because of a problem on our side.
+///
+/// An io error means writing to the stream failed, so the peer went away. A
+/// client error means the event handler aborted the request. And `NotFound`
+/// means we don't have the requested blob.
+fn is_local_export_failure(e: &ExportBaoError) -> bool {
+    match e {
+        ExportBaoError::ExportBaoIo { .. } | ExportBaoError::ClientError { .. } => false,
+        ExportBaoError::ExportBaoInner {
+            source: EncodeError::Io(e),
+            ..
+        } => e.kind() != io::ErrorKind::NotFound,
+        _ => true,
+    }
+}
+
 /// Handle a single get request.
 ///
 /// Requires a database, the request, and a writer.
@@ -478,6 +504,11 @@ pub async fn handle_get<R: RecvStream, W: SendStream>(
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_get_impl(store, request, &mut writer).await;
+    if let Err(e) = &res {
+        if e.is_local_failure() {
+            warn!("get request failed: {e:#}");
+        }
+    }
     handle_write_result(&mut writer, res).await?;
     Ok(())
 }
@@ -496,6 +527,15 @@ impl HasErrorCode for HandleGetManyError {
                 ..
             } => source.code(),
             _ => ERR_INTERNAL,
+        }
+    }
+}
+
+impl HandleGetManyError {
+    /// Whether the request failed because of a problem on our side.
+    fn is_local_failure(&self) -> bool {
+        match self {
+            Self::ExportBao { source, .. } => is_local_export_failure(source),
         }
     }
 }
@@ -527,6 +567,11 @@ pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_get_many_impl(store, request, &mut writer).await;
+    if let Err(e) = &res {
+        if e.is_local_failure() {
+            warn!("get_many request failed: {e:#}");
+        }
+    }
     handle_write_result(&mut writer, res).await?;
     Ok(())
 }
@@ -633,6 +678,16 @@ impl HasErrorCode for HandleObserveError {
     }
 }
 
+impl HandleObserveError {
+    /// Whether the request failed because of a problem on our side.
+    fn is_local_failure(&self) -> bool {
+        match self {
+            Self::ObserveStreamClosed { .. } => true,
+            Self::RemoteClosed { .. } => false,
+        }
+    }
+}
+
 /// Handle a single push request.
 ///
 /// Requires a database, the request, and a reader.
@@ -692,6 +747,11 @@ pub async fn handle_observe<R: RecvStream, W: SendStream>(
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_observe_impl(store, request, &mut writer).await;
+    if let Err(e) = &res {
+        if e.is_local_failure() {
+            warn!("observe request failed: {e:#}");
+        }
+    }
     handle_write_result(&mut writer, res).await?;
     Ok(())
 }
@@ -716,5 +776,80 @@ impl<R: RecvStream> ProgressReader<R> {
             .transfer_completed(|| Box::new(self.context.stats()))
             .await
             .ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroh::{endpoint::presets, Endpoint, RelayMode};
+    use n0_future::StreamExt;
+    use testresult::TestResult;
+    use tracing_test::traced_test;
+
+    use super::{handle_stream, StreamPair};
+    use crate::{get, provider::events::EventSender, store::mem::MemStore, Hash, ALPN};
+
+    async fn bind() -> TestResult<Endpoint> {
+        Ok(Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await?)
+    }
+
+    /// Serves a single get request for `hash` from `store`. The client drops
+    /// the response after the first item.
+    async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<()> {
+        let server = bind().await?;
+        let client = bind().await?;
+        let addr = server.addr();
+        let client_task = tokio::spawn(async move {
+            let conn = client.connect(addr, ALPN).await?;
+            let mut stream = get::request::get_blob(conn.clone(), hash);
+            stream.next().await;
+            drop(stream);
+            // keep the connection open until the provider is done
+            conn.closed().await;
+            TestResult::Ok(())
+        });
+        let conn = server.accept().await.expect("incoming").await?;
+        let pair = StreamPair::accept(&conn, EventSender::DEFAULT).await?;
+        let res = handle_stream(pair, (**store).clone()).await;
+        assert!(res.is_err());
+        conn.close(0u32.into(), b"");
+        client_task.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn get_peer_hangup_is_not_a_warning() -> TestResult<()> {
+        let store = MemStore::new();
+        let tt = store.add_bytes(vec![0u8; 16 * 1024 * 1024]).await?;
+        serve_one(&store, tt.hash).await?;
+        assert!(logs_contain("stream failed"));
+        assert!(!logs_contain("get request failed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn get_not_found_is_not_a_warning() -> TestResult<()> {
+        let store = MemStore::new();
+        serve_one(&store, Hash::new(b"missing")).await?;
+        assert!(logs_contain("stream failed"));
+        assert!(!logs_contain("get request failed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn get_store_failure_is_a_warning() -> TestResult<()> {
+        let store = MemStore::new();
+        let tt = store.add_bytes(vec![0u8; 1024]).await?;
+        store.shutdown().await?;
+        serve_one(&store, tt.hash).await?;
+        assert!(logs_contain("get request failed"));
+        Ok(())
     }
 }
