@@ -809,6 +809,7 @@ mod tests {
     use iroh::{endpoint::presets, Endpoint, RelayMode};
     use n0_error::{e, AnyError};
     use n0_future::StreamExt;
+    use n0_tracing_test::traced_test;
     use testresult::TestResult;
 
     use super::{handle_stream, is_local_export_failure, HandleGetError, StreamPair};
@@ -946,8 +947,8 @@ mod tests {
 
     /// A peer hanging up is not a local failure, a failing store is.
     #[tokio::test]
+    #[traced_test]
     async fn get_local_failure() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let store = MemStore::new();
         let tt = store.add_bytes(vec![0u8; 16 * 1024 * 1024]).await?;
         let error = serve_one(&store, tt.hash).await?;
