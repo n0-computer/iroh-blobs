@@ -2,6 +2,12 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.102.1](https://github.com/n0-computer/iroh-blobs/compare/v0.103.1..0.102.1) - 2026-10-06
+
+### 🐛 Bug Fixes
+
+- Respect the per-request-type modes in EventMask ([#270](https://github.com/n0-computer/iroh-blobs/issues/270)) - ([d96c972](https://github.com/n0-computer/iroh-blobs/commit/d96c972fc3cbdd3e0524bc223a6d1622415fadb4))
+
 ## [0.102.0](https://github.com/n0-computer/iroh-blobs/compare/v0.101.0..0.102.0) - 2026-05-27
 
 ### ⛰️  Features
