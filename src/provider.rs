@@ -435,16 +435,22 @@ impl HandleGetError {
 
 /// Whether an export failed because of a problem on our side.
 ///
-/// An io error means writing to the stream failed, so the peer went away. A
-/// client error means the event handler aborted the request. And `NotFound`
-/// means we don't have the requested blob.
+/// Stream writes and deliberate event-handler rejections are not local failures.
+/// Bao validation errors, missing data and short reads are normal for incomplete
+/// blobs. Store I/O errors and event-handler communication failures are local.
 fn is_local_export_failure(e: &ExportBaoError) -> bool {
     match e {
-        ExportBaoError::ExportBaoIo { .. } | ExportBaoError::ClientError { .. } => false,
-        ExportBaoError::ExportBaoInner {
-            source: EncodeError::Io(e),
-            ..
-        } => e.kind() != io::ErrorKind::NotFound,
+        ExportBaoError::ExportBaoIo { .. } => false,
+        ExportBaoError::ClientError { source, .. } => {
+            matches!(source, ProgressError::Internal { .. })
+        }
+        ExportBaoError::ExportBaoInner { source, .. } => match source {
+            EncodeError::Io(e) => !matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::UnexpectedEof
+            ),
+            _ => false,
+        },
         _ => true,
     }
 }
@@ -781,13 +787,69 @@ impl<R: RecvStream> ProgressReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use bao_tree::ChunkRanges;
     use iroh::{endpoint::presets, Endpoint, RelayMode};
-    use n0_error::AnyError;
+    use n0_error::{e, AnyError};
     use n0_future::StreamExt;
     use testresult::TestResult;
 
-    use super::{handle_stream, HandleGetError, StreamPair};
-    use crate::{get, provider::events::EventSender, store::mem::MemStore, Hash, ALPN};
+    use super::{handle_stream, is_local_export_failure, HandleGetError, StreamPair};
+    use crate::{
+        api::ExportBaoError,
+        get,
+        protocol::{ChunkRangesExt, GetRequest},
+        provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
+        store::{mem::MemStore, util::tests::create_n0_bao},
+        Hash, ALPN,
+    };
+
+    /// Missing chunks and outboard pairs are normal while a blob is incomplete.
+    #[tokio::test]
+    async fn incomplete_blob_is_not_local_failure() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        for size in [32 * 1024, 64 * 1024] {
+            for ranges in [ChunkRanges::chunk(0), ChunkRanges::last_chunk()] {
+                let data = vec![7u8; size];
+                let (hash, encoded) = create_n0_bao(&data, &ranges)?;
+                let store = MemStore::new();
+                store.import_bao_bytes(hash, ranges, encoded).await?;
+                let error = store.get_bytes(hash).await.expect_err("missing chunks");
+                assert!(!is_local_export_failure(&error), "{error:#}");
+                store.shutdown().await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Losing the event handler is a local failure, unlike deliberate rejection.
+    #[tokio::test]
+    async fn event_handler_failure_is_local() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let events = EventSender::new(
+            tx,
+            EventMask {
+                throttle: ThrottleMode::Intercept,
+                ..EventMask::DEFAULT
+            },
+        );
+        let mut tracker = events
+            .request(|| GetRequest::blob(Hash::EMPTY), 0, 0)
+            .await?;
+        drop(rx);
+        let error = tracker
+            .transfer_progress(1024, 1024)
+            .await
+            .expect_err("handler gone");
+        let error = ExportBaoError::from(error);
+        assert!(is_local_export_failure(&error), "{error:#}");
+
+        for rejection in [e!(ProgressError::Permission), e!(ProgressError::Limit)] {
+            let error = ExportBaoError::from(rejection);
+            assert!(!is_local_export_failure(&error), "{error:#}");
+        }
+        Ok(())
+    }
 
     /// Serves a single get request for `hash`, where the client drops the
     /// response after the first item, and returns the provider error.
