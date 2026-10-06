@@ -6,7 +6,6 @@ use n0_error::{anyerr, e, stack_error, AnyError};
 
 use crate::{
     api::{blobs::Blobs, RequestError},
-    store::IROH_BLOCK_SIZE,
     Hash,
 };
 
@@ -122,9 +121,11 @@ impl Iterator for HashSeqIter {
 
 /// Number of hashes [`LazyHashSeq`] reads from the store at a time.
 ///
-/// This is one chunk group, the unit in which the store tracks which data is
-/// present. So a window is either present or missing as a whole.
-const WINDOW: u64 = IROH_BLOCK_SIZE.bytes() as u64 / 32;
+/// This is one 1 KiB chunk, the unit in which the store tracks which data is
+/// present. So a window is either present or missing as a whole. Note that
+/// this is smaller than a chunk group, since a chunk can be present without
+/// the rest of its chunk group.
+const WINDOW: u64 = 32;
 
 /// Error when reading a [`LazyHashSeq`].
 #[stack_error(derive, add_meta, from_sources)]
@@ -135,11 +136,11 @@ pub(crate) enum LazyHashSeqError {
     InvalidHashSeq {},
 }
 
-/// A hash sequence in the store that is read one chunk group at a time, so it
-/// never has to be loaded into memory as a whole.
+/// A hash sequence in the store that is read one chunk at a time, so it never
+/// has to be loaded into memory as a whole.
 ///
 /// Optimized for sequential access. Accessing an index outside the current
-/// chunk group loads the chunk group containing that index.
+/// chunk loads the chunk containing that index.
 #[derive(Debug)]
 pub(crate) struct LazyHashSeq {
     blobs: Blobs,
@@ -215,14 +216,18 @@ mod tests {
         }
         assert_eq!(lazy.get(n).await?, None);
         assert_eq!(lazy.get(u64::MAX).await?, None);
-        // only the first block of 512 hashes is present
+        // only chunk 3, with hashes 96..128, is present, not the rest of its
+        // chunk group
         let store = MemStore::new();
-        let ranges = ChunkRanges::from(..ChunkNum(16));
+        let ranges = ChunkRanges::from(ChunkNum(3)..ChunkNum(4));
         let (hash, bao) = create_n0_bao(hs.into_inner().as_ref(), &ranges)?;
         store.import_bao_bytes(hash, ranges, bao).await?;
         let mut lazy = LazyHashSeq::new(store.blobs().clone(), hash);
-        assert_eq!(lazy.get(511).await?, Some(hashes[511]));
-        assert!(lazy.get(512).await.is_err());
+        assert!(lazy.get(95).await.is_err());
+        for i in 96..128 {
+            assert_eq!(lazy.get(i).await?, Some(hashes[i as usize]));
+        }
+        assert!(lazy.get(128).await.is_err());
         // not a multiple of 32
         let tt = store.add_bytes(vec![0u8; 33]).await?;
         let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
