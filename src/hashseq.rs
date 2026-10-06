@@ -1,14 +1,12 @@
 //! Helpers for blobs that contain a sequence of hashes.
 use std::fmt::Debug;
 
-use range_collections::range_set::RangeSetRange;
-
-use bao_tree::{ChunkNum, ChunkRanges};
 use bytes::Bytes;
 use n0_error::{anyerr, e, stack_error, AnyError};
 
 use crate::{
     api::{blobs::Blobs, RequestError},
+    store::IROH_BLOCK_SIZE,
     Hash,
 };
 
@@ -123,7 +121,10 @@ impl Iterator for HashSeqIter {
 }
 
 /// Number of hashes [`LazyHashSeq`] reads from the store at a time.
-const WINDOW: u64 = 1024;
+///
+/// This is one chunk group, the unit in which the store tracks which data is
+/// present. So a window is either present or missing as a whole.
+const WINDOW: u64 = IROH_BLOCK_SIZE.bytes() as u64 / 32;
 
 /// Error when reading a [`LazyHashSeq`].
 #[stack_error(derive, add_meta, from_sources)]
@@ -134,11 +135,11 @@ pub(crate) enum LazyHashSeqError {
     InvalidHashSeq {},
 }
 
-/// A hash sequence in the store that is read in windows of [`WINDOW`] hashes,
-/// so it never has to be loaded into memory as a whole.
+/// A hash sequence in the store that is read one chunk group at a time, so it
+/// never has to be loaded into memory as a whole.
 ///
 /// Optimized for sequential access. Accessing an index outside the current
-/// window loads the window starting at that index.
+/// chunk group loads the chunk group containing that index.
 #[derive(Debug)]
 pub(crate) struct LazyHashSeq {
     blobs: Blobs,
@@ -169,19 +170,15 @@ impl LazyHashSeq {
     }
 
     async fn load(&mut self, index: u64) -> Result<(), LazyHashSeqError> {
-        self.start = index;
+        self.start = index - index % WINDOW;
         self.window = HashSeq(Bytes::new());
-        let Some(start) = index.checked_mul(32) else {
+        let Some(start) = self.start.checked_mul(32) else {
             // no blob is that large
             return Ok(());
         };
-        // only read data that is present, so a hole after `index` does not
-        // fail the whole window
-        let bitfield = self.blobs.observe(self.hash).await?;
-        let end = present_end(&bitfield.ranges, start).min(start.saturating_add(WINDOW * 32));
         let bytes = self
             .blobs
-            .export_ranges(self.hash, start..end)
+            .export_ranges(self.hash, start..start.saturating_add(WINDOW * 32))
             .concatenate()
             .await?;
         self.window =
@@ -190,31 +187,13 @@ impl LazyHashSeq {
     }
 }
 
-/// End of the run of present chunks that contains `offset`, in bytes.
-///
-/// If `offset` is not present, this returns the end of the hash at `offset`,
-/// so that reading it reports the missing data.
-fn present_end(ranges: &ChunkRanges, offset: u64) -> u64 {
-    let chunk = ChunkNum::full_chunks(offset);
-    for range in ranges.iter() {
-        match range {
-            RangeSetRange::Range(r) if *r.start <= chunk && chunk < *r.end => {
-                return r.end.to_bytes();
-            }
-            RangeSetRange::RangeFrom(r) if *r.start <= chunk => return u64::MAX,
-            _ => {}
-        }
-    }
-    offset + 32
-}
-
 #[cfg(test)]
 mod tests {
     use testresult::TestResult;
 
     use bao_tree::{ChunkNum, ChunkRanges};
 
-    use super::{LazyHashSeq, WINDOW};
+    use super::LazyHashSeq;
     use crate::{
         hashseq::HashSeq,
         store::{mem::MemStore, util::tests::create_n0_bao},
@@ -224,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn lazy_hash_seq() -> TestResult<()> {
         let store = MemStore::new();
-        let n = WINDOW * 2 + 1;
+        let n = 1000u64;
         let hashes = (0..n)
             .map(|i| Hash::new(i.to_le_bytes()))
             .collect::<Vec<_>>();
