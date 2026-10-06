@@ -22,7 +22,7 @@ use crate::{
         blobs::{Bitfield, WriteProgress},
         ExportBaoError, ExportBaoResult, RequestError, Store,
     },
-    hashseq::{HashSeq, LazyHashSeq, LazyHashSeqError},
+    hashseq::{LazyHashSeq, LazyHashSeqError},
     protocol::{
         GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
     },
@@ -591,6 +591,15 @@ pub enum HandlePushError {
     Request { source: RequestError },
 }
 
+impl From<LazyHashSeqError> for HandlePushError {
+    fn from(e: LazyHashSeqError) -> Self {
+        match e {
+            LazyHashSeqError::InvalidHashSeq { .. } => e!(HandlePushError::InvalidHashSeq),
+            LazyHashSeqError::Request { source, .. } => e!(HandlePushError::Request, source),
+        }
+    }
+}
+
 impl HasErrorCode for HandlePushError {
     fn code(&self) -> VarInt {
         match self {
@@ -613,8 +622,11 @@ async fn handle_push_impl<R: RecvStream>(
 ) -> Result<(), HandlePushError> {
     let hash = request.hash;
     debug!(%hash, "push received request");
-    let mut request_ranges = request.ranges.iter_infinite();
-    let root_ranges = request_ranges.next().expect("infinite iterator");
+    let root_ranges = request
+        .ranges
+        .iter_infinite()
+        .next()
+        .expect("infinite iterator");
     if !root_ranges.is_empty() {
         // todo: send progress from import_bao_noq or rename to import_bao_noq_with_progress
         store
@@ -625,13 +637,14 @@ async fn handle_push_impl<R: RecvStream>(
         debug!("push request complete");
         return Ok(());
     }
-    // todo: we assume here that the hash sequence is complete. For some requests this might not be the case. We would need `LazyHashSeq` for that, but it is buggy as of now!
-    let hash_seq = store.get_bytes(hash).await?;
-    let hash_seq = HashSeq::try_from(hash_seq).map_err(|_| e!(HandlePushError::InvalidHashSeq))?;
-    for (child_hash, child_ranges) in hash_seq.into_iter().zip(request_ranges) {
-        if child_ranges.is_empty() {
+    let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), hash);
+    for (offset, child_ranges) in request.ranges.iter_non_empty_infinite() {
+        if offset == 0 {
             continue;
         }
+        let Some(child_hash) = hash_seq.get(offset - 1).await? else {
+            break;
+        };
         store
             .import_bao_reader(child_hash, child_ranges.clone(), &mut reader.inner)
             .await?;

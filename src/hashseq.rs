@@ -1,6 +1,9 @@
 //! Helpers for blobs that contain a sequence of hashes.
 use std::fmt::Debug;
 
+use range_collections::range_set::RangeSetRange;
+
+use bao_tree::{ChunkNum, ChunkRanges};
 use bytes::Bytes;
 use n0_error::{anyerr, e, stack_error, AnyError};
 
@@ -172,10 +175,13 @@ impl LazyHashSeq {
             // no blob is that large
             return Ok(());
         };
-        let len = WINDOW * 32;
+        // only read data that is present, so a hole after `index` does not
+        // fail the whole window
+        let bitfield = self.blobs.observe(self.hash).await?;
+        let end = present_end(&bitfield.ranges, start).min(start.saturating_add(WINDOW * 32));
         let bytes = self
             .blobs
-            .export_ranges(self.hash, start..start.saturating_add(len))
+            .export_ranges(self.hash, start..end)
             .concatenate()
             .await?;
         self.window =
@@ -184,12 +190,36 @@ impl LazyHashSeq {
     }
 }
 
+/// End of the run of present chunks that contains `offset`, in bytes.
+///
+/// If `offset` is not present, this returns the end of the hash at `offset`,
+/// so that reading it reports the missing data.
+fn present_end(ranges: &ChunkRanges, offset: u64) -> u64 {
+    let chunk = ChunkNum::full_chunks(offset);
+    for range in ranges.iter() {
+        match range {
+            RangeSetRange::Range(r) if *r.start <= chunk && chunk < *r.end => {
+                return r.end.to_bytes();
+            }
+            RangeSetRange::RangeFrom(r) if *r.start <= chunk => return u64::MAX,
+            _ => {}
+        }
+    }
+    offset + 32
+}
+
 #[cfg(test)]
 mod tests {
     use testresult::TestResult;
 
+    use bao_tree::{ChunkNum, ChunkRanges};
+
     use super::{LazyHashSeq, WINDOW};
-    use crate::{hashseq::HashSeq, store::mem::MemStore, Hash};
+    use crate::{
+        hashseq::HashSeq,
+        store::{mem::MemStore, util::tests::create_n0_bao},
+        Hash,
+    };
 
     #[tokio::test]
     async fn lazy_hash_seq() -> TestResult<()> {
@@ -199,13 +229,21 @@ mod tests {
             .map(|i| Hash::new(i.to_le_bytes()))
             .collect::<Vec<_>>();
         let hs = hashes.iter().collect::<HashSeq>();
-        let tt = store.add_bytes(hs.into_inner()).await?;
+        let tt = store.add_bytes(hs.clone().into_inner()).await?;
         let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
         for (i, hash) in hashes.iter().enumerate() {
             assert_eq!(lazy.get(i as u64).await?, Some(*hash));
         }
         assert_eq!(lazy.get(n).await?, None);
         assert_eq!(lazy.get(u64::MAX).await?, None);
+        // only the first block of 512 hashes is present
+        let store = MemStore::new();
+        let ranges = ChunkRanges::from(..ChunkNum(16));
+        let (hash, bao) = create_n0_bao(hs.into_inner().as_ref(), &ranges)?;
+        store.import_bao_bytes(hash, ranges, bao).await?;
+        let mut lazy = LazyHashSeq::new(store.blobs().clone(), hash);
+        assert_eq!(lazy.get(511).await?, Some(hashes[511]));
+        assert!(lazy.get(512).await.is_err());
         // not a multiple of 32
         let tt = store.add_bytes(vec![0u8; 33]).await?;
         let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);

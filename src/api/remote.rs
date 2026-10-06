@@ -30,7 +30,7 @@ use crate::{
         },
         GetError, GetResult, Stats, StreamPair,
     },
-    hashseq::{HashSeq, HashSeqIter},
+    hashseq::{HashSeq, HashSeqIter, LazyHashSeq, LazyHashSeqError},
     protocol::{
         ChunkRangesSeq, GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest,
         Request, RequestType, MAX_MESSAGE_SIZE,
@@ -615,17 +615,18 @@ impl Remote {
             send.finish().anyerr()?;
             return Ok(Default::default());
         }
-        let hash_seq = self.store().get_bytes(root).await?;
-        let hash_seq = HashSeq::try_from(hash_seq)?;
-        for (child, (child_hash, child_ranges)) in
-            hash_seq.into_iter().zip(request_ranges).enumerate()
-        {
-            if !child_ranges.is_empty() {
-                self.store()
-                    .export_bao(child_hash, child_ranges.clone())
-                    .write_with_progress(&mut send, &mut context, &child_hash, (child + 1) as u64)
-                    .await?;
+        let mut hash_seq = LazyHashSeq::new(self.store().blobs().clone(), root);
+        for (offset, child_ranges) in request.ranges.iter_non_empty_infinite() {
+            if offset == 0 {
+                continue;
             }
+            let Some(child_hash) = hash_seq.get(offset - 1).await? else {
+                break;
+            };
+            self.store()
+                .export_bao(child_hash, child_ranges.clone())
+                .write_with_progress(&mut send, &mut context, &child_hash, offset)
+                .await?;
         }
         send.finish().anyerr()?;
         Ok(Default::default())
@@ -702,21 +703,20 @@ impl Remote {
         let at_closing = match next_child {
             Ok(at_start_child) => {
                 let mut next_child = Ok(at_start_child);
-                let hash_seq = HashSeq::try_from(
-                    store
-                        .get_bytes(root)
-                        .await
-                        .map_err(|e| e!(GetError::LocalFailure, e.into()))?,
-                )
-                .map_err(|e| e!(GetError::BadRequest, e))?;
-                // let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), root);
+                let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), root);
                 loop {
                     let at_start_child = match next_child {
                         Ok(at_start_child) => at_start_child,
                         Err(at_closing) => break at_closing,
                     };
                     let offset = at_start_child.offset() - 1;
-                    let Some(hash) = hash_seq.get(offset as usize) else {
+                    let hash = hash_seq.get(offset).await.map_err(|e| match e {
+                        e @ LazyHashSeqError::InvalidHashSeq { .. } => {
+                            e!(GetError::BadRequest, e.into())
+                        }
+                        e => e!(GetError::LocalFailure, e.into()),
+                    })?;
+                    let Some(hash) = hash else {
                         break at_start_child.finish();
                     };
                     trace!("getting child {offset} {}", hash.fmt_short());
