@@ -781,10 +781,14 @@ impl<R: RecvStream> ProgressReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
+
     use iroh::{endpoint::presets, Endpoint, RelayMode};
     use n0_future::StreamExt;
     use testresult::TestResult;
-    use tracing_test::traced_test;
 
     use super::{handle_stream, StreamPair};
     use crate::{get, provider::events::EventSender, store::mem::MemStore, Hash, ALPN};
@@ -815,18 +819,47 @@ mod tests {
         Ok(())
     }
 
+    /// Log output, shared between the subscriber and the test.
+    #[derive(Clone, Default)]
+    struct Logs(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Logs {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Logs {
+        fn contain(&self, s: &str) -> bool {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).contains(s)
+        }
+    }
+
     /// A peer hanging up is not a warning, a failing store is.
     #[tokio::test]
-    #[traced_test]
     async fn get_failure_log_level() -> TestResult<()> {
+        // capture logs with a thread local subscriber, since other tests set
+        // a global one
+        let logs = Logs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
         let store = MemStore::new();
         let tt = store.add_bytes(vec![0u8; 16 * 1024 * 1024]).await?;
         serve_one(&store, tt.hash).await?;
-        assert!(logs_contain("stream failed"));
-        assert!(!logs_contain("get request failed"));
+        assert!(logs.contain("stream failed"));
+        assert!(!logs.contain("get request failed"));
         store.shutdown().await?;
         serve_one(&store, tt.hash).await?;
-        assert!(logs_contain("get request failed"));
+        assert!(logs.contain("get request failed"));
         Ok(())
     }
 }
