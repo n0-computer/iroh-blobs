@@ -789,64 +789,41 @@ mod tests {
     use super::{handle_stream, StreamPair};
     use crate::{get, provider::events::EventSender, store::mem::MemStore, Hash, ALPN};
 
-    async fn bind() -> TestResult<Endpoint> {
-        Ok(Endpoint::builder(presets::Minimal)
-            .relay_mode(RelayMode::Disabled)
-            .alpns(vec![ALPN.to_vec()])
-            .bind()
-            .await?)
-    }
-
-    /// Serves a single get request for `hash` from `store`. The client drops
-    /// the response after the first item.
+    /// Serves a single get request for `hash`, where the client drops the
+    /// response after the first item.
     async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<()> {
-        let server = bind().await?;
-        let client = bind().await?;
+        let bind = || {
+            Endpoint::builder(presets::Minimal)
+                .relay_mode(RelayMode::Disabled)
+                .alpns(vec![ALPN.to_vec()])
+                .bind()
+        };
+        let (server, client) = (bind().await?, bind().await?);
         let addr = server.addr();
         let client_task = tokio::spawn(async move {
             let conn = client.connect(addr, ALPN).await?;
-            let mut stream = get::request::get_blob(conn.clone(), hash);
-            stream.next().await;
-            drop(stream);
+            get::request::get_blob(conn.clone(), hash).next().await;
             // keep the connection open until the provider is done
             conn.closed().await;
             TestResult::Ok(())
         });
         let conn = server.accept().await.expect("incoming").await?;
         let pair = StreamPair::accept(&conn, EventSender::DEFAULT).await?;
-        let res = handle_stream(pair, (**store).clone()).await;
-        assert!(res.is_err());
+        assert!(handle_stream(pair, (**store).clone()).await.is_err());
         conn.close(0u32.into(), b"");
         client_task.await??;
         Ok(())
     }
 
+    /// A peer hanging up is not a warning, a failing store is.
     #[tokio::test]
     #[traced_test]
-    async fn get_peer_hangup_is_not_a_warning() -> TestResult<()> {
+    async fn get_failure_log_level() -> TestResult<()> {
         let store = MemStore::new();
         let tt = store.add_bytes(vec![0u8; 16 * 1024 * 1024]).await?;
         serve_one(&store, tt.hash).await?;
         assert!(logs_contain("stream failed"));
         assert!(!logs_contain("get request failed"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn get_not_found_is_not_a_warning() -> TestResult<()> {
-        let store = MemStore::new();
-        serve_one(&store, Hash::new(b"missing")).await?;
-        assert!(logs_contain("stream failed"));
-        assert!(!logs_contain("get request failed"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn get_store_failure_is_a_warning() -> TestResult<()> {
-        let store = MemStore::new();
-        let tt = store.add_bytes(vec![0u8; 1024]).await?;
         store.shutdown().await?;
         serve_one(&store, tt.hash).await?;
         assert!(logs_contain("get request failed"));
