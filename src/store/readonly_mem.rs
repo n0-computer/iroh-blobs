@@ -329,6 +329,7 @@ async fn export_ranges_impl(
     let ExportRangesRequest { ranges, .. } = cmd;
     let data = entry.data;
     let size = data.len() as u64;
+    tx.send(ExportRangesItem::Size(size)).await?;
     let bitfield = Bitfield::complete(size);
     for range in ranges.iter() {
         let range = match range {

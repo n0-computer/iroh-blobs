@@ -962,11 +962,17 @@ impl ExportRangesProgress {
 
     /// Concatenate all the data into a single `Bytes`.
     pub async fn concatenate(self) -> RequestResult<Vec<u8>> {
+        Ok(self.concatenate_with_size().await?.1)
+    }
+
+    /// Like [`Self::concatenate`], but also returns the size of the blob.
+    pub(crate) async fn concatenate_with_size(self) -> RequestResult<(Option<u64>, Vec<u8>)> {
         let mut rx = self.inner.await?;
+        let mut size = None;
         let mut data = BTreeMap::new();
         while let Some(item) = rx.recv().await? {
             match item {
-                ExportRangesItem::Size(_) => {}
+                ExportRangesItem::Size(s) => size = Some(s),
                 ExportRangesItem::Data(leaf) => {
                     data.insert(leaf.offset, leaf.data);
                 }
@@ -991,7 +997,7 @@ impl ExportRangesProgress {
                 res.extend_from_slice(data);
             }
         }
-        Ok(res)
+        Ok((size, res))
     }
 }
 

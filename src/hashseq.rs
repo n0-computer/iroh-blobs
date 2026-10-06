@@ -177,11 +177,14 @@ impl LazyHashSeq {
             // no blob is that large
             return Ok(());
         };
-        let bytes = self
+        let (size, bytes) = self
             .blobs
             .export_ranges(self.hash, start..start.saturating_add(WINDOW * 32))
-            .concatenate()
+            .concatenate_with_size()
             .await?;
+        if size.is_some_and(|size| size % 32 != 0) {
+            return Err(e!(LazyHashSeqError::InvalidHashSeq));
+        }
         self.window =
             HashSeq::new(bytes.into()).ok_or_else(|| e!(LazyHashSeqError::InvalidHashSeq))?;
         Ok(())
@@ -228,8 +231,9 @@ mod tests {
             assert_eq!(lazy.get(i).await?, Some(hashes[i as usize]));
         }
         assert!(lazy.get(128).await.is_err());
-        // not a multiple of 32
-        let tt = store.add_bytes(vec![0u8; 33]).await?;
+        // not a multiple of 32, detected from the size even though the first
+        // chunk is a valid hash seq
+        let tt = store.add_bytes(vec![0u8; 1025]).await?;
         let mut lazy = LazyHashSeq::new(store.blobs().clone(), tt.hash);
         assert!(lazy.get(0).await.is_err());
         Ok(())

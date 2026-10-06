@@ -580,6 +580,7 @@ async fn export_ranges_impl(
     debug_assert!(entry.hash() == hash, "hash mismatch");
     let data = entry.data_reader();
     let size = bitfield.size();
+    tx.send(ExportRangesItem::Size(size)).await?;
     for range in ranges.iter() {
         let range = match range {
             RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
