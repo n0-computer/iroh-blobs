@@ -2,6 +2,13 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.103.1](https://github.com/n0-computer/iroh-blobs/compare/v0.103.0..0.103.1) - 2026-10-06
+
+### 🐛 Bug Fixes
+
+- Log errors that were silently dropped in the provider and fs store ([#268](https://github.com/n0-computer/iroh-blobs/issues/268)) - ([425ee37](https://github.com/n0-computer/iroh-blobs/commit/425ee37ec7bc2749acedfe3436a6dc46db32c256))
+- Respect the per-request-type modes in EventMask ([#270](https://github.com/n0-computer/iroh-blobs/issues/270)) - ([476cdd0](https://github.com/n0-computer/iroh-blobs/commit/476cdd0ee9c5d472a53304988951accb25ab901d))
+
 ## [0.103.0](https://github.com/n0-computer/iroh-blobs/compare/v0.102.0..0.103.0) - 2026-06-15
 
 ### 🐛 Bug Fixes
