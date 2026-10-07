@@ -158,7 +158,15 @@ impl FromStr for Hash {
             // hex
             data_encoding::HEXLOWER.decode_mut(s.as_bytes(), &mut bytes)
         } else {
-            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), &mut bytes)
+            let input = s.to_ascii_uppercase();
+            let input = input.as_bytes();
+            // decode_mut panics if the output buffer does not match the decoded length
+            match data_encoding::BASE32_NOPAD.decode_len(input.len()) {
+                Ok(len) if len == bytes.len() => {}
+                Ok(_) => return Err(e!(HexOrBase32ParseError::DecodeInvalidLength)),
+                Err(err) => return Err(e!(HexOrBase32ParseError::Decode, err)),
+            }
+            data_encoding::BASE32_NOPAD.decode_mut(input, &mut bytes)
         };
         match res {
             Ok(len) => {
@@ -613,5 +621,27 @@ mod tests {
         let ser = serde_json::to_string(&haf).unwrap();
         let de = serde_json::from_str(&ser).unwrap();
         assert_eq!(haf, de);
+    }
+
+    #[test]
+    fn test_hash_invalid() {
+        let _ = Hash::from_str("invalid").unwrap_err();
+        let _ = Hash::from_str("").unwrap_err();
+        // valid base32 lengths that decode to the wrong number of bytes
+        let _ = Hash::from_str(&"a".repeat(56)).unwrap_err();
+        let _ = Hash::from_str(&"a".repeat(63)).unwrap_err();
+        // invalid base32 lengths
+        let _ = Hash::from_str(&"a".repeat(51)).unwrap_err();
+        let _ = Hash::from_str(&"a".repeat(65)).unwrap_err();
+    }
+
+    #[test]
+    fn test_hash_parse_base32() {
+        let hash = Hash::new("hello");
+        let text = data_encoding::BASE32_NOPAD
+            .encode(hash.as_bytes())
+            .to_ascii_lowercase();
+        assert_eq!(text.len(), 52);
+        assert_eq!(Hash::from_str(&text).unwrap(), hash);
     }
 }
