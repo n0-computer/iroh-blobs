@@ -386,22 +386,69 @@ impl IntoFuture for DownloadProgress {
     }
 }
 
-impl Downloader {
-    pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
-        Self::new_with_opts(store, endpoint, crate::ALPN, Default::default())
+/// Builder for a [`Downloader`], created with [`Downloader::builder`].
+#[derive(Debug)]
+pub struct DownloaderBuilder {
+    store: Store,
+    endpoint: Endpoint,
+    alpn: Vec<u8>,
+    pool_options: crate::util::connection_pool::Options,
+}
+
+impl DownloaderBuilder {
+    /// Sets the ALPN used to connect to providers. Defaults to [`crate::ALPN`].
+    ///
+    /// This is an advanced option: providers must accept the same ALPN,
+    /// e.g. via `Router::accept(alpn, blobs)`.
+    pub fn alpn(mut self, alpn: impl Into<Vec<u8>>) -> Self {
+        self.alpn = alpn.into();
+        self
     }
 
+    /// Sets the options for the connection pool used to connect to providers.
+    pub fn pool_options(mut self, pool_options: crate::util::connection_pool::Options) -> Self {
+        self.pool_options = pool_options;
+        self
+    }
+
+    /// Spawns the downloader.
+    pub fn build(self) -> Downloader {
+        let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
+        let actor = DownloaderActor::new_with_opts(
+            self.store,
+            self.endpoint,
+            &self.alpn,
+            self.pool_options,
+        );
+        n0_future::task::spawn(actor.run(rx));
+        Downloader { client: tx.into() }
+    }
+}
+
+impl Downloader {
+    pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
+        Self::builder(store, endpoint).build()
+    }
+
+    /// Creates a builder for a downloader with non-default options.
+    pub fn builder(store: &Store, endpoint: &Endpoint) -> DownloaderBuilder {
+        DownloaderBuilder {
+            store: store.clone(),
+            endpoint: endpoint.clone(),
+            alpn: crate::ALPN.to_vec(),
+            pool_options: Default::default(),
+        }
+    }
+
+    #[deprecated(note = "use Downloader::builder")]
     pub fn new_with_opts(
         store: &Store,
         endpoint: &Endpoint,
-        alpn: &[u8],
         pool_options: crate::util::connection_pool::Options,
     ) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
-        let actor =
-            DownloaderActor::new_with_opts(store.clone(), endpoint.clone(), alpn, pool_options);
-        n0_future::task::spawn(actor.run(rx));
-        Self { client: tx.into() }
+        Self::builder(store, endpoint)
+            .pool_options(pool_options)
+            .build()
     }
 
     pub fn download(
@@ -599,6 +646,7 @@ mod tests {
     use std::ops::Deref;
 
     use bao_tree::ChunkRanges;
+    use iroh::{endpoint::presets, protocol::Router, Endpoint, RelayMode};
     use n0_future::StreamExt;
     use testresult::TestResult;
 
@@ -608,8 +656,10 @@ mod tests {
             downloader::{DownloadOptions, Downloader, Shuffled, SplitStrategy},
         },
         hashseq::HashSeq,
+        net_protocol::BlobsProtocol,
         protocol::{GetManyRequest, GetRequest},
-        tests::node_test_setup_fs,
+        store::mem::MemStore,
+        tests::{node_test_setup_fs, node_test_setup_mem},
         Hash,
     };
 
@@ -743,6 +793,44 @@ mod tests {
             .stream()
             .await?;
         while progress.next().await.is_some() {}
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn downloader_custom_alpn() -> TestResult<()> {
+        const CUSTOM_ALPN: &[u8] = b"/custom-blobs/1";
+        // provider that only accepts the custom ALPN
+        let store1 = MemStore::new();
+        let ep1 = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Default)
+            .bind()
+            .await?;
+        let r1 = Router::builder(ep1)
+            .accept(CUSTOM_ALPN, BlobsProtocol::new(&store1, None))
+            .spawn();
+        let tt = store1.add_slice("hello world").await?;
+        let (r2, store2, sp2) = node_test_setup_mem().await?;
+        sp2.add_endpoint_info(r1.endpoint().addr());
+        let providers = [r1.endpoint().id()];
+
+        let timeout = std::time::Duration::from_secs(10);
+        let default = Downloader::new(&store2, r2.endpoint());
+        let res = tokio::time::timeout(
+            timeout,
+            default.download(GetRequest::blob(tt.hash), providers),
+        )
+        .await?;
+        assert!(res.is_err());
+
+        let custom = Downloader::builder(&store2, r2.endpoint())
+            .alpn(CUSTOM_ALPN)
+            .build();
+        tokio::time::timeout(
+            timeout,
+            custom.download(GetRequest::blob(tt.hash), providers),
+        )
+        .await??;
+        assert_eq!(store2.get_bytes(tt.hash).await?.deref(), b"hello world");
         Ok(())
     }
 
