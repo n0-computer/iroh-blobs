@@ -951,7 +951,7 @@
 <a href=#951 id=951 data-nosnippet>951</a>    </span><span class="kw">async fn </span>get_local_failure() -&gt; TestResult&lt;()&gt; {
 <a href=#952 id=952 data-nosnippet>952</a>        tracing_subscriber::fmt::try_init().ok();
 <a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span>store = MemStore::new();
-<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>tt = store.add_bytes(<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">8 </span>* <span class="number">1024 </span>* <span class="number">1024</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>tt = store.add_bytes(<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
 <a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
