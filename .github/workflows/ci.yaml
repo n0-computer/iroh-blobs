@@ -148,21 +148,24 @@ jobs:
       uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
       with:
         toolchain: stable
+        targets: ${{ matrix.target }}
 
-    - name: Cleanup Docker
-      continue-on-error: true
-      run: |
-        docker kill $(docker ps -q)
+    - name: Install 32-bit C toolchain
+      run: sudo apt-get update && sudo apt-get install -y gcc-multilib
 
-      # See https://github.com/cross-rs/cross/issues/1222
     - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
       with:
-        tool: cross
+        tool: nextest@0.9.80
 
+      # nextest runs each test in its own process. Run in one process, the lib
+      # tests exhaust the 32-bit address space.
     - name: test
-      run: cross test --locked --all --target ${{ matrix.target }} -- --test-threads=1
+      run: cargo nextest run --locked --workspace --lib --bins --tests --target ${{ matrix.target }} --profile ci
       env:
         RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG' }}
+
+    - name: doctests
+      run: cargo test --locked --workspace --doc --target ${{ matrix.target }}
 
   check_semver:
     runs-on: ubuntu-latest

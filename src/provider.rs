@@ -932,7 +932,7 @@ mod tests {
             get::request::get_blob(conn.clone(), hash).next().await;
             // keep the connection open until the provider is done
             conn.closed().await;
-            TestResult::Ok(())
+            TestResult::Ok(client)
         });
         let conn = server.accept().await.expect("incoming").await?;
         let pair = StreamPair::accept(&conn, EventSender::DEFAULT).await?;
@@ -940,7 +940,9 @@ mod tests {
             .await
             .expect_err("request fails");
         conn.close(0u32.into(), b"");
-        client_task.await??;
+        let client = client_task.await??;
+        // Dropping an endpoint without closing it aborts it ungracefully.
+        tokio::join!(server.close(), client.close());
         Ok(error)
     }
 
