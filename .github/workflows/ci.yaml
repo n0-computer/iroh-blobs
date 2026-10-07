@@ -351,6 +351,10 @@ jobs:
       - name: wasm32 build
         run: cargo build --locked --target wasm32-unknown-unknown --no-default-features
 
+      # Browser irpc clients enable irpc/rpc without our `rpc` feature.
+      - name: wasm32 build with irpc rpc
+        run: cargo build --locked --target wasm32-unknown-unknown --no-default-features --features irpc/rpc
+
       # If the Wasm file contains any 'import "env"' declarations, then
       # some non-Wasm-compatible code made it into the final code.
       - name: Ensure no 'import "env"' in wasm
