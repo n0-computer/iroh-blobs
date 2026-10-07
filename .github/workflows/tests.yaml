@@ -185,6 +185,11 @@ jobs:
         rustup target add $env:RUST_TARGET
         rustup set default-host $env:RUST_TARGET
 
+    # install-action shells out to `bash`. On the self-hosted Windows hosts
+    # that resolves to WSL, which mangles Windows paths. Use Git's bash.
+    - name: Prefer Git bash over WSL
+      run: echo "C:\Program Files\Git\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
     # Was a bare Invoke-WebRequest from get.nexte.st with no checksum,
     # unpacked into ~/.cargo/bin on a long-lived host.
     - name: Install cargo-nextest
