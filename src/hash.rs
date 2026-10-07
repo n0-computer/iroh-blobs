@@ -627,10 +627,10 @@ mod tests {
     fn test_hash_invalid() {
         let _ = Hash::from_str("invalid").unwrap_err();
         let _ = Hash::from_str("").unwrap_err();
-        // valid base32 lengths that decode to the wrong number of bytes
+        // valid base32 strings that decode to the wrong number of bytes
         let _ = Hash::from_str(&"a".repeat(56)).unwrap_err();
         let _ = Hash::from_str(&"a".repeat(63)).unwrap_err();
-        // invalid base32 lengths
+        // invalid base32 strings
         let _ = Hash::from_str(&"a".repeat(51)).unwrap_err();
         let _ = Hash::from_str(&"a".repeat(65)).unwrap_err();
     }
