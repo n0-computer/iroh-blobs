@@ -5,7 +5,7 @@
 //! handler with an [`iroh::Endpoint`](iroh::protocol::Router).
 use std::{fmt::Debug, future::Future, io};
 
-use bao_tree::ChunkRanges;
+use bao_tree::{io::EncodeError, ChunkRanges};
 use iroh::endpoint::{self, ConnectionError, VarInt};
 use iroh_io::{AsyncStreamReader, AsyncStreamWriter};
 use n0_error::{e, stack_error, Result};
@@ -15,14 +15,14 @@ use n0_future::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
-use tracing::{debug, debug_span, Instrument};
+use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::{
     api::{
         blobs::{Bitfield, WriteProgress},
         ExportBaoError, ExportBaoResult, RequestError, Store,
     },
-    hashseq::HashSeq,
+    hashseq::{LazyHashSeq, LazyHashSeqError},
     protocol::{
         GetManyRequest, GetRequest, ObserveItem, ObserveRequest, PushRequest, Request, ERR_INTERNAL,
     },
@@ -423,6 +423,57 @@ impl HasErrorCode for HandleGetError {
     }
 }
 
+impl HandleGetError {
+    /// Whether the request failed because of a problem on our side.
+    fn is_local_failure(&self) -> bool {
+        match self {
+            Self::ExportBao { source, .. } => is_local_export_failure(source),
+            Self::InvalidHashSeq { .. } | Self::InvalidOffset { .. } => false,
+        }
+    }
+}
+
+impl From<LazyHashSeqError> for HandleGetError {
+    fn from(e: LazyHashSeqError) -> Self {
+        match e {
+            LazyHashSeqError::InvalidHashSeq { .. } => e!(HandleGetError::InvalidHashSeq),
+            LazyHashSeqError::Request { source, .. } => {
+                let source = match source {
+                    RequestError::Rpc { source, .. } => source.into(),
+                    // a store error, so keep it apart from network errors
+                    RequestError::Inner {
+                        source: crate::api::Error::Io(e),
+                        ..
+                    } => e!(ExportBaoError::ExportBaoInner, EncodeError::Io(e)),
+                };
+                e!(HandleGetError::ExportBao, source)
+            }
+        }
+    }
+}
+
+/// Whether an export failed because of a problem on our side.
+///
+/// Stream writes and deliberate event-handler rejections are not local failures.
+/// Bao validation errors, missing data and short reads are normal for incomplete
+/// blobs. Store I/O errors and event-handler communication failures are local.
+fn is_local_export_failure(e: &ExportBaoError) -> bool {
+    match e {
+        ExportBaoError::ExportBaoIo { .. } => false,
+        ExportBaoError::ClientError { source, .. } => {
+            matches!(source, ProgressError::Internal { .. })
+        }
+        ExportBaoError::ExportBaoInner { source, .. } => match source {
+            EncodeError::Io(e) => !matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::UnexpectedEof
+            ),
+            _ => false,
+        },
+        _ => true,
+    }
+}
+
 /// Handle a single get request.
 ///
 /// Requires a database, the request, and a writer.
@@ -433,28 +484,12 @@ async fn handle_get_impl<W: SendStream>(
 ) -> Result<(), HandleGetError> {
     let hash = request.hash;
     debug!(%hash, "get received request");
-    let mut hash_seq = None;
+    let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), hash);
     for (offset, ranges) in request.ranges.iter_non_empty_infinite() {
         if offset == 0 {
             send_blob(&store, offset, hash, ranges.clone(), writer).await?;
         } else {
-            // todo: this assumes that 1. the hashseq is complete and 2. it is
-            // small enough to fit in memory.
-            //
-            // This should really read the hashseq from the store in chunks,
-            // only where needed, so we can deal with holes and large hashseqs.
-            let hash_seq = match &hash_seq {
-                Some(b) => b,
-                None => {
-                    let bytes = store.get_bytes(hash).await?;
-                    let hs =
-                        HashSeq::try_from(bytes).map_err(|_| e!(HandleGetError::InvalidHashSeq))?;
-                    hash_seq = Some(hs);
-                    hash_seq.as_ref().unwrap()
-                }
-            };
-            let o = usize::try_from(offset - 1).map_err(|_| e!(HandleGetError::InvalidOffset))?;
-            let Some(hash) = hash_seq.get(o) else {
+            let Some(hash) = hash_seq.get(offset - 1).await? else {
                 break;
             };
             send_blob(&store, offset, hash, ranges.clone(), writer).await?;
@@ -478,6 +513,11 @@ pub async fn handle_get<R: RecvStream, W: SendStream>(
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_get_impl(store, request, &mut writer).await;
+    if let Err(e) = &res {
+        if e.is_local_failure() {
+            warn!("get request failed: {e:#}");
+        }
+    }
     handle_write_result(&mut writer, res).await?;
     Ok(())
 }
@@ -496,6 +536,15 @@ impl HasErrorCode for HandleGetManyError {
                 ..
             } => source.code(),
             _ => ERR_INTERNAL,
+        }
+    }
+}
+
+impl HandleGetManyError {
+    /// Whether the request failed because of a problem on our side.
+    fn is_local_failure(&self) -> bool {
+        match self {
+            Self::ExportBao { source, .. } => is_local_export_failure(source),
         }
     }
 }
@@ -527,6 +576,11 @@ pub async fn handle_get_many<R: RecvStream, W: SendStream>(
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_get_many_impl(store, request, &mut writer).await;
+    if let Err(e) = &res {
+        if e.is_local_failure() {
+            warn!("get_many request failed: {e:#}");
+        }
+    }
     handle_write_result(&mut writer, res).await?;
     Ok(())
 }
@@ -541,6 +595,15 @@ pub enum HandlePushError {
 
     #[error(transparent)]
     Request { source: RequestError },
+}
+
+impl From<LazyHashSeqError> for HandlePushError {
+    fn from(e: LazyHashSeqError) -> Self {
+        match e {
+            LazyHashSeqError::InvalidHashSeq { .. } => e!(HandlePushError::InvalidHashSeq),
+            LazyHashSeqError::Request { source, .. } => e!(HandlePushError::Request, source),
+        }
+    }
 }
 
 impl HasErrorCode for HandlePushError {
@@ -565,8 +628,11 @@ async fn handle_push_impl<R: RecvStream>(
 ) -> Result<(), HandlePushError> {
     let hash = request.hash;
     debug!(%hash, "push received request");
-    let mut request_ranges = request.ranges.iter_infinite();
-    let root_ranges = request_ranges.next().expect("infinite iterator");
+    let root_ranges = request
+        .ranges
+        .iter_infinite()
+        .next()
+        .expect("infinite iterator");
     if !root_ranges.is_empty() {
         // todo: send progress from import_bao_noq or rename to import_bao_noq_with_progress
         store
@@ -577,13 +643,14 @@ async fn handle_push_impl<R: RecvStream>(
         debug!("push request complete");
         return Ok(());
     }
-    // todo: we assume here that the hash sequence is complete. For some requests this might not be the case. We would need `LazyHashSeq` for that, but it is buggy as of now!
-    let hash_seq = store.get_bytes(hash).await?;
-    let hash_seq = HashSeq::try_from(hash_seq).map_err(|_| e!(HandlePushError::InvalidHashSeq))?;
-    for (child_hash, child_ranges) in hash_seq.into_iter().zip(request_ranges) {
-        if child_ranges.is_empty() {
+    let mut hash_seq = LazyHashSeq::new(store.blobs().clone(), hash);
+    for (offset, child_ranges) in request.ranges.iter_non_empty_infinite() {
+        if offset == 0 {
             continue;
         }
+        let Some(child_hash) = hash_seq.get(offset - 1).await? else {
+            break;
+        };
         store
             .import_bao_reader(child_hash, child_ranges.clone(), &mut reader.inner)
             .await?;
@@ -630,6 +697,16 @@ pub enum HandleObserveError {
 impl HasErrorCode for HandleObserveError {
     fn code(&self) -> VarInt {
         ERR_INTERNAL
+    }
+}
+
+impl HandleObserveError {
+    /// Whether the request failed because of a problem on our side.
+    fn is_local_failure(&self) -> bool {
+        match self {
+            Self::ObserveStreamClosed { .. } => true,
+            Self::RemoteClosed { .. } => false,
+        }
     }
 }
 
@@ -692,6 +769,11 @@ pub async fn handle_observe<R: RecvStream, W: SendStream>(
     let tracker = handle_read_request_result(&mut pair, res).await?;
     let mut writer = pair.into_writer(tracker).await?;
     let res = handle_observe_impl(store, request, &mut writer).await;
+    if let Err(e) = &res {
+        if e.is_local_failure() {
+            warn!("observe request failed: {e:#}");
+        }
+    }
     handle_write_result(&mut writer, res).await?;
     Ok(())
 }
@@ -716,5 +798,165 @@ impl<R: RecvStream> ProgressReader<R> {
             .transfer_completed(|| Box::new(self.context.stats()))
             .await
             .ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use bao_tree::ChunkRanges;
+    use iroh::{endpoint::presets, Endpoint, RelayMode};
+    use n0_error::{e, AnyError};
+    use n0_future::StreamExt;
+    use testresult::TestResult;
+
+    use super::{handle_stream, is_local_export_failure, HandleGetError, StreamPair};
+    use crate::{
+        api::{Error, ExportBaoError, RequestError, Store},
+        get,
+        hashseq::{HashSeq, LazyHashSeq, LazyHashSeqError},
+        protocol::{ChunkRangesExt, GetRequest},
+        provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
+        store::{mem::MemStore, util::tests::create_n0_bao},
+        Hash, ALPN,
+    };
+
+    async fn missing_hashseq_chunk(store: &Store) -> TestResult<()> {
+        let hashes = (0..1000u64)
+            .map(|i| Hash::new(i.to_le_bytes()))
+            .collect::<HashSeq>();
+        let ranges = ChunkRanges::chunk(3);
+        let (hash, bao) = create_n0_bao(&hashes.into_inner(), &ranges)?;
+        store.import_bao_bytes(hash, ranges, bao).await?;
+        let mut lazy = LazyHashSeq::new(store.blobs().clone(), hash);
+        for index in [95, 128] {
+            let error = lazy.get(index).await.expect_err("missing chunk");
+            assert!(
+                matches!(
+                    &error,
+                    LazyHashSeqError::Request {
+                        source: RequestError::Inner { source: Error::Io(cause), .. },
+                        ..
+                    } if cause.kind() == io::ErrorKind::NotFound
+                ),
+                "{error:#}"
+            );
+            let error = HandleGetError::from(error);
+            assert!(!error.is_local_failure(), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_hashseq_chunk_mem() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let store = MemStore::new();
+        missing_hashseq_chunk(&store).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "fs-store")]
+    #[tokio::test]
+    async fn missing_hashseq_chunk_fs() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let testdir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(testdir.path()).await?;
+        missing_hashseq_chunk(&store).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Missing chunks and outboard pairs are normal while a blob is incomplete.
+    #[tokio::test]
+    async fn incomplete_blob_is_not_local_failure() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        for size in [32 * 1024, 64 * 1024] {
+            for ranges in [ChunkRanges::chunk(0), ChunkRanges::last_chunk()] {
+                let data = vec![7u8; size];
+                let (hash, encoded) = create_n0_bao(&data, &ranges)?;
+                let store = MemStore::new();
+                store.import_bao_bytes(hash, ranges, encoded).await?;
+                let error = store.get_bytes(hash).await.expect_err("missing chunks");
+                assert!(!is_local_export_failure(&error), "{error:#}");
+                store.shutdown().await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Losing the event handler is a local failure, unlike deliberate rejection.
+    #[tokio::test]
+    async fn event_handler_failure_is_local() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let events = EventSender::new(
+            tx,
+            EventMask {
+                throttle: ThrottleMode::Intercept,
+                ..EventMask::DEFAULT
+            },
+        );
+        let mut tracker = events
+            .request(|| GetRequest::blob(Hash::EMPTY), 0, 0)
+            .await?;
+        drop(rx);
+        let error = tracker
+            .transfer_progress(1024, 1024)
+            .await
+            .expect_err("handler gone");
+        let error = ExportBaoError::from(error);
+        assert!(is_local_export_failure(&error), "{error:#}");
+
+        for rejection in [e!(ProgressError::Permission), e!(ProgressError::Limit)] {
+            let error = ExportBaoError::from(rejection);
+            assert!(!is_local_export_failure(&error), "{error:#}");
+        }
+        Ok(())
+    }
+
+    /// Serves a single get request for `hash`, where the client drops the
+    /// response after the first item, and returns the provider error.
+    async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<AnyError> {
+        let bind = || {
+            Endpoint::builder(presets::Minimal)
+                .relay_mode(RelayMode::Disabled)
+                .alpns(vec![ALPN.to_vec()])
+                .bind()
+        };
+        let (server, client) = (bind().await?, bind().await?);
+        let addr = server.addr();
+        let client_task = tokio::spawn(async move {
+            let conn = client.connect(addr, ALPN).await?;
+            get::request::get_blob(conn.clone(), hash).next().await;
+            // keep the connection open until the provider is done
+            conn.closed().await;
+            TestResult::Ok(())
+        });
+        let conn = server.accept().await.expect("incoming").await?;
+        let pair = StreamPair::accept(&conn, EventSender::DEFAULT).await?;
+        let error = handle_stream(pair, (**store).clone())
+            .await
+            .expect_err("request fails");
+        conn.close(0u32.into(), b"");
+        client_task.await??;
+        Ok(error)
+    }
+
+    /// A peer hanging up is not a local failure, a failing store is.
+    #[tokio::test]
+    async fn get_local_failure() -> TestResult<()> {
+        tracing_subscriber::fmt::try_init().ok();
+        let store = MemStore::new();
+        let tt = store.add_bytes(vec![0u8; 16 * 1024 * 1024]).await?;
+        let error = serve_one(&store, tt.hash).await?;
+        let error = error.downcast_ref::<HandleGetError>().expect("get error");
+        assert!(!error.is_local_failure(), "{error:#}");
+        store.shutdown().await?;
+        let error = serve_one(&store, tt.hash).await?;
+        let error = error.downcast_ref::<HandleGetError>().expect("get error");
+        assert!(error.is_local_failure(), "{error:#}");
+        Ok(())
     }
 }
