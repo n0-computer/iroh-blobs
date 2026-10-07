@@ -850,8 +850,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn missing_hashseq_chunk_mem() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let store = MemStore::new();
         missing_hashseq_chunk(&store).await?;
         store.shutdown().await?;
@@ -860,8 +860,8 @@ mod tests {
 
     #[cfg(feature = "fs-store")]
     #[tokio::test]
+    #[traced_test]
     async fn missing_hashseq_chunk_fs() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let store = crate::store::fs::FsStore::load(testdir.path()).await?;
         missing_hashseq_chunk(&store).await?;
@@ -871,8 +871,8 @@ mod tests {
 
     /// Missing chunks and outboard pairs are normal while a blob is incomplete.
     #[tokio::test]
+    #[traced_test]
     async fn incomplete_blob_is_not_local_failure() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         for size in [32 * 1024, 64 * 1024] {
             for ranges in [ChunkRanges::chunk(0), ChunkRanges::last_chunk()] {
                 let data = vec![7u8; size];
@@ -889,8 +889,8 @@ mod tests {
 
     /// Losing the event handler is a local failure, unlike deliberate rejection.
     #[tokio::test]
+    #[traced_test]
     async fn event_handler_failure_is_local() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let events = EventSender::new(
             tx,
