@@ -126,6 +126,11 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
             #[cfg(feature = "rpc")]
             irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
+            // Without our `rpc` feature, another crate can still enable irpc's, which adds
+            // `Write`. We cannot name it here, since it may not exist.
+            #[cfg(not(feature = "rpc"))]
+            #[allow(unreachable_patterns)]
+            e => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
     }
 }
