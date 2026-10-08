@@ -66,7 +66,7 @@ tempfile = "3.17.1"
 test-strategy = "0.4.0"
 testresult = "0.4.1"
 tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
-tracing-test = "0.2.5"
+n0-tracing-test = "0.3"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
 iroh = { version = "1.0.0" }

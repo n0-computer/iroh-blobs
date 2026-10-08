@@ -246,6 +246,7 @@ mod tests {
     use std::io::{self};
 
     use bao_tree::io::EncodeError;
+    use n0_tracing_test::traced_test;
     use range_collections::RangeSet2;
     use testresult::TestResult;
 
@@ -376,8 +377,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "fs-store")]
+    #[traced_test]
     async fn gc_smoke_fs() -> TestResult {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_path = testdir.path().join("db");
         let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -387,8 +388,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn gc_smoke_mem() -> TestResult {
-        tracing_subscriber::fmt::try_init().ok();
         let store = crate::store::mem::MemStore::new();
         gc_smoke(&store).await?;
         Ok(())
@@ -396,8 +397,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "fs-store")]
+    #[traced_test]
     async fn gc_check_deletion_fs() -> TestResult {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_path = testdir.path().join("db");
         let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -405,8 +406,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn gc_check_deletion_mem() -> TestResult {
-        tracing_subscriber::fmt::try_init().ok();
         let store = crate::store::mem::MemStore::default();
         gc_check_deletion(&store).await
     }
