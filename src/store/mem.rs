@@ -455,6 +455,9 @@ impl Actor {
             }
         };
         let hash = import_data.outboard.root().into();
+        // Protect freshly imported blobs from concurrent GC until the next `clear_protected`,
+        // matching the fs store.
+        self.protected.insert(hash);
         let entry = self.get_or_create_entry(hash);
         entry
             .0
