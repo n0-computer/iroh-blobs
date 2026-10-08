@@ -933,7 +933,7 @@
 <a href=#933 id=933 data-nosnippet>933</a>            get::request::get_blob(conn.clone(), hash).next().<span class="kw">await</span>;
 <a href=#934 id=934 data-nosnippet>934</a>            <span class="comment">// keep the connection open until the provider is done
 <a href=#935 id=935 data-nosnippet>935</a>            </span>conn.closed().<span class="kw">await</span>;
-<a href=#936 id=936 data-nosnippet>936</a>            TestResult::Ok(())
+<a href=#936 id=936 data-nosnippet>936</a>            TestResult::Ok(client)
 <a href=#937 id=937 data-nosnippet>937</a>        });
 <a href=#938 id=938 data-nosnippet>938</a>        <span class="kw">let </span>conn = server.accept().<span class="kw">await</span>.expect(<span class="string">"incoming"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>pair = StreamPair::accept(<span class="kw-2">&amp;</span>conn, EventSender::DEFAULT).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -941,24 +941,26 @@
 <a href=#941 id=941 data-nosnippet>941</a>            .<span class="kw">await
 <a href=#942 id=942 data-nosnippet>942</a>            </span>.expect_err(<span class="string">"request fails"</span>);
 <a href=#943 id=943 data-nosnippet>943</a>        conn.close(<span class="number">0u32</span>.into(), <span class="string">b""</span>);
-<a href=#944 id=944 data-nosnippet>944</a>        client_task.<span class="kw">await</span><span class="question-mark">??</span>;
-<a href=#945 id=945 data-nosnippet>945</a>        <span class="prelude-val">Ok</span>(error)
-<a href=#946 id=946 data-nosnippet>946</a>    }
-<a href=#947 id=947 data-nosnippet>947</a>
-<a href=#948 id=948 data-nosnippet>948</a>    <span class="doccomment">/// A peer hanging up is not a local failure, a failing store is.
-<a href=#949 id=949 data-nosnippet>949</a>    </span><span class="attr">#[tokio::test]
-<a href=#950 id=950 data-nosnippet>950</a>    #[traced_test]
-<a href=#951 id=951 data-nosnippet>951</a>    </span><span class="kw">async fn </span>get_local_failure() -&gt; TestResult&lt;()&gt; {
-<a href=#952 id=952 data-nosnippet>952</a>        <span class="kw">let </span>store = MemStore::new();
-<a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span>tt = store.add_bytes(<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
-<a href=#957 id=957 data-nosnippet>957</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#958 id=958 data-nosnippet>958</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
-<a href=#960 id=960 data-nosnippet>960</a>        <span class="macro">assert!</span>(error.is_local_failure(), <span class="string">"{error:#}"</span>);
-<a href=#961 id=961 data-nosnippet>961</a>        <span class="prelude-val">Ok</span>(())
-<a href=#962 id=962 data-nosnippet>962</a>    }
-<a href=#963 id=963 data-nosnippet>963</a>}
+<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">let </span>client = client_task.<span class="kw">await</span><span class="question-mark">??</span>;
+<a href=#945 id=945 data-nosnippet>945</a>        <span class="comment">// Dropping an endpoint without closing it aborts it ungracefully.
+<a href=#946 id=946 data-nosnippet>946</a>        </span><span class="macro">tokio::join!</span>(server.close(), client.close());
+<a href=#947 id=947 data-nosnippet>947</a>        <span class="prelude-val">Ok</span>(error)
+<a href=#948 id=948 data-nosnippet>948</a>    }
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>    <span class="doccomment">/// A peer hanging up is not a local failure, a failing store is.
+<a href=#951 id=951 data-nosnippet>951</a>    </span><span class="attr">#[tokio::test]
+<a href=#952 id=952 data-nosnippet>952</a>    #[traced_test]
+<a href=#953 id=953 data-nosnippet>953</a>    </span><span class="kw">async fn </span>get_local_failure() -&gt; TestResult&lt;()&gt; {
+<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>store = MemStore::new();
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>tt = store.add_bytes(<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#957 id=957 data-nosnippet>957</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
+<a href=#958 id=958 data-nosnippet>958</a>        <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
+<a href=#959 id=959 data-nosnippet>959</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#961 id=961 data-nosnippet>961</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
+<a href=#962 id=962 data-nosnippet>962</a>        <span class="macro">assert!</span>(error.is_local_failure(), <span class="string">"{error:#}"</span>);
+<a href=#963 id=963 data-nosnippet>963</a>        <span class="prelude-val">Ok</span>(())
+<a href=#964 id=964 data-nosnippet>964</a>    }
+<a href=#965 id=965 data-nosnippet>965</a>}
 </code></pre></div></section></main></body></html>
