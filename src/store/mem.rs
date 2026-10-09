@@ -580,6 +580,7 @@ async fn export_ranges_impl(
     debug_assert!(entry.hash() == hash, "hash mismatch");
     let data = entry.data_reader();
     let size = bitfield.size();
+    tx.send(ExportRangesItem::Size(size)).await?;
     for range in ranges.iter() {
         let range = match range {
             RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
@@ -587,9 +588,10 @@ async fn export_ranges_impl(
         };
         let requested = ChunkRanges::bytes(range.start..range.end);
         if !bitfield.ranges.is_superset(&requested) {
-            return Err(io::Error::other(format!(
-                "missing range: {requested:?}, present: {bitfield:?}",
-            )));
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("missing range: {requested:?}, present: {bitfield:?}"),
+            ));
         }
         let bs = 1024;
         let mut offset = range.start;

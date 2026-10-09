@@ -91,6 +91,19 @@ impl Blobs {
         Self::ref_cast(sender)
     }
 
+    /// Creates a new batch scope.
+    ///
+    /// A batch holds open a set of temporary tags that protect blobs from
+    /// garbage collection for as long as the batch is alive. When the batch is
+    /// dropped, all its temporary tags are released and the protected blobs
+    /// become eligible for collection again.
+    ///
+    /// Use a batch whenever a long-running operation needs to protect a blob
+    /// in the middle of a write, e.g. when downloading a large blob that takes
+    /// longer than the GC interval. Without a temp tag, GC may collect the
+    /// partially written data file before the operation completes.
+    ///
+    /// See [`Batch::temp_tag`] to pin a specific hash inside the batch scope.
     pub async fn batch(&self) -> irpc::Result<Batch<'_>> {
         let msg = BatchRequest;
         trace!("{msg:?}");
@@ -493,6 +506,10 @@ impl Blobs {
 
     pub async fn status(&self, hash: impl Into<Hash>) -> irpc::Result<BlobStatus> {
         let hash = hash.into();
+        // the empty blob is always complete, regardless of backend state
+        if hash == Hash::EMPTY {
+            return Ok(BlobStatus::Complete { size: 0 });
+        }
         let msg = BlobStatusRequest { hash };
         self.client.rpc(msg).await
     }
@@ -543,7 +560,37 @@ impl<'a> BatchAddProgress<'a> {
     }
 }
 
-/// A batch of operations that modify the blob store.
+/// A scoped lifetime that protects blobs from garbage collection.
+///
+/// All temporary tags created through a `Batch` are kept alive until the batch
+/// is dropped, at which point they are released atomically and the protected
+/// blobs become eligible for GC again.
+///
+/// A typical use case is protecting a blob during a long-running write
+/// (or download) where GC could otherwise collect the partially-written data.
+///
+/// # Example
+///
+/// ```rust
+/// use iroh_blobs::{store::mem::MemStore, Hash};
+///
+/// # async fn example() -> n0_error::Result<()> {
+/// let store = MemStore::new();
+///
+/// // Hash is known upfront (e.g. from a download ticket).
+/// let hash = Hash::new(b"example content");
+///
+/// let batch = store.blobs().batch().await?;
+/// let _guard = batch.temp_tag(hash).await?;
+/// // GC will not collect `hash` for as long as `_guard` and `batch` are alive.
+///
+/// // ... perform long-running write or network download here ...
+///
+/// drop(_guard);
+/// // Any un-upgraded blobs from the batch are now eligible for garbage collection
+/// # Ok(())
+/// # }
+/// ```
 pub struct Batch<'a> {
     scope: Scope,
     blobs: &'a Blobs,
@@ -588,6 +635,12 @@ impl<'a> Batch<'a> {
         }))
     }
 
+    /// Pins a hash inside this batch scope, protecting it from garbage collection.
+    ///
+    /// The returned [`TempTag`] keeps the blob alive until either the tag or
+    /// the batch is dropped. This is the recommended way to protect a blob
+    /// during a long-running write or download where GC might otherwise collect
+    /// the partially-written data.
     pub async fn temp_tag(&self, value: impl Into<HashAndFormat>) -> irpc::Result<TempTag> {
         let value = value.into();
         let msg = CreateTempTagRequest {
@@ -909,11 +962,17 @@ impl ExportRangesProgress {
 
     /// Concatenate all the data into a single `Bytes`.
     pub async fn concatenate(self) -> RequestResult<Vec<u8>> {
+        Ok(self.concatenate_with_size().await?.1)
+    }
+
+    /// Like [`Self::concatenate`], but also returns the size of the blob.
+    pub(crate) async fn concatenate_with_size(self) -> RequestResult<(Option<u64>, Vec<u8>)> {
         let mut rx = self.inner.await?;
+        let mut size = None;
         let mut data = BTreeMap::new();
         while let Some(item) = rx.recv().await? {
             match item {
-                ExportRangesItem::Size(_) => {}
+                ExportRangesItem::Size(s) => size = Some(s),
                 ExportRangesItem::Data(leaf) => {
                     data.insert(leaf.offset, leaf.data);
                 }
@@ -938,7 +997,7 @@ impl ExportRangesProgress {
                 res.extend_from_slice(data);
             }
         }
-        Ok(res)
+        Ok((size, res))
     }
 }
 

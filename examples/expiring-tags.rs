@@ -13,7 +13,6 @@ use std::{
 };
 
 use chrono::Utc;
-use futures_lite::StreamExt;
 use iroh_blobs::{
     api::{blobs::AddBytesOptions, Store, Tag},
     hashseq::HashSeq,
@@ -23,6 +22,7 @@ use iroh_blobs::{
     },
     BlobFormat, Hash,
 };
+use n0_future::StreamExt;
 use tokio::signal::ctrl_c;
 
 /// Using an iroh rpc client, create a tag that is marked to expire at `expiry` for all the given hashes.

@@ -14,12 +14,17 @@ use tokio::sync::{mpsc, watch};
 use tracing::info;
 
 use crate::{
-    api::{blobs::Bitfield, Store},
+    api::{
+        blobs::{Bitfield, BlobStatus},
+        Store,
+    },
     get,
     hashseq::HashSeq,
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
-    provider::events::{AbortReason, EventMask, EventSender, ProviderMessage, RequestUpdate},
+    provider::events::{
+        AbortReason, EventMask, EventSender, ProviderMessage, RequestMode, RequestUpdate,
+    },
     store::{
         fs::{
             tests::{test_data, INTERESTING_SIZES},
@@ -345,7 +350,11 @@ fn event_handler(
     allowed_nodes: impl IntoIterator<Item = EndpointId>,
 ) -> (EventSender, watch::Receiver<usize>, AbortOnDropHandle<()>) {
     let (count_tx, count_rx) = tokio::sync::watch::channel(0usize);
-    let (events_tx, mut events_rx) = EventSender::channel(16, EventMask::ALL_READONLY);
+    let mask = EventMask {
+        push: RequestMode::InterceptLog,
+        ..EventMask::ALL_READONLY
+    };
+    let (events_tx, mut events_rx) = EventSender::channel(16, mask);
     let allowed_nodes = allowed_nodes.into_iter().collect::<HashSet<_>>();
     let task = AbortOnDropHandle::new(n0_future::task::spawn(async move {
         while let Some(event) = events_rx.recv().await {
@@ -420,6 +429,65 @@ async fn two_nodes_push_blobs_fs() -> TestResult<()> {
     sp1.add_endpoint_info(r2.endpoint().addr());
     sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
+}
+
+/// Push a blob from `r1` to `r2` and check that it does not end up in `store2`.
+///
+/// The pushing side currently does not learn whether the request was rejected,
+/// so we wait a bounded time for the blob to show up on the receiving side.
+async fn two_nodes_push_rejected(
+    r1: Router,
+    store1: &Store,
+    r2: Router,
+    store2: &Store,
+) -> TestResult<()> {
+    let data = test_data(1024 * 64);
+    let hash = store1.add_bytes(data).await?.hash;
+    let conn = r1
+        .endpoint()
+        .connect(r2.endpoint().addr(), crate::ALPN)
+        .await?;
+    // keep `conn` alive, so a wrongly accepted push is not cut short
+    store1
+        .remote()
+        .execute_push_sink(
+            conn.clone(),
+            PushRequest::new(hash, ChunkRangesSeq::root()),
+            Drain,
+        )
+        .await
+        .ok();
+    // Wait a bit for a wrongly accepted push to land. We don't use `observe`
+    // here because that would create an empty entry in the store.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let status = store2.blobs().status(hash).await?;
+    assert!(
+        matches!(status, BlobStatus::NotFound),
+        "blob exists on target, status: {status:?}"
+    );
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
+}
+
+/// Push requests must be rejected with the default event mask.
+#[tokio::test]
+async fn two_nodes_push_rejected_default() -> TestResult<()> {
+    tracing_subscriber::fmt::try_init().ok();
+    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    two_nodes_push_rejected(r1, &store1, r2, &store2).await
+}
+
+/// Push requests must be rejected with [`EventMask::ALL_READONLY`], even if
+/// the event handler accepts every request it is asked about.
+#[tokio::test]
+async fn two_nodes_push_rejected_readonly() -> TestResult<()> {
+    tracing_subscriber::fmt::try_init().ok();
+    let (r1, store1, sp1) = node_test_setup_mem().await?;
+    let events = EventSender::DEFAULT.tracing(EventMask::ALL_READONLY);
+    let (r2, store2, sp2) = node_test_setup_with_events_mem(events).await?;
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
+    two_nodes_push_rejected(r1, &store1, r2, &store2).await
 }
 
 #[tokio::test]
@@ -530,6 +598,37 @@ pub async fn node_test_setup_with_events_mem(
     let blobs = BlobsProtocol::new(&store, Some(events));
     let router = Router::builder(ep).accept(crate::ALPN, blobs).spawn();
     Ok((router, store, sp))
+}
+
+/// The empty blob is always complete, and `status`/`has` must agree with
+/// `observe`/`export_bao` on every backend.
+async fn empty_hash_is_complete(store: &Store) -> TestResult<()> {
+    use crate::api::blobs::BlobStatus;
+    let status = store.blobs().status(Hash::EMPTY).await?;
+    assert_eq!(status, BlobStatus::Complete { size: 0 });
+    assert!(store.blobs().has(Hash::EMPTY).await?);
+    let observed = store.blobs().observe(Hash::EMPTY).await?;
+    assert!(observed.is_complete());
+    assert_eq!(observed.size(), 0);
+    let exported = store
+        .export_bao(Hash::EMPTY, ChunkRanges::all())
+        .data_to_bytes()
+        .await?;
+    assert!(exported.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_hash_is_complete_mem() -> TestResult<()> {
+    let store = MemStore::new();
+    empty_hash_is_complete(&store).await
+}
+
+#[tokio::test]
+async fn empty_hash_is_complete_fs() -> TestResult<()> {
+    let testdir = tempfile::tempdir()?;
+    let store = FsStore::load(testdir.path().join("db")).await?;
+    empty_hash_is_complete(&store).await
 }
 
 /// Sets up two nodes with a router and a blob store each.

@@ -24,7 +24,12 @@ env:
   RUSTDOCFLAGS: -Dwarnings
   SCCACHE_CACHE_SIZE: "50G"
   CRATES_LIST: "iroh-blobs"
+  NEXTEST_VERSION: "0.9.80"
   IROH_FORCE_STAGING_RELAYS: "1"
+
+# Default to read-only; jobs that need more grant it explicitly.
+permissions:
+  contents: read
 
 jobs:
   build_and_test_nix:
@@ -54,22 +59,23 @@ jobs:
       RUSTC_WRAPPER: "sccache"
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
+        persist-credentials: false
         ref: ${{ inputs.git-ref }}
 
     - name: Install ${{ matrix.rust }} rust
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
       with:
         toolchain: ${{ matrix.rust }}
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
       with:
-        tool: nextest@0.9.80
+        tool: nextest@${{ env.NEXTEST_VERSION }}
 
     - name: Install sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
+      uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
     - name: Select features
       run: |
@@ -98,31 +104,34 @@ jobs:
           else
             targets="--lib --bins"
           fi
-          echo cargo check -p $i $FEATURES $targets
-          cargo check -p $i $FEATURES $targets
+          echo cargo check --locked -p $i $FEATURES $targets
+          cargo check --locked -p $i $FEATURES $targets
         done
       env:
         RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
 
     - name: build tests
       run: |
-        cargo nextest run --workspace ${{ env.FEATURES }} --lib --bins --tests --no-run
+        cargo nextest run --locked --workspace $FEATURES --lib --bins --tests --no-run
 
     - name: list ignored tests
       run: |
-        cargo nextest list --workspace ${{ env.FEATURES }} --lib --bins --tests --run-ignored ignored-only
+        cargo nextest list --locked --workspace $FEATURES --lib --bins --tests --run-ignored ignored-only
 
     - name: run tests
       run: |
         mkdir -p output
-        cargo nextest run --workspace ${{ env.FEATURES }} --lib --bins --tests --profile ci --run-ignored ${{ inputs.flaky && 'all' || 'default' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+        cargo nextest run --locked --workspace $FEATURES --lib --bins --tests --profile ci --run-ignored "$RUN_IGNORED" --no-fail-fast --message-format "$MSG_FORMAT" > "output/$OUT_NAME.json"
       env:
         RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
         NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
+        RUN_IGNORED: ${{ inputs.flaky && 'all' || 'default' }}
+        MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
+        OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
 
     - name: upload results
       if: ${{ failure() && inputs.flaky }}
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: libtest_run_${{ github.run_number }}-${{ github.run_attempt }}-${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
         path: output
@@ -137,7 +146,7 @@ jobs:
         else
             export RUST_LOG=DEBUG
         fi
-        cargo test --workspace --all-features --doc
+        cargo test --locked --workspace --all-features --doc
 
   build_and_test_windows:
     timeout-minutes: 30
@@ -161,25 +170,32 @@ jobs:
       RUSTC_WRAPPER: "sccache"
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
+        persist-credentials: false
         ref: ${{ inputs.git-ref }}
 
     - name: Install ${{ matrix.rust }}
+      env:
+        RUST_TOOLCHAIN: ${{ matrix.rust }}
+        RUST_TARGET: ${{ matrix.target }}
       run: |
-        rustup toolchain install ${{ matrix.rust }}
-        rustup toolchain default ${{ matrix.rust }}
-        rustup target add ${{ matrix.target }}
-        rustup set default-host ${{ matrix.target }}
+        rustup toolchain install $env:RUST_TOOLCHAIN
+        rustup toolchain default $env:RUST_TOOLCHAIN
+        rustup target add $env:RUST_TARGET
+        rustup set default-host $env:RUST_TARGET
 
+    # install-action shells out to `bash`. On the self-hosted Windows hosts
+    # that resolves to WSL, which mangles Windows paths. Use Git's bash.
+    - name: Prefer Git bash over WSL
+      run: echo "C:\Program Files\Git\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    # Was a bare Invoke-WebRequest from get.nexte.st with no checksum,
+    # unpacked into ~/.cargo/bin on a long-lived host.
     - name: Install cargo-nextest
-      shell: powershell
-      run: |
-        $tmp = New-TemporaryFile | Rename-Item -NewName { $_ -replace 'tmp$', 'zip' } -PassThru
-        Invoke-WebRequest -OutFile $tmp https://get.nexte.st/latest/windows
-        $outputDir = if ($Env:CARGO_HOME) { Join-Path $Env:CARGO_HOME "bin" } else { "~/.cargo/bin" }
-        $tmp | Expand-Archive -DestinationPath $outputDir -Force
-        $tmp | Remove-Item
+      uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+      with:
+        tool: nextest@${{ env.NEXTEST_VERSION }}
 
     - name: Select features
       run: |
@@ -199,29 +215,40 @@ jobs:
         }
 
     - name: Install sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
+      uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
-    - uses: msys2/setup-msys2@v2
+    - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
 
     - name: build tests
+      env:
+        RUST_TARGET: ${{ matrix.target }}
       run: |
-        cargo nextest run --workspace ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --no-run
+        $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+        cargo nextest run --locked --workspace @feat --lib --bins --tests --target $env:RUST_TARGET --no-run
 
     - name: list ignored tests
+      env:
+        RUST_TARGET: ${{ matrix.target }}
       run: |
-        cargo nextest list --workspace ${{ env.FEATURES }} --lib --bins --tests --target ${{ matrix.target }} --run-ignored ignored-only
+        $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+        cargo nextest list --locked --workspace @feat --lib --bins --tests --target $env:RUST_TARGET --run-ignored ignored-only
 
     - name: tests
       run: |
         mkdir -p output
-        cargo nextest run --workspace ${{ env.FEATURES }} --lib --bins --tests --profile ci --target ${{ matrix.target }} --run-ignored ${{ inputs.flaky && 'all' || 'default' }} --no-fail-fast --message-format ${{ inputs.flaky && 'libtest-json' || 'human' }} > output/${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
+        $feat = if ($env:FEATURES) { $env:FEATURES -split '\s+' } else { @() }
+        cargo nextest run --locked --workspace @feat --lib --bins --tests --profile ci --target $env:RUST_TARGET --run-ignored $env:RUN_IGNORED --no-fail-fast --message-format $env:MSG_FORMAT > "output/$($env:OUT_NAME).json"
       env:
         RUST_LOG: ${{ runner.debug && 'TRACE' || 'DEBUG'}}
         NEXTEST_EXPERIMENTAL_LIBTEST_JSON: 1
+        RUST_TARGET: ${{ matrix.target }}
+        RUN_IGNORED: ${{ inputs.flaky && 'all' || 'default' }}
+        MSG_FORMAT: ${{ inputs.flaky && 'libtest-json' || 'human' }}
+        OUT_NAME: ${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}
   
     - name: upload results
       if: ${{ failure() && inputs.flaky }}
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: libtest_run_${{ github.run_number }}-${{ github.run_attempt }}-${{ matrix.name }}_${{ matrix.features }}_${{ matrix.rust }}.json
         path: output

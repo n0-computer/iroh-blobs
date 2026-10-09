@@ -131,6 +131,9 @@ fn gc_sweep<'a>(
 }
 
 /// Configuration for garbage collection.
+///
+/// To protect blobs during long-running writes without pausing the GC
+/// schedule, use [`crate::api::blobs::Batch::temp_tag`].
 #[derive(derive_more::Debug, Clone)]
 pub struct GcConfig {
     /// Interval in which to run garbage collection.

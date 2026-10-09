@@ -15,11 +15,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Result};
 use clap::{Parser, Subcommand};
-use iroh::{
-    address_lookup::MdnsAddressLookup, endpoint::presets, protocol::Router, Endpoint, PublicKey,
-    RelayMode, SecretKey,
-};
+use iroh::{endpoint::presets, protocol::Router, Endpoint, PublicKey, RelayMode, SecretKey};
 use iroh_blobs::{store::mem::MemStore, BlobsProtocol, Hash};
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 mod common;
 use common::{get_or_generate_secret_key, setup_logging};

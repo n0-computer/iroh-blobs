@@ -1,6 +1,6 @@
 //! API for downloads from multiple nodes.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Debug,
     future::{Future, IntoFuture},
     sync::Arc,
@@ -8,9 +8,16 @@ use std::{
 
 use genawaiter::sync::Gen;
 use iroh::{Endpoint, EndpointId};
-use irpc::{channel::mpsc, rpc_requests};
+use irpc::{
+    channel::{mpsc, oneshot},
+    rpc_requests,
+};
 use n0_error::{anyerr, Result};
-use n0_future::{future, stream, task::JoinSet, BufferedStreamExt, Stream, StreamExt};
+use n0_future::{
+    future, stream,
+    task::{JoinError, JoinSet},
+    BufferedStreamExt, Stream, StreamExt,
+};
 use rand::seq::SliceRandom;
 use serde::{de::Error, Deserialize, Serialize};
 use tracing::instrument::Instrument;
@@ -35,13 +42,18 @@ pub struct Downloader {
 enum SwarmProtocol {
     #[rpc(tx = mpsc::Sender<DownloadProgressItem>)]
     Download(DownloadRequest),
+    #[rpc(tx = oneshot::Sender<()>)]
+    WaitIdle(WaitIdleRequest),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WaitIdleRequest;
 
 struct DownloaderActor {
     store: Store,
     pool: ConnectionPool,
     tasks: JoinSet<()>,
-    running: HashSet<n0_future::task::Id>,
+    idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,34 +79,65 @@ impl DownloaderActor {
     fn new_with_opts(
         store: Store,
         endpoint: Endpoint,
+        alpn: &[u8],
         pool_options: crate::util::connection_pool::Options,
     ) -> Self {
         Self {
             store,
-            pool: ConnectionPool::new(endpoint, crate::ALPN, pool_options),
+            pool: ConnectionPool::new(endpoint, alpn, pool_options),
             tasks: JoinSet::new(),
-            running: HashSet::new(),
+            idle_waiters: Vec::new(),
         }
     }
 
     async fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<SwarmMsg>) {
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                SwarmMsg::Download(request) => {
-                    self.spawn(handle_download(
-                        self.store.clone(),
-                        self.pool.clone(),
-                        request,
-                    ));
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    match msg {
+                        SwarmMsg::Download(request) => {
+                            self.spawn(handle_download(
+                                self.store.clone(),
+                                self.pool.clone(),
+                                request,
+                            ));
+                        }
+                        SwarmMsg::WaitIdle(WaitIdleMsg { tx, .. }) => {
+                            if self.tasks.is_empty() {
+                                tx.send(()).await.ok();
+                            } else {
+                                self.idle_waiters.push(tx);
+                            }
+                        }
+                    }
+                }
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    Self::log_task_result(res);
+                    if self.tasks.is_empty() {
+                        for tx in self.idle_waiters.drain(..) {
+                            tx.send(()).await.ok();
+                        }
+                    }
                 }
             }
+        }
+        while let Some(res) = self.tasks.join_next().await {
+            Self::log_task_result(res);
+        }
+    }
+
+    fn log_task_result(res: std::result::Result<(), JoinError>) {
+        match res {
+            Ok(()) => {}
+            Err(e) if e.is_cancelled() => tracing::trace!("download task cancelled: {e}"),
+            Err(e) => tracing::error!("download task failed: {e}"),
         }
     }
 
     fn spawn(&mut self, fut: impl Future<Output = ()> + Send + 'static) {
         let span = tracing::Span::current();
-        let id = self.tasks.spawn(fut.instrument(span)).id();
-        self.running.insert(id);
+        self.tasks.spawn(fut.instrument(span));
     }
 }
 
@@ -343,20 +386,69 @@ impl IntoFuture for DownloadProgress {
     }
 }
 
-impl Downloader {
-    pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
-        Self::new_with_opts(store, endpoint, Default::default())
+/// Builder for a [`Downloader`], created with [`Downloader::builder`].
+#[derive(Debug)]
+pub struct DownloaderBuilder {
+    store: Store,
+    endpoint: Endpoint,
+    alpn: Vec<u8>,
+    pool_options: crate::util::connection_pool::Options,
+}
+
+impl DownloaderBuilder {
+    /// Sets the ALPN used to connect to providers. Defaults to [`crate::ALPN`].
+    ///
+    /// This is an advanced option: providers must accept the same ALPN,
+    /// e.g. via `Router::accept(alpn, blobs)`.
+    pub fn alpn(mut self, alpn: impl Into<Vec<u8>>) -> Self {
+        self.alpn = alpn.into();
+        self
     }
 
+    /// Sets the options for the connection pool used to connect to providers.
+    pub fn pool_options(mut self, pool_options: crate::util::connection_pool::Options) -> Self {
+        self.pool_options = pool_options;
+        self
+    }
+
+    /// Spawns the downloader.
+    pub fn build(self) -> Downloader {
+        let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
+        let actor = DownloaderActor::new_with_opts(
+            self.store,
+            self.endpoint,
+            &self.alpn,
+            self.pool_options,
+        );
+        n0_future::task::spawn(actor.run(rx));
+        Downloader { client: tx.into() }
+    }
+}
+
+impl Downloader {
+    pub fn new(store: &Store, endpoint: &Endpoint) -> Self {
+        Self::builder(store, endpoint).build()
+    }
+
+    /// Creates a builder for a downloader with non-default options.
+    pub fn builder(store: &Store, endpoint: &Endpoint) -> DownloaderBuilder {
+        DownloaderBuilder {
+            store: store.clone(),
+            endpoint: endpoint.clone(),
+            alpn: crate::ALPN.to_vec(),
+            pool_options: Default::default(),
+        }
+    }
+
+    #[deprecated(note = "use Downloader::builder")]
     pub fn new_with_opts(
         store: &Store,
         endpoint: &Endpoint,
         pool_options: crate::util::connection_pool::Options,
     ) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SwarmMsg>(32);
-        let actor = DownloaderActor::new_with_opts(store.clone(), endpoint.clone(), pool_options);
-        n0_future::task::spawn(actor.run(rx));
-        Self { client: tx.into() }
+        Self::builder(store, endpoint)
+            .pool_options(pool_options)
+            .build()
     }
 
     pub fn download(
@@ -376,6 +468,21 @@ impl Downloader {
     pub fn download_with_opts(&self, options: DownloadOptions) -> DownloadProgress {
         let fut = self.client.server_streaming(options, 32);
         DownloadProgress::new(Box::pin(fut))
+    }
+
+    /// Wait until the downloader has no in-flight download tasks.
+    ///
+    /// This is mostly useful for tests, where you want to confirm that all
+    /// previously-issued downloads have settled (whether they completed
+    /// successfully or errored out). Note that the downloader is not
+    /// guaranteed to become idle if it is being interacted with concurrently;
+    /// in that case this might wait forever. Also note that once you get the
+    /// callback, the downloader is not guaranteed to still be idle — all this
+    /// tells you is that there was a point in time, between the call and the
+    /// response, where it was idle.
+    pub async fn wait_idle(&self) -> irpc::Result<()> {
+        self.client.rpc(WaitIdleRequest).await?;
+        Ok(())
     }
 }
 
@@ -539,6 +646,7 @@ mod tests {
     use std::ops::Deref;
 
     use bao_tree::ChunkRanges;
+    use iroh::{endpoint::presets, protocol::Router, Endpoint, RelayMode};
     use n0_future::StreamExt;
     use testresult::TestResult;
 
@@ -548,8 +656,11 @@ mod tests {
             downloader::{DownloadOptions, Downloader, Shuffled, SplitStrategy},
         },
         hashseq::HashSeq,
+        net_protocol::BlobsProtocol,
         protocol::{GetManyRequest, GetRequest},
-        tests::node_test_setup_fs,
+        store::mem::MemStore,
+        tests::{node_test_setup_fs, node_test_setup_mem},
+        Hash,
     };
 
     #[tokio::test]
@@ -682,6 +793,93 @@ mod tests {
             .stream()
             .await?;
         while progress.next().await.is_some() {}
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn downloader_custom_alpn() -> TestResult<()> {
+        const CUSTOM_ALPN: &[u8] = b"/custom-blobs/1";
+        // provider that only accepts the custom ALPN
+        let store1 = MemStore::new();
+        let ep1 = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Default)
+            .bind()
+            .await?;
+        let r1 = Router::builder(ep1)
+            .accept(CUSTOM_ALPN, BlobsProtocol::new(&store1, None))
+            .spawn();
+        let tt = store1.add_slice("hello world").await?;
+        let (r2, store2, sp2) = node_test_setup_mem().await?;
+        sp2.add_endpoint_info(r1.endpoint().addr());
+        let providers = [r1.endpoint().id()];
+
+        let timeout = std::time::Duration::from_secs(10);
+        let default = Downloader::new(&store2, r2.endpoint());
+        let res = tokio::time::timeout(
+            timeout,
+            default.download(GetRequest::blob(tt.hash), providers),
+        )
+        .await?;
+        assert!(res.is_err());
+
+        let custom = Downloader::builder(&store2, r2.endpoint())
+            .alpn(CUSTOM_ALPN)
+            .build();
+        tokio::time::timeout(
+            timeout,
+            custom.download(GetRequest::blob(tt.hash), providers),
+        )
+        .await??;
+        assert_eq!(store2.get_bytes(tt.hash).await?.deref(), b"hello world");
+        Ok(())
+    }
+
+    /// Invariant: `DownloaderActor` must reap each `handle_download` task
+    /// from its `JoinSet` as that task finishes, not only on shutdown.
+    /// If steady-state reaping is skipped, every completed download
+    /// retains its tokio task header for the lifetime of the actor and
+    /// the heap grows linearly with download volume — invisible at the
+    /// API surface, since downloads still report progress and finish.
+    ///
+    /// We submit many downloads with an empty provider list so each
+    /// `handle_download` finishes in microseconds with no I/O, then
+    /// assert the actor reaches an idle state via [`Downloader::wait_idle`].
+    /// If the `tasks.join_next()` arm is removed from
+    /// `DownloaderActor::run`'s `select!`, the JoinSet stays full of
+    /// completed-but-not-joined tasks, `tasks.is_empty()` never becomes
+    /// true, and the timeout below fires.
+    ///
+    /// The complementary `idle_waiters` notification path is not
+    /// exercised here: by the time this test calls `wait_idle`, the
+    /// actor has already drained the JoinSet during the per-stream
+    /// awaits, so `wait_idle`'s fast path answers directly.
+    #[tokio::test]
+    async fn downloader_drains_completed_tasks() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let (r, store, _, _) = node_test_setup_fs(testdir.path().join("a")).await?;
+        let swarm = Downloader::new(&store, r.endpoint());
+
+        let n = 1_000;
+        let bogus_hash = Hash::new(b"this hash is not stored anywhere");
+        let mut streams = Vec::with_capacity(n);
+        for _ in 0..n {
+            streams.push(
+                swarm
+                    .download(GetRequest::all(bogus_hash), Shuffled::new(vec![]))
+                    .stream()
+                    .await?,
+            );
+        }
+        for mut s in streams {
+            while s.next().await.is_some() {}
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), swarm.wait_idle())
+            .await
+            .map_err(|_| {
+                "wait_idle did not resolve within 5s — DownloaderActor JoinSet not draining"
+            })??;
+
         Ok(())
     }
 }
