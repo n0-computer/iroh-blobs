@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["connection_pool"],"struct":["AsyncReadRecvStream","AsyncWriteSendStream","RecvStreamAsyncStreamReader"],"trait":["AsyncReadRecvStreamExtra","AsyncWriteSendStreamExtra","RecvStream","SendStream"]};
