@@ -634,7 +634,6 @@ impl Actor {
 
     async fn new(
         db_path: PathBuf,
-        rt: RtWrapper,
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
@@ -664,7 +663,7 @@ impl Actor {
             internal_cmd_tx: fs_commands_tx,
             protect,
         });
-        rt.spawn(db_actor.run());
+        tokio::spawn(db_actor.run());
         Ok(Self {
             context: slot_context.clone(),
             cmd_rx,
@@ -673,7 +672,7 @@ impl Actor {
             handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
             temp_tags: Default::default(),
             idle_waiters: Vec::new(),
-            _rt: rt,
+            _rt: RtWrapper(None),
         })
     }
 }
@@ -834,11 +833,8 @@ impl Deref for RtWrapper {
 impl Drop for RtWrapper {
     fn drop(&mut self) {
         if let Some(rt) = self.0.take() {
-            trace!("dropping tokio runtime");
-            tokio::task::block_in_place(|| {
-                drop(rt);
-            });
-            trace!("dropped tokio runtime");
+            trace!("shutting down tokio runtime");
+            rt.shutdown_background();
         }
     }
 }
@@ -1399,23 +1395,37 @@ impl FsStore {
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder
             .thread_name_fn(|| {
                 format!(
                     "iroh-blob-store-{}",
                     THREAD_NR.fetch_add(1, Ordering::Relaxed)
                 )
             })
-            .enable_time()
-            .build()?;
+            .enable_time();
+        #[cfg(test)]
+        let threads = Arc::new(AtomicU64::new(0));
+        #[cfg(test)]
+        {
+            let start = threads.clone();
+            let stop = threads.clone();
+            builder
+                .on_thread_start(move || {
+                    start.fetch_add(1, Ordering::SeqCst);
+                })
+                .on_thread_stop(move || {
+                    stop.fetch_sub(1, Ordering::SeqCst);
+                });
+        }
+        let rt = RtWrapper::from(builder.build()?);
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
-        let actor = handle
+        let mut actor = handle
             .spawn(Actor::new(
                 db_path,
-                rt.into(),
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
@@ -1423,8 +1433,13 @@ impl FsStore {
             ))
             .await
             .anyerr()??;
+        actor._rt = rt;
         handle.spawn(actor.run());
-        let store = FsStore::new(commands_tx.into(), fs_commands_tx);
+        let store = FsStore {
+            #[cfg(test)]
+            threads,
+            ..FsStore::new(commands_tx.into(), fs_commands_tx)
+        };
         if let Some(config) = gc_config {
             handle.spawn(run_gc(store.deref().clone(), config));
         }
@@ -1445,6 +1460,8 @@ impl FsStore {
 pub struct FsStore {
     sender: ApiClient,
     db: tokio::sync::mpsc::Sender<InternalCommand>,
+    #[cfg(test)]
+    threads: Arc<AtomicU64>,
 }
 
 impl From<FsStore> for Store {
@@ -1475,6 +1492,8 @@ impl FsStore {
         Self {
             sender: sender.into(),
             db,
+            #[cfg(test)]
+            threads: Default::default(),
         }
     }
 
@@ -1498,7 +1517,10 @@ impl FsStore {
 #[cfg(test)]
 pub mod tests {
     use core::panic;
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        time::Duration,
+    };
 
     use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
     use n0_future::{stream, Stream, StreamExt};
@@ -2135,6 +2157,58 @@ pub mod tests {
             //     let item = item?;
             // }
             // store.import_bao_bytes(hash, ChunkRanges::all(), bao_tree.into()).await?;
+        }
+        Ok(())
+    }
+
+    /// A failed load must return the error instead of hanging in the drop of the store runtime.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_root_is_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let root = testdir.path().join("file");
+        std::fs::write(&root, b"not a directory")?;
+        let res = tokio::time::timeout(Duration::from_secs(10), FsStore::load(&root)).await?;
+        assert!(res.is_err());
+        Ok(())
+    }
+
+    /// A failed load must return the error instead of hanging in the drop of the store runtime.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_already_open() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let root = testdir.path().join("db");
+        let _store = FsStore::load(&root).await?;
+        let res = tokio::time::timeout(Duration::from_secs(10), FsStore::load(&root)).await?;
+        assert!(res.is_err());
+        Ok(())
+    }
+
+    /// Dropping stores concurrently must not deadlock in the drop of the store runtime.
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_load_drop_concurrent() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let mut tasks = JoinSet::new();
+        for i in 0..4 {
+            let root = testdir.path().join(format!("db{i}"));
+            tasks.spawn(async move {
+                for j in 0..20 {
+                    let store = FsStore::load(root.join(format!("{j}"))).await?;
+                    store.add_bytes(vec![0u8; 100]).await?;
+                    let threads = store.threads.clone();
+                    drop(store);
+                    while threads.load(Ordering::SeqCst) > 0 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                }
+                n0_error::Ok(())
+            });
+        }
+        let all = tasks.join_all();
+        for res in tokio::time::timeout(Duration::from_secs(30), all).await? {
+            res?;
         }
         Ok(())
     }
