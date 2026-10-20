@@ -1502,6 +1502,7 @@ pub mod tests {
 
     use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
     use n0_future::{stream, Stream, StreamExt};
+    use n0_tracing_test::traced_test;
     use testresult::TestResult;
     use walkdir::WalkDir;
 
@@ -1551,9 +1552,8 @@ pub mod tests {
     }
 
     #[tokio::test]
-    // #[traced_test]
+    #[traced_test]
     async fn test_observe() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -1594,8 +1594,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_import_byte_stream() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1617,8 +1617,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bytes_simple() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(&db_dir).await?;
@@ -1644,8 +1644,8 @@ pub mod tests {
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
     #[ignore = "flaky. I need a reliable way to keep the handle alive"]
+    #[traced_test]
     async fn test_roundtrip_bytes_small() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1677,8 +1677,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_import_path() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1702,8 +1702,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_export_path() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1721,8 +1721,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_ranges() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         {
@@ -1743,8 +1743,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_minimal() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = [1];
         let db_dir = testdir.path().join("db");
@@ -1764,8 +1764,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_simple() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = [1048576];
         let db_dir = testdir.path().join("db");
@@ -1786,8 +1786,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_full() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1820,8 +1820,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_just_size() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1858,8 +1858,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_two_stages() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1922,8 +1922,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_observe() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1960,8 +1960,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_recover() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -2000,8 +2000,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bytes_persistence_full() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -2066,8 +2066,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_batch_fs() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -2075,8 +2075,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn smoke() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;

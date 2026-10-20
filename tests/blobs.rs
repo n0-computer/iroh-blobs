@@ -14,6 +14,7 @@ use iroh_blobs::{
     Hash,
 };
 use n0_future::StreamExt;
+use n0_tracing_test::traced_test;
 use testresult::TestResult;
 
 /// Interesting sizes for testing.
@@ -82,8 +83,8 @@ async fn blobs_smoke(path: &Path, blobs: &Blobs) -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn blobs_smoke_fs() -> TestResult {
-    tracing_subscriber::fmt::try_init().ok();
     let td = tempfile::tempdir()?;
     let store = FsStore::load(td.path().join("a")).await?;
     blobs_smoke(td.path(), store.blobs()).await?;
@@ -92,8 +93,8 @@ async fn blobs_smoke_fs() -> TestResult {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn blobs_smoke_mem() -> TestResult {
-    tracing_subscriber::fmt::try_init().ok();
     let td = tempfile::tempdir()?;
     let store = MemStore::new();
     blobs_smoke(td.path(), store.blobs()).await?;
@@ -102,8 +103,8 @@ async fn blobs_smoke_mem() -> TestResult {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn blobs_smoke_fs_rpc() -> TestResult {
-    tracing_subscriber::fmt::try_init().ok();
     let unspecified = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
     let (server, cert) = irpc::util::make_server_endpoint(unspecified)?;
     let client = irpc::util::make_client_endpoint(unspecified, &[cert.as_ref()])?;
