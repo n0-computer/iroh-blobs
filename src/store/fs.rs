@@ -47,10 +47,18 @@
 //!
 //! # Runtime
 //!
-//! The fs store owns and manages its own tokio runtime. Dropping the store
-//! will clean up the database and shut down the runtime. However, some parts
-//! of the persistent state won't make it to disk, so operations involving large
-//! partial blobs will have a large initial delay on the next startup.
+//! The fs store owns and manages its own tokio runtime. Almost all store
+//! operations are small synchronous IO operations: file reads and writes, and
+//! redb transactions. Running them on a dedicated runtime lets the store
+//! perform them directly inside its tasks. The alternative, wrapping every
+//! tiny operation in `spawn_blocking`, would be slow and error-prone. It also
+//! means that blocking IO in the store never stalls the caller's runtime, and
+//! the store works no matter which runtime flavor the caller uses.
+//!
+//! Dropping the store will clean up the database and shut down the runtime.
+//! However, some parts of the persistent state won't make it to disk, so
+//! operations involving large partial blobs will have a large initial delay on
+//! the next startup.
 //!
 //! It is also not guaranteed that all write operations will make it to disk.
 //! The on-disk store will be in a consistent state, but might miss some writes
