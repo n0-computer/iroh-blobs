@@ -296,9 +296,15 @@ impl SyncEntityApi for HashContext {
                     match self.global.db.get(self.id).await {
                         Ok(state) => match BaoFileStorage::open(state, self).await {
                             Ok(handle) => handle,
-                            Err(_) => BaoFileStorage::Poisoned,
+                            Err(cause) => {
+                                error!("failed to open {}, poisoning: {cause}", self.id);
+                                BaoFileStorage::Poisoned
+                            }
                         },
-                        Err(_) => BaoFileStorage::Poisoned,
+                        Err(cause) => {
+                            error!("failed to get {} from db, poisoning: {cause}", self.id);
+                            BaoFileStorage::Poisoned
+                        }
                     }
                 };
                 self.state.send_replace(state);
@@ -319,9 +325,13 @@ impl SyncEntityApi for HashContext {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, self) else {
-                res = Err(io::Error::other("write batch failed"));
-                return false;
+            let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
+                Ok(written) => written,
+                Err(cause) => {
+                    error!("failed to write batch for {}, poisoning: {cause}", self.id);
+                    res = Err(io::Error::other("write batch failed"));
+                    return false;
+                }
             };
             res = Ok(update);
             *state = state1;
