@@ -484,8 +484,9 @@ impl BaoFileStorage {
                 // unless there is a bug, this would just write the exact same data
                 (self, None)
             }
+            BaoFileStorage::Poisoned => return Err(io::Error::other("poisoned storage")),
             _ => {
-                // we are poisoned, so just ignore the write
+                // Initial and Loading can not occur after load
                 (self, None)
             }
         })
