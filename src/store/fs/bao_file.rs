@@ -708,12 +708,16 @@ impl BaoFileStorageSubscriber {
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
     pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let value = self.receiver.borrow().bitfield();
+        let Some(value) = self.bitfield() else {
+            return Ok(());
+        };
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
-            let value = self.receiver.borrow().bitfield();
-            tx.send(value.clone()).await?;
+            let Some(value) = self.bitfield() else {
+                return Ok(());
+            };
+            tx.send(value).await?;
         }
     }
 
@@ -722,18 +726,33 @@ impl BaoFileStorageSubscriber {
     /// Returns an error if sending fails, or if the last sender is dropped
     #[allow(dead_code)]
     pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let value = self.receiver.borrow().bitfield();
+        let Some(value) = self.bitfield() else {
+            return Ok(());
+        };
         let mut old = value.clone();
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
-            let new = self.receiver.borrow().bitfield();
+            let Some(new) = self.bitfield() else {
+                return Ok(());
+            };
             let diff = old.diff(&new);
             if diff.is_empty() {
                 continue;
             }
             tx.send(diff).await?;
             old = new;
+        }
+    }
+
+    /// The current bitfield, or `None` if the storage is poisoned.
+    ///
+    /// Observers end the stream on `None`, since there is no error channel.
+    fn bitfield(&self) -> Option<Bitfield> {
+        let state = self.receiver.borrow();
+        match state.deref() {
+            BaoFileStorage::Poisoned => None,
+            state => Some(state.bitfield()),
         }
     }
 

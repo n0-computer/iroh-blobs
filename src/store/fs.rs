@@ -1999,6 +1999,30 @@ pub mod tests {
         Ok(())
     }
 
+    /// Observing an entry whose data file is missing must end the stream
+    /// instead of panicking.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_observe_poisoned_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+        {
+            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+            store.add_bytes(data.clone()).await?;
+            store.shutdown().await?;
+        }
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        assert!(store.observe(hash).await.is_err());
+        // the entity for the hash must still be alive, so re-adding works
+        store.add_bytes(data).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test_import_bytes_persistence_full() -> TestResult<()> {
