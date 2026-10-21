@@ -879,3 +879,43 @@ async fn export_ranges_smoke(store: &Store) -> TestResult {
     }
     Ok(())
 }
+
+/// A source stream that yields an error must make `add_stream` fail with
+/// that error, not hang or import the truncated prefix.
+async fn check_add_stream_source_error(store: &Store) -> TestResult<()> {
+    let items: Vec<io::Result<Bytes>> = vec![
+        Ok(Bytes::from_static(b"first chunk of data")),
+        Err(io::Error::other("source stream failed")),
+    ];
+    let stream = n0_future::stream::iter(items);
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        store.blobs().add_stream(stream).await.temp_tag(),
+    )
+    .await?;
+    let err = res.expect_err("add_stream must fail when the source fails");
+    assert!(
+        format!("{err:?}").contains("source stream failed"),
+        "unexpected error: {err:?}"
+    );
+    // the store is still usable afterwards
+    let _tt = store.add_bytes(b"after".to_vec()).temp_tag().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+async fn mem_add_stream_source_error() -> TestResult<()> {
+    let store = MemStore::new();
+    check_add_stream_source_error(&store).await
+}
+
+#[tokio::test]
+#[traced_test]
+async fn fs_add_stream_source_error() -> TestResult<()> {
+    let testdir = tempfile::tempdir()?;
+    let store = FsStore::load(testdir.path().join("db")).await?;
+    check_add_stream_source_error(&store).await?;
+    store.shutdown().await?;
+    Ok(())
+}
