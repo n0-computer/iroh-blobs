@@ -47,17 +47,28 @@
 //!
 //! # Runtime
 //!
-//! The fs store owns and manages its own tokio runtime. Dropping the store
-//! will clean up the database and shut down the runtime. However, some parts
-//! of the persistent state won't make it to disk, so operations involving large
-//! partial blobs will have a large initial delay on the next startup.
+//! The fs store owns and manages its own tokio runtime. Almost all store
+//! operations are small synchronous IO operations: file reads and writes, and
+//! redb transactions. Running them on a dedicated runtime lets the store
+//! perform them directly inside its tasks. The alternative, wrapping every
+//! tiny operation in `spawn_blocking`, would be slow and error-prone. It also
+//! means that blocking IO in the store never stalls the caller's runtime, and
+//! the store works no matter which runtime flavor the caller uses.
+//!
+//! Dropping the store shuts down the runtime and closes the database in the
+//! background, without waiting for either to finish. The database stays locked
+//! until it is closed, so loading the store again right after dropping it will
+//! usually fail. Also, some parts of the persistent state won't make it to
+//! disk, so operations involving large partial blobs will have a large initial
+//! delay on the next startup.
 //!
 //! It is also not guaranteed that all write operations will make it to disk.
 //! The on-disk store will be in a consistent state, but might miss some writes
 //! in the last seconds before shutdown.
 //!
-//! To avoid this, you can use the [`crate::api::Store::shutdown`] method to
-//! cleanly shut down the store and save ephemeral state to disk.
+//! To avoid this, await [`crate::api::Store::shutdown`] before dropping the
+//! store. It returns once the database is closed and ephemeral state is saved
+//! to disk, so the store can be loaded again right away.
 //!
 //! Note that if you use the store inside a [`iroh::protocol::Router`] and shut
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
@@ -632,9 +643,12 @@ impl Actor {
         }
     }
 
+    /// Creates the actor and spawns the database actor.
+    ///
+    /// This must only be called in the context of the store runtime, since the
+    /// database actor is spawned on the current runtime and does blocking IO.
     async fn new(
         db_path: PathBuf,
-        rt: RtWrapper,
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
@@ -664,7 +678,7 @@ impl Actor {
             internal_cmd_tx: fs_commands_tx,
             protect,
         });
-        rt.spawn(db_actor.run());
+        tokio::spawn(db_actor.run());
         Ok(Self {
             context: slot_context.clone(),
             cmd_rx,
@@ -673,7 +687,7 @@ impl Actor {
             handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
             temp_tags: Default::default(),
             idle_waiters: Vec::new(),
-            _rt: rt,
+            _rt: RtWrapper(None),
         })
     }
 }
@@ -834,11 +848,8 @@ impl Deref for RtWrapper {
 impl Drop for RtWrapper {
     fn drop(&mut self) {
         if let Some(rt) = self.0.take() {
-            trace!("dropping tokio runtime");
-            tokio::task::block_in_place(|| {
-                drop(rt);
-            });
-            trace!("dropped tokio runtime");
+            trace!("shutting down tokio runtime");
+            rt.shutdown_background();
         }
     }
 }
@@ -1167,6 +1178,7 @@ async fn export_ranges_impl(
     let bitfield = ctx.bitfield()?;
     let data = ctx.data_reader();
     let size = bitfield.size();
+    tx.send(ExportRangesItem::Size(size)).await?;
     for range in ranges.iter() {
         let range = match range {
             RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
@@ -1174,9 +1186,10 @@ async fn export_ranges_impl(
         };
         let requested = ChunkRanges::bytes(range.start..range.end);
         if !bitfield.ranges.is_superset(&requested) {
-            return Err(io::Error::other(format!(
-                "missing range: {requested:?}, present: {bitfield:?}",
-            )));
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("missing range: {requested:?}, present: {bitfield:?}"),
+            ));
         }
         let bs = 1024;
         let mut offset = range.start;
@@ -1397,23 +1410,40 @@ impl FsStore {
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder
             .thread_name_fn(|| {
                 format!(
                     "iroh-blob-store-{}",
                     THREAD_NR.fetch_add(1, Ordering::Relaxed)
                 )
             })
-            .enable_time()
-            .build()?;
+            .enable_time();
+        // Counts the live threads of the store runtime, so that
+        // `test_load_drop_concurrent` can check that they exit after the store
+        // is dropped. `Runtime::metrics` only has this with `tokio_unstable`.
+        #[cfg(test)]
+        let threads = Arc::new(AtomicU64::new(0));
+        #[cfg(test)]
+        {
+            let start = threads.clone();
+            let stop = threads.clone();
+            builder
+                .on_thread_start(move || {
+                    start.fetch_add(1, Ordering::SeqCst);
+                })
+                .on_thread_stop(move || {
+                    stop.fetch_sub(1, Ordering::SeqCst);
+                });
+        }
+        let rt = RtWrapper::from(builder.build()?);
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
-        let actor = handle
+        let mut actor = handle
             .spawn(Actor::new(
                 db_path,
-                rt.into(),
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
@@ -1421,8 +1451,13 @@ impl FsStore {
             ))
             .await
             .anyerr()??;
+        actor._rt = rt;
         handle.spawn(actor.run());
-        let store = FsStore::new(commands_tx.into(), fs_commands_tx);
+        let store = FsStore {
+            #[cfg(test)]
+            threads,
+            ..FsStore::new(commands_tx.into(), fs_commands_tx)
+        };
         if let Some(config) = gc_config {
             handle.spawn(run_gc(store.deref().clone(), config));
         }
@@ -1443,6 +1478,8 @@ impl FsStore {
 pub struct FsStore {
     sender: ApiClient,
     db: tokio::sync::mpsc::Sender<InternalCommand>,
+    #[cfg(test)]
+    threads: Arc<AtomicU64>,
 }
 
 impl From<FsStore> for Store {
@@ -1473,6 +1510,8 @@ impl FsStore {
         Self {
             sender: sender.into(),
             db,
+            #[cfg(test)]
+            threads: Default::default(),
         }
     }
 
@@ -1496,10 +1535,14 @@ impl FsStore {
 #[cfg(test)]
 pub mod tests {
     use core::panic;
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        time::Duration,
+    };
 
     use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
     use n0_future::{stream, Stream, StreamExt};
+    use n0_tracing_test::traced_test;
     use testresult::TestResult;
     use walkdir::WalkDir;
 
@@ -1549,9 +1592,8 @@ pub mod tests {
     }
 
     #[tokio::test]
-    // #[traced_test]
+    #[traced_test]
     async fn test_observe() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -1592,8 +1634,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_import_byte_stream() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1615,8 +1657,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bytes_simple() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(&db_dir).await?;
@@ -1642,8 +1684,8 @@ pub mod tests {
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
     #[ignore = "flaky. I need a reliable way to keep the handle alive"]
+    #[traced_test]
     async fn test_roundtrip_bytes_small() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1675,8 +1717,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_import_path() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1700,8 +1742,8 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
+    #[traced_test]
     async fn test_export_path() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -1719,8 +1761,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_ranges() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         {
@@ -1741,8 +1783,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_minimal() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = [1];
         let db_dir = testdir.path().join("db");
@@ -1762,8 +1804,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_simple() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = [1048576];
         let db_dir = testdir.path().join("db");
@@ -1784,8 +1826,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_full() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1818,8 +1860,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_just_size() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1856,8 +1898,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_two_stages() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1920,8 +1962,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_observe() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1958,8 +2000,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bao_persistence_recover() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -1998,8 +2040,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_import_bytes_persistence_full() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let sizes = INTERESTING_SIZES;
         let db_dir = testdir.path().join("db");
@@ -2064,8 +2106,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_batch_fs() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -2073,8 +2115,8 @@ pub mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn smoke() -> TestResult<()> {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let store = FsStore::load(db_dir).await?;
@@ -2133,6 +2175,58 @@ pub mod tests {
             //     let item = item?;
             // }
             // store.import_bao_bytes(hash, ChunkRanges::all(), bao_tree.into()).await?;
+        }
+        Ok(())
+    }
+
+    /// A failed load must return the error instead of hanging in the drop of the store runtime.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_root_is_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let root = testdir.path().join("file");
+        std::fs::write(&root, b"not a directory")?;
+        let res = tokio::time::timeout(Duration::from_secs(10), FsStore::load(&root)).await?;
+        assert!(res.is_err());
+        Ok(())
+    }
+
+    /// A failed load must return the error instead of hanging in the drop of the store runtime.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_already_open() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let root = testdir.path().join("db");
+        let _store = FsStore::load(&root).await?;
+        let res = tokio::time::timeout(Duration::from_secs(10), FsStore::load(&root)).await?;
+        assert!(res.is_err());
+        Ok(())
+    }
+
+    /// Dropping stores concurrently must not deadlock in the drop of the store runtime.
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_load_drop_concurrent() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let mut tasks = JoinSet::new();
+        for i in 0..4 {
+            let root = testdir.path().join(format!("db{i}"));
+            tasks.spawn(async move {
+                for j in 0..20 {
+                    let store = FsStore::load(root.join(format!("{j}"))).await?;
+                    store.add_bytes(vec![0u8; 100]).await?;
+                    let threads = store.threads.clone();
+                    drop(store);
+                    while threads.load(Ordering::SeqCst) > 0 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                }
+                n0_error::Ok(())
+            });
+        }
+        let all = tasks.join_all();
+        for res in tokio::time::timeout(Duration::from_secs(30), all).await? {
+            res?;
         }
         Ok(())
     }

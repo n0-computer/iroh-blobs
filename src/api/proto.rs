@@ -226,7 +226,10 @@ pub struct ExportBaoRequest {
     pub ranges: ChunkRanges,
 }
 
-/// Export the given ranges as chunkks, without validation.
+/// Export the given ranges as chunks, without validation.
+///
+/// Missing blobs or requested chunks produce an [`std::io::ErrorKind::NotFound`]
+/// error. Ranges past the end of the blob are clipped.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportRangesRequest {
     pub hash: Hash,

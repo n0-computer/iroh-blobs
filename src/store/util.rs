@@ -415,7 +415,6 @@ impl bao_tree::io::mixed::Sender for BaoTreeSender {
 }
 
 #[cfg(test)]
-#[cfg(feature = "fs-store")]
 pub mod tests {
     use bao_tree::{io::outboard::PreOrderMemOutboard, ChunkRanges};
     use n0_error::{Result, StdResultExt};

@@ -8,6 +8,7 @@ use iroh::{
 };
 use irpc::RpcMessage;
 use n0_future::{task::AbortOnDropHandle, StreamExt};
+use n0_tracing_test::traced_test;
 use tempfile::TempDir;
 use testresult::TestResult;
 use tokio::sync::{mpsc, watch};
@@ -300,8 +301,8 @@ fn observe_enabled() -> EventSender {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_observe_fs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let (r1, store1, _, sp1) =
         node_test_setup_with_events_fs(testdir.path().join("a"), observe_enabled()).await?;
@@ -312,8 +313,8 @@ async fn two_nodes_observe_fs() -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_observe_mem() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let (r1, store1, sp1) = node_test_setup_with_events_mem(observe_enabled()).await?;
     let (r2, store2, sp2) = node_test_setup_mem().await?;
     sp1.add_endpoint_info(r2.endpoint().addr());
@@ -323,8 +324,8 @@ async fn two_nodes_observe_mem() -> TestResult<()> {
 
 /// Observe requests must be rejected with the default event mask.
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_observe_disabled_by_default() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
     let hash = store1.add_bytes(test_data(1024)).await?.hash;
     let conn = r2
@@ -370,15 +371,15 @@ async fn two_nodes_get_many(
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_get_many_fs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
     two_nodes_get_many(r1, &store1, r2, &store2).await
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_get_many_mem() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
     two_nodes_get_many(r1, &store1, r2, &store2).await
 }
@@ -456,8 +457,8 @@ async fn two_nodes_push_blobs(
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_push_blobs_fs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let (r1, store1, _, sp1) = node_test_setup_fs(testdir.path().join("a")).await?;
     let (events_tx, count_rx, _task) = event_handler([r1.endpoint().id()]);
@@ -508,8 +509,8 @@ async fn two_nodes_push_rejected(
 
 /// Push requests must be rejected with the default event mask.
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_push_rejected_default() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
     two_nodes_push_rejected(r1, &store1, r2, &store2).await
 }
@@ -517,8 +518,8 @@ async fn two_nodes_push_rejected_default() -> TestResult<()> {
 /// Push requests must be rejected with [`EventMask::ALL_READONLY`], even if
 /// the event handler accepts every request it is asked about.
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_push_rejected_readonly() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let (r1, store1, sp1) = node_test_setup_mem().await?;
     let events = EventSender::DEFAULT.tracing(EventMask::ALL_READONLY);
     let (r2, store2, sp2) = node_test_setup_with_events_mem(events).await?;
@@ -528,8 +529,8 @@ async fn two_nodes_push_rejected_readonly() -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_push_blobs_mem() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let (r1, store1, sp1) = node_test_setup_mem().await?;
     let (events_tx, count_rx, _task) = event_handler([r1.endpoint().id()]);
     let (r2, store2, sp2) = node_test_setup_with_events_mem(events_tx).await?;
@@ -712,23 +713,22 @@ async fn two_nodes_hash_seq(
 }
 
 #[tokio::test]
-
+#[traced_test]
 async fn two_nodes_hash_seq_fs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
     two_nodes_hash_seq(r1, &store1, r2, &store2).await
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_hash_seq_mem() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
     two_nodes_hash_seq(r1, &store1, r2, &store2).await
 }
 
 #[tokio::test]
+#[traced_test]
 async fn two_nodes_hash_seq_progress() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
     let addr1 = r1.endpoint().addr();
     let sizes = INTERESTING_SIZES;
@@ -744,8 +744,8 @@ async fn two_nodes_hash_seq_progress() -> TestResult<()> {
 ///
 /// The client requests the hash sequence and the children, but does not store the data.
 #[tokio::test]
+#[traced_test]
 async fn node_serve_hash_seq() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let db_path = testdir.path().join("db");
     let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -780,8 +780,8 @@ async fn node_serve_hash_seq() -> TestResult<()> {
 ///
 /// The client requests them all one by one, but does not store it.
 #[tokio::test]
+#[traced_test]
 async fn node_serve_blobs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let db_path = testdir.path().join("db");
     let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -814,8 +814,8 @@ async fn node_serve_blobs() -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn node_smoke_fs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let db_path = testdir.path().join("db");
     let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -823,8 +823,8 @@ async fn node_smoke_fs() -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn node_smoke_mem() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let store = crate::store::mem::MemStore::new();
     node_smoke(&store).await
 }
@@ -851,8 +851,8 @@ async fn node_smoke(store: &Store) -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn test_export_chunk() -> TestResult {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let db_path = testdir.path().join("db");
     let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -886,8 +886,8 @@ async fn test_export_ranges(
 }
 
 #[tokio::test]
+#[traced_test]
 async fn export_ranges_smoke_fs() -> TestResult {
-    tracing_subscriber::fmt::try_init().ok();
     let testdir = tempfile::tempdir()?;
     let db_path = testdir.path().join("db");
     let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -895,8 +895,8 @@ async fn export_ranges_smoke_fs() -> TestResult {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn export_ranges_smoke_mem() -> TestResult {
-    tracing_subscriber::fmt::try_init().ok();
     let store = MemStore::new();
     export_ranges_smoke(&store).await
 }
