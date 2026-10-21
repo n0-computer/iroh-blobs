@@ -294,8 +294,6 @@ fn read_size(size_file: &File) -> io::Result<u64> {
 ///
 /// From the remaining states you can get into `Poisoned` if there is an
 /// IO error during an operation.
-///
-/// `Poisioned` is also used once the handle is persisted and no longer usable.
 #[derive(derive_more::From, Default)]
 pub(crate) enum BaoFileStorage {
     /// Initial state, we don't know anything yet.
@@ -322,8 +320,7 @@ pub(crate) enum BaoFileStorage {
     ///
     /// Writing to this is a no-op, since it is already complete.
     Complete(CompleteStorage),
-    /// We will get into that state if there is an io error in the middle of an operation,
-    /// or after the handle is persisted and no longer usable.
+    /// We will get into that state if there is an io error in the middle of an operation.
     Poisoned,
 }
 

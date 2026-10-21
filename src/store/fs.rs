@@ -1013,7 +1013,7 @@ impl EntityApi for HashContext {
     async fn persist(&self) {
         self.state.send_if_modified(|guard| {
             let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
+            let BaoFileStorage::Partial(fs) = &*guard else {
                 return false;
             };
             let path = self.global.options.path.bitfield_path(hash);
