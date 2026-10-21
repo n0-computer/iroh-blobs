@@ -307,9 +307,15 @@ impl SyncEntityApi for HashContext {
                     match self.global.db.get(self.id).await {
                         Ok(state) => match BaoFileStorage::open(state, self).await {
                             Ok(handle) => handle,
-                            Err(_) => BaoFileStorage::Poisoned,
+                            Err(cause) => {
+                                error!("failed to open {}, poisoning: {cause}", self.id);
+                                BaoFileStorage::Poisoned
+                            }
                         },
-                        Err(_) => BaoFileStorage::Poisoned,
+                        Err(cause) => {
+                            error!("failed to get {} from db, poisoning: {cause}", self.id);
+                            BaoFileStorage::Poisoned
+                        }
                     }
                 };
                 self.state.send_replace(state);
@@ -330,9 +336,14 @@ impl SyncEntityApi for HashContext {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, self) else {
-                res = Err(io::Error::other("write batch failed"));
-                return false;
+            let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
+                Ok(written) => written,
+                Err(cause) => {
+                    error!("failed to write batch for {}, poisoning: {cause}", self.id);
+                    res = Err(cause);
+                    // the entry is poisoned now, wake up observers so they can end
+                    return true;
+                }
             };
             res = Ok(update);
             *state = state1;
@@ -2036,6 +2047,88 @@ pub mod tests {
             store.dump().await?;
             store.shutdown().await?;
         }
+        Ok(())
+    }
+
+    /// Observing an entry whose data file is missing must end the stream
+    /// instead of panicking.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_observe_poisoned_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+        {
+            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+            store.add_bytes(data.clone()).await?;
+            store.shutdown().await?;
+        }
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        assert!(store.observe(hash).await.is_err());
+        // the entity for the hash must still be alive, so re-adding works
+        store.add_bytes(data).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Importing into an entry whose data file is missing must fail.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_import_bao_poisoned_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let data = test_data(1024 * 16 + 1);
+        let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
+        {
+            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+            store.add_bytes(data).await?;
+            store.shutdown().await?;
+        }
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        let res = store
+            .import_bao_bytes(hash, ChunkRanges::all(), encoded)
+            .await;
+        assert!(res.is_err());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// An observer must see the stream end when a write poisons the entry.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[traced_test]
+    async fn test_observe_ends_when_write_poisons() -> TestResult<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        // just over the inline limit, so the write has to create the data file
+        let data = test_data(1024 * 16 + 1);
+        let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
+        let mut stream = Box::pin(store.observe(hash).stream().await?);
+        assert!(stream.next().await.is_some());
+        // make it impossible to create the data file
+        let data_dir = db_dir.join("data");
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o555))?;
+        if std::fs::File::create(data_dir.join("probe")).is_ok() {
+            // running as root, permissions are not enforced
+            return Ok(());
+        }
+        let res = store
+            .import_bao_bytes(hash, ChunkRanges::all(), encoded)
+            .await;
+        let next = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await;
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755))?;
+        assert!(res.is_err());
+        assert!(matches!(next, Ok(None)));
+        store.shutdown().await?;
         Ok(())
     }
 
