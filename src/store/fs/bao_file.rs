@@ -652,6 +652,8 @@ impl BaoFileHandle {
                 BaoFileStorage::Complete(_) => false,
                 BaoFileStorage::PartialMem(_) => true,
                 BaoFileStorage::Partial(_) => true,
+                // a finished import does not depend on the old content
+                BaoFileStorage::Poisoned => true,
                 _ => false,
             };
             if needs_complete {

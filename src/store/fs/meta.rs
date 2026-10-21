@@ -833,7 +833,7 @@ impl Actor {
                         .map_err(|e| e!(ActorError::Transaction, e))?;
                     let mut tables =
                         Tables::new(&tx, &ftx).map_err(|e| e!(ActorError::Table, e))?;
-                    let timeout = n0_future::time::sleep(self.options.max_read_duration);
+                    let timeout = n0_future::time::sleep(self.options.max_write_duration);
                     pin!(timeout);
                     let mut n = 0;
                     while let Some(cmd) = self
