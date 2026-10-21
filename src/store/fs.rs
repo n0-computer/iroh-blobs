@@ -2132,6 +2132,40 @@ pub mod tests {
         Ok(())
     }
 
+    /// Persisting a complete entry must leave its state intact.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_persist_keeps_complete_state() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let options = Arc::new(Options::new(testdir.path()));
+        // persist does not talk to the db or the main actor for complete entries
+        let (db_tx, _db_rx) = tokio::sync::mpsc::channel(1);
+        let (internal_cmd_tx, _internal_cmd_rx) = tokio::sync::mpsc::channel(1);
+        let (protect, _delete) = delete_set::pair(Arc::new(options.path.clone()));
+        let global = Arc::new(TaskContext {
+            options,
+            db: meta::Db::new(db_tx),
+            internal_cmd_tx,
+            protect,
+        });
+        let data = Bytes::from_static(b"hello");
+        let ctx = HashContext {
+            id: Hash::new(&data),
+            global,
+            state: BaoFileHandle::default(),
+        };
+        ctx.state.send_replace(BaoFileStorage::new_complete(
+            MemOrFile::Mem(data),
+            MemOrFile::empty(),
+        ));
+        ctx.persist().await;
+        assert!(matches!(
+            ctx.state.borrow().deref(),
+            BaoFileStorage::Complete(_)
+        ));
+        Ok(())
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test_import_bytes_persistence_full() -> TestResult<()> {
