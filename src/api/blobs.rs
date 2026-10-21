@@ -316,15 +316,12 @@ impl Blobs {
                 sender.send(ImportByteStreamUpdate::Done).await.ok();
                 io::Result::Ok(())
             };
-            tokio::pin!(send, recv);
+            // If send succeeds its branch is disabled and we keep receiving.
+            // On a source error, report it rather than the store's generic
+            // "byte stream ended unexpectedly".
             tokio::select! {
-                res = &mut send => match res {
-                    Ok(()) => recv.await,
-                    // report the source error rather than the store's
-                    // generic "byte stream ended unexpectedly"
-                    Err(cause) => co.yield_(AddProgressItem::Error(cause)).await,
-                },
-                _ = &mut recv => {}
+                Err(cause) = send => co.yield_(AddProgressItem::Error(cause)).await,
+                _ = recv => {}
             }
         });
         AddProgress::new(self, stream)
