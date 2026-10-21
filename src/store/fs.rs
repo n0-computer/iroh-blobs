@@ -1559,7 +1559,7 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        api::blobs::Bitfield,
+        api::blobs::{Bitfield, BlobStatus},
         store::{
             util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
             IROH_BLOCK_SIZE,
@@ -2050,50 +2050,164 @@ pub mod tests {
         Ok(())
     }
 
-    /// Observing an entry whose data file is missing must end the stream
-    /// instead of panicking.
-    #[tokio::test]
-    #[traced_test]
-    async fn test_observe_poisoned_missing_data_file() -> TestResult<()> {
-        let testdir = tempfile::tempdir()?;
-        let db_dir = testdir.path().join("db");
-        let options = Options::new(&db_dir);
-        let data = test_data(1024 * 16 + 1);
-        let hash = Hash::new(&data);
-        {
-            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
-            store.add_bytes(data.clone()).await?;
-            store.shutdown().await?;
-        }
-        std::fs::remove_file(options.path.data_path(&hash))?;
-        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
-        assert!(store.observe(hash).await.is_err());
-        // the entity for the hash must still be alive, so re-adding works
+    /// Adds `data` to a new store at `db_path` and shuts the store down again.
+    async fn add_and_shutdown(db_path: &Path, options: &Options, data: Bytes) -> TestResult<()> {
+        let store = FsStore::load_with_opts(db_path.to_owned(), options.clone()).await?;
         store.add_bytes(data).await?;
         store.shutdown().await?;
         Ok(())
     }
 
-    /// Importing into an entry whose data file is missing must fail.
+    /// Replaces the file at `path` with a symlink to itself.
+    ///
+    /// Opening the path then fails with an error other than `NotFound`, which
+    /// poisons the entry that owns the file.
+    #[cfg(unix)]
+    fn make_unopenable(path: &Path) -> io::Result<()> {
+        std::fs::remove_file(path)?;
+        std::os::unix::fs::symlink(path, path)
+    }
+
+    /// Observing a poisoned entry must end the stream instead of panicking.
+    #[cfg(unix)]
     #[tokio::test]
     #[traced_test]
-    async fn test_import_bao_poisoned_missing_data_file() -> TestResult<()> {
+    async fn test_observe_poisoned_entry() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
-        let db_dir = testdir.path().join("db");
-        let options = Options::new(&db_dir);
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+        add_and_shutdown(&db_path, &options, data.clone()).await?;
+        make_unopenable(&options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_path, options.clone()).await?;
+        assert!(store.observe(hash).await.is_err());
+        // the entity for the hash must still be alive, so re-adding works
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        store.add_bytes(data).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Importing into a poisoned entry must fail.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[traced_test]
+    async fn test_import_bao_poisoned_entry() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
         let data = test_data(1024 * 16 + 1);
         let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
-        {
-            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
-            store.add_bytes(data).await?;
-            store.shutdown().await?;
-        }
-        std::fs::remove_file(options.path.data_path(&hash))?;
-        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        add_and_shutdown(&db_path, &options, data).await?;
+        make_unopenable(&options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
         let res = store
             .import_bao_bytes(hash, ChunkRanges::all(), encoded)
             .await;
         assert!(res.is_err());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Importing into an entry whose data file is missing must store the data.
+    ///
+    /// This is how a blob whose data file got lost is downloaded again.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_import_bao_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 16 + 1);
+        let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
+        add_and_shutdown(&db_path, &options, data.clone()).await?;
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        // a download first checks what is available locally
+        let local = store.remote().local(hash).await?;
+        assert!(!local.is_complete());
+        store
+            .import_bao_bytes(hash, ChunkRanges::all(), encoded)
+            .await?;
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Reading an entry whose data file is missing must fail, and work again once the file is back.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_read_retries_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+        add_and_shutdown(&db_path, &options, data.clone()).await?;
+        let data_path = options.path.data_path(&hash);
+        let moved = testdir.path().join("moved");
+        std::fs::rename(&data_path, &moved)?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
+        assert!(store.get_bytes(hash).await.is_err());
+        std::fs::rename(&moved, &data_path)?;
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// An observer of an entry whose data file is missing must see it become complete once the file is back.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_observe_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+        add_and_shutdown(&db_path, &options, data.clone()).await?;
+        let data_path = options.path.data_path(&hash);
+        let moved = testdir.path().join("moved");
+        std::fs::rename(&data_path, &moved)?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
+        let mut stream = Box::pin(store.observe(hash).stream().await?);
+        let first = stream.next().await.expect("initial bitfield");
+        assert!(!first.is_complete());
+        std::fs::rename(&moved, &data_path)?;
+        // the read reloads the entry while the observer is still attached
+        assert_eq!(store.get_bytes(hash).await?, data);
+        let next = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await?;
+        assert!(next.expect("updated bitfield").is_complete());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// A partial import into an entry whose data file is missing must leave a partial entry.
+    ///
+    /// The db entry must not stay complete, otherwise the partially written
+    /// data file would be read as complete data after a restart.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_partial_import_bao_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 1024);
+        // more than the inline limit, so the import has to write the data file
+        let ranges = ChunkRanges::chunks(..64);
+        let (hash, encoded) = create_n0_bao(&data, &ranges)?;
+        add_and_shutdown(&db_path, &options, data).await?;
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        store.import_bao_bytes(hash, ranges, encoded).await?;
+        store.shutdown().await?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
+        let status = store.status(hash).await?;
+        assert!(matches!(status, BlobStatus::Partial { .. }), "{status:?}");
+        assert!(store.get_bytes(hash).await.is_err());
         store.shutdown().await?;
         Ok(())
     }
