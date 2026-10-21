@@ -55,17 +55,20 @@
 //! means that blocking IO in the store never stalls the caller's runtime, and
 //! the store works no matter which runtime flavor the caller uses.
 //!
-//! Dropping the store will clean up the database and shut down the runtime.
-//! However, some parts of the persistent state won't make it to disk, so
-//! operations involving large partial blobs will have a large initial delay on
-//! the next startup.
+//! Dropping the store shuts down the runtime and closes the database in the
+//! background, without waiting for either to finish. The database stays locked
+//! until it is closed, so loading the store again right after dropping it will
+//! usually fail. Also, some parts of the persistent state won't make it to
+//! disk, so operations involving large partial blobs will have a large initial
+//! delay on the next startup.
 //!
 //! It is also not guaranteed that all write operations will make it to disk.
 //! The on-disk store will be in a consistent state, but might miss some writes
 //! in the last seconds before shutdown.
 //!
-//! To avoid this, you can use the [`crate::api::Store::shutdown`] method to
-//! cleanly shut down the store and save ephemeral state to disk.
+//! To avoid this, await [`crate::api::Store::shutdown`] before dropping the
+//! store. It returns once the database is closed and ephemeral state is saved
+//! to disk, so the store can be loaded again right away.
 //!
 //! Note that if you use the store inside a [`iroh::protocol::Router`] and shut
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
@@ -640,6 +643,10 @@ impl Actor {
         }
     }
 
+    /// Creates the actor and spawns the database actor.
+    ///
+    /// This must only be called in the context of the store runtime, since the
+    /// database actor is spawned on the current runtime and does blocking IO.
     async fn new(
         db_path: PathBuf,
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
@@ -1412,6 +1419,9 @@ impl FsStore {
                 )
             })
             .enable_time();
+        // Counts the live threads of the store runtime, so that
+        // `test_load_drop_concurrent` can check that they exit after the store
+        // is dropped. `Runtime::metrics` only has this with `tokio_unstable`.
         #[cfg(test)]
         let threads = Arc::new(AtomicU64::new(0));
         #[cfg(test)]
