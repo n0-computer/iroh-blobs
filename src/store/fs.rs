@@ -1559,11 +1559,12 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        api::blobs::Bitfield,
+        api::blobs::{AddPathOptions, Bitfield, ImportMode},
         store::{
             util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
             IROH_BLOCK_SIZE,
         },
+        BlobFormat,
     };
 
     /// Interesting sizes for testing.
@@ -2128,6 +2129,38 @@ pub mod tests {
         std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755))?;
         assert!(res.is_err());
         assert!(matches!(next, Ok(None)));
+        Ok(())
+    }
+
+    /// Re-adding content in place from a new path must work after the old external file was deleted.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_reference_new_path_after_external_file_deleted() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 64);
+        let hash = Hash::new(&data);
+        // the old path sorts before the new one, so it is the first one in the db entry
+        let old = testdir.path().join("a.bin");
+        let new = testdir.path().join("b.bin");
+        std::fs::write(&old, &data)?;
+        std::fs::write(&new, &data)?;
+        let reference = |path: &Path| AddPathOptions {
+            path: path.to_owned(),
+            mode: ImportMode::TryReference,
+            format: BlobFormat::Raw,
+        };
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        store.add_path_with_opts(reference(&old)).await?;
+        store.shutdown().await?;
+        std::fs::remove_file(&old)?;
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        store.add_path_with_opts(reference(&new)).await?;
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
+        assert_eq!(store.get_bytes(hash).await?, data);
         store.shutdown().await?;
         Ok(())
     }
