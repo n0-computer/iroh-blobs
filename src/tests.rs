@@ -22,7 +22,7 @@ use crate::{
     get,
     hashseq::HashSeq,
     net_protocol::BlobsProtocol,
-    protocol::{ChunkRangesSeq, GetManyRequest, GetRequest, ObserveRequest, PushRequest},
+    protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
     provider::events::{
         AbortReason, EventMask, EventSender, ProviderMessage, RequestMode, RequestUpdate,
     },
@@ -264,6 +264,7 @@ async fn get_blob_store_write_error_fs() -> TestResult<()> {
 
     use crate::{
         get::StreamPair,
+        protocol::GetRequest,
         util::{AsyncWriteSendStream, AsyncWriteSendStreamExtra},
     };
 
