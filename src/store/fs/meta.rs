@@ -459,10 +459,24 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    tables
+    let old = tables
         .blobs
         .insert(hash, state)
-        .map_err(|e| e!(ActorError::Storage, e))?;
+        .map_err(|e| e!(ActorError::Storage, e))?
+        .map(|e| e.value());
+    // remove inline parts of the old state that the new state no longer has
+    if let Some(EntryState::Complete {
+        data_location,
+        outboard_location,
+    }) = old
+    {
+        if matches!(data_location, DataLocation::Inline(_)) && data.is_none() {
+            tables.inline_data.remove(hash)?;
+        }
+        if matches!(outboard_location, OutboardLocation::Inline(_)) && outboard.is_none() {
+            tables.inline_outboard.remove(hash)?;
+        }
+    }
     if let Some(data) = data {
         tables
             .inline_data

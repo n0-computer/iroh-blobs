@@ -110,7 +110,7 @@ use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::{
     api::{
@@ -272,7 +272,7 @@ type HashContext = ActiveEntityState<EmParams>;
 impl SyncEntityApi for HashContext {
     /// Load the state from the database.
     ///
-    /// If the state is Initial, this will start the load.
+    /// If the state is Initial or Missing, this will start the load.
     /// If it is Loading, it will wait until loading is done.
     /// If it is any other state, it will be a noop.
     async fn load(&self) {
@@ -283,7 +283,8 @@ impl SyncEntityApi for HashContext {
         }
         let mut action = Action::None;
         self.state.send_if_modified(|guard| match guard.deref() {
-            BaoFileStorage::Initial => {
+            // retry loading missing entries, in case the files are back
+            BaoFileStorage::Initial | BaoFileStorage::Missing => {
                 *guard = BaoFileStorage::Loading;
                 action = Action::Load;
                 true
@@ -335,7 +336,9 @@ impl SyncEntityApi for HashContext {
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
+        let mut replaces_missing = false;
         self.state.send_if_modified(|state| {
+            replaces_missing = matches!(state, BaoFileStorage::Missing);
             let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
                 Ok(written) => written,
                 Err(cause) => {
@@ -349,7 +352,17 @@ impl SyncEntityApi for HashContext {
             *state = state1;
             true
         });
-        if let Some(update) = res? {
+        let update = res?;
+        if replaces_missing {
+            // The complete db entry must not be merged with the new partial
+            // data, or it would claim that partially written files are complete.
+            debug!("replacing missing entry {} with a partial one", self.id);
+            self.global
+                .db
+                .set(self.id, EntryState::Partial { size: None })
+                .await?;
+        }
+        if let Some(update) = update {
             self.global.db.update(self.id, update).await?;
         }
         Ok(())
@@ -382,7 +395,9 @@ impl SyncEntityApi for HashContext {
             BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Missing => {
+                Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 
@@ -395,7 +410,9 @@ impl SyncEntityApi for HashContext {
             BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Missing => {
+                Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 }

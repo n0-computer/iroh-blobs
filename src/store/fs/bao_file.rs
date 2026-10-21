@@ -21,7 +21,7 @@ use derive_more::Debug;
 use irpc::channel::mpsc;
 use n0_error::{Result, StdResultExt};
 use tokio::sync::watch;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
@@ -305,6 +305,12 @@ pub(crate) enum BaoFileStorage {
     Loading,
     /// There is no info about this hash in the metadata db.
     NonExisting,
+    /// The metadata db has a complete entry, but its files are missing.
+    ///
+    /// Reads behave as for `NonExisting`. Loading is retried on every access,
+    /// so the entry recovers once the files are back. The first write resets
+    /// the db entry to partial and then continues as for `NonExisting`.
+    Missing,
     /// The entry is incomplete and in memory.
     ///
     /// Since it is incomplete, it must be writeable.
@@ -337,6 +343,7 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::Initial => f.debug_struct("Initial").finish(),
             BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
             BaoFileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
+            BaoFileStorage::Missing => f.debug_struct("Missing").finish(),
         }
     }
 }
@@ -402,7 +409,7 @@ impl BaoFileStorage {
             BaoFileStorage::Loading => {
                 panic!("loading storage should not be used")
             }
-            BaoFileStorage::NonExisting => Bitfield::empty(),
+            BaoFileStorage::NonExisting | BaoFileStorage::Missing => Bitfield::empty(),
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
             BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
@@ -419,7 +426,7 @@ impl BaoFileStorage {
         ctx: &HashContext,
     ) -> io::Result<(Self, Option<EntryState<bytes::Bytes>>)> {
         Ok(match self {
-            BaoFileStorage::NonExisting => {
+            BaoFileStorage::NonExisting | BaoFileStorage::Missing => {
                 Self::new_partial_mem().write_batch(batch, bitfield, ctx)?
             }
             BaoFileStorage::PartialMem(mut ms) => {
@@ -503,7 +510,7 @@ impl BaoFileStorage {
         match self {
             Self::Complete(_) => Ok(()),
             Self::PartialMem(_) => Ok(()),
-            Self::NonExisting => Ok(()),
+            Self::NonExisting | Self::Missing => Ok(()),
             Self::Partial(file) => {
                 file.data.sync_all()?;
                 file.outboard.sync_all()?;
@@ -550,7 +557,9 @@ impl ReadBytesAt for DataReader {
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Missing => {
+                io::Result::Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 }
@@ -569,49 +578,65 @@ impl ReadAt for OutboardReader {
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Missing => {
+                io::Result::Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 }
 
 impl BaoFileStorage {
     pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext) -> io::Result<Self> {
-        let hash = &ctx.id;
-        let options = &ctx.global.options;
         Ok(match state {
             Some(EntryState::Complete {
                 data_location,
                 outboard_location,
-            }) => {
-                let data = match data_location {
-                    DataLocation::Inline(data) => MemOrFile::Mem(data),
-                    DataLocation::Owned(size) => {
-                        let path = options.path.data_path(hash);
-                        let file = std::fs::File::open(&path)?;
-                        MemOrFile::File(FixedSize::new(file, size))
-                    }
-                    DataLocation::External(paths, size) => {
-                        let Some(path) = paths.into_iter().next() else {
-                            return Err(io::Error::other("no external data path"));
-                        };
-                        let file = std::fs::File::open(&path)?;
-                        MemOrFile::File(FixedSize::new(file, size))
-                    }
-                };
-                let outboard = match outboard_location {
-                    OutboardLocation::NotNeeded => MemOrFile::empty(),
-                    OutboardLocation::Inline(data) => MemOrFile::Mem(data),
-                    OutboardLocation::Owned => {
-                        let path = options.path.outboard_path(hash);
-                        let file = std::fs::File::open(&path)?;
-                        MemOrFile::File(file)
-                    }
-                };
-                Self::new_complete(data, outboard)
-            }
+            }) => match Self::open_complete(data_location, outboard_location, ctx) {
+                Ok(storage) => storage,
+                Err(cause) if cause.kind() == io::ErrorKind::NotFound => {
+                    warn!("files of complete entry {} are missing: {cause}", ctx.id);
+                    Self::Missing
+                }
+                Err(cause) => return Err(cause),
+            },
             Some(EntryState::Partial { .. }) => Self::new_partial_file(ctx).await?,
             None => Self::NonExisting,
         })
+    }
+
+    /// Opens the files of a complete entry.
+    fn open_complete(
+        data_location: DataLocation<Bytes, u64>,
+        outboard_location: OutboardLocation<Bytes>,
+        ctx: &HashContext,
+    ) -> io::Result<Self> {
+        let hash = &ctx.id;
+        let options = &ctx.global.options;
+        let data = match data_location {
+            DataLocation::Inline(data) => MemOrFile::Mem(data),
+            DataLocation::Owned(size) => {
+                let path = options.path.data_path(hash);
+                let file = std::fs::File::open(&path)?;
+                MemOrFile::File(FixedSize::new(file, size))
+            }
+            DataLocation::External(paths, size) => {
+                let Some(path) = paths.into_iter().next() else {
+                    return Err(io::Error::other("no external data path"));
+                };
+                let file = std::fs::File::open(&path)?;
+                MemOrFile::File(FixedSize::new(file, size))
+            }
+        };
+        let outboard = match outboard_location {
+            OutboardLocation::NotNeeded => MemOrFile::empty(),
+            OutboardLocation::Inline(data) => MemOrFile::Mem(data),
+            OutboardLocation::Owned => {
+                let path = options.path.outboard_path(hash);
+                let file = std::fs::File::open(&path)?;
+                MemOrFile::File(file)
+            }
+        };
+        Ok(Self::new_complete(data, outboard))
     }
 
     /// Create a new bao file handle with a partial file.
@@ -649,6 +674,7 @@ impl BaoFileHandle {
         self.send_if_modified(|guard| {
             let needs_complete = match guard {
                 BaoFileStorage::NonExisting => true,
+                BaoFileStorage::Missing => true,
                 BaoFileStorage::Complete(_) => false,
                 BaoFileStorage::PartialMem(_) => true,
                 BaoFileStorage::Partial(_) => true,
@@ -759,13 +785,26 @@ impl BaoFileStorageSubscriber {
         }
     }
 
+    /// Waits until the storage changed to a state that has a bitfield.
+    ///
+    /// A missing entry is loaded again on every access, so it can go through
+    /// `Loading` while observed. Those intermediate states are skipped.
     async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> Result<()> {
-        tokio::select! {
-            _ = tx.closed() => {
-                // the sender is closed, we are done
-                Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into())
+        loop {
+            tokio::select! {
+                _ = tx.closed() => {
+                    // the sender is closed, we are done
+                    return Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into());
+                }
+                e = self.receiver.changed() => e.anyerr()?,
             }
-            e = self.receiver.changed() => Ok(e.anyerr()?),
+            let state = self.receiver.borrow();
+            if !matches!(
+                state.deref(),
+                BaoFileStorage::Initial | BaoFileStorage::Loading
+            ) {
+                return Ok(());
+            }
         }
     }
 }
