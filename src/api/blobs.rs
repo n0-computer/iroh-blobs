@@ -30,7 +30,7 @@ use n0_future::{future, stream, Stream, StreamExt};
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use tracing::trace;
+use tracing::{error, trace};
 mod reader;
 pub use reader::BlobReader;
 
@@ -957,10 +957,9 @@ impl ExportRangesProgress {
 impl ExportRangesProgress {
     /// A raw stream of [`ExportRangesItem`]s.
     ///
-    /// Ranges will be rounded up to chunk boundaries. So if you request a
-    /// range of 0..100, you will get the entire first chunk, 0..1024.
-    ///
-    /// It is up to the caller to clip the ranges to the requested ranges.
+    /// The stream starts with the size of the blob, followed by the data of
+    /// the requested ranges, clipped to the size, in ascending order. If the
+    /// stream ends before all of that data, the last item is an error.
     pub fn stream(self) -> impl Stream<Item = ExportRangesItem> {
         Gen::new(|co| async move {
             let mut rx = match self.inner.await {
@@ -970,9 +969,21 @@ impl ExportRangesProgress {
                     return;
                 }
             };
-            while let Ok(Some(item)) = rx.recv().await {
-                co.yield_(item).await;
-            }
+            let mut end = ExportRangesEnd::default();
+            let cause = loop {
+                match rx.recv().await {
+                    Ok(Some(item)) => {
+                        let last = end.is_last(&self.ranges, &item);
+                        co.yield_(item).await;
+                        if last {
+                            return;
+                        }
+                    }
+                    Ok(None) => break export_ranges_ended_early(),
+                    Err(cause) => break cause.into(),
+                }
+            };
+            co.yield_(ExportRangesItem::Error(cause)).await;
         })
     }
 
@@ -984,15 +995,21 @@ impl ExportRangesProgress {
     /// Like [`Self::concatenate`], but also returns the size of the blob.
     pub(crate) async fn concatenate_with_size(self) -> RequestResult<(Option<u64>, Vec<u8>)> {
         let mut rx = self.inner.await?;
+        let mut end = ExportRangesEnd::default();
         let mut size = None;
         let mut data = BTreeMap::new();
-        while let Some(item) = rx.recv().await? {
+        loop {
+            let item = rx.recv().await?.ok_or_else(export_ranges_ended_early)?;
+            let last = end.is_last(&self.ranges, &item);
             match item {
                 ExportRangesItem::Size(s) => size = Some(s),
                 ExportRangesItem::Data(leaf) => {
                     data.insert(leaf.offset, leaf.data);
                 }
                 ExportRangesItem::Error(cause) => return Err(cause.into()),
+            }
+            if last {
+                break;
             }
         }
         let mut res = Vec::new();
@@ -1015,6 +1032,53 @@ impl ExportRangesProgress {
         }
         Ok((size, res))
     }
+}
+
+/// Finds the last item of an [`ExportRangesItem`] stream.
+///
+/// A store sends [`ExportRangesItem::Size`] first, then the requested ranges
+/// clipped to the size, in ascending order, and then drops the sender. So the
+/// stream is complete with the item that reaches the end of the last clipped
+/// range, and a stream that ends before that was cut short. An error is always
+/// the last item.
+#[derive(Debug, Default)]
+enum ExportRangesEnd {
+    /// Nothing received yet, the size comes first.
+    #[default]
+    Start,
+    /// Got the size, the data ends at `end`.
+    Data { end: u64 },
+}
+
+impl ExportRangesEnd {
+    /// Feed the items of a stream for `ranges` in order. Returns true for the
+    /// item that completes the stream, or for an error.
+    fn is_last(&mut self, ranges: &RangeSet2<u64>, item: &ExportRangesItem) -> bool {
+        match (&*self, item) {
+            (Self::Start, ExportRangesItem::Size(size)) => {
+                let clipped = ranges & &RangeSet2::from(0..*size);
+                // clipped is bounded, so the last boundary is its end
+                let end = clipped.boundaries().last().copied().unwrap_or(0);
+                *self = Self::Data { end };
+                end == 0
+            }
+            (Self::Data { end }, ExportRangesItem::Data(leaf)) => {
+                leaf.offset + leaf.data.len() as u64 >= *end
+            }
+            (_, ExportRangesItem::Error(_)) => true,
+            _ => {
+                error!("export ranges: unexpected item in state {self:?}");
+                false
+            }
+        }
+    }
+}
+
+fn export_ranges_ended_early() -> super::Error {
+    super::Error::io(
+        io::ErrorKind::UnexpectedEof,
+        "export ranges stream ended before all requested data was sent",
+    )
 }
 
 /// A progress handle for a bao export operation.
@@ -1232,4 +1296,66 @@ pub(crate) trait WriteProgress {
 
     /// Notify the progress writer that a transfer has started.
     async fn send_transfer_started(&mut self, index: u64, hash: &Hash, size: u64);
+}
+
+#[cfg(test)]
+mod tests {
+    use testresult::TestResult;
+
+    use super::*;
+    use crate::store::mem::MemStore;
+
+    fn data_of(items: &[ExportRangesItem]) -> Vec<u8> {
+        let mut res = Vec::new();
+        for item in items {
+            if let ExportRangesItem::Data(leaf) = item {
+                res.extend_from_slice(&leaf.data);
+            }
+        }
+        res
+    }
+
+    /// For the raw output of a real store, some item is the last one, and no
+    /// data comes after it.
+    #[tokio::test]
+    async fn export_ranges_end() -> TestResult<()> {
+        let store = MemStore::new();
+        for size in [0u64, 1, 1023, 1024, 1025, 5000, 16 * 1024 + 7] {
+            let data = (0..size).map(|i| i as u8).collect::<Vec<_>>();
+            let tt = store.add_slice(&data).temp_tag().await?;
+            let cases = [
+                RangeSet2::empty(),
+                RangeSet2::all(),
+                RangeSet2::from(0..1),
+                RangeSet2::from(100..2000),
+                RangeSet2::from(size..),
+                RangeSet2::from(size + 10..size + 20),
+                &RangeSet2::from(0..10) | &RangeSet2::from(3000..),
+                &RangeSet2::from(10..20) | &RangeSet2::from(size + 1..size + 2),
+            ];
+            for ranges in cases {
+                let mut rx = store.export_ranges(tt.hash(), ranges.clone()).inner.await?;
+                let mut items = Vec::new();
+                while let Some(item) = rx.recv().await? {
+                    items.push(item);
+                }
+                assert!(
+                    !items
+                        .iter()
+                        .any(|item| matches!(item, ExportRangesItem::Error(_))),
+                    "size {size}, ranges {ranges:?}: unexpected error in {items:?}"
+                );
+                let mut end = ExportRangesEnd::default();
+                let Some(last) = items.iter().position(|item| end.is_last(&ranges, item)) else {
+                    panic!("size {size}, ranges {ranges:?}: no last item in {items:?}");
+                };
+                assert_eq!(
+                    data_of(&items[..=last]),
+                    data_of(&items),
+                    "size {size}, ranges {ranges:?}: data after the last item {last}"
+                );
+            }
+        }
+        Ok(())
+    }
 }
