@@ -147,7 +147,8 @@ impl Bitfield {
                 }
                 RangeSetRange::RangeFrom(range) => (range.start.to_bytes(), self.size),
             };
-            total += end - start;
+            // a range can start past size, e.g. if size is not validated yet
+            total += end.saturating_sub(start);
         }
         total
     }
@@ -281,7 +282,18 @@ mod tests {
     use test_strategy::proptest;
 
     use super::Bitfield;
-    use crate::store::util::observer::{Combine, CombineInPlace};
+    use crate::{
+        protocol::ChunkRangesExt,
+        store::util::observer::{Combine, CombineInPlace},
+    };
+
+    #[test]
+    fn total_bytes_range_past_size() {
+        let bitfield = Bitfield::new(ChunkRanges::chunks(10..11), 100);
+        assert_eq!(bitfield.total_bytes(), 0);
+        let bitfield = Bitfield::new(ChunkRanges::chunks(10..), 100);
+        assert_eq!(bitfield.total_bytes(), 0);
+    }
 
     fn gen_chunk_ranges(max: ChunkNum, k: usize) -> impl Strategy<Value = ChunkRanges> {
         prop::collection::btree_set(0..=max.0, 0..=k).prop_map(|vec| {
