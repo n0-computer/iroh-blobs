@@ -833,7 +833,7 @@
 <a href=#833 id=833 data-nosnippet>833</a>                        .map_err(|e| <span class="macro">e!</span>(ActorError::Transaction, e))<span class="question-mark">?</span>;
 <a href=#834 id=834 data-nosnippet>834</a>                    <span class="kw">let </span><span class="kw-2">mut </span>tables =
 <a href=#835 id=835 data-nosnippet>835</a>                        Tables::new(<span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>ftx).map_err(|e| <span class="macro">e!</span>(ActorError::Table, e))<span class="question-mark">?</span>;
-<a href=#836 id=836 data-nosnippet>836</a>                    <span class="kw">let </span>timeout = n0_future::time::sleep(<span class="self">self</span>.options.max_read_duration);
+<a href=#836 id=836 data-nosnippet>836</a>                    <span class="kw">let </span>timeout = n0_future::time::sleep(<span class="self">self</span>.options.max_write_duration);
 <a href=#837 id=837 data-nosnippet>837</a>                    <span class="macro">pin!</span>(timeout);
 <a href=#838 id=838 data-nosnippet>838</a>                    <span class="kw">let </span><span class="kw-2">mut </span>n = <span class="number">0</span>;
 <a href=#839 id=839 data-nosnippet>839</a>                    <span class="kw">while let </span><span class="prelude-val">Some</span>(cmd) = <span class="self">self
