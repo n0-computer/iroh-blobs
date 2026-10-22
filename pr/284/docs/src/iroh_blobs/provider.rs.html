@@ -809,157 +809,158 @@
 <a href=#809 id=809 data-nosnippet>809</a>    <span class="kw">use </span>iroh::{endpoint::presets, Endpoint, RelayMode};
 <a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">use </span>n0_error::{e, AnyError};
 <a href=#811 id=811 data-nosnippet>811</a>    <span class="kw">use </span>n0_future::StreamExt;
-<a href=#812 id=812 data-nosnippet>812</a>    <span class="kw">use </span>testresult::TestResult;
-<a href=#813 id=813 data-nosnippet>813</a>
-<a href=#814 id=814 data-nosnippet>814</a>    <span class="kw">use </span>super::{handle_stream, is_local_export_failure, HandleGetError, StreamPair};
-<a href=#815 id=815 data-nosnippet>815</a>    <span class="kw">use </span>crate::{
-<a href=#816 id=816 data-nosnippet>816</a>        api::{Error, ExportBaoError, RequestError, Store},
-<a href=#817 id=817 data-nosnippet>817</a>        get,
-<a href=#818 id=818 data-nosnippet>818</a>        hashseq::{HashSeq, LazyHashSeq, LazyHashSeqError},
-<a href=#819 id=819 data-nosnippet>819</a>        protocol::{ChunkRangesExt, GetRequest},
-<a href=#820 id=820 data-nosnippet>820</a>        provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
-<a href=#821 id=821 data-nosnippet>821</a>        store::{mem::MemStore, util::tests::create_n0_bao},
-<a href=#822 id=822 data-nosnippet>822</a>        Hash, ALPN,
-<a href=#823 id=823 data-nosnippet>823</a>    };
-<a href=#824 id=824 data-nosnippet>824</a>
-<a href=#825 id=825 data-nosnippet>825</a>    <span class="kw">async fn </span>missing_hashseq_chunk(store: <span class="kw-2">&amp;</span>Store) -&gt; TestResult&lt;()&gt; {
-<a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">let </span>hashes = (<span class="number">0</span>..<span class="number">1000u64</span>)
-<a href=#827 id=827 data-nosnippet>827</a>            .map(|i| Hash::new(i.to_le_bytes()))
-<a href=#828 id=828 data-nosnippet>828</a>            .collect::&lt;HashSeq&gt;();
-<a href=#829 id=829 data-nosnippet>829</a>        <span class="kw">let </span>ranges = ChunkRanges::chunk(<span class="number">3</span>);
-<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">let </span>(hash, bao) = create_n0_bao(<span class="kw-2">&amp;</span>hashes.into_inner(), <span class="kw-2">&amp;</span>ranges)<span class="question-mark">?</span>;
-<a href=#831 id=831 data-nosnippet>831</a>        store.import_bao_bytes(hash, ranges, bao).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#832 id=832 data-nosnippet>832</a>        <span class="kw">let </span><span class="kw-2">mut </span>lazy = LazyHashSeq::new(store.blobs().clone(), hash);
-<a href=#833 id=833 data-nosnippet>833</a>        <span class="kw">for </span>index <span class="kw">in </span>[<span class="number">95</span>, <span class="number">128</span>] {
-<a href=#834 id=834 data-nosnippet>834</a>            <span class="kw">let </span>error = lazy.get(index).<span class="kw">await</span>.expect_err(<span class="string">"missing chunk"</span>);
-<a href=#835 id=835 data-nosnippet>835</a>            <span class="macro">assert!</span>(
-<a href=#836 id=836 data-nosnippet>836</a>                <span class="macro">matches!</span>(
-<a href=#837 id=837 data-nosnippet>837</a>                    <span class="kw-2">&amp;</span>error,
-<a href=#838 id=838 data-nosnippet>838</a>                    LazyHashSeqError::Request {
-<a href=#839 id=839 data-nosnippet>839</a>                        source: RequestError::Inner { source: Error::Io(cause), .. },
-<a href=#840 id=840 data-nosnippet>840</a>                        ..
-<a href=#841 id=841 data-nosnippet>841</a>                    } <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
-<a href=#842 id=842 data-nosnippet>842</a>                ),
-<a href=#843 id=843 data-nosnippet>843</a>                <span class="string">"{error:#}"
-<a href=#844 id=844 data-nosnippet>844</a>            </span>);
-<a href=#845 id=845 data-nosnippet>845</a>            <span class="kw">let </span>error = HandleGetError::from(error);
-<a href=#846 id=846 data-nosnippet>846</a>            <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
-<a href=#847 id=847 data-nosnippet>847</a>        }
-<a href=#848 id=848 data-nosnippet>848</a>        <span class="prelude-val">Ok</span>(())
-<a href=#849 id=849 data-nosnippet>849</a>    }
-<a href=#850 id=850 data-nosnippet>850</a>
-<a href=#851 id=851 data-nosnippet>851</a>    <span class="attr">#[tokio::test]
-<a href=#852 id=852 data-nosnippet>852</a>    </span><span class="kw">async fn </span>missing_hashseq_chunk_mem() -&gt; TestResult&lt;()&gt; {
-<a href=#853 id=853 data-nosnippet>853</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#854 id=854 data-nosnippet>854</a>        <span class="kw">let </span>store = MemStore::new();
-<a href=#855 id=855 data-nosnippet>855</a>        missing_hashseq_chunk(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#856 id=856 data-nosnippet>856</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#857 id=857 data-nosnippet>857</a>        <span class="prelude-val">Ok</span>(())
-<a href=#858 id=858 data-nosnippet>858</a>    }
-<a href=#859 id=859 data-nosnippet>859</a>
-<a href=#860 id=860 data-nosnippet>860</a>    <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
-<a href=#861 id=861 data-nosnippet>861</a>    #[tokio::test]
-<a href=#862 id=862 data-nosnippet>862</a>    </span><span class="kw">async fn </span>missing_hashseq_chunk_fs() -&gt; TestResult&lt;()&gt; {
-<a href=#863 id=863 data-nosnippet>863</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#864 id=864 data-nosnippet>864</a>        <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
-<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::fs::FsStore::load(testdir.path()).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#866 id=866 data-nosnippet>866</a>        missing_hashseq_chunk(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#867 id=867 data-nosnippet>867</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#868 id=868 data-nosnippet>868</a>        <span class="prelude-val">Ok</span>(())
-<a href=#869 id=869 data-nosnippet>869</a>    }
-<a href=#870 id=870 data-nosnippet>870</a>
-<a href=#871 id=871 data-nosnippet>871</a>    <span class="doccomment">/// Missing chunks and outboard pairs are normal while a blob is incomplete.
-<a href=#872 id=872 data-nosnippet>872</a>    </span><span class="attr">#[tokio::test]
-<a href=#873 id=873 data-nosnippet>873</a>    </span><span class="kw">async fn </span>incomplete_blob_is_not_local_failure() -&gt; TestResult&lt;()&gt; {
-<a href=#874 id=874 data-nosnippet>874</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#875 id=875 data-nosnippet>875</a>        <span class="kw">for </span>size <span class="kw">in </span>[<span class="number">32 </span>* <span class="number">1024</span>, <span class="number">64 </span>* <span class="number">1024</span>] {
-<a href=#876 id=876 data-nosnippet>876</a>            <span class="kw">for </span>ranges <span class="kw">in </span>[ChunkRanges::chunk(<span class="number">0</span>), ChunkRanges::last_chunk()] {
-<a href=#877 id=877 data-nosnippet>877</a>                <span class="kw">let </span>data = <span class="macro">vec!</span>[<span class="number">7u8</span>; size];
-<a href=#878 id=878 data-nosnippet>878</a>                <span class="kw">let </span>(hash, encoded) = create_n0_bao(<span class="kw-2">&amp;</span>data, <span class="kw-2">&amp;</span>ranges)<span class="question-mark">?</span>;
-<a href=#879 id=879 data-nosnippet>879</a>                <span class="kw">let </span>store = MemStore::new();
-<a href=#880 id=880 data-nosnippet>880</a>                store.import_bao_bytes(hash, ranges, encoded).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#881 id=881 data-nosnippet>881</a>                <span class="kw">let </span>error = store.get_bytes(hash).<span class="kw">await</span>.expect_err(<span class="string">"missing chunks"</span>);
-<a href=#882 id=882 data-nosnippet>882</a>                <span class="macro">assert!</span>(!is_local_export_failure(<span class="kw-2">&amp;</span>error), <span class="string">"{error:#}"</span>);
-<a href=#883 id=883 data-nosnippet>883</a>                store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#884 id=884 data-nosnippet>884</a>            }
-<a href=#885 id=885 data-nosnippet>885</a>        }
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="prelude-val">Ok</span>(())
-<a href=#887 id=887 data-nosnippet>887</a>    }
-<a href=#888 id=888 data-nosnippet>888</a>
-<a href=#889 id=889 data-nosnippet>889</a>    <span class="doccomment">/// Losing the event handler is a local failure, unlike deliberate rejection.
-<a href=#890 id=890 data-nosnippet>890</a>    </span><span class="attr">#[tokio::test]
-<a href=#891 id=891 data-nosnippet>891</a>    </span><span class="kw">async fn </span>event_handler_failure_is_local() -&gt; TestResult&lt;()&gt; {
-<a href=#892 id=892 data-nosnippet>892</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#893 id=893 data-nosnippet>893</a>        <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(<span class="number">1</span>);
-<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span>events = EventSender::new(
-<a href=#895 id=895 data-nosnippet>895</a>            tx,
-<a href=#896 id=896 data-nosnippet>896</a>            EventMask {
-<a href=#897 id=897 data-nosnippet>897</a>                throttle: ThrottleMode::Intercept,
-<a href=#898 id=898 data-nosnippet>898</a>                ..EventMask::DEFAULT
-<a href=#899 id=899 data-nosnippet>899</a>            },
-<a href=#900 id=900 data-nosnippet>900</a>        );
-<a href=#901 id=901 data-nosnippet>901</a>        <span class="kw">let </span><span class="kw-2">mut </span>tracker = events
-<a href=#902 id=902 data-nosnippet>902</a>            .request(|| GetRequest::blob(Hash::EMPTY), <span class="number">0</span>, <span class="number">0</span>)
-<a href=#903 id=903 data-nosnippet>903</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#904 id=904 data-nosnippet>904</a>        drop(rx);
-<a href=#905 id=905 data-nosnippet>905</a>        <span class="kw">let </span>error = tracker
-<a href=#906 id=906 data-nosnippet>906</a>            .transfer_progress(<span class="number">1024</span>, <span class="number">1024</span>)
-<a href=#907 id=907 data-nosnippet>907</a>            .<span class="kw">await
-<a href=#908 id=908 data-nosnippet>908</a>            </span>.expect_err(<span class="string">"handler gone"</span>);
-<a href=#909 id=909 data-nosnippet>909</a>        <span class="kw">let </span>error = ExportBaoError::from(error);
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="macro">assert!</span>(is_local_export_failure(<span class="kw-2">&amp;</span>error), <span class="string">"{error:#}"</span>);
-<a href=#911 id=911 data-nosnippet>911</a>
-<a href=#912 id=912 data-nosnippet>912</a>        <span class="kw">for </span>rejection <span class="kw">in </span>[<span class="macro">e!</span>(ProgressError::Permission), <span class="macro">e!</span>(ProgressError::Limit)] {
-<a href=#913 id=913 data-nosnippet>913</a>            <span class="kw">let </span>error = ExportBaoError::from(rejection);
-<a href=#914 id=914 data-nosnippet>914</a>            <span class="macro">assert!</span>(!is_local_export_failure(<span class="kw-2">&amp;</span>error), <span class="string">"{error:#}"</span>);
-<a href=#915 id=915 data-nosnippet>915</a>        }
-<a href=#916 id=916 data-nosnippet>916</a>        <span class="prelude-val">Ok</span>(())
-<a href=#917 id=917 data-nosnippet>917</a>    }
-<a href=#918 id=918 data-nosnippet>918</a>
-<a href=#919 id=919 data-nosnippet>919</a>    <span class="doccomment">/// Serves a single get request for `hash`, where the client drops the
-<a href=#920 id=920 data-nosnippet>920</a>    /// response after the first item, and returns the provider error.
-<a href=#921 id=921 data-nosnippet>921</a>    </span><span class="kw">async fn </span>serve_one(store: <span class="kw-2">&amp;</span>MemStore, hash: Hash) -&gt; TestResult&lt;AnyError&gt; {
-<a href=#922 id=922 data-nosnippet>922</a>        <span class="kw">let </span>bind = || {
-<a href=#923 id=923 data-nosnippet>923</a>            Endpoint::builder(presets::Minimal)
-<a href=#924 id=924 data-nosnippet>924</a>                .relay_mode(RelayMode::Disabled)
-<a href=#925 id=925 data-nosnippet>925</a>                .alpns(<span class="macro">vec!</span>[ALPN.to_vec()])
-<a href=#926 id=926 data-nosnippet>926</a>                .bind()
-<a href=#927 id=927 data-nosnippet>927</a>        };
-<a href=#928 id=928 data-nosnippet>928</a>        <span class="kw">let </span>(server, client) = (bind().<span class="kw">await</span><span class="question-mark">?</span>, bind().<span class="kw">await</span><span class="question-mark">?</span>);
-<a href=#929 id=929 data-nosnippet>929</a>        <span class="kw">let </span>addr = server.addr();
-<a href=#930 id=930 data-nosnippet>930</a>        <span class="kw">let </span>client_task = tokio::spawn(<span class="kw">async move </span>{
-<a href=#931 id=931 data-nosnippet>931</a>            <span class="kw">let </span>conn = client.connect(addr, ALPN).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#932 id=932 data-nosnippet>932</a>            get::request::get_blob(conn.clone(), hash).next().<span class="kw">await</span>;
-<a href=#933 id=933 data-nosnippet>933</a>            <span class="comment">// keep the connection open until the provider is done
-<a href=#934 id=934 data-nosnippet>934</a>            </span>conn.closed().<span class="kw">await</span>;
-<a href=#935 id=935 data-nosnippet>935</a>            TestResult::Ok(client)
-<a href=#936 id=936 data-nosnippet>936</a>        });
-<a href=#937 id=937 data-nosnippet>937</a>        <span class="kw">let </span>conn = server.accept().<span class="kw">await</span>.expect(<span class="string">"incoming"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#938 id=938 data-nosnippet>938</a>        <span class="kw">let </span>pair = StreamPair::accept(<span class="kw-2">&amp;</span>conn, EventSender::DEFAULT).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>error = handle_stream(pair, (<span class="kw-2">**</span>store).clone())
-<a href=#940 id=940 data-nosnippet>940</a>            .<span class="kw">await
-<a href=#941 id=941 data-nosnippet>941</a>            </span>.expect_err(<span class="string">"request fails"</span>);
-<a href=#942 id=942 data-nosnippet>942</a>        conn.close(<span class="number">0u32</span>.into(), <span class="string">b""</span>);
-<a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span>client = client_task.<span class="kw">await</span><span class="question-mark">??</span>;
-<a href=#944 id=944 data-nosnippet>944</a>        <span class="comment">// Dropping an endpoint without closing it aborts it ungracefully.
-<a href=#945 id=945 data-nosnippet>945</a>        </span><span class="macro">tokio::join!</span>(server.close(), client.close());
-<a href=#946 id=946 data-nosnippet>946</a>        <span class="prelude-val">Ok</span>(error)
-<a href=#947 id=947 data-nosnippet>947</a>    }
-<a href=#948 id=948 data-nosnippet>948</a>
-<a href=#949 id=949 data-nosnippet>949</a>    <span class="doccomment">/// A peer hanging up is not a local failure, a failing store is.
-<a href=#950 id=950 data-nosnippet>950</a>    </span><span class="attr">#[tokio::test]
-<a href=#951 id=951 data-nosnippet>951</a>    </span><span class="kw">async fn </span>get_local_failure() -&gt; TestResult&lt;()&gt; {
-<a href=#952 id=952 data-nosnippet>952</a>        tracing_subscriber::fmt::try_init().ok();
-<a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span>store = MemStore::new();
-<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>tt = store.add_bytes(<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
-<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
-<a href=#958 id=958 data-nosnippet>958</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
-<a href=#961 id=961 data-nosnippet>961</a>        <span class="macro">assert!</span>(error.is_local_failure(), <span class="string">"{error:#}"</span>);
-<a href=#962 id=962 data-nosnippet>962</a>        <span class="prelude-val">Ok</span>(())
-<a href=#963 id=963 data-nosnippet>963</a>    }
-<a href=#964 id=964 data-nosnippet>964</a>}
+<a href=#812 id=812 data-nosnippet>812</a>    <span class="kw">use </span>n0_tracing_test::traced_test;
+<a href=#813 id=813 data-nosnippet>813</a>    <span class="kw">use </span>testresult::TestResult;
+<a href=#814 id=814 data-nosnippet>814</a>
+<a href=#815 id=815 data-nosnippet>815</a>    <span class="kw">use </span>super::{handle_stream, is_local_export_failure, HandleGetError, StreamPair};
+<a href=#816 id=816 data-nosnippet>816</a>    <span class="kw">use </span>crate::{
+<a href=#817 id=817 data-nosnippet>817</a>        api::{Error, ExportBaoError, RequestError, Store},
+<a href=#818 id=818 data-nosnippet>818</a>        get,
+<a href=#819 id=819 data-nosnippet>819</a>        hashseq::{HashSeq, LazyHashSeq, LazyHashSeqError},
+<a href=#820 id=820 data-nosnippet>820</a>        protocol::{ChunkRangesExt, GetRequest},
+<a href=#821 id=821 data-nosnippet>821</a>        provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
+<a href=#822 id=822 data-nosnippet>822</a>        store::{mem::MemStore, util::tests::create_n0_bao},
+<a href=#823 id=823 data-nosnippet>823</a>        Hash, ALPN,
+<a href=#824 id=824 data-nosnippet>824</a>    };
+<a href=#825 id=825 data-nosnippet>825</a>
+<a href=#826 id=826 data-nosnippet>826</a>    <span class="kw">async fn </span>missing_hashseq_chunk(store: <span class="kw-2">&amp;</span>Store) -&gt; TestResult&lt;()&gt; {
+<a href=#827 id=827 data-nosnippet>827</a>        <span class="kw">let </span>hashes = (<span class="number">0</span>..<span class="number">1000u64</span>)
+<a href=#828 id=828 data-nosnippet>828</a>            .map(|i| Hash::new(i.to_le_bytes()))
+<a href=#829 id=829 data-nosnippet>829</a>            .collect::&lt;HashSeq&gt;();
+<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">let </span>ranges = ChunkRanges::chunk(<span class="number">3</span>);
+<a href=#831 id=831 data-nosnippet>831</a>        <span class="kw">let </span>(hash, bao) = create_n0_bao(<span class="kw-2">&amp;</span>hashes.into_inner(), <span class="kw-2">&amp;</span>ranges)<span class="question-mark">?</span>;
+<a href=#832 id=832 data-nosnippet>832</a>        store.import_bao_bytes(hash, ranges, bao).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#833 id=833 data-nosnippet>833</a>        <span class="kw">let </span><span class="kw-2">mut </span>lazy = LazyHashSeq::new(store.blobs().clone(), hash);
+<a href=#834 id=834 data-nosnippet>834</a>        <span class="kw">for </span>index <span class="kw">in </span>[<span class="number">95</span>, <span class="number">128</span>] {
+<a href=#835 id=835 data-nosnippet>835</a>            <span class="kw">let </span>error = lazy.get(index).<span class="kw">await</span>.expect_err(<span class="string">"missing chunk"</span>);
+<a href=#836 id=836 data-nosnippet>836</a>            <span class="macro">assert!</span>(
+<a href=#837 id=837 data-nosnippet>837</a>                <span class="macro">matches!</span>(
+<a href=#838 id=838 data-nosnippet>838</a>                    <span class="kw-2">&amp;</span>error,
+<a href=#839 id=839 data-nosnippet>839</a>                    LazyHashSeqError::Request {
+<a href=#840 id=840 data-nosnippet>840</a>                        source: RequestError::Inner { source: Error::Io(cause), .. },
+<a href=#841 id=841 data-nosnippet>841</a>                        ..
+<a href=#842 id=842 data-nosnippet>842</a>                    } <span class="kw">if </span>cause.kind() == io::ErrorKind::NotFound
+<a href=#843 id=843 data-nosnippet>843</a>                ),
+<a href=#844 id=844 data-nosnippet>844</a>                <span class="string">"{error:#}"
+<a href=#845 id=845 data-nosnippet>845</a>            </span>);
+<a href=#846 id=846 data-nosnippet>846</a>            <span class="kw">let </span>error = HandleGetError::from(error);
+<a href=#847 id=847 data-nosnippet>847</a>            <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
+<a href=#848 id=848 data-nosnippet>848</a>        }
+<a href=#849 id=849 data-nosnippet>849</a>        <span class="prelude-val">Ok</span>(())
+<a href=#850 id=850 data-nosnippet>850</a>    }
+<a href=#851 id=851 data-nosnippet>851</a>
+<a href=#852 id=852 data-nosnippet>852</a>    <span class="attr">#[tokio::test]
+<a href=#853 id=853 data-nosnippet>853</a>    #[traced_test]
+<a href=#854 id=854 data-nosnippet>854</a>    </span><span class="kw">async fn </span>missing_hashseq_chunk_mem() -&gt; TestResult&lt;()&gt; {
+<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">let </span>store = MemStore::new();
+<a href=#856 id=856 data-nosnippet>856</a>        missing_hashseq_chunk(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#857 id=857 data-nosnippet>857</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="prelude-val">Ok</span>(())
+<a href=#859 id=859 data-nosnippet>859</a>    }
+<a href=#860 id=860 data-nosnippet>860</a>
+<a href=#861 id=861 data-nosnippet>861</a>    <span class="attr">#[cfg(feature = <span class="string">"fs-store"</span>)]
+<a href=#862 id=862 data-nosnippet>862</a>    #[tokio::test]
+<a href=#863 id=863 data-nosnippet>863</a>    #[traced_test]
+<a href=#864 id=864 data-nosnippet>864</a>    </span><span class="kw">async fn </span>missing_hashseq_chunk_fs() -&gt; TestResult&lt;()&gt; {
+<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw">let </span>testdir = tempfile::tempdir()<span class="question-mark">?</span>;
+<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>store = <span class="kw">crate</span>::store::fs::FsStore::load(testdir.path()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#867 id=867 data-nosnippet>867</a>        missing_hashseq_chunk(<span class="kw-2">&amp;</span>store).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#868 id=868 data-nosnippet>868</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#869 id=869 data-nosnippet>869</a>        <span class="prelude-val">Ok</span>(())
+<a href=#870 id=870 data-nosnippet>870</a>    }
+<a href=#871 id=871 data-nosnippet>871</a>
+<a href=#872 id=872 data-nosnippet>872</a>    <span class="doccomment">/// Missing chunks and outboard pairs are normal while a blob is incomplete.
+<a href=#873 id=873 data-nosnippet>873</a>    </span><span class="attr">#[tokio::test]
+<a href=#874 id=874 data-nosnippet>874</a>    #[traced_test]
+<a href=#875 id=875 data-nosnippet>875</a>    </span><span class="kw">async fn </span>incomplete_blob_is_not_local_failure() -&gt; TestResult&lt;()&gt; {
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">for </span>size <span class="kw">in </span>[<span class="number">32 </span>* <span class="number">1024</span>, <span class="number">64 </span>* <span class="number">1024</span>] {
+<a href=#877 id=877 data-nosnippet>877</a>            <span class="kw">for </span>ranges <span class="kw">in </span>[ChunkRanges::chunk(<span class="number">0</span>), ChunkRanges::last_chunk()] {
+<a href=#878 id=878 data-nosnippet>878</a>                <span class="kw">let </span>data = <span class="macro">vec!</span>[<span class="number">7u8</span>; size];
+<a href=#879 id=879 data-nosnippet>879</a>                <span class="kw">let </span>(hash, encoded) = create_n0_bao(<span class="kw-2">&amp;</span>data, <span class="kw-2">&amp;</span>ranges)<span class="question-mark">?</span>;
+<a href=#880 id=880 data-nosnippet>880</a>                <span class="kw">let </span>store = MemStore::new();
+<a href=#881 id=881 data-nosnippet>881</a>                store.import_bao_bytes(hash, ranges, encoded).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#882 id=882 data-nosnippet>882</a>                <span class="kw">let </span>error = store.get_bytes(hash).<span class="kw">await</span>.expect_err(<span class="string">"missing chunks"</span>);
+<a href=#883 id=883 data-nosnippet>883</a>                <span class="macro">assert!</span>(!is_local_export_failure(<span class="kw-2">&amp;</span>error), <span class="string">"{error:#}"</span>);
+<a href=#884 id=884 data-nosnippet>884</a>                store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#885 id=885 data-nosnippet>885</a>            }
+<a href=#886 id=886 data-nosnippet>886</a>        }
+<a href=#887 id=887 data-nosnippet>887</a>        <span class="prelude-val">Ok</span>(())
+<a href=#888 id=888 data-nosnippet>888</a>    }
+<a href=#889 id=889 data-nosnippet>889</a>
+<a href=#890 id=890 data-nosnippet>890</a>    <span class="doccomment">/// Losing the event handler is a local failure, unlike deliberate rejection.
+<a href=#891 id=891 data-nosnippet>891</a>    </span><span class="attr">#[tokio::test]
+<a href=#892 id=892 data-nosnippet>892</a>    #[traced_test]
+<a href=#893 id=893 data-nosnippet>893</a>    </span><span class="kw">async fn </span>event_handler_failure_is_local() -&gt; TestResult&lt;()&gt; {
+<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span>(tx, rx) = tokio::sync::mpsc::channel(<span class="number">1</span>);
+<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span>events = EventSender::new(
+<a href=#896 id=896 data-nosnippet>896</a>            tx,
+<a href=#897 id=897 data-nosnippet>897</a>            EventMask {
+<a href=#898 id=898 data-nosnippet>898</a>                throttle: ThrottleMode::Intercept,
+<a href=#899 id=899 data-nosnippet>899</a>                ..EventMask::DEFAULT
+<a href=#900 id=900 data-nosnippet>900</a>            },
+<a href=#901 id=901 data-nosnippet>901</a>        );
+<a href=#902 id=902 data-nosnippet>902</a>        <span class="kw">let </span><span class="kw-2">mut </span>tracker = events
+<a href=#903 id=903 data-nosnippet>903</a>            .request(|| GetRequest::blob(Hash::EMPTY), <span class="number">0</span>, <span class="number">0</span>)
+<a href=#904 id=904 data-nosnippet>904</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#905 id=905 data-nosnippet>905</a>        drop(rx);
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw">let </span>error = tracker
+<a href=#907 id=907 data-nosnippet>907</a>            .transfer_progress(<span class="number">1024</span>, <span class="number">1024</span>)
+<a href=#908 id=908 data-nosnippet>908</a>            .<span class="kw">await
+<a href=#909 id=909 data-nosnippet>909</a>            </span>.expect_err(<span class="string">"handler gone"</span>);
+<a href=#910 id=910 data-nosnippet>910</a>        <span class="kw">let </span>error = ExportBaoError::from(error);
+<a href=#911 id=911 data-nosnippet>911</a>        <span class="macro">assert!</span>(is_local_export_failure(<span class="kw-2">&amp;</span>error), <span class="string">"{error:#}"</span>);
+<a href=#912 id=912 data-nosnippet>912</a>
+<a href=#913 id=913 data-nosnippet>913</a>        <span class="kw">for </span>rejection <span class="kw">in </span>[<span class="macro">e!</span>(ProgressError::Permission), <span class="macro">e!</span>(ProgressError::Limit)] {
+<a href=#914 id=914 data-nosnippet>914</a>            <span class="kw">let </span>error = ExportBaoError::from(rejection);
+<a href=#915 id=915 data-nosnippet>915</a>            <span class="macro">assert!</span>(!is_local_export_failure(<span class="kw-2">&amp;</span>error), <span class="string">"{error:#}"</span>);
+<a href=#916 id=916 data-nosnippet>916</a>        }
+<a href=#917 id=917 data-nosnippet>917</a>        <span class="prelude-val">Ok</span>(())
+<a href=#918 id=918 data-nosnippet>918</a>    }
+<a href=#919 id=919 data-nosnippet>919</a>
+<a href=#920 id=920 data-nosnippet>920</a>    <span class="doccomment">/// Serves a single get request for `hash`, where the client drops the
+<a href=#921 id=921 data-nosnippet>921</a>    /// response after the first item, and returns the provider error.
+<a href=#922 id=922 data-nosnippet>922</a>    </span><span class="kw">async fn </span>serve_one(store: <span class="kw-2">&amp;</span>MemStore, hash: Hash) -&gt; TestResult&lt;AnyError&gt; {
+<a href=#923 id=923 data-nosnippet>923</a>        <span class="kw">let </span>bind = || {
+<a href=#924 id=924 data-nosnippet>924</a>            Endpoint::builder(presets::Minimal)
+<a href=#925 id=925 data-nosnippet>925</a>                .relay_mode(RelayMode::Disabled)
+<a href=#926 id=926 data-nosnippet>926</a>                .alpns(<span class="macro">vec!</span>[ALPN.to_vec()])
+<a href=#927 id=927 data-nosnippet>927</a>                .bind()
+<a href=#928 id=928 data-nosnippet>928</a>        };
+<a href=#929 id=929 data-nosnippet>929</a>        <span class="kw">let </span>(server, client) = (bind().<span class="kw">await</span><span class="question-mark">?</span>, bind().<span class="kw">await</span><span class="question-mark">?</span>);
+<a href=#930 id=930 data-nosnippet>930</a>        <span class="kw">let </span>addr = server.addr();
+<a href=#931 id=931 data-nosnippet>931</a>        <span class="kw">let </span>client_task = tokio::spawn(<span class="kw">async move </span>{
+<a href=#932 id=932 data-nosnippet>932</a>            <span class="kw">let </span>conn = client.connect(addr, ALPN).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#933 id=933 data-nosnippet>933</a>            get::request::get_blob(conn.clone(), hash).next().<span class="kw">await</span>;
+<a href=#934 id=934 data-nosnippet>934</a>            <span class="comment">// keep the connection open until the provider is done
+<a href=#935 id=935 data-nosnippet>935</a>            </span>conn.closed().<span class="kw">await</span>;
+<a href=#936 id=936 data-nosnippet>936</a>            TestResult::Ok(client)
+<a href=#937 id=937 data-nosnippet>937</a>        });
+<a href=#938 id=938 data-nosnippet>938</a>        <span class="kw">let </span>conn = server.accept().<span class="kw">await</span>.expect(<span class="string">"incoming"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>pair = StreamPair::accept(<span class="kw-2">&amp;</span>conn, EventSender::DEFAULT).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#940 id=940 data-nosnippet>940</a>        <span class="kw">let </span>error = handle_stream(pair, (<span class="kw-2">**</span>store).clone())
+<a href=#941 id=941 data-nosnippet>941</a>            .<span class="kw">await
+<a href=#942 id=942 data-nosnippet>942</a>            </span>.expect_err(<span class="string">"request fails"</span>);
+<a href=#943 id=943 data-nosnippet>943</a>        conn.close(<span class="number">0u32</span>.into(), <span class="string">b""</span>);
+<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">let </span>client = client_task.<span class="kw">await</span><span class="question-mark">??</span>;
+<a href=#945 id=945 data-nosnippet>945</a>        <span class="comment">// Dropping an endpoint without closing it aborts it ungracefully.
+<a href=#946 id=946 data-nosnippet>946</a>        </span><span class="macro">tokio::join!</span>(server.close(), client.close());
+<a href=#947 id=947 data-nosnippet>947</a>        <span class="prelude-val">Ok</span>(error)
+<a href=#948 id=948 data-nosnippet>948</a>    }
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>    <span class="doccomment">/// A peer hanging up is not a local failure, a failing store is.
+<a href=#951 id=951 data-nosnippet>951</a>    </span><span class="attr">#[tokio::test]
+<a href=#952 id=952 data-nosnippet>952</a>    #[traced_test]
+<a href=#953 id=953 data-nosnippet>953</a>    </span><span class="kw">async fn </span>get_local_failure() -&gt; TestResult&lt;()&gt; {
+<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>store = MemStore::new();
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>tt = store.add_bytes(<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">16 </span>* <span class="number">1024 </span>* <span class="number">1024</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#957 id=957 data-nosnippet>957</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
+<a href=#958 id=958 data-nosnippet>958</a>        <span class="macro">assert!</span>(!error.is_local_failure(), <span class="string">"{error:#}"</span>);
+<a href=#959 id=959 data-nosnippet>959</a>        store.shutdown().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span>error = serve_one(<span class="kw-2">&amp;</span>store, tt.hash).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#961 id=961 data-nosnippet>961</a>        <span class="kw">let </span>error = error.downcast_ref::&lt;HandleGetError&gt;().expect(<span class="string">"get error"</span>);
+<a href=#962 id=962 data-nosnippet>962</a>        <span class="macro">assert!</span>(error.is_local_failure(), <span class="string">"{error:#}"</span>);
+<a href=#963 id=963 data-nosnippet>963</a>        <span class="prelude-val">Ok</span>(())
+<a href=#964 id=964 data-nosnippet>964</a>    }
+<a href=#965 id=965 data-nosnippet>965</a>}
 </code></pre></div></section></main></body></html>
