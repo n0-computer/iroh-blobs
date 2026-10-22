@@ -39,7 +39,7 @@ iroh-base = "1.0.0"
 iroh-tickets = "1.0.0"
 irpc = { version = "0.17.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
 iroh-metrics = { version = "1.0.1" }
-iroh-util = "0.6.0"
+iroh-util = "0.7.0"
 redb = { version = "4.1.0", optional = true }
 reflink-copy = { version = "0.1.24", optional = true }
 n0-error = "1.0.0"
