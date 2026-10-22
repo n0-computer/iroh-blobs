@@ -100,4 +100,4 @@ required-features = ["fs-store"]
 
 [[example]]
 name = "random_store"
-required-features = ["fs-store"]
+required-features = ["fs-store", "unstable-util"]
