@@ -96,6 +96,7 @@ fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
 ///
 /// Fails with `NotFound` only if all files are missing. Otherwise the first
 /// error that is not `NotFound` is returned, so real IO faults stay visible.
+/// An empty list never happens in normal use and is reported as corrupt metadata.
 fn open_external(paths: &[PathBuf]) -> io::Result<File> {
     let mut error: Option<io::Error> = None;
     for path in paths {
@@ -115,7 +116,7 @@ fn open_external(paths: &[PathBuf]) -> io::Result<File> {
             }
         }
     }
-    Err(error.unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no external data path")))
+    Err(error.unwrap_or_else(|| io::Error::other("no external data path")))
 }
 
 /// Read from the given file at the given offset, until end of file or max bytes.
