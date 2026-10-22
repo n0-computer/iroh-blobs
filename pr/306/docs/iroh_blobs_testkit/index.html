@@ -1,0 +1,61 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Protocol level conformance tests for iroh-blobs stores."><title>iroh_blobs_testkit - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="iroh_blobs_testkit" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (900485642 2026-04-08)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate iroh_blobs_testkit</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../iroh_blobs_testkit/index.html">iroh_<wbr>blobs_<wbr>testkit</a><span class="version">0.103.1</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#usage" title="Usage">Usage</a></li><li><a href="#what-is-checked" title="What is checked">What is checked</a></li></ul><h3><a href="#structs">Crate Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>iroh_<wbr>blobs_<wbr>testkit</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/iroh_blobs_testkit/lib.rs.html#1-98">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Protocol level conformance tests for <a href="https://docs.rs/iroh-blobs">iroh-blobs</a> stores.</p>
+<p>An iroh-blobs store is anything that answers <a href="iroh_blobs::api::proto::Request"><code>proto::Request</code></a>s. This
+crate checks that a store answers them the way iroh-blobs clients expect.
+It only talks to the store through the protocol, either with the regular
+client API or with raw requests where the client would hide what the store
+does. So the same tests run against in-process and remote stores, and
+against stores written outside of iroh-blobs.</p>
+<h2 id="usage"><a class="doc-anchor" href="#usage">§</a>Usage</h2>
+<p>The cases are a plain list, see <a href="fn.cases.html" title="fn iroh_blobs_testkit::cases"><code>cases</code></a>. A <a href="struct.Testkit.html" title="struct iroh_blobs_testkit::Testkit"><code>Testkit</code></a> runs them against
+fresh stores from a factory you provide.</p>
+<p>The easiest way to run them is a test target without the built-in test
+harness, which shows every case as a separate test:</p>
+<div class="example-wrap"><pre class="language-toml"><code>[[test]]
+name = &quot;conformance&quot;
+harness = false</code></pre></div>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// tests/conformance.rs
+</span><span class="kw">use </span>iroh_blobs::store::mem::MemStore;
+<span class="kw">use </span>iroh_blobs_testkit::{TestStore, Testkit};
+
+<span class="kw">async fn </span>mem_store() -&gt; anyhow::Result&lt;TestStore&gt; {
+    <span class="prelude-val">Ok</span>(TestStore::new(MemStore::new()))
+}
+
+<span class="kw">fn </span>main() {
+    Testkit::new(mem_store)
+        .skip(<span class="string">"tags_model"</span>, <span class="string">"tags are not supported yet"</span>)
+        .main()
+}</code></pre></div>
+<p><code>cargo test --test conformance</code> then runs one test per case. The usual
+arguments work, e.g. <code>cargo test --test conformance export_</code> to filter,
+<code>-- --list</code> to list, or <code>-- --include-ignored</code> to also run skipped cases.</p>
+<p>Without a separate test target, run cases from a normal test:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#[test]
+</span><span class="kw">fn </span>conformance() {
+    <span class="kw">let </span>testkit = Testkit::new(mem_store);
+    <span class="kw">for </span>case <span class="kw">in </span>iroh_blobs_testkit::cases() {
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = testkit.run(case) {
+            <span class="macro">panic!</span>(<span class="string">"{}: {cause:#}"</span>, case.name());
+        }
+    }
+}</code></pre></div>
+<p>The factory is called once per generated input. Resources the store
+needs, such as a temp dir, can be tied to it with
+<a href="struct.TestStore.html#method.with_guard" title="method iroh_blobs_testkit::TestStore::with_guard"><code>TestStore::with_guard</code></a>.</p>
+<h2 id="what-is-checked"><a class="doc-anchor" href="#what-is-checked">§</a>What is checked</h2>
+<p>Most cases are properties: they run many times with generated blobs,
+ranges and operations, each time against a fresh store, and shrink to a
+minimal input on failure. Failure messages state the part of the contract
+that was violated. Expected values come from <a href="https://docs.rs/bao-tree">bao-tree</a> and from simple
+models, never from another store implementation.</p>
+<p>The cases cover adding and exporting blobs, importing and exporting bao
+encoded data (complete, partial and incremental), observing bitfields,
+listing blobs, tags, and requests whose client goes away, as happens when
+a connection drops. Every run also checks that the store shuts down
+cleanly and that no request hangs.</p>
+<p>The tests assume a cooperative client, like the iroh-blobs clients: they
+look for ways to break a store through correct use of the protocol, not
+through malformed or adversarial request sequences. Persistence, crash and
+fault behavior are out of scope.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Case.html" title="struct iroh_blobs_testkit::Case">Case</a></dt><dd>A conformance case.</dd><dt><a class="struct" href="struct.TestStore.html" title="struct iroh_blobs_testkit::TestStore">Test<wbr>Store</a></dt><dd>A store under test, created by the factory passed to <a href="struct.Testkit.html#method.new" title="associated function iroh_blobs_testkit::Testkit::new"><code>Testkit::new</code></a>.</dd><dt><a class="struct" href="struct.Testkit.html" title="struct iroh_blobs_testkit::Testkit">Testkit</a></dt><dd>Runs conformance cases against stores from a factory.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.cases.html" title="fn iroh_blobs_testkit::cases">cases</a></dt><dd>All conformance cases.</dd></dl></section></div></main></body></html>

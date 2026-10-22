@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cases"],"struct":["Case","TestStore","Testkit"]};
