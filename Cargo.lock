@@ -1639,7 +1639,6 @@ name = "iroh-blobs"
 version = "0.103.1"
 dependencies = [
  "anyhow",
- "arrayvec",
  "async-compression",
  "atomic_refcell",
  "bao-tree",

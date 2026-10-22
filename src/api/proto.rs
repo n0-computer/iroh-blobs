@@ -22,7 +22,6 @@ use std::{
     pin::Pin,
 };
 
-use arrayvec::ArrayString;
 use bao_tree::{
     io::{mixed::EncodedItem, BaoContentItem, Leaf},
     ChunkRanges,
@@ -44,7 +43,7 @@ use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAnd
 pub(crate) trait HashSpecific {
     fn hash(&self) -> Hash;
 
-    fn hash_short(&self) -> ArrayString<10> {
+    fn hash_short(&self) -> impl fmt::Display + Copy + 'static {
         self.hash().fmt_short()
     }
 }
