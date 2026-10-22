@@ -91,6 +91,8 @@ metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
 fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs", "tokio/rt-multi-thread"]
 rpc = ["dep:noq", "irpc/rpc", "irpc/noq_endpoint_setup"]
+# Unstable: utility APIs that are not covered by semver guarantees (may change without notice)
+unstable-util = []
 
 [[example]]
 name = "expiring-tags"
@@ -98,4 +100,4 @@ required-features = ["fs-store"]
 
 [[example]]
 name = "random_store"
-required-features = ["fs-store"]
+required-features = ["fs-store", "unstable-util"]
