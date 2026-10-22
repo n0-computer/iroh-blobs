@@ -21,7 +21,7 @@ fn chunk_ranges_empty() -> &'static ChunkRanges {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[serde(from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]
+#[serde(try_from = "wire::RangeSpecSeq", into = "wire::RangeSpecSeq")]
 pub struct ChunkRangesSeq(pub(crate) SmallVec<[(u64, ChunkRanges); 2]>);
 
 impl std::hash::Hash for ChunkRangesSeq {
@@ -429,6 +429,32 @@ impl RangeSpec {
         (min, max)
     }
 
+    /// Creates a [`ChunkRanges`] from this [`RangeSpec`], or `None` if the spec is
+    /// not in canonical form.
+    ///
+    /// A canonical spec has strictly increasing boundaries that fit in a `u64`,
+    /// so every width after the first must be non-zero.
+    fn try_to_chunk_ranges(&self) -> Option<ChunkRanges> {
+        let mut ranges = ChunkRanges::empty();
+        let mut current = 0u64;
+        let mut on = false;
+        for (i, &width) in self.0.iter().enumerate() {
+            if i > 0 && width == 0 {
+                return None;
+            }
+            let next = current.checked_add(width)?;
+            if on {
+                ranges |= ChunkRanges::from(ChunkNum(current)..ChunkNum(next));
+            }
+            current = next;
+            on = !on;
+        }
+        if on {
+            ranges |= ChunkRanges::from(ChunkNum(current)..);
+        }
+        Some(ranges)
+    }
+
     /// Creates a [`ChunkRanges`] from this [`RangeSpec`].
     pub fn to_chunk_ranges(&self) -> ChunkRanges {
         // this is zero allocation for single ranges
@@ -477,15 +503,29 @@ mod wire {
     #[derive(Deserialize, Serialize)]
     pub struct RangeSpecSeq(SmallVec<[(u64, RangeSpec); 2]>);
 
-    impl From<RangeSpecSeq> for ChunkRangesSeq {
-        fn from(wire: RangeSpecSeq) -> Self {
-            let mut offset = 0;
+    /// Decodes the wire format, rejecting anything the encoder would not produce.
+    ///
+    /// Offsets must be strictly increasing and fit in a `u64`, so every delta after
+    /// the first must be non-zero. The range specs must be canonical as well.
+    impl TryFrom<RangeSpecSeq> for ChunkRangesSeq {
+        type Error = &'static str;
+
+        fn try_from(wire: RangeSpecSeq) -> Result<Self, Self::Error> {
+            let mut offset = 0u64;
             let mut res = SmallVec::new();
-            for (delta, spec) in wire.0.iter() {
-                offset += *delta;
-                res.push((offset, spec.to_chunk_ranges()));
+            for (i, (delta, spec)) in wire.0.iter().enumerate() {
+                if i > 0 && *delta == 0 {
+                    return Err("range spec seq offsets must be strictly increasing");
+                }
+                offset = offset
+                    .checked_add(*delta)
+                    .ok_or("range spec seq offset overflow")?;
+                let ranges = spec
+                    .try_to_chunk_ranges()
+                    .ok_or("range spec boundaries must be strictly increasing")?;
+                res.push((offset, ranges));
             }
-            Self(res)
+            Ok(Self(res))
         }
     }
 
@@ -655,6 +695,28 @@ mod tests {
             let expected = parse_hexdump(expected_hex).unwrap();
             assert_eq_hex!(expected, postcard::to_stdvec(&case).unwrap());
         }
+    }
+
+    #[test]
+    fn range_spec_seq_rejects_invalid() {
+        // same wire layout as RangeSpecSeq: a seq of (offset delta, seq of widths)
+        fn decode(wire: &[(u64, &[u64])]) -> postcard::Result<ChunkRangesSeq> {
+            let wire: Vec<(u64, Vec<u64>)> = wire.iter().map(|(d, w)| (*d, w.to_vec())).collect();
+            postcard::from_bytes(&postcard::to_allocvec(&wire).unwrap())
+        }
+        // canonical encoding of a single blob request
+        assert_eq!(
+            decode(&[(0, &[0]), (1, &[])]).unwrap(),
+            ChunkRangesSeq::from_ranges([ChunkRanges::all()])
+        );
+        // repeated offset
+        assert!(decode(&[(0, &[0]), (0, &[])]).is_err());
+        // offset overflow
+        assert!(decode(&[(u64::MAX, &[0]), (1, &[])]).is_err());
+        // range boundary overflow
+        assert!(decode(&[(0, &[u64::MAX, 1])]).is_err());
+        // repeated range boundary
+        assert!(decode(&[(0, &[1, 0])]).is_err());
     }
 
     /// Test that the roundtrip from [`Vec<ChunkRanges>`] via [`RangeSpec`] to [`RangeSpecSeq`]  and back works.
