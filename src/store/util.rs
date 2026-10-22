@@ -169,7 +169,6 @@ mod fs {
         path::Path,
     };
 
-    use arrayvec::ArrayString;
     use bao_tree::blake3;
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -319,13 +318,13 @@ mod fs {
         fn addr(&self) -> usize;
 
         // a short symbol string for the address
-        fn addr_short(&self) -> ArrayString<12> {
+        fn addr_short(&self) -> String {
             let addr = self.addr().to_le_bytes();
             symbol_string(&addr)
         }
 
         #[allow(dead_code)]
-        fn hash_short(&self) -> ArrayString<10> {
+        fn hash_short(&self) -> impl fmt::Display + Copy + 'static {
             crate::Hash::new(self.as_ref()).fmt_short()
         }
     }
@@ -335,12 +334,12 @@ mod fs {
             self.as_ref() as *const [u8] as *const u8 as usize
         }
 
-        fn hash_short(&self) -> ArrayString<10> {
+        fn hash_short(&self) -> impl fmt::Display + Copy + 'static {
             crate::Hash::new(self.as_ref()).fmt_short()
         }
     }
 
-    pub fn symbol_string(data: &[u8]) -> ArrayString<12> {
+    pub fn symbol_string(data: &[u8]) -> String {
         const SYMBOLS: &[char] = &[
             '😀', '😂', '😍', '😎', '😢', '😡', '😱', '😴', '🤓', '🤔', '🤗', '🤢', '🤡', '🤖',
             '👽', '👾', '👻', '💀', '💩', '♥', '💥', '💦', '💨', '💫', '💬', '💭', '💰', '💳',
@@ -354,8 +353,7 @@ mod fs {
         let hash = blake3::hash(data);
         let bytes = hash.as_bytes(); // 32-byte hash
 
-        // Create an ArrayString with capacity 12 (bytes)
-        let mut result = ArrayString::<12>::new();
+        let mut result = String::with_capacity(12);
 
         // Fill with 3 symbols
         for byte in bytes.iter().take(3) {
