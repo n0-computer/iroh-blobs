@@ -34,13 +34,18 @@ pub enum ConnectMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ObserveMode {
-    /// We don't get notification of connect events at all.
-    #[default]
+    /// We don't get observe request events at all.
     None,
-    /// We get a notification for connect events.
+    /// We get a notification for each observe request.
     Notify,
-    /// We get a request for connect events and can reject incoming connections.
+    /// We get a request for each observe request, and can reject it.
     Intercept,
+    /// Observe requests are completely disabled. All requests will be rejected.
+    ///
+    /// This is the default, since observe requests are long running
+    /// subscriptions, and are not needed for normal blob transfers.
+    #[default]
+    Disabled,
 }
 
 /// Request mode for all data related requests.
@@ -187,14 +192,15 @@ impl Default for EventMask {
 }
 
 impl EventMask {
-    /// All event notifications are fully disabled. Push requests are disabled by default.
+    /// All event notifications are fully disabled. Push and observe requests
+    /// are disabled by default.
     pub const DEFAULT: Self = Self {
         connected: ConnectMode::None,
         get: RequestMode::None,
         get_many: RequestMode::None,
         push: RequestMode::Disabled,
         throttle: ThrottleMode::None,
-        observe: ObserveMode::None,
+        observe: ObserveMode::Disabled,
     };
 
     /// All event notifications for read-only requests are fully enabled.
@@ -242,6 +248,7 @@ impl RequestKind for ObserveRequest {
             ObserveMode::None => RequestMode::None,
             ObserveMode::Notify => RequestMode::Notify,
             ObserveMode::Intercept => RequestMode::Intercept,
+            ObserveMode::Disabled => RequestMode::Disabled,
         }
     }
 }
