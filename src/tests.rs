@@ -253,6 +253,67 @@ async fn two_nodes_get_blobs_fs() -> TestResult<()> {
     two_nodes_get_blobs(r1, &store1, r2, &store2).await
 }
 
+/// A get must fail if the local store fails to write the last batch.
+#[cfg(unix)]
+#[tokio::test]
+#[traced_test]
+async fn get_blob_store_write_error_fs() -> TestResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    use iroh::endpoint::VarInt;
+
+    use crate::{
+        get::StreamPair,
+        protocol::GetRequest,
+        util::{AsyncWriteSendStream, AsyncWriteSendStreamExtra},
+    };
+
+    struct Sink(tokio::io::Sink);
+
+    impl AsyncWriteSendStreamExtra for Sink {
+        fn inner(&mut self) -> &mut (impl tokio::io::AsyncWrite + Unpin + Send) {
+            &mut self.0
+        }
+
+        fn reset(&mut self, _code: VarInt) -> io::Result<()> {
+            Ok(())
+        }
+
+        async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+            std::future::pending().await
+        }
+
+        fn id(&self) -> u64 {
+            0
+        }
+    }
+
+    let testdir = tempfile::tempdir()?;
+    let db_path = testdir.path().join("db");
+    let store = FsStore::load(&db_path).await?;
+    // just over the inline limit, so the entry has to go to disk. This is
+    // written in a single batch, so the first batch is also the last one.
+    let data = test_data(1024 * 16 + 1);
+    let (hash, response) = create_n0_bao(&data, &ChunkRanges::all())?;
+    // make it impossible to create the data file
+    let data_dir = db_path.join("data");
+    std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o555))?;
+    if std::fs::File::create(data_dir.join("probe")).is_ok() {
+        // running as root, permissions are not enforced
+        return Ok(());
+    }
+    let sink = AsyncWriteSendStream::new(Sink(tokio::io::sink()));
+    let sp = StreamPair::new(0, Bytes::from(response), sink);
+    let res = store.remote().execute_get(sp, GetRequest::blob(hash)).await;
+    std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755))?;
+    assert!(
+        matches!(res, Err(get::GetError::LocalFailure { .. })),
+        "{res:?}"
+    );
+    store.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn two_nodes_get_blobs_mem() -> TestResult<()> {
     let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
