@@ -299,15 +299,30 @@ impl Blobs {
                     }
                 }
             };
-            let send = async {
+            // Moving the sender in means it is dropped when the source fails,
+            // which makes the store abort the import instead of waiting forever.
+            let send = async move {
                 tokio::pin!(data);
                 while let Some(item) = data.next().await {
-                    sender.send(ImportByteStreamUpdate::Bytes(item?)).await?;
+                    if sender
+                        .send(ImportByteStreamUpdate::Bytes(item?))
+                        .await
+                        .is_err()
+                    {
+                        // the store side is gone, recv will report why
+                        return Ok(());
+                    }
                 }
-                sender.send(ImportByteStreamUpdate::Done).await?;
-                n0_error::Ok(())
+                sender.send(ImportByteStreamUpdate::Done).await.ok();
+                io::Result::Ok(())
             };
-            let _ = tokio::join!(send, recv);
+            // If send succeeds its branch is disabled and we keep receiving.
+            // On a source error, report it rather than the store's generic
+            // "byte stream ended unexpectedly".
+            tokio::select! {
+                Err(cause) = send => co.yield_(AddProgressItem::Error(cause)).await,
+                _ = recv => {}
+            }
         });
         AddProgress::new(self, stream)
     }
