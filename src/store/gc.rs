@@ -60,9 +60,15 @@ pub(super) async fn gc_mark_task(
         trace!("adding temp root {:?}", tt);
         roots.insert(tt);
     }
+    // A hash can appear in `roots` more than once with different formats (e.g. a Raw tag
+    // and a HashSeq tag on the same blob). Liveness and traversal are separate questions:
+    // gating traversal on `live.insert(hash)` skips the HashSeq entry whenever the Raw entry
+    // happens to be iterated first, leaving the children unmarked.
+    let mut traversed: HashSet<Hash> = HashSet::new();
     for HashAndFormat { hash, format } in roots {
-        // we need to do this for all formats except raw
-        if live.insert(hash) && !format.is_raw() {
+        live.insert(hash);
+        // we need to do this for all formats except raw, once per hash
+        if !format.is_raw() && traversed.insert(hash) {
             let mut stream = store.export_bao(hash, ChunkRanges::all()).hashes();
             while let Some(hash) = stream.next().await {
                 match hash {
@@ -321,6 +327,50 @@ mod tests {
         assert!(!store.has(h).await?);
         drop(at);
         drop(hehs);
+        Ok(())
+    }
+
+    /// A HashSeq root that also carries a Raw tag must still have its children traversed.
+    /// `roots` iteration order is random, so run GC repeatedly.
+    async fn gc_dual_tagged_root_keeps_children(store: &Store) -> TestResult<()> {
+        let blobs = store.blobs();
+        let x = blobs.add_slice("child-x").temp_tag().await?;
+        let y = blobs.add_slice("child-y").temp_tag().await?;
+        let (xh, yh) = (x.hash(), y.hash());
+        let xyhs = [xh, yh].into_iter().collect::<HashSeq>();
+        let root = blobs
+            .add_bytes_with_opts(AddBytesOptions {
+                data: xyhs.into(),
+                format: BlobFormat::HashSeq,
+            })
+            .await?;
+        let rh = root.hash;
+        store.tags().set("raw", HashAndFormat::raw(rh)).await?;
+        store
+            .tags()
+            .set("hashseq", HashAndFormat::hash_seq(rh))
+            .await?;
+        drop(x);
+        drop(y);
+        for round in 0..20 {
+            let mut live = HashSet::new();
+            gc_run_once(store, &mut live).await?;
+            assert!(
+                live.contains(&xh) && live.contains(&yh),
+                "round {round}: children not marked live"
+            );
+            assert!(
+                store.has(xh).await? && store.has(yh).await?,
+                "round {round}: a child was swept"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gc_dual_tagged_root_keeps_children_mem() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        gc_dual_tagged_root_keeps_children(&store).await?;
         Ok(())
     }
 
