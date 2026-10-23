@@ -306,7 +306,10 @@ async fn get_blob_store_write_error_fs() -> TestResult<()> {
     let sp = StreamPair::new(0, Bytes::from(response), sink);
     let res = store.remote().execute_get(sp, GetRequest::blob(hash)).await;
     std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755))?;
-    assert!(res.is_err());
+    assert!(
+        matches!(res, Err(get::GetError::LocalFailure { .. })),
+        "{res:?}"
+    );
     store.shutdown().await?;
     Ok(())
 }
