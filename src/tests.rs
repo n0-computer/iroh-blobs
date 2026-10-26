@@ -980,3 +980,56 @@ async fn fs_add_stream_source_error() -> TestResult<()> {
     store.shutdown().await?;
     Ok(())
 }
+
+/// A store that shuts down in the middle of an export_ranges must not make
+/// the export look complete.
+#[tokio::test(flavor = "multi_thread")]
+#[traced_test]
+async fn mem_export_ranges_shutdown_mid_export() -> TestResult<()> {
+    const TOTAL: u64 = 8 << 20;
+    let data = (0..TOTAL).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+
+    // the stream ends with an error, unless all the data made it out
+    let store = MemStore::new();
+    let tt = store.add_slice(&data).temp_tag().await?;
+    let mut stream = store.export_ranges(tt.hash(), 0..TOTAL).stream();
+    let mut items = Vec::new();
+    while let Some(item) = stream.next().await {
+        items.push(item);
+        if items.len() == 3 {
+            store.shutdown().await?;
+        }
+    }
+    let received = items
+        .iter()
+        .map(|item| match item {
+            crate::api::proto::ExportRangesItem::Data(leaf) => leaf.data.len() as u64,
+            _ => 0,
+        })
+        .sum::<u64>();
+    let ends_with_error = matches!(
+        items.last(),
+        Some(crate::api::proto::ExportRangesItem::Error(_))
+    );
+    assert!(
+        ends_with_error || received == TOTAL,
+        "stream ended without error after {received} of {TOTAL} bytes"
+    );
+
+    // concatenate returns an error, unless it got all the data
+    let store = MemStore::new();
+    let tt = store.add_slice(&data).temp_tag().await?;
+    let blobs = store.blobs().clone();
+    let hash = tt.hash();
+    let task = tokio::spawn(async move { blobs.export_ranges(hash, 0..TOTAL).concatenate().await });
+    tokio::task::yield_now().await;
+    store.shutdown().await?;
+    if let Ok(res) = task.await? {
+        assert_eq!(
+            res.len() as u64,
+            TOTAL,
+            "concatenate returned truncated data"
+        );
+    }
+    Ok(())
+}
