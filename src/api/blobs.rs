@@ -970,7 +970,7 @@ impl ExportRangesProgress {
                 }
             };
             let mut end = ExportRangesEnd::default();
-            let cause = loop {
+            let item = loop {
                 match rx.recv().await {
                     Ok(Some(item)) => {
                         let last = end.is_last(&self.ranges, &item);
@@ -979,11 +979,11 @@ impl ExportRangesProgress {
                             return;
                         }
                     }
-                    Ok(None) => break export_ranges_ended_early(),
-                    Err(cause) => break cause.into(),
+                    Ok(None) => break ExportRangesItem::Error(export_ranges_ended_early()),
+                    Err(cause) => break ExportRangesItem::Error(cause.into()),
                 }
             };
-            co.yield_(ExportRangesItem::Error(cause)).await;
+            co.yield_(item).await;
         })
     }
 
