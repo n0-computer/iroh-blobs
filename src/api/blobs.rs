@@ -1312,7 +1312,7 @@ impl ExportBaoProgress {
                 }
             };
             let mut end = ExportBaoEnd::default();
-            let cause = loop {
+            let item = loop {
                 match rx.recv().await {
                     Ok(Some(item)) => {
                         let last = end.is_last(&self.ranges, &item);
@@ -1321,11 +1321,11 @@ impl ExportBaoProgress {
                             return;
                         }
                     }
-                    Ok(None) => break export_bao_ended_early_io(),
-                    Err(cause) => break io::Error::other(cause),
+                    Ok(None) => break EncodedItem::Error(export_bao_ended_early_io().into()),
+                    Err(cause) => break EncodedItem::Error(io::Error::other(cause).into()),
                 }
             };
-            co.yield_(EncodedItem::Error(cause.into())).await;
+            co.yield_(item).await;
         })
     }
 }
