@@ -304,8 +304,9 @@ impl Blobs {
             let send = async move {
                 tokio::pin!(data);
                 while let Some(item) = data.next().await {
+                    let bytes = item.map_err(AddProgressItem::Error)?;
                     if sender
-                        .send(ImportByteStreamUpdate::Bytes(item?))
+                        .send(ImportByteStreamUpdate::Bytes(bytes))
                         .await
                         .is_err()
                     {
@@ -314,13 +315,13 @@ impl Blobs {
                     }
                 }
                 sender.send(ImportByteStreamUpdate::Done).await.ok();
-                io::Result::Ok(())
+                Ok(())
             };
             // If send succeeds its branch is disabled and we keep receiving.
             // On a source error, report it rather than the store's generic
             // "byte stream ended unexpectedly".
             tokio::select! {
-                Err(cause) = send => co.yield_(AddProgressItem::Error(cause)).await,
+                Err(item) = send => co.yield_(item).await,
                 _ = recv => {}
             }
         });
