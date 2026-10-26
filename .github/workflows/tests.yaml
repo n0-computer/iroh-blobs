@@ -23,7 +23,7 @@ env:
   RUSTFLAGS: -Dwarnings
   RUSTDOCFLAGS: -Dwarnings
   SCCACHE_CACHE_SIZE: "50G"
-  CRATES_LIST: "iroh-blobs"
+  CRATES_LIST: "iroh-blobs,iroh-blobs-testkit"
   NEXTEST_VERSION: "0.9.80"
   IROH_FORCE_STAGING_RELAYS: "1"
 
