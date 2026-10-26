@@ -46,38 +46,38 @@ pub(super) async fn gc_mark_task(
             co.yield_(GcMarkEvent::CustomWarning(format!($($arg)*), None)).await;
         };
     }
-    let mut roots = HashSet::new();
+    // Every root is live, and HashSeq roots also have their children traversed.
+    // Traversal does not depend on `live`, which may already contain a root
+    // because of a Raw tag on the same hash or the protect callback.
+    let mut seqs = HashSet::new();
+    let mut add_root = |HashAndFormat { hash, format }: HashAndFormat| {
+        live.insert(hash);
+        if !format.is_raw() {
+            seqs.insert(hash);
+        }
+    };
     trace!("traversing tags");
     let mut tags = store.tags().list().await?;
     while let Some(tag) = tags.next().await {
         let info = tag?;
         trace!("adding root {:?} {:?}", info.name, info.hash_and_format());
-        roots.insert(info.hash_and_format());
+        add_root(info.hash_and_format());
     }
     trace!("traversing temp roots");
     let mut tts = store.tags().list_temp_tags().await?;
     while let Some(tt) = tts.next().await {
         trace!("adding temp root {:?}", tt);
-        roots.insert(tt);
+        add_root(tt);
     }
-    // A hash can appear in `roots` more than once with different formats (e.g. a Raw tag
-    // and a HashSeq tag on the same blob). Liveness and traversal are separate questions:
-    // gating traversal on `live.insert(hash)` skips the HashSeq entry whenever the Raw entry
-    // happens to be iterated first, leaving the children unmarked.
-    let mut traversed: HashSet<Hash> = HashSet::new();
-    for HashAndFormat { hash, format } in roots {
-        live.insert(hash);
-        // we need to do this for all formats except raw, once per hash
-        if !format.is_raw() && traversed.insert(hash) {
-            let mut stream = store.export_bao(hash, ChunkRanges::all()).hashes();
-            while let Some(hash) = stream.next().await {
-                match hash {
-                    Ok(hash) => {
-                        live.insert(hash);
-                    }
-                    Err(e) => {
-                        warn!("error while traversing hashseq: {e:?}");
-                    }
+    for hash in seqs {
+        let mut stream = store.export_bao(hash, ChunkRanges::all()).hashes();
+        while let Some(hash) = stream.next().await {
+            match hash {
+                Ok(hash) => {
+                    live.insert(hash);
+                }
+                Err(e) => {
+                    warn!("error while traversing hashseq: {e:?}");
                 }
             }
         }
@@ -371,6 +371,47 @@ mod tests {
     async fn gc_dual_tagged_root_keeps_children_mem() -> TestResult {
         let store = crate::store::mem::MemStore::new();
         gc_dual_tagged_root_keeps_children(&store).await?;
+        Ok(())
+    }
+
+    /// A HashSeq root that is already live before the mark, as after the
+    /// protect callback, must still have its children traversed.
+    async fn gc_protected_root_keeps_children(store: &Store) -> TestResult<()> {
+        let blobs = store.blobs();
+        let x = blobs.add_slice("child-x").temp_tag().await?;
+        let y = blobs.add_slice("child-y").temp_tag().await?;
+        let (xh, yh) = (x.hash(), y.hash());
+        let xyhs = [xh, yh].into_iter().collect::<HashSeq>();
+        let root = blobs
+            .add_bytes_with_opts(AddBytesOptions {
+                data: xyhs.into(),
+                format: BlobFormat::HashSeq,
+            })
+            .await?;
+        let rh = root.hash;
+        store
+            .tags()
+            .set("hashseq", HashAndFormat::hash_seq(rh))
+            .await?;
+        drop(x);
+        drop(y);
+        let mut live = HashSet::from([rh]);
+        gc_run_once(store, &mut live).await?;
+        assert!(
+            live.contains(&xh) && live.contains(&yh),
+            "children not marked live"
+        );
+        assert!(
+            store.has(xh).await? && store.has(yh).await?,
+            "a child was swept"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gc_protected_root_keeps_children_mem() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        gc_protected_root_keeps_children(&store).await?;
         Ok(())
     }
 
