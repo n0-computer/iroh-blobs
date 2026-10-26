@@ -928,12 +928,16 @@ async fn get_blob_ranges_impl<R: RecvStream>(
         })
     };
     let complete = async move {
-        handle.rx.await.map_err(|e| {
-            e!(
-                GetError::LocalFailure,
-                n0_error::anyerr!("error reading from import stream: {e}")
-            )
-        })
+        handle
+            .rx
+            .await
+            .map_err(|e| {
+                e!(
+                    GetError::LocalFailure,
+                    n0_error::anyerr!("error reading from import stream: {e}")
+                )
+            })?
+            .map_err(|e| e!(GetError::LocalFailure, e.into()))
     };
     let (_, end) = tokio::try_join!(complete, write)?;
     Ok(end)
