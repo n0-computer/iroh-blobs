@@ -970,7 +970,7 @@
 <a href=#970 id=970 data-nosnippet>970</a>                }
 <a href=#971 id=971 data-nosnippet>971</a>            };
 <a href=#972 id=972 data-nosnippet>972</a>            <span class="kw">let </span><span class="kw-2">mut </span>end = ExportRangesEnd::default();
-<a href=#973 id=973 data-nosnippet>973</a>            <span class="kw">let </span>cause = <span class="kw">loop </span>{
+<a href=#973 id=973 data-nosnippet>973</a>            <span class="kw">let </span>item = <span class="kw">loop </span>{
 <a href=#974 id=974 data-nosnippet>974</a>                <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
 <a href=#975 id=975 data-nosnippet>975</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(item)) =&gt; {
 <a href=#976 id=976 data-nosnippet>976</a>                        <span class="kw">let </span>last = end.is_last(<span class="kw-2">&amp;</span><span class="self">self</span>.ranges, <span class="kw-2">&amp;</span>item);
@@ -979,11 +979,11 @@
 <a href=#979 id=979 data-nosnippet>979</a>                            <span class="kw">return</span>;
 <a href=#980 id=980 data-nosnippet>980</a>                        }
 <a href=#981 id=981 data-nosnippet>981</a>                    }
-<a href=#982 id=982 data-nosnippet>982</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">break </span>export_ranges_ended_early(),
-<a href=#983 id=983 data-nosnippet>983</a>                    <span class="prelude-val">Err</span>(cause) =&gt; <span class="kw">break </span>cause.into(),
+<a href=#982 id=982 data-nosnippet>982</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">break </span>ExportRangesItem::Error(export_ranges_ended_early()),
+<a href=#983 id=983 data-nosnippet>983</a>                    <span class="prelude-val">Err</span>(cause) =&gt; <span class="kw">break </span>ExportRangesItem::Error(cause.into()),
 <a href=#984 id=984 data-nosnippet>984</a>                }
 <a href=#985 id=985 data-nosnippet>985</a>            };
-<a href=#986 id=986 data-nosnippet>986</a>            co.yield_(ExportRangesItem::Error(cause)).<span class="kw">await</span>;
+<a href=#986 id=986 data-nosnippet>986</a>            co.yield_(item).<span class="kw">await</span>;
 <a href=#987 id=987 data-nosnippet>987</a>        })
 <a href=#988 id=988 data-nosnippet>988</a>    }
 <a href=#989 id=989 data-nosnippet>989</a>
