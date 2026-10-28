@@ -45,6 +45,11 @@ postprocessors = [
 
 
 [git]
+# Only use tags that are in the history of the current branch. Without this,
+# patch-release tags created on release branches (e.g. v0.102.1) are newer
+# than the tags on main, so git-cliff treats them as the latest release and
+# regenerates (duplicates) every changelog section since their branch point.
+use_branch_tags = true
 # regex for parsing and grouping commits
 commit_parsers = [
   { message = "^feat", group = "<!-- 0 -->⛰️  Features" },
