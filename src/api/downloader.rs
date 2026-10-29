@@ -801,8 +801,11 @@ mod tests {
         const CUSTOM_ALPN: &[u8] = b"/custom-blobs/1";
         // provider that only accepts the custom ALPN
         let store1 = MemStore::new();
+        // Loopback only, like the other test endpoints.
         let ep1 = Endpoint::builder(presets::Minimal)
-            .relay_mode(RelayMode::Default)
+            .relay_mode(RelayMode::Disabled)
+            .clear_ip_transports()
+            .bind_addr("127.0.0.1:0")?
             .bind()
             .await?;
         let r1 = Router::builder(ep1)
