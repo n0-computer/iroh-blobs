@@ -7,6 +7,9 @@
 //!
 //! For many use cases this can be quite useful, since it does not require write access
 //! to the file system.
+#[cfg(any(wasm_browser, test))]
+mod import_outboard;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     future::Future,
@@ -715,7 +718,10 @@ async fn import_bytes(
 ) -> Result<ImportEntry> {
     tx.send(AddProgressItem::Size(data.len() as u64)).await?;
     tx.send(AddProgressItem::CopyDone).await?;
+    #[cfg(not(wasm_browser))]
     let outboard = PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE);
+    #[cfg(wasm_browser)]
+    let outboard = import_outboard::create(data.clone()).await?;
     Ok(ImportEntry {
         data,
         outboard,
