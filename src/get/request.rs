@@ -20,7 +20,6 @@ use iroh::endpoint::Connection;
 use n0_error::e;
 use n0_future::{Stream, StreamExt};
 use nested_enum_utils::enum_conversions;
-use rand::{Rng, RngExt};
 use tokio::sync::mpsc;
 
 use super::{fsm, GetError, GetResult, Stats};
@@ -323,7 +322,13 @@ pub async fn get_chunk_probe(
 ///
 /// The random chunk is chosen uniformly from the chunks of the children, so
 /// larger children are more likely to be selected.
-pub fn random_hash_seq_ranges(sizes: &[u64], mut rng: impl Rng) -> ChunkRangesSeq {
+///
+/// This is an unstable API and may change without notice.
+#[cfg(feature = "unstable-util")]
+#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "unstable-util")))]
+pub fn random_hash_seq_ranges(sizes: &[u64], mut rng: impl rand::Rng) -> ChunkRangesSeq {
+    use rand::RngExt;
+
     let total_chunks = sizes
         .iter()
         .map(|size| ChunkNum::full_chunks(*size).0)
