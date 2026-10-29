@@ -920,11 +920,16 @@ mod tests {
     /// Serves a single get request for `hash`, where the client drops the
     /// response after the first item, and returns the provider error.
     async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<AnyError> {
-        let bind = || {
-            Endpoint::builder(presets::Minimal)
+        // Loopback only: no relay, no LAN discovery, no local network permission prompt.
+        let bind = || async {
+            let endpoint = Endpoint::builder(presets::Minimal)
                 .relay_mode(RelayMode::Disabled)
+                .clear_ip_transports()
+                .bind_addr("127.0.0.1:0")?
                 .alpns(vec![ALPN.to_vec()])
                 .bind()
+                .await?;
+            TestResult::Ok(endpoint)
         };
         let (server, client) = (bind().await?, bind().await?);
         let addr = server.addr();
