@@ -3,7 +3,7 @@ use std::{
     fs::{File, OpenOptions},
     io,
     ops::Deref,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use bao_tree::{
@@ -90,6 +90,33 @@ fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
         .create(true)
         .truncate(false)
         .open(path)
+}
+
+/// Opens the first external data file that can be opened.
+///
+/// Fails with `NotFound` only if all files are missing. Otherwise the first
+/// error that is not `NotFound` is returned, so real IO faults stay visible.
+/// An empty list never happens in normal use and is reported as corrupt metadata.
+fn open_external(paths: &[PathBuf]) -> io::Result<File> {
+    let mut error: Option<io::Error> = None;
+    for path in paths {
+        match File::open(path) {
+            Ok(file) => return Ok(file),
+            Err(cause) => {
+                debug!(
+                    "failed to open external data file {}: {cause}",
+                    path.display()
+                );
+                if error
+                    .as_ref()
+                    .is_none_or(|e| e.kind() == io::ErrorKind::NotFound)
+                {
+                    error = Some(cause);
+                }
+            }
+        }
+    }
+    Err(error.unwrap_or_else(|| io::Error::other("no external data path")))
 }
 
 /// Read from the given file at the given offset, until end of file or max bytes.
@@ -484,8 +511,9 @@ impl BaoFileStorage {
                 // unless there is a bug, this would just write the exact same data
                 (self, None)
             }
+            BaoFileStorage::Poisoned => return Err(io::Error::other("poisoned storage")),
             _ => {
-                // we are poisoned, so just ignore the write
+                // Initial and Loading can not occur after load
                 (self, None)
             }
         })
@@ -590,10 +618,7 @@ impl BaoFileStorage {
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                     DataLocation::External(paths, size) => {
-                        let Some(path) = paths.into_iter().next() else {
-                            return Err(io::Error::other("no external data path"));
-                        };
-                        let file = std::fs::File::open(&path)?;
+                        let file = open_external(&paths)?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                 };
@@ -651,6 +676,8 @@ impl BaoFileHandle {
                 BaoFileStorage::Complete(_) => false,
                 BaoFileStorage::PartialMem(_) => true,
                 BaoFileStorage::Partial(_) => true,
+                // a finished import does not depend on the old content
+                BaoFileStorage::Poisoned => true,
                 _ => false,
             };
             if needs_complete {
@@ -708,12 +735,16 @@ impl BaoFileStorageSubscriber {
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
     pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let value = self.receiver.borrow().bitfield();
+        let Some(value) = self.bitfield() else {
+            return Ok(());
+        };
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
-            let value = self.receiver.borrow().bitfield();
-            tx.send(value.clone()).await?;
+            let Some(value) = self.bitfield() else {
+                return Ok(());
+            };
+            tx.send(value).await?;
         }
     }
 
@@ -722,18 +753,33 @@ impl BaoFileStorageSubscriber {
     /// Returns an error if sending fails, or if the last sender is dropped
     #[allow(dead_code)]
     pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let value = self.receiver.borrow().bitfield();
+        let Some(value) = self.bitfield() else {
+            return Ok(());
+        };
         let mut old = value.clone();
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
-            let new = self.receiver.borrow().bitfield();
+            let Some(new) = self.bitfield() else {
+                return Ok(());
+            };
             let diff = old.diff(&new);
             if diff.is_empty() {
                 continue;
             }
             tx.send(diff).await?;
             old = new;
+        }
+    }
+
+    /// The current bitfield, or `None` if the storage is poisoned.
+    ///
+    /// Observers end the stream on `None`, since there is no error channel.
+    fn bitfield(&self) -> Option<Bitfield> {
+        let state = self.receiver.borrow();
+        match state.deref() {
+            BaoFileStorage::Poisoned => None,
+            state => Some(state.bitfield()),
         }
     }
 

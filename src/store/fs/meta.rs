@@ -782,7 +782,14 @@ impl Actor {
         })
     }
 
-    pub async fn run(mut self) -> ActorResult<()> {
+    pub async fn run(self) {
+        if let Err(error) = self.run_inner().await {
+            // Without this actor every store operation fails, so keep the cause.
+            error!("metadata db actor stopped: {error:#}");
+        }
+    }
+
+    async fn run_inner(mut self) -> ActorResult<()> {
         let mut db = DbWrapper::from(self.db);
         let options = &self.options;
         let mut op = 0u64;
@@ -826,7 +833,7 @@ impl Actor {
                         .map_err(|e| e!(ActorError::Transaction, e))?;
                     let mut tables =
                         Tables::new(&tx, &ftx).map_err(|e| e!(ActorError::Table, e))?;
-                    let timeout = n0_future::time::sleep(self.options.max_read_duration);
+                    let timeout = n0_future::time::sleep(self.options.max_write_duration);
                     pin!(timeout);
                     let mut n = 0;
                     while let Some(cmd) = self
