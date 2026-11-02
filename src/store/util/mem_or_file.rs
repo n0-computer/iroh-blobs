@@ -1,6 +1,5 @@
 use std::{
     fmt::Debug,
-    fs::File,
     io::{self, Read, Seek},
 };
 
@@ -22,12 +21,6 @@ pub struct FixedSize<T> {
 impl<T> FixedSize<T> {
     pub fn new(file: T, size: u64) -> Self {
         Self { file, size }
-    }
-}
-
-impl FixedSize<File> {
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self::new(self.file.try_clone()?, self.size))
     }
 }
 
@@ -133,12 +126,5 @@ impl<F> MemOrFile<Bytes, F> {
     /// Create an empty MemOrFile, using a Bytes for the Mem part
     pub fn empty() -> Self {
         MemOrFile::default()
-    }
-}
-
-impl<M, F> MemOrFile<M, F> {
-    /// True if this is a Mem
-    pub fn is_mem(&self) -> bool {
-        matches!(self, MemOrFile::Mem(_))
     }
 }

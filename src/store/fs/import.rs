@@ -56,7 +56,7 @@ use crate::{
 /// This makes sure that an import that does not complete, for example because it
 /// was cancelled or the source failed, does not leave its temp files behind.
 #[derive(Debug)]
-pub struct TempPath(Option<PathBuf>);
+pub(crate) struct TempPath(Option<PathBuf>);
 
 impl TempPath {
     fn new(path: PathBuf) -> Self {
@@ -92,7 +92,7 @@ impl Drop for TempPath {
 /// and the file location.
 ///
 /// This serves as an intermediate result between copying and outboard computation.
-pub enum ImportSource {
+pub(crate) enum ImportSource {
     TempFile(TempPath, File, u64),
     External(PathBuf, File, u64),
     Memory(Bytes),
@@ -121,10 +121,6 @@ impl ImportSource {
         }
     }
 
-    fn is_mem(&self) -> bool {
-        matches!(self, Self::Memory(_))
-    }
-
     /// A reader for the import source.
     fn read(&self) -> MemOrFile<std::io::Cursor<&[u8]>, &File> {
         match self {
@@ -151,7 +147,7 @@ impl ImportSource {
 ///
 /// The store can assume that the outboard, if on disk, is in a location where
 /// it can be moved to the final location (basically it needs to be on the same device).
-pub struct ImportEntry {
+pub(crate) struct ImportEntry {
     pub hash: Hash,
     pub format: BlobFormat,
     pub scope: Scope,
@@ -176,7 +172,7 @@ impl Channels<Request> for ImportEntry {
     type Rx = NoReceiver;
 }
 
-pub type ImportEntryMsg = WithChannels<ImportEntry, Request>;
+pub(crate) type ImportEntryMsg = WithChannels<ImportEntry, Request>;
 
 impl HashSpecific for ImportEntryMsg {
     fn hash(&self) -> Hash {
@@ -184,16 +180,9 @@ impl HashSpecific for ImportEntryMsg {
     }
 }
 
-impl ImportEntry {
-    /// True if both data and outboard are in memory.
-    pub fn is_mem(&self) -> bool {
-        self.source.is_mem() && self.outboard.is_mem()
-    }
-}
-
 /// Start a task to import from a [`Bytes`] in memory.
 #[instrument(skip_all, fields(data = cmd.data.len()))]
-pub async fn import_bytes(cmd: ImportBytesMsg, ctx: Arc<TaskContext>) {
+pub(crate) async fn import_bytes(cmd: ImportBytesMsg, ctx: Arc<TaskContext>) {
     let size = cmd.data.len() as u64;
     if ctx.options.is_inlined_all(size) {
         import_bytes_tiny_outer(cmd, ctx).await;
@@ -256,7 +245,7 @@ async fn import_bytes_tiny_impl(
 }
 
 #[instrument(skip_all)]
-pub async fn import_byte_stream(cmd: ImportByteStreamMsg, ctx: Arc<TaskContext>) {
+pub(crate) async fn import_byte_stream(cmd: ImportByteStreamMsg, ctx: Arc<TaskContext>) {
     let stream = into_stream(cmd.rx);
     import_byte_stream_mid(cmd.inner, cmd.tx, cmd.span, stream, ctx).await
 }
@@ -454,7 +443,7 @@ async fn compute_outboard(
 }
 
 #[instrument(skip_all, fields(path = %cmd.path.display()))]
-pub async fn import_path(mut cmd: ImportPathMsg, context: Arc<TaskContext>) {
+pub(crate) async fn import_path(mut cmd: ImportPathMsg, context: Arc<TaskContext>) {
     match import_path_impl(cmd.inner, &mut cmd.tx, context.options.clone()).await {
         Ok(inner) => {
             let res = ImportEntryMsg {
