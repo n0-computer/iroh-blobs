@@ -17,7 +17,7 @@ use tracing::info;
 use crate::{
     api::{
         blobs::{Bitfield, BlobStatus},
-        Store,
+        RequestError, Store,
     },
     get,
     hashseq::HashSeq,
@@ -1092,4 +1092,69 @@ async fn mem_export_bao_shutdown_mid_export() -> TestResult<()> {
         );
     }
     Ok(())
+}
+
+/// A provider that has an entry for a blob but no data for it, not even the
+/// size, must answer like for a blob it has never seen, not with data that
+/// fails verification.
+async fn two_nodes_get_dataless_entry(
+    r1: Router,
+    store1: &Store,
+    r2: Router,
+    store2: &Store,
+) -> TestResult<()> {
+    let dataless = Hash::new(b"dataless");
+    let unknown = Hash::new(b"unknown");
+    // asking what is missing leaves an entry without data in the mem store
+    store1.remote().local(HashAndFormat::raw(dataless)).await?;
+    let res = store1
+        .export_bao(dataless, ChunkRanges::all())
+        .bao_to_vec()
+        .await;
+    assert!(
+        matches!(
+            &res,
+            Err(RequestError::Inner {
+                source: crate::api::Error::Io(cause),
+                ..
+            }) if cause.kind() == io::ErrorKind::NotFound
+        ),
+        "local export: {res:?}"
+    );
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+    let get = |hash| {
+        store2.remote().execute_get(
+            conn.clone(),
+            crate::protocol::GetRequest::from(HashAndFormat::raw(hash)),
+        )
+    };
+    let Err(dataless_err) = get(dataless).await else {
+        panic!("get of a dataless entry succeeded");
+    };
+    let Err(unknown_err) = get(unknown).await else {
+        panic!("get of an unknown hash succeeded");
+    };
+    assert!(unknown_err.iroh_error_code().is_some());
+    assert_eq!(
+        dataless_err.iroh_error_code(),
+        unknown_err.iroh_error_code(),
+        "dataless: {dataless_err:?}, unknown: {unknown_err:?}"
+    );
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_nodes_get_dataless_entry_mem() -> TestResult<()> {
+    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    two_nodes_get_dataless_entry(r1, &store1, r2, &store2).await
+}
+
+#[tokio::test]
+async fn two_nodes_get_dataless_entry_fs() -> TestResult<()> {
+    let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
+    two_nodes_get_dataless_entry(r1, &store1, r2, &store2).await
 }

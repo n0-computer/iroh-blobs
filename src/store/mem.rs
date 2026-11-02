@@ -688,7 +688,10 @@ async fn export_bao(
     ranges: ChunkRanges,
     mut sender: mpsc::Sender<EncodedItem>,
 ) {
-    let Some(entry) = entry else {
+    // an entry without any data, not even the size, is answered like a missing one
+    let Some(entry) =
+        entry.filter(|entry| entry.hash == Hash::EMPTY || entry.outboard_reader().tree.size() != 0)
+    else {
         let err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, "hash not found"));
         sender.send(err.into()).await.ok();
         return;
