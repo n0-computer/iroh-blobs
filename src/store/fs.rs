@@ -1069,14 +1069,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             // possibly open with FILE_SHARE_DELETE on windows?
             let target = ctx.options().path.data_path(&hash);
             trace!(
-                "moving temp file to owned data location: {} -> {}",
-                path.display(),
+                "moving temp file to owned data location: {path:?} -> {}",
                 target.display()
             );
-            if let Err(cause) = fs::rename(&path, &target) {
+            if let Err(cause) = path.persist(&target) {
                 error!(
-                    "failed to move temp file {} to owned data location {}: {cause}",
-                    path.display(),
+                    "failed to move temp file to owned data location {}: {cause}",
                     target.display()
                 );
             }
@@ -1090,14 +1088,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(
-                "moving temp file to owned outboard location: {} -> {}",
-                path.display(),
+                "moving temp file to owned outboard location: {path:?} -> {}",
                 target.display()
             );
-            if let Err(cause) = fs::rename(&path, &target) {
+            if let Err(cause) = path.persist(&target) {
                 error!(
-                    "failed to move temp file {} to owned outboard location {}: {cause}",
-                    path.display(),
+                    "failed to move temp file to owned outboard location {}: {cause}",
                     target.display()
                 );
             }
@@ -2302,6 +2298,43 @@ pub mod tests {
             // }
             // store.import_bao_bytes(hash, ChunkRanges::all(), bao_tree.into()).await?;
         }
+        Ok(())
+    }
+
+    /// An import that does not complete must not leave its temp files behind.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_incomplete_import_removes_temp_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let temp_files =
+            || -> io::Result<usize> { Ok(std::fs::read_dir(&options.path.temp_path)?.count()) };
+        let size = 1024 * 1024 * 4;
+        // cancelled after the first progress item
+        let mut stream = store.add_bytes(vec![1u8; size]).stream().await;
+        stream.next().await;
+        drop(stream);
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "cancelled add_bytes");
+        // cancelled after the first progress item
+        let path = testdir.path().join("source");
+        std::fs::write(&path, vec![2u8; size])?;
+        let mut stream = store.add_path(&path).stream().await;
+        stream.next().await;
+        drop(stream);
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "cancelled add_path");
+        // the source fails after some data
+        let source = stream::iter([
+            Ok(Bytes::from(vec![3u8; size])),
+            Err(io::Error::other("source failed")),
+        ]);
+        assert!(store.add_stream(source).await.temp_tag().await.is_err());
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "failed add_stream");
+        assert!(store.list().hashes().await?.is_empty());
         Ok(())
     }
 

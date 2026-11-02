@@ -14,7 +14,7 @@ use std::{
     fmt,
     fs::{self, File, OpenOptions},
     io::{self, Seek, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -51,6 +51,40 @@ use crate::{
     BlobFormat, Hash,
 };
 
+/// A file in the temp directory that is removed on drop, unless it was persisted.
+///
+/// This makes sure that an import that does not complete, for example because it
+/// was cancelled or the source failed, does not leave its temp files behind.
+#[derive(Debug)]
+pub struct TempPath(PathBuf);
+
+impl TempPath {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    /// Moves the file to `target`. If this fails, the file is removed on drop.
+    pub fn persist(mut self, target: &Path) -> io::Result<()> {
+        fs::rename(&self.0, target)?;
+        self.0 = PathBuf::new();
+        Ok(())
+    }
+}
+
+impl AsRef<Path> for TempPath {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        if !self.0.as_os_str().is_empty() {
+            fs::remove_file(&self.0).ok();
+        }
+    }
+}
+
 /// An import source.
 ///
 /// It must provide a way to read the data synchronously, as well as the size
@@ -58,7 +92,7 @@ use crate::{
 ///
 /// This serves as an intermediate result between copying and outboard computation.
 pub enum ImportSource {
-    TempFile(PathBuf, File, u64),
+    TempFile(TempPath, File, u64),
     External(PathBuf, File, u64),
     Memory(Bytes),
 }
@@ -80,7 +114,7 @@ impl std::fmt::Debug for ImportSource {
 impl ImportSource {
     pub fn fmt_short(&self) -> String {
         match self {
-            Self::TempFile(path, _, _) => format!("TempFile({})", path.display()),
+            Self::TempFile(path, _, _) => format!("TempFile({})", path.0.display()),
             Self::External(path, _, _) => format!("External({})", path.display()),
             Self::Memory(data) => format!("Memory({})", data.len()),
         }
@@ -121,7 +155,7 @@ pub struct ImportEntry {
     pub format: BlobFormat,
     pub scope: Scope,
     pub source: ImportSource,
-    pub outboard: MemOrFile<Bytes, PathBuf>,
+    pub outboard: MemOrFile<Bytes, TempPath>,
 }
 
 impl std::fmt::Debug for ImportEntry {
@@ -319,7 +353,7 @@ async fn get_import_source(
         let chunk = chunk?;
         size += chunk.len() as u64;
         if size > options.inline.max_data_inlined {
-            let temp_path = options.path.temp_file_name();
+            let temp_path = TempPath::new(options.path.temp_file_name());
             trace!("writing to temp file: {:?}", temp_path);
             let mut file = fs::OpenOptions::new()
                 .read(true)
@@ -386,8 +420,8 @@ async fn compute_outboard(
     let (hash, outboard) = if outboard_size > options.inline.max_outboard_inlined {
         // outboard will eventually be stored as a file, so compute it directly to a file
         // we don't know the hash yet, so we need to create a temp file
-        let outboard_path = options.path.temp_file_name();
-        trace!("Creating outboard file in {}", outboard_path.display());
+        let outboard_path = TempPath::new(options.path.temp_file_name());
+        trace!("Creating outboard file in {:?}", outboard_path);
         // we don't need to read from this file!
         let mut outboard_file = File::create(&outboard_path)?;
         let mut outboard = PreOrderOutboard {
@@ -473,15 +507,11 @@ async fn import_path_impl(
         let file = OpenOptions::new().read(true).open(&path)?;
         ImportSource::External(path, file, size)
     } else {
-        let temp_path = options.path.temp_file_name();
+        let temp_path = TempPath::new(options.path.temp_file_name());
         // todo: if reflink works, we don't need progress.
         // But if it does not, it might take a while and we won't get progress.
         let res = reflink_or_copy_with_progress(&path, &temp_path, size, tx).await?;
-        trace!(
-            "imported {} to {}, {res:?}",
-            path.display(),
-            temp_path.display()
-        );
+        trace!("imported {} to {temp_path:?}, {res:?}", path.display());
         // copy from path to temp_path
         let file = OpenOptions::new().read(true).open(&temp_path)?;
         tx.send(AddProgressItem::CopyDone).await?;
