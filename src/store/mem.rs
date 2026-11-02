@@ -179,6 +179,8 @@ impl Actor {
                 tx,
                 ..
             }) => {
+                // protect from a gc run that is already past the mark phase, like the fs store
+                self.protected.insert(hash);
                 let entry = self.get_or_create_entry(hash);
                 self.spawn(import_bao(entry, size, data, tx));
             }
@@ -455,6 +457,8 @@ impl Actor {
             }
         };
         let hash = import_data.outboard.root().into();
+        // protect from a gc run that is already past the mark phase, like the fs store
+        self.protected.insert(hash);
         let entry = self.get_or_create_entry(hash);
         entry
             .0
