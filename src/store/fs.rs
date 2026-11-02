@@ -1450,6 +1450,7 @@ impl FsStore {
         let rt = RtWrapper::from(builder.build()?);
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
+        let gc_sender = commands_tx.downgrade();
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let mut actor = handle
@@ -1470,7 +1471,7 @@ impl FsStore {
             ..FsStore::new(commands_tx.into(), fs_commands_tx)
         };
         if let Some(config) = gc_config {
-            handle.spawn(run_gc(store.deref().clone(), config));
+            handle.spawn(run_gc(gc_sender, config));
         }
         Ok(store)
     }

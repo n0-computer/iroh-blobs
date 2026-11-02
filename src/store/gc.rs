@@ -3,9 +3,13 @@ use std::{collections::HashSet, pin::Pin, sync::Arc};
 use bao_tree::ChunkRanges;
 use genawaiter::sync::{Co, Gen};
 use n0_future::{time::Duration, Stream, StreamExt};
+use tokio::sync::mpsc::WeakSender;
 use tracing::{debug, error, info, warn};
 
-use crate::{api::Store, Hash, HashAndFormat};
+use crate::{
+    api::{proto::Command, Store},
+    Hash, HashAndFormat,
+};
 
 /// An event related to GC
 #[derive(Debug)]
@@ -225,12 +229,21 @@ pub async fn gc_run_once(store: &Store, live: &mut HashSet<Hash>) -> crate::api:
     Ok(())
 }
 
-pub async fn run_gc(store: Store, config: GcConfig) {
+/// Runs garbage collection in a loop until the store is gone.
+///
+/// This holds only a weak sender, so it does not keep the store alive. Once all
+/// handles to the store are dropped, the loop ends.
+pub async fn run_gc(store: WeakSender<Command>, config: GcConfig) {
     debug!("gc enabled with interval {:?}", config.interval);
     let mut live = HashSet::new();
     loop {
         live.clear();
         n0_future::time::sleep(config.interval).await;
+        let Some(sender) = store.upgrade() else {
+            debug!("gc: store dropped, stopping");
+            break;
+        };
+        let store = Store::from_sender(sender.into());
         if let Some(ref cb) = config.add_protected {
             match (cb)(&mut live).await {
                 ProtectOutcome::Continue => {}
@@ -476,6 +489,56 @@ mod tests {
         gc_smoke(&store).await?;
         gc_file_delete(testdir.path(), &store).await?;
         Ok(())
+    }
+
+    fn long_interval_gc() -> GcConfig {
+        GcConfig {
+            interval: Duration::from_secs(3600),
+            add_protected: None,
+        }
+    }
+
+    /// GC must not keep a mem store alive once all its handles are dropped.
+    #[tokio::test]
+    #[traced_test]
+    async fn gc_does_not_keep_mem_store_alive() -> TestResult {
+        let store = crate::store::mem::MemStore::new_with_opts(crate::store::mem::Options {
+            gc_config: Some(long_interval_gc()),
+        });
+        let hash = store.add_slice(b"data").await?.hash;
+        let mut updates = store.observe(hash).stream().await?;
+        updates.next().await;
+        drop(store);
+        // the store's actor stops, which ends the observe stream
+        let next = tokio::time::timeout(Duration::from_secs(5), updates.next()).await?;
+        assert!(next.is_none());
+        Ok(())
+    }
+
+    /// GC must not keep an fs store alive once all its handles are dropped.
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    #[traced_test]
+    async fn gc_does_not_keep_fs_store_alive() -> TestResult {
+        use crate::store::fs::{options::Options, FsStore};
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options {
+            gc: Some(long_interval_gc()),
+            ..Options::new(&db_dir)
+        };
+        let db_path = db_dir.join("blobs.db");
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        drop(store);
+        // the store releases its database once it is gone, so it can be opened again
+        for _ in 0..50 {
+            if let Ok(store) = FsStore::load_with_opts(db_path.clone(), options.clone()).await {
+                store.shutdown().await?;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the store is still open");
     }
 
     #[tokio::test]
