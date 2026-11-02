@@ -110,7 +110,7 @@ use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 
 use crate::{
     api::{
@@ -683,6 +683,10 @@ impl Actor {
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
         let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
         let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        // We hold the database lock now, so no other store is importing into the temp
+        // directory. Anything in it is left over from imports that did not complete,
+        // for example because the process was killed.
+        remove_temp_files(&options.path.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -700,6 +704,42 @@ impl Actor {
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
         })
+    }
+}
+
+/// Remove all files in the temp directory, logging but otherwise ignoring failures.
+fn remove_temp_files(temp_path: &Path) {
+    let entries = match fs::read_dir(temp_path) {
+        Ok(entries) => entries,
+        Err(cause) => {
+            warn!(
+                "failed to read temp directory {}: {cause}",
+                temp_path.display()
+            );
+            return;
+        }
+    };
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(cause) => {
+                warn!(
+                    "failed to read temp directory {}: {cause}",
+                    temp_path.display()
+                );
+                continue;
+            }
+        };
+        if !path.is_file() {
+            continue;
+        }
+        trace!("removing leftover temp file {}", path.display());
+        if let Err(cause) = fs::remove_file(&path) {
+            warn!(
+                "failed to remove leftover temp file {}: {cause}",
+                path.display()
+            );
+        }
     }
 }
 
@@ -2335,6 +2375,29 @@ pub mod tests {
         store.wait_idle().await?;
         assert_eq!(temp_files()?, 0, "failed add_stream");
         assert!(store.list().hashes().await?.is_empty());
+        Ok(())
+    }
+
+    /// Loading a store removes temp files left over by a previous run, and nothing else.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_removes_leftover_temp_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let db_path = db_dir.join("blobs.db");
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        let data = vec![1u8; 1024 * 1024];
+        let hash = store.add_slice(&data).await?.hash;
+        store.shutdown().await?;
+        // as left by a process that was killed during an import
+        let leftover = options.path.temp_file_name();
+        std::fs::write(&leftover, b"leftover")?;
+        let store = FsStore::load_with_opts(db_path, options.clone()).await?;
+        assert!(!leftover.exists());
+        assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_slice());
+        store.shutdown().await?;
         Ok(())
     }
 
