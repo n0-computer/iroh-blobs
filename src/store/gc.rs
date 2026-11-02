@@ -428,6 +428,52 @@ mod tests {
         Ok(())
     }
 
+    /// Blobs written after the mark phase of a gc run, so not in `live`,
+    /// must survive the sweep of that run.
+    async fn gc_import_after_mark_survives(store: &Store) -> TestResult<()> {
+        use bao_tree::ChunkNum;
+
+        use crate::{api::blobs::BlobStatus, store::util::tests::create_n0_bao};
+        // the mark phase of a run that sees nothing live
+        store.clear_protected().await?;
+        let live = HashSet::new();
+        // a complete import and a partial import between mark and sweep
+        let a = store.add_slice(vec![0u8; 100000]).temp_tag().await?;
+        let ah = a.hash();
+        let data = vec![1u8; 100000];
+        let ranges = ChunkRanges::from(..ChunkNum(16));
+        let (bh, b_bao) = create_n0_bao(&data, &ranges)?;
+        store.import_bao_bytes(bh, ranges, b_bao).await?;
+        let mut stream = gc_sweep(store, &live);
+        while let Some(ev) = stream.next().await {
+            if let GcSweepEvent::Error(err) = ev {
+                return Err(err.into());
+            }
+        }
+        assert!(store.has(ah).await?, "complete import was swept");
+        assert!(
+            store.status(bh).await? != BlobStatus::NotFound,
+            "partial import was swept"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn gc_import_after_mark_survives_mem() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        gc_import_after_mark_survives(&store).await
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    #[traced_test]
+    async fn gc_import_after_mark_survives_fs() -> TestResult {
+        let testdir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(testdir.path().join("db")).await?;
+        gc_import_after_mark_survives(&store).await
+    }
+
     #[cfg(feature = "fs-store")]
     async fn gc_file_delete(path: &std::path::Path, store: &Store) -> TestResult<()> {
         use bao_tree::ChunkNum;
