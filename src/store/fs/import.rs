@@ -56,31 +56,32 @@ use crate::{
 /// This makes sure that an import that does not complete, for example because it
 /// was cancelled or the source failed, does not leave its temp files behind.
 #[derive(Debug)]
-pub struct TempPath(PathBuf);
+pub struct TempPath(Option<PathBuf>);
 
 impl TempPath {
     fn new(path: PathBuf) -> Self {
-        Self(path)
+        Self(Some(path))
     }
 
     /// Moves the file to `target`. If this fails, the file is removed on drop.
     pub fn persist(mut self, target: &Path) -> io::Result<()> {
-        fs::rename(&self.0, target)?;
-        self.0 = PathBuf::new();
+        fs::rename(self.as_ref(), target)?;
+        self.0 = None;
         Ok(())
     }
 }
 
 impl AsRef<Path> for TempPath {
     fn as_ref(&self) -> &Path {
-        &self.0
+        // only None after persist, which consumes self
+        self.0.as_deref().expect("temp path already persisted")
     }
 }
 
 impl Drop for TempPath {
     fn drop(&mut self) {
-        if !self.0.as_os_str().is_empty() {
-            fs::remove_file(&self.0).ok();
+        if let Some(path) = &self.0 {
+            fs::remove_file(path).ok();
         }
     }
 }
@@ -114,7 +115,7 @@ impl std::fmt::Debug for ImportSource {
 impl ImportSource {
     pub fn fmt_short(&self) -> String {
         match self {
-            Self::TempFile(path, _, _) => format!("TempFile({})", path.0.display()),
+            Self::TempFile(path, _, _) => format!("TempFile({})", path.as_ref().display()),
             Self::External(path, _, _) => format!("External({})", path.display()),
             Self::Memory(data) => format!("Memory({})", data.len()),
         }
