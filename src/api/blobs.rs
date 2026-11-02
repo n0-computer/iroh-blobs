@@ -789,6 +789,12 @@ impl ObserveProgress {
         }
     }
 
+    /// Waits until the blob is complete and returns its final bitfield.
+    ///
+    /// This only returns once some other operation, such as a download or an
+    /// import, has filled in the rest of the blob. For a partial blob that nothing
+    /// is filling, it never returns. To get the current bitfield without waiting,
+    /// await the [`ObserveProgress`] itself.
     pub async fn await_completion(self) -> RequestResult<Bitfield> {
         let mut stream = self.stream().await?;
         while let Some(item) = stream.next().await {
