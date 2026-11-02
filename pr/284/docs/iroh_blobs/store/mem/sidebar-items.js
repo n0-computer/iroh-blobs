@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["BaoFileStorage"],"struct":["BaoFileHandle","BaoFileHandleInner","BaoFileStorageSubscriber","CompleteStorage","DataReader","MemStore","Options","OutboardReader"]};
