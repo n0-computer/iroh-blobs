@@ -110,7 +110,7 @@ use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 
 use crate::{
     api::{
@@ -683,6 +683,10 @@ impl Actor {
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
         let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
         let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        // We hold the database lock now, so no other store is importing into the temp
+        // directory. Anything in it is left over from imports that did not complete,
+        // for example because the process was killed.
+        remove_all_files(&options.path.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -700,6 +704,27 @@ impl Actor {
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
         })
+    }
+}
+
+/// Remove all files directly in `dir`, logging but otherwise ignoring failures.
+///
+/// Subdirectories and their contents are left alone.
+fn remove_all_files(dir: &Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(cause) => {
+            warn!("failed to read directory {}: {cause}", dir.display());
+            return;
+        }
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if !path.is_file() {
+            continue;
+        }
+        if let Err(cause) = fs::remove_file(&path) {
+            warn!("failed to remove file {}: {cause}", path.display());
+        }
     }
 }
 
@@ -1069,14 +1094,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             // possibly open with FILE_SHARE_DELETE on windows?
             let target = ctx.options().path.data_path(&hash);
             trace!(
-                "moving temp file to owned data location: {} -> {}",
-                path.display(),
+                "moving temp file to owned data location: {path:?} -> {}",
                 target.display()
             );
-            if let Err(cause) = fs::rename(&path, &target) {
+            if let Err(cause) = path.persist(&target) {
                 error!(
-                    "failed to move temp file {} to owned data location {}: {cause}",
-                    path.display(),
+                    "failed to move temp file to owned data location {}: {cause}",
                     target.display()
                 );
             }
@@ -1090,14 +1113,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(
-                "moving temp file to owned outboard location: {} -> {}",
-                path.display(),
+                "moving temp file to owned outboard location: {path:?} -> {}",
                 target.display()
             );
-            if let Err(cause) = fs::rename(&path, &target) {
+            if let Err(cause) = path.persist(&target) {
                 error!(
-                    "failed to move temp file {} to owned outboard location {}: {cause}",
-                    path.display(),
+                    "failed to move temp file to owned outboard location {}: {cause}",
                     target.display()
                 );
             }
@@ -2303,6 +2324,65 @@ pub mod tests {
             // }
             // store.import_bao_bytes(hash, ChunkRanges::all(), bao_tree.into()).await?;
         }
+        Ok(())
+    }
+
+    /// An import that does not complete must not leave its temp files behind.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_incomplete_import_removes_temp_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let temp_files =
+            || -> io::Result<usize> { Ok(std::fs::read_dir(&options.path.temp_path)?.count()) };
+        let size = 1024 * 1024 * 4;
+        // cancelled after the first progress item
+        let mut stream = store.add_bytes(vec![1u8; size]).stream().await;
+        stream.next().await;
+        drop(stream);
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "cancelled add_bytes");
+        // cancelled after the first progress item
+        let path = testdir.path().join("source");
+        std::fs::write(&path, vec![2u8; size])?;
+        let mut stream = store.add_path(&path).stream().await;
+        stream.next().await;
+        drop(stream);
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "cancelled add_path");
+        // the source fails after some data
+        let source = stream::iter([
+            Ok(Bytes::from(vec![3u8; size])),
+            Err(io::Error::other("source failed")),
+        ]);
+        assert!(store.add_stream(source).await.temp_tag().await.is_err());
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "failed add_stream");
+        Ok(())
+    }
+
+    /// Loading a store removes temp files left over by a previous run, and nothing else.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_removes_leftover_temp_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let db_path = db_dir.join("blobs.db");
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        let data = vec![1u8; 1024 * 1024];
+        let hash = store.add_slice(&data).await?.hash;
+        store.shutdown().await?;
+        // as left by a process that was killed during an import
+        let leftover = options.path.temp_file_name();
+        std::fs::write(&leftover, b"leftover")?;
+        let store = FsStore::load_with_opts(db_path, options.clone()).await?;
+        assert!(!leftover.exists());
+        assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_slice());
+        store.shutdown().await?;
         Ok(())
     }
 
