@@ -30,18 +30,24 @@ async fn create_with_max_turn(data: Bytes, max_turn: Duration) -> io::Result<Pre
     // In the browser, `sleep` is backed by `setTimeout`, so this gives the event
     // loop a turn. A self-waking future would not.
     sleep(Duration::ZERO).await;
-    let tree = BaoTree::new(data.len() as u64, IROH_BLOCK_SIZE);
+    let size = data.len() as u64;
+    let reader = YieldingReader {
+        data,
+        max_turn,
+        turn_start: Instant::now(),
+    };
+    compute(reader, size).await
+}
+
+/// Computes the pre-order outboard for `size` bytes read from `reader`.
+async fn compute(reader: impl AsyncStreamReader, size: u64) -> io::Result<PreOrderMemOutboard> {
+    let tree = BaoTree::new(size, IROH_BLOCK_SIZE);
     let outboard_size = usize::try_from(tree.outboard_size())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "outboard is too large"))?;
     let mut outboard = PreOrderMemOutboard {
         root: blake3::Hash::from([0; 32]),
         tree,
         data: vec![0; outboard_size],
-    };
-    let reader = YieldingReader {
-        data,
-        max_turn,
-        turn_start: Instant::now(),
     };
     outboard.root = bao_tree::io::fsm::outboard(reader, tree, &mut outboard).await?;
     Ok(outboard)
@@ -82,12 +88,21 @@ impl AsyncStreamReader for YieldingReader {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+    };
+
     use bao_tree::io::outboard::PreOrderMemOutboard;
     use bytes::Bytes;
-    use n0_future::time::Duration;
+    use iroh_io::AsyncStreamReader;
+    use n0_future::time::{Duration, Instant};
     use testresult::TestResult;
 
-    use super::{create, create_with_max_turn, IROH_BLOCK_SIZE};
+    use super::{compute, create, create_with_max_turn, YieldingReader, IROH_BLOCK_SIZE};
 
     const SIZES: [usize; 7] = [
         0,
@@ -133,6 +148,71 @@ mod tests {
                 &data,
             );
         }
+        Ok(())
+    }
+
+    /// Records the ticks of another task at every read.
+    struct Recording<R> {
+        inner: R,
+        ticks: Arc<AtomicUsize>,
+        seen: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl<R> Recording<R> {
+        fn record(&self) {
+            let ticks = self.ticks.load(Ordering::Relaxed);
+            self.seen.lock().unwrap().push(ticks);
+        }
+    }
+
+    impl<R: AsyncStreamReader> AsyncStreamReader for Recording<R> {
+        async fn read_bytes(&mut self, len: usize) -> io::Result<Bytes> {
+            let res = self.inner.read_bytes(len).await;
+            self.record();
+            res
+        }
+
+        async fn read<const L: usize>(&mut self) -> io::Result<[u8; L]> {
+            let res = self.inner.read().await;
+            self.record();
+            res
+        }
+    }
+
+    /// On a single thread, another task runs between every two reads when the
+    /// computation yields before every read.
+    #[tokio::test(flavor = "current_thread")]
+    async fn other_tasks_run_between_reads() -> TestResult<()> {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticker = tokio::spawn({
+            let ticks = ticks.clone();
+            async move {
+                loop {
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            }
+        });
+        let data = test_data(256 * 1024);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let reader = Recording {
+            inner: YieldingReader {
+                data: data.clone(),
+                max_turn: Duration::ZERO,
+                turn_start: Instant::now(),
+            },
+            ticks,
+            seen: seen.clone(),
+        };
+        let outboard = compute(reader, data.len() as u64).await?;
+        ticker.abort();
+        assert_matches_sync(&outboard, &data);
+        let seen = seen.lock().unwrap();
+        assert!(seen.len() > 1, "{} reads", seen.len());
+        assert!(
+            seen.windows(2).all(|w| w[0] < w[1]),
+            "ticks at each read: {seen:?}"
+        );
         Ok(())
     }
 }
