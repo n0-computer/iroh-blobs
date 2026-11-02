@@ -34,7 +34,7 @@ data-encoding = "2.8.0"
 ref-cast = "1.0.24"
 iroh = { version = "1.0.0", default-features = false }
 self_cell = "1.1.0"
-genawaiter = { version = "0.99.1", features = ["futures03"] }
+genawaiter = { version = "0.99.1", default-features = false, features = ["futures03"] }
 iroh-base = "1.0.0"
 iroh-tickets = "1.0.0"
 irpc = { version = "0.17.0", features = ["spans", "stream", "derive", "varint-util"], default-features = false }
