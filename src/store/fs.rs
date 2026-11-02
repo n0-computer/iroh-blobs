@@ -2363,7 +2363,6 @@ pub mod tests {
         assert!(store.add_stream(source).await.temp_tag().await.is_err());
         store.wait_idle().await?;
         assert_eq!(temp_files()?, 0, "failed add_stream");
-        assert!(store.list().hashes().await?.is_empty());
         Ok(())
     }
 

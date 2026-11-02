@@ -647,4 +647,26 @@ mod tests {
         }
         Ok(())
     }
+
+    /// An import whose requester is gone stops at its first progress send,
+    /// and must not leave its temp file behind.
+    #[tokio::test]
+    async fn cancelled_import_removes_temp_file() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let options = Arc::new(Options::new(dir.path()));
+        std::fs::create_dir_all(&options.path.temp_path)?;
+        let (mut tx, rx) = mpsc::channel(16);
+        drop(rx);
+        // a single chunk above the inline limit goes to a temp file before any progress
+        let data = Bytes::from(vec![0u8; 1024 * 1024]);
+        let cmd = ImportByteStreamRequest {
+            format: BlobFormat::Raw,
+            scope: Default::default(),
+        };
+        let res =
+            import_byte_stream_impl(cmd, &mut tx, stream::iter([Ok(data)]), options.clone()).await;
+        assert!(res.is_err());
+        assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
+        Ok(())
+    }
 }
