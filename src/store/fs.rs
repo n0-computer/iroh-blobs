@@ -686,7 +686,7 @@ impl Actor {
         // We hold the database lock now, so no other store is importing into the temp
         // directory. Anything in it is left over from imports that did not complete,
         // for example because the process was killed.
-        remove_temp_files(&options.path.temp_path);
+        remove_all_files(&options.path.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -707,15 +707,14 @@ impl Actor {
     }
 }
 
-/// Remove all files in the temp directory, logging but otherwise ignoring failures.
-fn remove_temp_files(temp_path: &Path) {
-    let entries = match fs::read_dir(temp_path) {
+/// Remove all files directly in `dir`, logging but otherwise ignoring failures.
+///
+/// Subdirectories and their contents are left alone.
+fn remove_all_files(dir: &Path) {
+    let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(cause) => {
-            warn!(
-                "failed to read temp directory {}: {cause}",
-                temp_path.display()
-            );
+            warn!("failed to read directory {}: {cause}", dir.display());
             return;
         }
     };
@@ -724,10 +723,7 @@ fn remove_temp_files(temp_path: &Path) {
             continue;
         }
         if let Err(cause) = fs::remove_file(&path) {
-            warn!(
-                "failed to remove leftover temp file {}: {cause}",
-                path.display()
-            );
+            warn!("failed to remove file {}: {cause}", path.display());
         }
     }
 }
