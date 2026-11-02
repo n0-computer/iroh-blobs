@@ -2,24 +2,31 @@
 //!
 //! In the browser everything runs on one thread, so computing the outboard of
 //! a large import in one go blocks the page until it is done. This computes the
-//! same outboard incrementally and gives control back to the event loop after
-//! every [`HASH_BYTES_PER_TURN`] bytes of input.
+//! same outboard incrementally and gives control back to the event loop once a
+//! turn has taken longer than [`MAX_TURN`].
 use std::io;
 
 use bao_tree::{blake3, io::outboard::PreOrderMemOutboard, BaoTree};
 use bytes::Bytes;
 use iroh_io::AsyncStreamReader;
-use n0_future::time::{sleep, Duration};
+use n0_future::time::{sleep, Duration, Instant};
 
 use super::IROH_BLOCK_SIZE;
 
-/// Maximum number of input bytes hashed between two yields.
-const HASH_BYTES_PER_TURN: usize = 256 * 1024;
+/// Longest time the outboard computation runs before giving the event loop a turn.
+///
+/// Well below a frame, so the page stays responsive. Browsers clamp nested
+/// timeouts to at least 4 ms, so yielding much more often would mostly wait.
+const MAX_TURN: Duration = Duration::from_millis(8);
 
 /// Computes the pre-order outboard for `data`, yielding between chunks of work.
 ///
 /// The result is identical to `PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE)`.
 pub(super) async fn create(data: Bytes) -> io::Result<PreOrderMemOutboard> {
+    create_with_max_turn(data, MAX_TURN).await
+}
+
+async fn create_with_max_turn(data: Bytes, max_turn: Duration) -> io::Result<PreOrderMemOutboard> {
     // In the browser, `sleep` is backed by `setTimeout`, so this gives the event
     // loop a turn. A self-waking future would not.
     sleep(Duration::ZERO).await;
@@ -33,49 +40,40 @@ pub(super) async fn create(data: Bytes) -> io::Result<PreOrderMemOutboard> {
     };
     let reader = YieldingReader {
         data,
-        remaining: HASH_BYTES_PER_TURN,
+        max_turn,
+        turn_start: Instant::now(),
     };
     outboard.root = bao_tree::io::fsm::outboard(reader, tree, &mut outboard).await?;
     Ok(outboard)
 }
 
-/// Reads from shared [`Bytes`] and yields once the per-turn budget is used up.
-///
-/// The outboard computation reads at most one chunk group per call, which is far
-/// below the budget. Larger reads are rejected so the budget can't be bypassed.
+/// Reads from shared [`Bytes`] and yields once the current turn took longer than `max_turn`.
 struct YieldingReader {
     data: Bytes,
-    remaining: usize,
+    max_turn: Duration,
+    turn_start: Instant,
 }
 
 impl YieldingReader {
-    async fn take(&mut self, len: usize) -> io::Result<Bytes> {
-        if len > HASH_BYTES_PER_TURN {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read exceeds the per-turn budget",
-            ));
-        }
-        let len = len.min(self.data.len());
-        if len > self.remaining {
+    async fn take(&mut self, len: usize) -> Bytes {
+        if self.turn_start.elapsed() >= self.max_turn {
             sleep(Duration::ZERO).await;
-            self.remaining = HASH_BYTES_PER_TURN;
+            self.turn_start = Instant::now();
         }
-        self.remaining -= len;
-        Ok(self.data.split_to(len))
+        self.data.split_to(len.min(self.data.len()))
     }
 }
 
 impl AsyncStreamReader for YieldingReader {
     async fn read_bytes(&mut self, len: usize) -> io::Result<Bytes> {
-        self.take(len).await
+        Ok(self.take(len).await)
     }
 
     async fn read<const L: usize>(&mut self) -> io::Result<[u8; L]> {
         if self.data.len() < L {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
-        let bytes = self.take(L).await?;
+        let bytes = self.take(L).await;
         let mut result = [0; L];
         result.copy_from_slice(&bytes);
         Ok(result)
@@ -86,33 +84,54 @@ impl AsyncStreamReader for YieldingReader {
 mod tests {
     use bao_tree::io::outboard::PreOrderMemOutboard;
     use bytes::Bytes;
+    use n0_future::time::Duration;
     use testresult::TestResult;
 
-    use super::{create, HASH_BYTES_PER_TURN, IROH_BLOCK_SIZE};
+    use super::{create, create_with_max_turn, IROH_BLOCK_SIZE};
+
+    const SIZES: [usize; 7] = [
+        0,
+        1,
+        1024,
+        16 * 1024,
+        16 * 1024 + 1,
+        256 * 1024,
+        1024 * 1024 + 12345,
+    ];
+
+    fn test_data(size: usize) -> Bytes {
+        (0..size)
+            .map(|i| (i % 251) as u8)
+            .collect::<Vec<_>>()
+            .into()
+    }
+
+    fn assert_matches_sync(actual: &PreOrderMemOutboard, data: &[u8]) {
+        let size = data.len();
+        let expected = PreOrderMemOutboard::create(data, IROH_BLOCK_SIZE);
+        assert_eq!(actual.root, expected.root, "root for size {size}");
+        assert_eq!(actual.tree, expected.tree, "tree for size {size}");
+        assert_eq!(actual.data, expected.data, "outboard for size {size}");
+    }
 
     #[tokio::test]
     async fn matches_sync_outboard() -> TestResult<()> {
-        let sizes = [
-            0,
-            1,
-            1024,
-            16 * 1024,
-            16 * 1024 + 1,
-            HASH_BYTES_PER_TURN - 1,
-            HASH_BYTES_PER_TURN,
-            HASH_BYTES_PER_TURN + 1,
-            3 * HASH_BYTES_PER_TURN + 12345,
-        ];
-        for size in sizes {
-            let data: Bytes = (0..size)
-                .map(|i| (i % 251) as u8)
-                .collect::<Vec<_>>()
-                .into();
-            let expected = PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE);
-            let actual = create(data).await?;
-            assert_eq!(actual.root, expected.root, "root for size {size}");
-            assert_eq!(actual.tree, expected.tree, "tree for size {size}");
-            assert_eq!(actual.data, expected.data, "outboard for size {size}");
+        for size in SIZES {
+            let data = test_data(size);
+            assert_matches_sync(&create(data.clone()).await?, &data);
+        }
+        Ok(())
+    }
+
+    /// With a zero max turn the computation yields before every read.
+    #[tokio::test]
+    async fn matches_sync_outboard_yielding_every_read() -> TestResult<()> {
+        for size in SIZES {
+            let data = test_data(size);
+            assert_matches_sync(
+                &create_with_max_turn(data.clone(), Duration::ZERO).await?,
+                &data,
+            );
         }
         Ok(())
     }
