@@ -686,7 +686,13 @@ pub struct AddPathOptions {
 /// methods to work with the result.
 ///
 /// It also implements [`IntoFuture`], so you can await it to get the [`TagInfo`] that
-/// contains the hash of the added content and also protects the content.
+/// contains the hash of the added content. Awaiting it is the same as calling
+/// [`AddProgress::with_tag`]: it creates a persistent tag with an automatically
+/// generated name, which protects the content from garbage collection until you
+/// delete the tag.
+///
+/// To protect the content only temporarily, use [`AddProgress::temp_tag`] instead.
+/// To choose the tag name, use [`AddProgress::with_named_tag`].
 ///
 /// If you want access to the stream, you can use the [`AddProgress::stream`] method.
 pub struct AddProgress<'a> {
@@ -712,6 +718,10 @@ impl<'a> AddProgress<'a> {
         }
     }
 
+    /// Waits for the import to finish and returns a [`TempTag`] for the content.
+    ///
+    /// The content is protected from garbage collection only as long as the
+    /// temp tag is alive. No persistent tag is created.
     pub async fn temp_tag(self) -> RequestResult<TempTag> {
         let mut stream = self.inner;
         while let Some(item) = stream.next().await {
@@ -724,6 +734,10 @@ impl<'a> AddProgress<'a> {
         Err(io::Error::other("unexpected end of stream").into())
     }
 
+    /// Waits for the import to finish and sets the persistent tag `name` to the content.
+    ///
+    /// Any previous value of that tag is replaced. The content is protected from
+    /// garbage collection until the tag is deleted or set to something else.
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
@@ -734,6 +748,13 @@ impl<'a> AddProgress<'a> {
         Ok(haf)
     }
 
+    /// Waits for the import to finish and creates a persistent tag with a generated name.
+    ///
+    /// The name looks like `auto-2026-01-01T00:00:00.000Z`.
+    ///
+    /// This is what awaiting [`AddProgress`] does. The content is protected from
+    /// garbage collection until the tag is deleted, so if you don't need a
+    /// persistent tag, use [`AddProgress::temp_tag`] instead.
     pub async fn with_tag(self) -> RequestResult<TagInfo> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
@@ -789,6 +810,12 @@ impl ObserveProgress {
         }
     }
 
+    /// Waits until the blob is complete and returns its final bitfield.
+    ///
+    /// This only returns once some other operation, such as a download or an
+    /// import, has filled in the rest of the blob. For a partial blob that nothing
+    /// is filling, it never returns. To get the current bitfield without waiting,
+    /// await the [`ObserveProgress`] itself.
     pub async fn await_completion(self) -> RequestResult<Bitfield> {
         let mut stream = self.stream().await?;
         while let Some(item) = stream.next().await {

@@ -1471,6 +1471,7 @@ impl FsStore {
         let rt = RtWrapper::from(builder.build()?);
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
+        let gc_sender = commands_tx.downgrade();
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let mut actor = handle
@@ -1491,7 +1492,7 @@ impl FsStore {
             ..FsStore::new(commands_tx.into(), fs_commands_tx)
         };
         if let Some(config) = gc_config {
-            handle.spawn(run_gc(store.deref().clone(), config));
+            handle.spawn(run_gc(gc_sender, config));
         }
         Ok(store)
     }
@@ -2382,6 +2383,42 @@ pub mod tests {
         assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
         assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_slice());
         store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Requests that reach the store after its shutdown must not panic its tasks,
+    /// e.g. on an entry that the shutdown poisoned.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_requests_after_shutdown_do_not_panic() -> TestResult<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static PANICS: AtomicUsize = AtomicUsize::new(0);
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if info.to_string().contains("should not be used") {
+                PANICS.fetch_add(1, Ordering::SeqCst);
+            }
+            prev(info);
+        }));
+        let testdir = tempfile::tempdir()?;
+        let store = FsStore::load(testdir.path().join("db")).await?;
+        let complete = store.add_bytes(test_data(1024 * 1024)).await?.hash;
+        let unknown = Hash::new(b"unknown");
+        store.observe(complete).await?;
+        store.shutdown().await?;
+        for hash in [complete, unknown] {
+            let timeout = Duration::from_secs(5);
+            tokio::time::timeout(timeout, store.observe(hash))
+                .await
+                .ok();
+            tokio::time::timeout(
+                timeout,
+                store.export_bao(hash, ChunkRanges::all()).bao_to_vec(),
+            )
+            .await
+            .ok();
+        }
+        assert_eq!(PANICS.load(Ordering::SeqCst), 0);
         Ok(())
     }
 
