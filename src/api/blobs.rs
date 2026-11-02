@@ -734,11 +734,10 @@ impl<'a> AddProgress<'a> {
         Err(io::Error::other("unexpected end of stream").into())
     }
 
-    /// Waits for the import to finish and sets a persistent tag with the given
-    /// name to the content, replacing any previous value of that tag.
+    /// Waits for the import to finish and sets the persistent tag `name` to the content.
     ///
-    /// The content is protected from garbage collection until the tag is
-    /// deleted or set to something else.
+    /// Any previous value of that tag is replaced. The content is protected from
+    /// garbage collection until the tag is deleted or set to something else.
     pub async fn with_named_tag(self, name: impl AsRef<[u8]>) -> RequestResult<HashAndFormat> {
         let blobs = self.blobs.clone();
         let tt = self.temp_tag().await?;
@@ -749,9 +748,9 @@ impl<'a> AddProgress<'a> {
         Ok(haf)
     }
 
-    /// Waits for the import to finish and creates a persistent tag for the
-    /// content, with an automatically generated name such as
-    /// `auto-2026-01-01T00:00:00.000Z`.
+    /// Waits for the import to finish and creates a persistent tag with a generated name.
+    ///
+    /// The name looks like `auto-2026-01-01T00:00:00.000Z`.
     ///
     /// This is what awaiting [`AddProgress`] does. The content is protected from
     /// garbage collection until the tag is deleted, so if you don't need a
