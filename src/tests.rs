@@ -247,6 +247,24 @@ async fn two_nodes_get_blobs(
     Ok(())
 }
 
+/// A get over a closed connection fails to open its stream, which is a
+/// connection error, not a local failure.
+#[tokio::test]
+async fn get_over_closed_connection_is_open_error() -> TestResult<()> {
+    let ((r1, _store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+    conn.close(0u32.into(), b"done");
+    let Err(err) = store2.remote().fetch(conn, Hash::new(b"blob")).await else {
+        panic!("get over a closed connection succeeded");
+    };
+    assert!(err.open().is_some(), "{err:?}");
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn two_nodes_get_blobs_fs() -> TestResult<()> {
     let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
