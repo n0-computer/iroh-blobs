@@ -719,21 +719,10 @@ fn remove_temp_files(temp_path: &Path) {
             return;
         }
     };
-    for entry in entries {
-        let path = match entry {
-            Ok(entry) => entry.path(),
-            Err(cause) => {
-                warn!(
-                    "failed to read temp directory {}: {cause}",
-                    temp_path.display()
-                );
-                continue;
-            }
-        };
+    for path in entries.flatten().map(|entry| entry.path()) {
         if !path.is_file() {
             continue;
         }
-        trace!("removing leftover temp file {}", path.display());
         if let Err(cause) = fs::remove_file(&path) {
             warn!(
                 "failed to remove leftover temp file {}: {cause}",
