@@ -2,7 +2,6 @@
 
 use std::{borrow::Borrow, fmt, str::FromStr};
 
-use arrayvec::ArrayString;
 use bao_tree::blake3;
 use n0_error::{e, stack_error, StdResultExt};
 use postcard::experimental::max_size::MaxSize;
@@ -50,12 +49,22 @@ impl Hash {
 
     /// Convert to a hex string limited to the first 5bytes for a friendly string
     /// representation of the hash.
-    pub fn fmt_short(&self) -> ArrayString<10> {
-        let mut res = ArrayString::new();
-        data_encoding::HEXLOWER
-            .encode_write(&self.as_bytes()[..5], &mut res)
-            .unwrap();
-        res
+    pub fn fmt_short(&self) -> impl fmt::Display + Copy + 'static {
+        HashShort(
+            self.as_bytes()[..5]
+                .try_into()
+                .expect("slice with incorrect length"),
+        )
+    }
+}
+
+/// Display helper for [`Hash::fmt_short`].
+#[derive(Clone, Copy)]
+struct HashShort([u8; 5]);
+
+impl fmt::Display for HashShort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        data_encoding::HEXLOWER.encode_write(&self.0, f)
     }
 }
 
@@ -158,7 +167,15 @@ impl FromStr for Hash {
             // hex
             data_encoding::HEXLOWER.decode_mut(s.as_bytes(), &mut bytes)
         } else {
-            data_encoding::BASE32_NOPAD.decode_mut(s.to_ascii_uppercase().as_bytes(), &mut bytes)
+            let input = s.to_ascii_uppercase();
+            let input = input.as_bytes();
+            // decode_mut panics if the output buffer does not match the decoded length
+            match data_encoding::BASE32_NOPAD.decode_len(input.len()) {
+                Ok(len) if len == bytes.len() => {}
+                Ok(_) => return Err(e!(HexOrBase32ParseError::DecodeInvalidLength)),
+                Err(err) => return Err(e!(HexOrBase32ParseError::Decode, err)),
+            }
+            data_encoding::BASE32_NOPAD.decode_mut(input, &mut bytes)
         };
         match res {
             Ok(len) => {
@@ -453,6 +470,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_fmt_short() {
+        for i in 0..100 {
+            let hash: Hash = blake3::hash(&[i]).into();
+            assert_eq!(hash.fmt_short().to_string(), hash.to_hex()[..10]);
+        }
+    }
+
+    #[test]
     fn test_display_parse_roundtrip() {
         for i in 0..100 {
             let hash: Hash = blake3::hash(&[i]).into();
@@ -613,5 +638,27 @@ mod tests {
         let ser = serde_json::to_string(&haf).unwrap();
         let de = serde_json::from_str(&ser).unwrap();
         assert_eq!(haf, de);
+    }
+
+    #[test]
+    fn test_hash_invalid() {
+        let _ = Hash::from_str("invalid").unwrap_err();
+        let _ = Hash::from_str("").unwrap_err();
+        // valid base32 strings that decode to the wrong number of bytes
+        let _ = Hash::from_str(&"a".repeat(56)).unwrap_err();
+        let _ = Hash::from_str(&"a".repeat(63)).unwrap_err();
+        // invalid base32 strings
+        let _ = Hash::from_str(&"a".repeat(51)).unwrap_err();
+        let _ = Hash::from_str(&"a".repeat(65)).unwrap_err();
+    }
+
+    #[test]
+    fn test_hash_parse_base32() {
+        let hash = Hash::new("hello");
+        let text = data_encoding::BASE32_NOPAD
+            .encode(hash.as_bytes())
+            .to_ascii_lowercase();
+        assert_eq!(text.len(), 52);
+        assert_eq!(Hash::from_str(&text).unwrap(), hash);
     }
 }

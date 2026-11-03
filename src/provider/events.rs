@@ -212,6 +212,40 @@ impl EventMask {
     };
 }
 
+/// Selects the [`EventMask`] field that governs a request type.
+pub(crate) trait RequestKind {
+    /// Returns the request mode configured for this request type in `mask`.
+    fn mode(mask: &EventMask) -> RequestMode;
+}
+
+impl RequestKind for GetRequest {
+    fn mode(mask: &EventMask) -> RequestMode {
+        mask.get
+    }
+}
+
+impl RequestKind for GetManyRequest {
+    fn mode(mask: &EventMask) -> RequestMode {
+        mask.get_many
+    }
+}
+
+impl RequestKind for PushRequest {
+    fn mode(mask: &EventMask) -> RequestMode {
+        mask.push
+    }
+}
+
+impl RequestKind for ObserveRequest {
+    fn mode(mask: &EventMask) -> RequestMode {
+        match mask.observe {
+            ObserveMode::None => RequestMode::None,
+            ObserveMode::Notify => RequestMode::Notify,
+            ObserveMode::Intercept => RequestMode::Intercept,
+        }
+    }
+}
+
 /// Newtype wrapper that wraps an event so that it is a distinct type for the notify variant.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notify<T>(T);
@@ -445,6 +479,7 @@ impl EventSender {
         request_id: u64,
     ) -> Result<RequestTracker, ProgressError>
     where
+        Req: RequestKind,
         ProviderProto: From<RequestReceived<Req>>,
         ProviderMessage: From<WithChannels<RequestReceived<Req>, ProviderProto>>,
         RequestReceived<Req>: Channels<
@@ -459,7 +494,7 @@ impl EventSender {
     {
         let client = self.inner.as_ref();
         Ok(self.create_tracker((
-            match self.mask.get {
+            match Req::mode(&self.mask) {
                 RequestMode::None => RequestUpdates::None,
                 RequestMode::Notify if client.is_some() => {
                     let msg = RequestReceived {
