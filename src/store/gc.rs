@@ -3,9 +3,13 @@ use std::{collections::HashSet, pin::Pin, sync::Arc};
 use bao_tree::ChunkRanges;
 use genawaiter::sync::{Co, Gen};
 use n0_future::{time::Duration, Stream, StreamExt};
+use tokio::sync::mpsc::WeakSender;
 use tracing::{debug, error, info, warn};
 
-use crate::{api::Store, Hash, HashAndFormat};
+use crate::{
+    api::{proto::Command, Store},
+    Hash, HashAndFormat,
+};
 
 /// An event related to GC
 #[derive(Debug)]
@@ -245,12 +249,21 @@ pub async fn gc_run_once(
     Ok(())
 }
 
-pub async fn run_gc(store: Store, config: GcConfig) {
+/// Runs garbage collection in a loop until the store is gone.
+///
+/// This holds only a weak sender, so it does not keep the store alive. Once all
+/// handles to the store are dropped, the loop ends.
+pub async fn run_gc(store: WeakSender<Command>, config: GcConfig) {
     debug!("gc enabled with interval {:?}", config.interval);
     let mut live = HashSet::new();
     loop {
         live.clear();
         n0_future::time::sleep(config.interval).await;
+        let Some(sender) = store.upgrade() else {
+            debug!("gc: store dropped, stopping");
+            break;
+        };
+        let store = Store::from_sender(sender.into());
         if let Err(e) = gc_run_once(&store, &mut live, config.add_protected.as_ref()).await {
             error!("error during gc run: {e}");
             break;
@@ -426,6 +439,52 @@ mod tests {
         Ok(())
     }
 
+    /// Blobs written after the mark phase of a gc run, so not in `live`,
+    /// must survive the sweep of that run.
+    async fn gc_import_after_mark_survives(store: &Store) -> TestResult<()> {
+        use bao_tree::ChunkNum;
+
+        use crate::{api::blobs::BlobStatus, store::util::tests::create_n0_bao};
+        // the mark phase of a run that sees nothing live
+        store.clear_protected().await?;
+        let live = HashSet::new();
+        // a complete import and a partial import between mark and sweep
+        let a = store.add_slice(vec![0u8; 100000]).temp_tag().await?;
+        let ah = a.hash();
+        let data = vec![1u8; 100000];
+        let ranges = ChunkRanges::from(..ChunkNum(16));
+        let (bh, b_bao) = create_n0_bao(&data, &ranges)?;
+        store.import_bao_bytes(bh, ranges, b_bao).await?;
+        let mut stream = gc_sweep(store, &live);
+        while let Some(ev) = stream.next().await {
+            if let GcSweepEvent::Error(err) = ev {
+                return Err(err.into());
+            }
+        }
+        assert!(store.has(ah).await?, "complete import was swept");
+        assert!(
+            store.status(bh).await? != BlobStatus::NotFound,
+            "partial import was swept"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn gc_import_after_mark_survives_mem() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        gc_import_after_mark_survives(&store).await
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    #[traced_test]
+    async fn gc_import_after_mark_survives_fs() -> TestResult {
+        let testdir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(testdir.path().join("db")).await?;
+        gc_import_after_mark_survives(&store).await
+    }
+
     #[cfg(feature = "fs-store")]
     async fn gc_file_delete(path: &std::path::Path, store: &Store) -> TestResult<()> {
         use bao_tree::ChunkNum;
@@ -487,6 +546,56 @@ mod tests {
         gc_smoke(&store).await?;
         gc_file_delete(testdir.path(), &store).await?;
         Ok(())
+    }
+
+    fn long_interval_gc() -> GcConfig {
+        GcConfig {
+            interval: Duration::from_secs(3600),
+            add_protected: None,
+        }
+    }
+
+    /// GC must not keep a mem store alive once all its handles are dropped.
+    #[tokio::test]
+    #[traced_test]
+    async fn gc_does_not_keep_mem_store_alive() -> TestResult {
+        let store = crate::store::mem::MemStore::new_with_opts(crate::store::mem::Options {
+            gc_config: Some(long_interval_gc()),
+        });
+        let hash = store.add_slice(b"data").await?.hash;
+        let mut updates = store.observe(hash).stream().await?;
+        updates.next().await;
+        drop(store);
+        // the store's actor stops, which ends the observe stream
+        let next = tokio::time::timeout(Duration::from_secs(5), updates.next()).await?;
+        assert!(next.is_none());
+        Ok(())
+    }
+
+    /// GC must not keep an fs store alive once all its handles are dropped.
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    #[traced_test]
+    async fn gc_does_not_keep_fs_store_alive() -> TestResult {
+        use crate::store::fs::{options::Options, FsStore};
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options {
+            gc: Some(long_interval_gc()),
+            ..Options::new(&db_dir)
+        };
+        let db_path = db_dir.join("blobs.db");
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        drop(store);
+        // the store releases its database once it is gone, so it can be opened again
+        for _ in 0..50 {
+            if let Ok(store) = FsStore::load_with_opts(db_path.clone(), options.clone()).await {
+                store.shutdown().await?;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the store is still open");
     }
 
     #[tokio::test]
