@@ -301,6 +301,15 @@ impl Store {
         Ok(())
     }
 
+    /// The rpc client backing this store.
+    ///
+    /// Used by iroh-blobs-testkit to send raw [`proto::Request`]s.
+    /// Not part of the stable API.
+    #[doc(hidden)]
+    pub fn client(&self) -> &irpc::Client<proto::Request> {
+        &self.client
+    }
+
     pub(crate) fn from_sender(client: ApiClient) -> Self {
         Self { client }
     }
