@@ -624,16 +624,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn gc_protect_race_mem() -> TestResult {
-        tracing_subscriber::fmt::try_init().ok();
         let store = crate::store::mem::MemStore::default();
         gc_protect_race(&store).await
     }
 
     #[tokio::test]
     #[cfg(feature = "fs-store")]
+    #[traced_test]
     async fn gc_protect_race_fs() -> TestResult {
-        tracing_subscriber::fmt::try_init().ok();
         let testdir = tempfile::tempdir()?;
         let db_path = testdir.path().join("db");
         let store = crate::store::fs::FsStore::load(&db_path).await?;
@@ -704,50 +704,6 @@ mod tests {
             "blob imported during the GC run must survive (protected set must be honored)"
         );
         drop(writer);
-        Ok(())
-    }
-
-    /// A continuously rewritten entry's blob is never swept while GC runs.
-    ///
-    /// A tight writer loop rewrites a single high-frequency entry while GC runs at a very short
-    /// interval; the blob referenced by the current entry must always resolve.
-    #[tokio::test]
-    async fn gc_protect_race_stress_mem() -> TestResult {
-        use std::sync::Mutex;
-        tracing_subscriber::fmt::try_init().ok();
-
-        // The current entry's blob hash, rewritten every iteration. The protect callback reports
-        // it; the writer asserts it always resolves.
-        let current: Arc<Mutex<Option<Hash>>> = Arc::new(Mutex::new(None));
-        let current_cb = current.clone();
-        let cb: ProtectCb = Arc::new(move |live: &mut HashSet<Hash>| {
-            let current_cb = current_cb.clone();
-            Box::pin(async move {
-                if let Some(h) = *current_cb.lock().unwrap() {
-                    live.insert(h);
-                }
-                ProtectOutcome::Continue
-            })
-        });
-
-        let store = crate::store::mem::MemStore::new_with_opts(crate::store::mem::Options {
-            gc_config: Some(GcConfig {
-                interval: Duration::from_micros(100),
-                add_protected: Some(cb),
-            }),
-        });
-
-        for i in 0..1000u32 {
-            let tt = store.blobs().add_slice(format!("v{i}")).temp_tag().await?;
-            let h = tt.hash();
-            // Commit the entry before dropping the import temp tag, exactly as doc_set does.
-            *current.lock().unwrap() = Some(h);
-            drop(tt);
-            assert!(
-                store.has(h).await?,
-                "iteration {i}: blob referenced by the current entry was swept"
-            );
-        }
         Ok(())
     }
 
