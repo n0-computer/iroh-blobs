@@ -457,15 +457,14 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    if let Some(old) = tables.blobs.get(hash)?.map(|e| e.value()) {
-        if old.is_partial() {
-            delete_partial_files(tables, hash, &state);
-        }
-    }
-    tables
+    let was_partial = tables
         .blobs
-        .insert(hash, state)
-        .map_err(|e| e!(ActorError::Storage, e))?;
+        .insert(hash, &state)
+        .map_err(|e| e!(ActorError::Storage, e))?
+        .is_some_and(|old| old.value().is_partial());
+    if was_partial {
+        delete_partial_files(tables, hash, &state);
+    }
     if let Some(data) = data {
         tables
             .inline_data
