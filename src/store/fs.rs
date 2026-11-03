@@ -489,13 +489,7 @@ impl Actor {
             }
             Command::WaitIdle(cmd) => {
                 trace!("{cmd:?}");
-                if self.tasks.is_empty() {
-                    // we are currently idle
-                    cmd.tx.send(()).await.ok();
-                } else {
-                    // wait for idle state
-                    self.idle_waiters.push(cmd.tx);
-                }
+                self.idle_waiters.push(cmd.tx);
             }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
@@ -629,22 +623,29 @@ impl Actor {
                         self.spawn(task);
                     }
                 }
+                Some(cmd) = self.fs_cmd_rx.recv() => {
+                    self.handle_fs_command(cmd).await;
+                }
                 cmd = self.cmd_rx.recv() => {
                     let Some(cmd) = cmd else {
                         break;
                     };
                     self.handle_command(cmd).await;
                 }
-                Some(cmd) = self.fs_cmd_rx.recv() => {
-                    self.handle_fs_command(cmd).await;
-                }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     Self::log_task_result(res);
-                    if self.tasks.is_empty() {
-                        for tx in self.idle_waiters.drain(..) {
-                            tx.send(()).await.ok();
-                        }
-                    }
+                }
+            }
+            // Check after joining: a task may have queued work since select!
+            // polled the receivers. With no tasks left, no follow-ups can arrive.
+            // Queued API requests are new work and do not prevent idle.
+            if !self.idle_waiters.is_empty()
+                && self.tasks.is_empty()
+                && self.fs_cmd_rx.is_empty()
+                && !self.handles.has_pending()
+            {
+                for tx in self.idle_waiters.drain(..) {
+                    tx.send(()).await.ok();
                 }
             }
         }
@@ -1603,6 +1604,37 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
+
+    /// A last task can finish after its follow-up queue was polled empty.
+    #[tokio::test]
+    async fn test_idle_after_last_task_followup() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
+        let mut actor = Actor::new(
+            dir.path().join("blobs.db"),
+            cmd_rx,
+            fs_rx,
+            fs_tx.clone(),
+            Arc::new(Options::new(dir.path())),
+        )
+        .await?;
+        let (idle_tx, idle_rx) = irpc::channel::oneshot::channel();
+        actor.idle_waiters.push(idle_tx);
+        let (scope, _) = actor.temp_tags.create_scope();
+        actor.spawn(async move {
+            fs_tx.send(ClearScope { scope }.into()).await.unwrap();
+        });
+        // Start at the race's outcome: the last task is joined, but its
+        // follow-up is queued. Processing it does not spawn another task.
+        actor.tasks.join_next().await.unwrap()?;
+        assert!(!actor.fs_cmd_rx.is_empty());
+        let task = tokio::spawn(actor.run());
+        tokio::time::timeout(Duration::from_secs(5), idle_rx).await??;
+        drop(cmd_tx);
+        task.await?;
+        Ok(())
+    }
 
     pub fn round_up_request(size: u64, ranges: &ChunkRanges) -> ChunkRanges {
         let last_chunk = ChunkNum::chunks(size);
