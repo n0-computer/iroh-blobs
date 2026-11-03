@@ -402,13 +402,9 @@ fn handle_update(
     };
     let state = match old_entry_opt {
         Some(old) => {
-            let partial_to_complete = old.is_partial() && state.is_complete();
+            let old_files = files_used(&old);
             let res = EntryState::union(old, state)?;
-            if partial_to_complete {
-                tables
-                    .ftx
-                    .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
-            }
+            delete_unused_files(tables, hash, old_files, &res);
             res
         }
         None => state,
@@ -459,6 +455,9 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
+    if let Some(old) = tables.blobs.get(hash)?.map(|e| e.value()) {
+        delete_unused_files(tables, hash, files_used(&old), &state);
+    }
     tables
         .blobs
         .insert(hash, state)
@@ -477,6 +476,48 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     }
     tx.send(Ok(()));
     Ok(())
+}
+
+/// The files in the data directory that an entry in this state uses.
+fn files_used<I>(state: &EntryState<I>) -> Vec<BaoFilePart> {
+    match state {
+        EntryState::Partial { .. } => vec![
+            BaoFilePart::Data,
+            BaoFilePart::Outboard,
+            BaoFilePart::Sizes,
+            BaoFilePart::Bitfield,
+        ],
+        EntryState::Complete {
+            data_location,
+            outboard_location,
+        } => {
+            let mut parts = Vec::new();
+            if matches!(data_location, DataLocation::Owned(_)) {
+                parts.push(BaoFilePart::Data);
+            }
+            if matches!(outboard_location, OutboardLocation::Owned) {
+                parts.push(BaoFilePart::Outboard);
+            }
+            parts
+        }
+    }
+}
+
+/// Delete the files in the data directory that the old state used and `new` does not,
+/// e.g. the outboard file of a partial entry whose outboard got inlined on completion.
+fn delete_unused_files<I>(
+    tables: &Tables,
+    hash: Hash,
+    old_files: Vec<BaoFilePart>,
+    new: &EntryState<I>,
+) {
+    let new_files = files_used(new);
+    tables.ftx.delete(
+        hash,
+        old_files
+            .into_iter()
+            .filter(|part| !new_files.contains(part)),
+    );
 }
 
 #[derive(Clone, Copy)]
