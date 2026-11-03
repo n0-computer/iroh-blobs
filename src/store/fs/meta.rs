@@ -402,9 +402,11 @@ fn handle_update(
     };
     let state = match old_entry_opt {
         Some(old) => {
-            let old_files = files_used(&old);
+            let was_partial = old.is_partial();
             let res = EntryState::union(old, state)?;
-            delete_unused_files(tables, hash, old_files, &res);
+            if was_partial {
+                delete_partial_files(tables, hash, &res);
+            }
             res
         }
         None => state,
@@ -456,7 +458,9 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
     if let Some(old) = tables.blobs.get(hash)?.map(|e| e.value()) {
-        delete_unused_files(tables, hash, files_used(&old), &state);
+        if old.is_partial() {
+            delete_partial_files(tables, hash, &state);
+        }
     }
     tables
         .blobs
@@ -478,51 +482,21 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     Ok(())
 }
 
-/// The files in the data directory that an entry in this state uses.
-///
-/// For a complete entry this is exact. A partial entry in the db always has
-/// its data, outboard and sizes files, created when it left memory, even if
-/// some are empty. Its bitfield file may not exist yet, which is fine for a
-/// delete. Blobs that never leave memory go straight to complete.
-fn files_used<I>(state: &EntryState<I>) -> Vec<BaoFilePart> {
-    match state {
-        EntryState::Partial { .. } => vec![
-            BaoFilePart::Data,
-            BaoFilePart::Outboard,
-            BaoFilePart::Sizes,
-            BaoFilePart::Bitfield,
-        ],
-        EntryState::Complete {
-            data_location,
-            outboard_location,
-        } => {
-            let mut parts = Vec::new();
-            if matches!(data_location, DataLocation::Owned(_)) {
-                parts.push(BaoFilePart::Data);
-            }
-            if matches!(outboard_location, OutboardLocation::Owned) {
-                parts.push(BaoFilePart::Outboard);
-            }
-            parts
-        }
+/// Remove partial-entry metadata files after completion.
+/// Data cleanup can race with a re-import replacing the owned file.
+fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
+    let EntryState::Complete {
+        outboard_location, ..
+    } = new
+    else {
+        return;
+    };
+    tables
+        .ftx
+        .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+    if !matches!(outboard_location, OutboardLocation::Owned) {
+        tables.ftx.delete(hash, [BaoFilePart::Outboard]);
     }
-}
-
-/// Delete the files in the data directory that the old state used and `new` does not,
-/// e.g. the outboard file of a partial entry whose outboard got inlined on completion.
-fn delete_unused_files<I>(
-    tables: &Tables,
-    hash: Hash,
-    old_files: Vec<BaoFilePart>,
-    new: &EntryState<I>,
-) {
-    let new_files = files_used(new);
-    tables.ftx.delete(
-        hash,
-        old_files
-            .into_iter()
-            .filter(|part| !new_files.contains(part)),
-    );
 }
 
 #[derive(Clone, Copy)]
@@ -1026,4 +1000,82 @@ async fn list_blobs_impl(
         tx.send(Ok(k)).await.ok();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::super::{delete_set, options::PathOptions};
+    use super::*;
+
+    #[test]
+    fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Arc::new(PathOptions::new(dir.path()));
+        std::fs::create_dir_all(&paths.data_path)?;
+        let (protect, mut deletes) = delete_set::pair(paths.clone());
+        let db = Database::create(dir.path().join("db"))?;
+        let hash = Hash::new(b"content");
+        let owned = paths.data_path(&hash);
+        let external = dir.path().join("exported");
+        std::fs::write(&owned, b"content")?;
+        let ftx = deletes.begin_write();
+        let tx = db.begin_write()?;
+        let mut tables = Tables::new(&tx, &ftx)?;
+        tables.blobs.insert(
+            hash,
+            EntryState::Complete {
+                data_location: DataLocation::Owned(7),
+                outboard_location: OutboardLocation::NotNeeded,
+            },
+        )?;
+        // Export queues Set; another import writes before the db handles it.
+        std::fs::rename(&owned, &external)?;
+        protect.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
+        std::fs::write(&owned, b"content")?;
+        let mut protected = HashSet::new();
+        let (reply, _rx) = oneshot::channel();
+        handle_set(
+            Set {
+                hash,
+                state: EntryState::Complete {
+                    data_location: DataLocation::External(vec![external], 7),
+                    outboard_location: OutboardLocation::NotNeeded,
+                },
+                tx: reply,
+                span: Span::none(),
+            },
+            &mut protected,
+            &mut tables,
+        )?;
+        handle_update(
+            Update {
+                hash,
+                state: EntryState::Complete {
+                    data_location: DataLocation::Owned(7),
+                    outboard_location: OutboardLocation::NotNeeded,
+                },
+                tx: None,
+                span: Span::none(),
+            },
+            &mut protected,
+            &mut tables,
+        )?;
+        assert!(matches!(
+            tables.blobs.get(hash)?.unwrap().value(),
+            EntryState::Complete {
+                data_location: DataLocation::Owned(_),
+                ..
+            }
+        ));
+        drop(tables);
+        tx.commit()?;
+        ftx.commit();
+        assert!(
+            owned.exists(),
+            "committed metadata still refers to this file"
+        );
+        Ok(())
+    }
 }
