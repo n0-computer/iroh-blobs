@@ -479,6 +479,11 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
 }
 
 /// The files in the data directory that an entry in this state uses.
+///
+/// For a complete entry this is exact. A partial entry in the db always has
+/// its data, outboard and sizes files, created when it left memory, even if
+/// some are empty. Its bitfield file may not exist yet, which is fine for a
+/// delete. Blobs that never leave memory go straight to complete.
 fn files_used<I>(state: &EntryState<I>) -> Vec<BaoFilePart> {
     match state {
         EntryState::Partial { .. } => vec![
