@@ -308,5 +308,10 @@
 <a href=#308 id=308 data-nosnippet>308</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>ref_from_sender(client: <span class="kw-2">&amp;</span>ApiClient) -&gt; <span class="kw-2">&amp;</span><span class="self">Self </span>{
 <a href=#309 id=309 data-nosnippet>309</a>        <span class="self">Self</span>::ref_cast(client)
 <a href=#310 id=310 data-nosnippet>310</a>    }
-<a href=#311 id=311 data-nosnippet>311</a>}
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a>    <span class="attr">#[cfg(test)]
+<a href=#313 id=313 data-nosnippet>313</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ApiClient {
+<a href=#314 id=314 data-nosnippet>314</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.client
+<a href=#315 id=315 data-nosnippet>315</a>    }
+<a href=#316 id=316 data-nosnippet>316</a>}
 </code></pre></div></section></main></body></html>
