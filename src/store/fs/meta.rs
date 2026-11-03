@@ -1008,8 +1008,10 @@ async fn list_blobs_impl(
 mod tests {
     use std::sync::Arc;
 
-    use super::super::{delete_set, options::PathOptions};
-    use super::*;
+    use super::{
+        super::{delete_set, options::PathOptions},
+        *,
+    };
 
     #[test]
     fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {
