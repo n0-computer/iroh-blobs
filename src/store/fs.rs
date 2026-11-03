@@ -1720,7 +1720,6 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
-    #[ignore = "flaky. I need a reliable way to keep the handle alive"]
     #[traced_test]
     async fn test_roundtrip_bytes_small() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
@@ -1732,7 +1731,10 @@ pub mod tests {
         {
             let expected = test_data(size);
             let expected_hash = Hash::new(&expected);
-            let obs = store.observe(expected_hash);
+            // An active observer keeps the handle alive. Otherwise it is persisted
+            // when idle, and the export reloads the data as a new instance.
+            let mut obs = std::pin::pin!(store.observe(expected_hash).stream().await?);
+            obs.next().await;
             let tt = store.add_bytes(expected.clone()).await?;
             assert_eq!(expected_hash, tt.hash);
             let actual = store.get_bytes(expected_hash).await?;
@@ -1743,10 +1745,6 @@ pub mod tests {
                 &actual.addr(),
                 "address mismatch for size {size}"
             );
-            // we must at some point see completion, otherwise the test will hang
-            // keep the handle alive by observing until the end, otherwise the handle
-            // will change and the bytes won't be the same instance anymore
-            obs.await_completion().await?;
         }
         store.shutdown().await?;
         Ok(())
