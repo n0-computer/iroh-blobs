@@ -1008,77 +1008,79 @@
 <a href=#1008 id=1008 data-nosnippet>1008</a></span><span class="kw">mod </span>tests {
 <a href=#1009 id=1009 data-nosnippet>1009</a>    <span class="kw">use </span>std::sync::Arc;
 <a href=#1010 id=1010 data-nosnippet>1010</a>
-<a href=#1011 id=1011 data-nosnippet>1011</a>    <span class="kw">use </span><span class="kw">super</span>::super::{delete_set, options::PathOptions};
-<a href=#1012 id=1012 data-nosnippet>1012</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#1013 id=1013 data-nosnippet>1013</a>
-<a href=#1014 id=1014 data-nosnippet>1014</a>    <span class="attr">#[test]
-<a href=#1015 id=1015 data-nosnippet>1015</a>    </span><span class="kw">fn </span>export_then_reimport_before_metadata_runs() -&gt; testresult::TestResult&lt;()&gt; {
-<a href=#1016 id=1016 data-nosnippet>1016</a>        <span class="kw">let </span>dir = tempfile::tempdir()<span class="question-mark">?</span>;
-<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">let </span>paths = Arc::new(PathOptions::new(dir.path()));
-<a href=#1018 id=1018 data-nosnippet>1018</a>        std::fs::create_dir_all(<span class="kw-2">&amp;</span>paths.data_path)<span class="question-mark">?</span>;
-<a href=#1019 id=1019 data-nosnippet>1019</a>        <span class="kw">let </span>(protect, <span class="kw-2">mut </span>deletes) = delete_set::pair(paths.clone());
-<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="kw">let </span>db = Database::create(dir.path().join(<span class="string">"db"</span>))<span class="question-mark">?</span>;
-<a href=#1021 id=1021 data-nosnippet>1021</a>        <span class="kw">let </span>hash = Hash::new(<span class="string">b"content"</span>);
-<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span>owned = paths.data_path(<span class="kw-2">&amp;</span>hash);
-<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="kw">let </span>external = dir.path().join(<span class="string">"exported"</span>);
-<a href=#1024 id=1024 data-nosnippet>1024</a>        std::fs::write(<span class="kw-2">&amp;</span>owned, <span class="string">b"content"</span>)<span class="question-mark">?</span>;
-<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw">let </span>ftx = deletes.begin_write();
-<a href=#1026 id=1026 data-nosnippet>1026</a>        <span class="kw">let </span>tx = db.begin_write()<span class="question-mark">?</span>;
-<a href=#1027 id=1027 data-nosnippet>1027</a>        <span class="kw">let </span><span class="kw-2">mut </span>tables = Tables::new(<span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>ftx)<span class="question-mark">?</span>;
-<a href=#1028 id=1028 data-nosnippet>1028</a>        tables.blobs.insert(
-<a href=#1029 id=1029 data-nosnippet>1029</a>            hash,
-<a href=#1030 id=1030 data-nosnippet>1030</a>            EntryState::Complete {
-<a href=#1031 id=1031 data-nosnippet>1031</a>                data_location: DataLocation::Owned(<span class="number">7</span>),
-<a href=#1032 id=1032 data-nosnippet>1032</a>                outboard_location: OutboardLocation::NotNeeded,
-<a href=#1033 id=1033 data-nosnippet>1033</a>            },
-<a href=#1034 id=1034 data-nosnippet>1034</a>        )<span class="question-mark">?</span>;
-<a href=#1035 id=1035 data-nosnippet>1035</a>        <span class="comment">// Export queues Set; another import writes before the db handles it.
-<a href=#1036 id=1036 data-nosnippet>1036</a>        </span>std::fs::rename(<span class="kw-2">&amp;</span>owned, <span class="kw-2">&amp;</span>external)<span class="question-mark">?</span>;
-<a href=#1037 id=1037 data-nosnippet>1037</a>        protect.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
-<a href=#1038 id=1038 data-nosnippet>1038</a>        std::fs::write(<span class="kw-2">&amp;</span>owned, <span class="string">b"content"</span>)<span class="question-mark">?</span>;
-<a href=#1039 id=1039 data-nosnippet>1039</a>        <span class="kw">let </span><span class="kw-2">mut </span>protected = HashSet::new();
-<a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="kw">let </span>(reply, _rx) = oneshot::channel();
-<a href=#1041 id=1041 data-nosnippet>1041</a>        handle_set(
-<a href=#1042 id=1042 data-nosnippet>1042</a>            Set {
-<a href=#1043 id=1043 data-nosnippet>1043</a>                hash,
-<a href=#1044 id=1044 data-nosnippet>1044</a>                state: EntryState::Complete {
-<a href=#1045 id=1045 data-nosnippet>1045</a>                    data_location: DataLocation::External(<span class="macro">vec!</span>[external], <span class="number">7</span>),
-<a href=#1046 id=1046 data-nosnippet>1046</a>                    outboard_location: OutboardLocation::NotNeeded,
-<a href=#1047 id=1047 data-nosnippet>1047</a>                },
-<a href=#1048 id=1048 data-nosnippet>1048</a>                tx: reply,
-<a href=#1049 id=1049 data-nosnippet>1049</a>                span: Span::none(),
-<a href=#1050 id=1050 data-nosnippet>1050</a>            },
-<a href=#1051 id=1051 data-nosnippet>1051</a>            <span class="kw-2">&amp;mut </span>protected,
-<a href=#1052 id=1052 data-nosnippet>1052</a>            <span class="kw-2">&amp;mut </span>tables,
-<a href=#1053 id=1053 data-nosnippet>1053</a>        )<span class="question-mark">?</span>;
-<a href=#1054 id=1054 data-nosnippet>1054</a>        handle_update(
-<a href=#1055 id=1055 data-nosnippet>1055</a>            Update {
-<a href=#1056 id=1056 data-nosnippet>1056</a>                hash,
-<a href=#1057 id=1057 data-nosnippet>1057</a>                state: EntryState::Complete {
-<a href=#1058 id=1058 data-nosnippet>1058</a>                    data_location: DataLocation::Owned(<span class="number">7</span>),
-<a href=#1059 id=1059 data-nosnippet>1059</a>                    outboard_location: OutboardLocation::NotNeeded,
-<a href=#1060 id=1060 data-nosnippet>1060</a>                },
-<a href=#1061 id=1061 data-nosnippet>1061</a>                tx: <span class="prelude-val">None</span>,
-<a href=#1062 id=1062 data-nosnippet>1062</a>                span: Span::none(),
-<a href=#1063 id=1063 data-nosnippet>1063</a>            },
-<a href=#1064 id=1064 data-nosnippet>1064</a>            <span class="kw-2">&amp;mut </span>protected,
-<a href=#1065 id=1065 data-nosnippet>1065</a>            <span class="kw-2">&amp;mut </span>tables,
-<a href=#1066 id=1066 data-nosnippet>1066</a>        )<span class="question-mark">?</span>;
-<a href=#1067 id=1067 data-nosnippet>1067</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#1068 id=1068 data-nosnippet>1068</a>            tables.blobs.get(hash)<span class="question-mark">?</span>.unwrap().value(),
-<a href=#1069 id=1069 data-nosnippet>1069</a>            EntryState::Complete {
-<a href=#1070 id=1070 data-nosnippet>1070</a>                data_location: DataLocation::Owned(<span class="kw">_</span>),
-<a href=#1071 id=1071 data-nosnippet>1071</a>                ..
-<a href=#1072 id=1072 data-nosnippet>1072</a>            }
-<a href=#1073 id=1073 data-nosnippet>1073</a>        ));
-<a href=#1074 id=1074 data-nosnippet>1074</a>        drop(tables);
-<a href=#1075 id=1075 data-nosnippet>1075</a>        tx.commit()<span class="question-mark">?</span>;
-<a href=#1076 id=1076 data-nosnippet>1076</a>        ftx.commit();
-<a href=#1077 id=1077 data-nosnippet>1077</a>        <span class="macro">assert!</span>(
-<a href=#1078 id=1078 data-nosnippet>1078</a>            owned.exists(),
-<a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="string">"committed metadata still refers to this file"
-<a href=#1080 id=1080 data-nosnippet>1080</a>        </span>);
-<a href=#1081 id=1081 data-nosnippet>1081</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1082 id=1082 data-nosnippet>1082</a>    }
-<a href=#1083 id=1083 data-nosnippet>1083</a>}
+<a href=#1011 id=1011 data-nosnippet>1011</a>    <span class="kw">use </span>super::{
+<a href=#1012 id=1012 data-nosnippet>1012</a>        super::{delete_set, options::PathOptions},
+<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw-2">*</span>,
+<a href=#1014 id=1014 data-nosnippet>1014</a>    };
+<a href=#1015 id=1015 data-nosnippet>1015</a>
+<a href=#1016 id=1016 data-nosnippet>1016</a>    <span class="attr">#[test]
+<a href=#1017 id=1017 data-nosnippet>1017</a>    </span><span class="kw">fn </span>export_then_reimport_before_metadata_runs() -&gt; testresult::TestResult&lt;()&gt; {
+<a href=#1018 id=1018 data-nosnippet>1018</a>        <span class="kw">let </span>dir = tempfile::tempdir()<span class="question-mark">?</span>;
+<a href=#1019 id=1019 data-nosnippet>1019</a>        <span class="kw">let </span>paths = Arc::new(PathOptions::new(dir.path()));
+<a href=#1020 id=1020 data-nosnippet>1020</a>        std::fs::create_dir_all(<span class="kw-2">&amp;</span>paths.data_path)<span class="question-mark">?</span>;
+<a href=#1021 id=1021 data-nosnippet>1021</a>        <span class="kw">let </span>(protect, <span class="kw-2">mut </span>deletes) = delete_set::pair(paths.clone());
+<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span>db = Database::create(dir.path().join(<span class="string">"db"</span>))<span class="question-mark">?</span>;
+<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="kw">let </span>hash = Hash::new(<span class="string">b"content"</span>);
+<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw">let </span>owned = paths.data_path(<span class="kw-2">&amp;</span>hash);
+<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw">let </span>external = dir.path().join(<span class="string">"exported"</span>);
+<a href=#1026 id=1026 data-nosnippet>1026</a>        std::fs::write(<span class="kw-2">&amp;</span>owned, <span class="string">b"content"</span>)<span class="question-mark">?</span>;
+<a href=#1027 id=1027 data-nosnippet>1027</a>        <span class="kw">let </span>ftx = deletes.begin_write();
+<a href=#1028 id=1028 data-nosnippet>1028</a>        <span class="kw">let </span>tx = db.begin_write()<span class="question-mark">?</span>;
+<a href=#1029 id=1029 data-nosnippet>1029</a>        <span class="kw">let </span><span class="kw-2">mut </span>tables = Tables::new(<span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>ftx)<span class="question-mark">?</span>;
+<a href=#1030 id=1030 data-nosnippet>1030</a>        tables.blobs.insert(
+<a href=#1031 id=1031 data-nosnippet>1031</a>            hash,
+<a href=#1032 id=1032 data-nosnippet>1032</a>            EntryState::Complete {
+<a href=#1033 id=1033 data-nosnippet>1033</a>                data_location: DataLocation::Owned(<span class="number">7</span>),
+<a href=#1034 id=1034 data-nosnippet>1034</a>                outboard_location: OutboardLocation::NotNeeded,
+<a href=#1035 id=1035 data-nosnippet>1035</a>            },
+<a href=#1036 id=1036 data-nosnippet>1036</a>        )<span class="question-mark">?</span>;
+<a href=#1037 id=1037 data-nosnippet>1037</a>        <span class="comment">// Export queues Set; another import writes before the db handles it.
+<a href=#1038 id=1038 data-nosnippet>1038</a>        </span>std::fs::rename(<span class="kw-2">&amp;</span>owned, <span class="kw-2">&amp;</span>external)<span class="question-mark">?</span>;
+<a href=#1039 id=1039 data-nosnippet>1039</a>        protect.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
+<a href=#1040 id=1040 data-nosnippet>1040</a>        std::fs::write(<span class="kw-2">&amp;</span>owned, <span class="string">b"content"</span>)<span class="question-mark">?</span>;
+<a href=#1041 id=1041 data-nosnippet>1041</a>        <span class="kw">let </span><span class="kw-2">mut </span>protected = HashSet::new();
+<a href=#1042 id=1042 data-nosnippet>1042</a>        <span class="kw">let </span>(reply, _rx) = oneshot::channel();
+<a href=#1043 id=1043 data-nosnippet>1043</a>        handle_set(
+<a href=#1044 id=1044 data-nosnippet>1044</a>            Set {
+<a href=#1045 id=1045 data-nosnippet>1045</a>                hash,
+<a href=#1046 id=1046 data-nosnippet>1046</a>                state: EntryState::Complete {
+<a href=#1047 id=1047 data-nosnippet>1047</a>                    data_location: DataLocation::External(<span class="macro">vec!</span>[external], <span class="number">7</span>),
+<a href=#1048 id=1048 data-nosnippet>1048</a>                    outboard_location: OutboardLocation::NotNeeded,
+<a href=#1049 id=1049 data-nosnippet>1049</a>                },
+<a href=#1050 id=1050 data-nosnippet>1050</a>                tx: reply,
+<a href=#1051 id=1051 data-nosnippet>1051</a>                span: Span::none(),
+<a href=#1052 id=1052 data-nosnippet>1052</a>            },
+<a href=#1053 id=1053 data-nosnippet>1053</a>            <span class="kw-2">&amp;mut </span>protected,
+<a href=#1054 id=1054 data-nosnippet>1054</a>            <span class="kw-2">&amp;mut </span>tables,
+<a href=#1055 id=1055 data-nosnippet>1055</a>        )<span class="question-mark">?</span>;
+<a href=#1056 id=1056 data-nosnippet>1056</a>        handle_update(
+<a href=#1057 id=1057 data-nosnippet>1057</a>            Update {
+<a href=#1058 id=1058 data-nosnippet>1058</a>                hash,
+<a href=#1059 id=1059 data-nosnippet>1059</a>                state: EntryState::Complete {
+<a href=#1060 id=1060 data-nosnippet>1060</a>                    data_location: DataLocation::Owned(<span class="number">7</span>),
+<a href=#1061 id=1061 data-nosnippet>1061</a>                    outboard_location: OutboardLocation::NotNeeded,
+<a href=#1062 id=1062 data-nosnippet>1062</a>                },
+<a href=#1063 id=1063 data-nosnippet>1063</a>                tx: <span class="prelude-val">None</span>,
+<a href=#1064 id=1064 data-nosnippet>1064</a>                span: Span::none(),
+<a href=#1065 id=1065 data-nosnippet>1065</a>            },
+<a href=#1066 id=1066 data-nosnippet>1066</a>            <span class="kw-2">&amp;mut </span>protected,
+<a href=#1067 id=1067 data-nosnippet>1067</a>            <span class="kw-2">&amp;mut </span>tables,
+<a href=#1068 id=1068 data-nosnippet>1068</a>        )<span class="question-mark">?</span>;
+<a href=#1069 id=1069 data-nosnippet>1069</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#1070 id=1070 data-nosnippet>1070</a>            tables.blobs.get(hash)<span class="question-mark">?</span>.unwrap().value(),
+<a href=#1071 id=1071 data-nosnippet>1071</a>            EntryState::Complete {
+<a href=#1072 id=1072 data-nosnippet>1072</a>                data_location: DataLocation::Owned(<span class="kw">_</span>),
+<a href=#1073 id=1073 data-nosnippet>1073</a>                ..
+<a href=#1074 id=1074 data-nosnippet>1074</a>            }
+<a href=#1075 id=1075 data-nosnippet>1075</a>        ));
+<a href=#1076 id=1076 data-nosnippet>1076</a>        drop(tables);
+<a href=#1077 id=1077 data-nosnippet>1077</a>        tx.commit()<span class="question-mark">?</span>;
+<a href=#1078 id=1078 data-nosnippet>1078</a>        ftx.commit();
+<a href=#1079 id=1079 data-nosnippet>1079</a>        <span class="macro">assert!</span>(
+<a href=#1080 id=1080 data-nosnippet>1080</a>            owned.exists(),
+<a href=#1081 id=1081 data-nosnippet>1081</a>            <span class="string">"committed metadata still refers to this file"
+<a href=#1082 id=1082 data-nosnippet>1082</a>        </span>);
+<a href=#1083 id=1083 data-nosnippet>1083</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1084 id=1084 data-nosnippet>1084</a>    }
+<a href=#1085 id=1085 data-nosnippet>1085</a>}
 </code></pre></div></section></main></body></html>
