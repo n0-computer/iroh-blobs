@@ -623,20 +623,24 @@ impl Actor {
 
     async fn run(mut self) {
         loop {
+            // Biased, so a task's follow-up command, sent right before the
+            // task ends, is handled before the task is joined. Otherwise idle
+            // waiters could be answered while that work is still queued.
             tokio::select! {
+                biased;
                 task = self.handles.tick() => {
                     if let Some(task) = task {
                         self.spawn(task);
                     }
+                }
+                Some(cmd) = self.fs_cmd_rx.recv() => {
+                    self.handle_fs_command(cmd).await;
                 }
                 cmd = self.cmd_rx.recv() => {
                     let Some(cmd) = cmd else {
                         break;
                     };
                     self.handle_command(cmd).await;
-                }
-                Some(cmd) = self.fs_cmd_rx.recv() => {
-                    self.handle_fs_command(cmd).await;
                 }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     Self::log_task_result(res);
