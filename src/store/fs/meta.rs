@@ -484,6 +484,8 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
 
 /// Remove partial-entry metadata files after completion.
 /// Data cleanup can race with a re-import replacing the owned file.
+/// The outboard can't: whether it is inlined depends only on the size, so no
+/// concurrent import of the same hash writes an outboard file.
 fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
     let EntryState::Complete {
         outboard_location, ..
