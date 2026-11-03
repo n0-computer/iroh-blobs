@@ -2419,6 +2419,52 @@ pub mod tests {
         Ok(())
     }
 
+    /// When a partial entry completes, the files the complete entry does not use are
+    /// removed, e.g. the data or outboard file when it gets inlined.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_complete_removes_unused_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        // 8 KiB gets inlined data, 1 MiB its own data file and an inlined outboard
+        for (size, by_import) in [
+            (8 * 1024, false),
+            (8 * 1024 + 1, true),
+            (1024 * 1024, false),
+            (1024 * 1024 + 1, true),
+        ] {
+            let data = test_data(size);
+            let half = ChunkRanges::from(..ChunkNum(4));
+            let (hash, bao) = create_n0_bao(&data, &half)?;
+            store.import_bao_bytes(hash, half, bao).await?;
+            store.wait_idle().await?;
+            assert!(path.data_path(&hash).exists());
+            assert!(path.outboard_path(&hash).exists());
+            if by_import {
+                // an import of the whole blob over the partial entry
+                drop(store.add_bytes(data.clone()).temp_tag().await?);
+            } else {
+                // the rest of the blob through the partial entry
+                let rest = ChunkRanges::from(ChunkNum(4)..);
+                let (_, bao) = create_n0_bao(&data, &rest)?;
+                store.import_bao_bytes(hash, rest, bao).await?;
+            }
+            store.wait_idle().await?;
+            store.sync_db().await?;
+            let inlined = size <= options.inline.max_data_inlined as usize;
+            assert_eq!(path.data_path(&hash).exists(), !inlined, "size={size}");
+            assert!(!path.outboard_path(&hash).exists(), "by_import={by_import}");
+            assert!(!path.sizes_path(&hash).exists(), "by_import={by_import}");
+            assert!(!path.bitfield_path(&hash).exists(), "by_import={by_import}");
+            assert_eq!(store.get_bytes(hash).await?, data);
+        }
+        store.shutdown().await?;
+        Ok(())
+    }
+
     /// Requests that reach the store after its shutdown must not panic its tasks,
     /// e.g. on an entry that the shutdown poisoned.
     #[tokio::test]

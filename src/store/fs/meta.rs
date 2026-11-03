@@ -402,12 +402,10 @@ fn handle_update(
     };
     let state = match old_entry_opt {
         Some(old) => {
-            let partial_to_complete = old.is_partial() && state.is_complete();
+            let was_partial = old.is_partial();
             let res = EntryState::union(old, state)?;
-            if partial_to_complete {
-                tables
-                    .ftx
-                    .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+            if was_partial {
+                delete_partial_files(tables, hash, &res);
             }
             res
         }
@@ -459,10 +457,14 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    tables
+    let was_partial = tables
         .blobs
-        .insert(hash, state)
-        .map_err(|e| e!(ActorError::Storage, e))?;
+        .insert(hash, &state)
+        .map_err(|e| e!(ActorError::Storage, e))?
+        .is_some_and(|old| old.value().is_partial());
+    if was_partial {
+        delete_partial_files(tables, hash, &state);
+    }
     if let Some(data) = data {
         tables
             .inline_data
@@ -477,6 +479,30 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     }
     tx.send(Ok(()));
     Ok(())
+}
+
+/// Removes the files of a partial entry that its complete state no longer uses.
+///
+/// Inlined data and outboards are safe to delete: whether they are inlined depends
+/// only on the size, so no concurrent import of the same hash writes those files.
+/// Owned data is never deleted, since a re-import can replace that file at any time.
+fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
+    let EntryState::Complete {
+        data_location,
+        outboard_location,
+    } = new
+    else {
+        return;
+    };
+    tables
+        .ftx
+        .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+    if matches!(data_location, DataLocation::Inline(_)) {
+        tables.ftx.delete(hash, [BaoFilePart::Data]);
+    }
+    if !matches!(outboard_location, OutboardLocation::Owned) {
+        tables.ftx.delete(hash, [BaoFilePart::Outboard]);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -980,4 +1006,84 @@ async fn list_blobs_impl(
         tx.send(Ok(k)).await.ok();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{
+        super::{delete_set, options::PathOptions},
+        *,
+    };
+
+    #[test]
+    fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Arc::new(PathOptions::new(dir.path()));
+        std::fs::create_dir_all(&paths.data_path)?;
+        let (protect, mut deletes) = delete_set::pair(paths.clone());
+        let db = Database::create(dir.path().join("db"))?;
+        let hash = Hash::new(b"content");
+        let owned = paths.data_path(&hash);
+        let external = dir.path().join("exported");
+        std::fs::write(&owned, b"content")?;
+        let ftx = deletes.begin_write();
+        let tx = db.begin_write()?;
+        let mut tables = Tables::new(&tx, &ftx)?;
+        tables.blobs.insert(
+            hash,
+            EntryState::Complete {
+                data_location: DataLocation::Owned(7),
+                outboard_location: OutboardLocation::NotNeeded,
+            },
+        )?;
+        // Export queues Set; another import writes before the db handles it.
+        std::fs::rename(&owned, &external)?;
+        protect.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
+        std::fs::write(&owned, b"content")?;
+        let mut protected = HashSet::new();
+        let (reply, _rx) = oneshot::channel();
+        handle_set(
+            Set {
+                hash,
+                state: EntryState::Complete {
+                    data_location: DataLocation::External(vec![external], 7),
+                    outboard_location: OutboardLocation::NotNeeded,
+                },
+                tx: reply,
+                span: Span::none(),
+            },
+            &mut protected,
+            &mut tables,
+        )?;
+        handle_update(
+            Update {
+                hash,
+                state: EntryState::Complete {
+                    data_location: DataLocation::Owned(7),
+                    outboard_location: OutboardLocation::NotNeeded,
+                },
+                tx: None,
+                span: Span::none(),
+            },
+            &mut protected,
+            &mut tables,
+        )?;
+        assert!(matches!(
+            tables.blobs.get(hash)?.unwrap().value(),
+            EntryState::Complete {
+                data_location: DataLocation::Owned(_),
+                ..
+            }
+        ));
+        drop(tables);
+        tx.commit()?;
+        ftx.commit();
+        assert!(
+            owned.exists(),
+            "committed metadata still refers to this file"
+        );
+        Ok(())
+    }
 }
