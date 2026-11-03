@@ -999,6 +999,21 @@ async fn fs_add_stream_source_error() -> TestResult<()> {
     Ok(())
 }
 
+/// `add_stream` takes a stream that is `Send` but not `Sync`.
+#[tokio::test]
+#[traced_test]
+async fn mem_add_stream_not_sync() -> TestResult<()> {
+    let store = MemStore::new();
+    let items = std::cell::Cell::new(0);
+    let stream = n0_future::stream::iter([Ok(Bytes::from_static(b"not sync"))]).map(move |item| {
+        items.set(items.get() + 1);
+        item
+    });
+    let tt = store.blobs().add_stream(stream).await.temp_tag().await?;
+    assert_eq!(tt.hash(), Hash::new(b"not sync"));
+    Ok(())
+}
+
 /// A store that shuts down in the middle of an export_ranges must not make
 /// the export look complete.
 #[tokio::test(flavor = "multi_thread")]
