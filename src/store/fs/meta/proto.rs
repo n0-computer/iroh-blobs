@@ -121,9 +121,9 @@ impl ReadOnlyCommand {
         match self {
             Self::Get(x) => Some(&x.span),
             Self::Dump(x) => Some(&x.span),
-            Self::ListTags(x) => x.parent_span_opt(),
-            Self::ClearProtected(x) => x.parent_span_opt(),
-            Self::GetBlobStatus(x) => x.parent_span_opt(),
+            Self::ListTags(x) => Some(&x.span),
+            Self::ClearProtected(x) => Some(&x.span),
+            Self::GetBlobStatus(x) => Some(&x.span),
         }
     }
 }
@@ -153,10 +153,10 @@ impl ReadWriteCommand {
             Self::Update(x) => Some(&x.span),
             Self::Set(x) => Some(&x.span),
             Self::DeleteBlobw(x) => Some(&x.span),
-            Self::SetTag(x) => x.parent_span_opt(),
-            Self::DeleteTags(x) => x.parent_span_opt(),
-            Self::RenameTag(x) => x.parent_span_opt(),
-            Self::CreateTag(x) => x.parent_span_opt(),
+            Self::SetTag(x) => Some(&x.span),
+            Self::DeleteTags(x) => Some(&x.span),
+            Self::RenameTag(x) => Some(&x.span),
+            Self::CreateTag(x) => Some(&x.span),
             Self::ProcessExit(_) => None,
         }
     }
@@ -179,8 +179,8 @@ impl TopLevelCommand {
 
     pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
         match self {
-            Self::SyncDb(x) => x.parent_span_opt(),
-            Self::Shutdown(x) => x.parent_span_opt(),
+            Self::SyncDb(x) => Some(&x.span),
+            Self::Shutdown(x) => Some(&x.span),
             Self::Snapshot(x) => Some(&x.span),
         }
     }

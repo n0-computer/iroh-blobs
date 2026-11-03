@@ -13,7 +13,7 @@ use crate::{
         GetManyRequest, GetRequest, ObserveRequest, PushRequest, ERR_INTERNAL, ERR_LIMIT,
         ERR_PERMISSION,
     },
-    provider::{events::irpc_ext::IrpcClientExt, TransferStats},
+    provider::TransferStats,
     Hash,
 };
 
@@ -689,63 +689,3 @@ mod proto {
     }
 }
 pub use proto::*;
-
-mod irpc_ext {
-    use std::future::Future;
-
-    use irpc::{
-        channel::{mpsc, none::NoSender},
-        Channels, RpcMessage, Service, WithChannels,
-    };
-
-    pub trait IrpcClientExt<S: Service> {
-        fn notify_streaming<Req, Update>(
-            &self,
-            msg: Req,
-            local_update_cap: usize,
-        ) -> impl Future<Output = irpc::Result<mpsc::Sender<Update>>>
-        where
-            S: From<Req>,
-            S::Message: From<WithChannels<Req, S>>,
-            Req: Channels<S, Tx = NoSender, Rx = mpsc::Receiver<Update>>,
-            Update: RpcMessage;
-    }
-
-    impl<S: Service> IrpcClientExt<S> for irpc::Client<S> {
-        fn notify_streaming<Req, Update>(
-            &self,
-            msg: Req,
-            local_update_cap: usize,
-        ) -> impl Future<Output = irpc::Result<mpsc::Sender<Update>>>
-        where
-            S: From<Req>,
-            S::Message: From<WithChannels<Req, S>>,
-            Req: Channels<S, Tx = NoSender, Rx = mpsc::Receiver<Update>>,
-            Update: RpcMessage,
-        {
-            let client = self.clone();
-            async move {
-                let request = client.request().await?;
-                match request {
-                    irpc::Request::Local(local) => {
-                        let (req_tx, req_rx) = mpsc::channel(local_update_cap);
-                        local
-                            .send((msg, NoSender, req_rx))
-                            .await
-                            .map_err(irpc::Error::from)?;
-                        Ok(req_tx)
-                    }
-                    #[cfg(feature = "rpc")]
-                    irpc::Request::Remote(remote) => {
-                        let (s, _) = remote.write(msg).await?;
-                        Ok(s.into())
-                    }
-                    #[cfg(not(feature = "rpc"))]
-                    irpc::Request::Remote(_) => {
-                        unreachable!()
-                    }
-                }
-            }
-        }
-    }
-}

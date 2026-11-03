@@ -198,10 +198,7 @@ impl InternalCommand {
         match self {
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
-            Self::FinishImport(cmd) => cmd
-                .parent_span_opt()
-                .cloned()
-                .unwrap_or_else(tracing::Span::current),
+            Self::FinishImport(cmd) => cmd.span.clone(),
         }
     }
 }
@@ -480,7 +477,7 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) {
-        let span = cmd.parent_span();
+        let span = cmd.span().clone();
         let _entered = span.enter();
         match cmd {
             Command::SyncDb(cmd) => {
