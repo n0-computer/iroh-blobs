@@ -308,4 +308,9 @@ impl Store {
     pub(crate) fn ref_from_sender(client: &ApiClient) -> &Self {
         Self::ref_cast(client)
     }
+
+    #[cfg(test)]
+    pub(crate) fn client(&self) -> &ApiClient {
+        &self.client
+    }
 }

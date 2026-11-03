@@ -482,6 +482,54 @@ mod tests {
         gc_import_after_mark_survives(&store).await
     }
 
+    /// Returns a store that forwards every request to `inner`, and runs
+    /// `handover` once the first tag listing of a gc run, named or temp, has
+    /// gone to `inner`. The handover thus lands between the two listings.
+    ///
+    /// `handover` must make a request to `inner` before it changes any temp
+    /// tag, so that the listing is answered first.
+    fn store_with_handover<F>(inner: &Store, handover: F) -> Store
+    where
+        F: FnOnce() -> n0_future::boxed::BoxFuture<()> + Send + 'static,
+    {
+        use crate::api::proto::Command;
+        let inner = inner.client().as_local().expect("a local store");
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
+        tokio::spawn(async move {
+            let mut handover = Some(handover);
+            while let Some(cmd) = rx.recv().await {
+                let listing = matches!(cmd, Command::ListTags(_) | Command::ListTempTags(_));
+                if inner.send_raw(cmd).await.is_err() {
+                    break;
+                }
+                if let Some(handover) = handover.take_if(|_| listing) {
+                    handover().await;
+                }
+            }
+        });
+        Store::from_sender(irpc::Client::local(tx))
+    }
+
+    /// A blob whose temp tag is replaced by a named tag during the mark, as
+    /// `with_named_tag` does, survives the run (#247).
+    #[tokio::test]
+    #[traced_test]
+    async fn gc_temp_to_named_handover() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        let tt = store.add_slice("handover").temp_tag().await?;
+        let hash = tt.hash();
+        let inner = (*store).clone();
+        let proxy = store_with_handover(&store, move || {
+            Box::pin(async move {
+                inner.tags().set("named", tt.hash_and_format()).await.ok();
+                drop(tt);
+            })
+        });
+        gc_run_once(&proxy, &mut HashSet::new()).await?;
+        assert!(store.has(hash).await?, "the handed over blob was swept");
+        Ok(())
+    }
+
     #[cfg(feature = "fs-store")]
     async fn gc_file_delete(path: &std::path::Path, store: &Store) -> TestResult<()> {
         use bao_tree::ChunkNum;
