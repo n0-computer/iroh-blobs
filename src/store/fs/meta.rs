@@ -481,13 +481,15 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     Ok(())
 }
 
-/// Remove partial-entry metadata files after completion.
-/// Data cleanup can race with a re-import replacing the owned file.
-/// The outboard can't: whether it is inlined depends only on the size, so no
-/// concurrent import of the same hash writes an outboard file.
+/// Removes the files of a partial entry that its complete state no longer uses.
+///
+/// Inlined data and outboards are safe to delete: whether they are inlined depends
+/// only on the size, so no concurrent import of the same hash writes those files.
+/// Owned data is never deleted, since a re-import can replace that file at any time.
 fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
     let EntryState::Complete {
-        outboard_location, ..
+        data_location,
+        outboard_location,
     } = new
     else {
         return;
@@ -495,6 +497,9 @@ fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
     tables
         .ftx
         .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+    if matches!(data_location, DataLocation::Inline(_)) {
+        tables.ftx.delete(hash, [BaoFilePart::Data]);
+    }
     if !matches!(outboard_location, OutboardLocation::Owned) {
         tables.ftx.delete(hash, [BaoFilePart::Outboard]);
     }
