@@ -960,13 +960,16 @@ impl EntityApi for HashContext {
         self.load().await;
         let ImportBaoMsg {
             inner: ImportBaoRequest { size, .. },
-            rx,
+            mut rx,
             tx,
             ..
         } = cmd;
-        let res = import_bao_impl(self, size, rx).await;
+        let res = import_bao_impl(self, size, &mut rx).await;
         trace!("{res:?}");
+        // Answer before dropping `rx`, so the sender sees our error rather
+        // than just a closed channel.
         tx.send(res).await.ok();
+        drop(rx);
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -1167,7 +1170,7 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 async fn import_bao_impl(
     ctx: &HashContext,
     size: NonZeroU64,
-    mut rx: mpsc::Receiver<BaoContentItem>,
+    rx: &mut mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
     trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
