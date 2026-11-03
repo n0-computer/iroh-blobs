@@ -272,7 +272,7 @@ impl Blobs {
 
     pub async fn add_stream(
         &self,
-        data: impl Stream<Item = io::Result<Bytes>> + Send + Sync + 'static,
+        data: impl Stream<Item = io::Result<Bytes>> + Send + 'static,
     ) -> AddProgress<'_> {
         let inner = ImportByteStreamRequest {
             format: crate::BlobFormat::Raw,
