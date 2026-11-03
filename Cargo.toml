@@ -54,7 +54,11 @@ chrono = { version = "0.4.39" }
 chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
-[dev-dependencies]
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# Native-only: these pull in tokio's net and fs support, which do not build for the browser.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
 hex = "0.4.3"
 iroh-test = "0.31.0"

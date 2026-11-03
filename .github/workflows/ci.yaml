@@ -363,3 +363,7 @@ jobs:
       - name: Ensure no 'import "env"' in wasm
         run: |
           ! wasm-tools print --skeleton target/wasm32-unknown-unknown/debug/iroh_blobs.wasm | grep 'import "env"'
+
+      # Runs the wasm-bindgen tests under Node.
+      - name: wasm32 tests under Node
+        run: wasm-pack test --node -- --locked --no-default-features --test wasm_mem_store
