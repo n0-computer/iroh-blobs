@@ -9,6 +9,7 @@
     - only currentColor, so it works in the light and dark rustdoc themes
     - ids are unique on the page, so they are prefixed with list
     Item labels are monospace, the close of the stream is in the normal font.
+    Labels use the ListBlobsItem variants, the tag listings have Tag for Hash.
     To check a change, render it in both themes and look at the result:
       rsvg-convert -w 1120 -b white list.svg -o light.png
       rsvg-convert -w 1120 -b '#353535' -s dark.css list.svg -o dark.png
@@ -25,7 +26,7 @@
     <g fill="currentColor" stroke="none" text-anchor="middle">
       <text x="70" y="21">listing</text>
       <text x="70" y="39" font-size="11">zero or more items</text>
-      <text x="70" y="-45" font-family="monospace" font-size="12">Item</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">Hash</text>
     </g>
   </g>
   <g id="list-complete" transform="translate(390 108)">
@@ -44,6 +45,6 @@
     <path d="M190,145 C280,145 305,232 388,232" fill="none" stroke="currentColor" marker-end="url(#list-arrow)"/>
     <text x="307" y="183">Error</text>
     <path d="M120,155 C120,254 220,254 388,254" fill="none" stroke="currentColor" marker-end="url(#list-arrow)"/>
-    <text x="238" y="280" font-family="sans-serif" font-size="11">closed</text>
+    <text x="300" y="272" font-family="sans-serif" font-size="11">closed</text>
   </g>
 </svg>

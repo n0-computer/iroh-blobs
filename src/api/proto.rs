@@ -399,11 +399,11 @@ impl ListTagsRequest {
 ///
 /// A listing is zero or more [`Self::Hash`] items, followed by [`Self::Done`]
 /// on success or [`Self::Error`] on failure. An empty listing still sends
-/// [`Self::Done`]. Unlike for the other response streams, dropping the sender
-/// does not complete a listing: a store task that panics or is aborted drops
-/// its sender, and the client can not tell from the items that some are
-/// missing. So a client reports a listing that closes before its terminal item
-/// as an error, and stops at the terminal item without waiting for the close.
+/// [`Self::Done`]. Dropping the sender does not complete a listing: a store
+/// task that panics or is aborted drops its sender, and the client can not
+/// tell from the items that some are missing. So a client reports a listing
+/// that closes before its terminal item as an error, and stops at the terminal
+/// item without waiting for the close.
 ///
 /// [`ListTagsItem`] and [`ListTempTagsItem`] work the same way.
 ///

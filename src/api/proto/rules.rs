@@ -233,7 +233,7 @@ impl StreamRules<ListBlobsItem> for ListBlobsRules {
 ///
 /// Zero or more `Tag` items are followed by `Done` or `Error`. Both are terminal,
 /// so a client stops immediately and reports closure before either as an error.
-/// The diagram on [`ListTagsItem`] and the clients in `api::tags` must agree.
+/// The diagram on [`ListBlobsItem`] and the clients in `api::tags` must agree.
 #[derive(Debug, Default)]
 pub(crate) struct TagListRules;
 
@@ -566,6 +566,25 @@ mod tests {
             Err(Violation::EmptyHashListed)
         );
         assert_eq!(rules.feed(&ListBlobsItem::Done), Ok(Step::Last));
+        let error = || crate::api::Error::other("failed");
+        assert_eq!(rules.feed(&ListBlobsItem::Error(error())), Ok(Step::Last));
+    }
+
+    #[test]
+    fn tag_list_steps() {
+        let error = || crate::api::Error::other("failed");
+        let tag = crate::api::tags::TagInfo::new("a", Hash::new(b"a"));
+        let mut rules = TagListRules;
+        assert_eq!(rules.feed(&ListTagsItem::Tag(tag)), Ok(Step::More));
+        assert_eq!(rules.feed(&ListTagsItem::Done), Ok(Step::Last));
+        assert_eq!(rules.feed(&ListTagsItem::Error(error())), Ok(Step::Last));
+        let tt = crate::HashAndFormat::raw(Hash::new(b"a"));
+        assert_eq!(rules.feed(&ListTempTagsItem::Tag(tt)), Ok(Step::More));
+        assert_eq!(rules.feed(&ListTempTagsItem::Done), Ok(Step::Last));
+        assert_eq!(
+            rules.feed(&ListTempTagsItem::Error(error())),
+            Ok(Step::Last)
+        );
     }
 
     #[test]
