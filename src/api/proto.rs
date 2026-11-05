@@ -51,6 +51,7 @@ use n0_future::Stream;
 use range_collections::RangeSet2;
 use serde::{Deserialize, Serialize};
 pub(crate) mod bitfield;
+pub(crate) mod rules;
 pub use bitfield::Bitfield;
 
 use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};
@@ -151,27 +152,6 @@ pub enum Request {
     Shutdown(ShutdownRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     ClearProtected(ClearProtectedRequest),
-}
-
-impl Command {
-    /// Checks, in debug builds, that commands answered by the client do not reach the store.
-    ///
-    /// The client answers those itself, see the [module docs](self).
-    pub(crate) fn debug_assert_not_empty_hash(&self) {
-        let hash = match self {
-            Self::BlobStatus(cmd) => cmd.hash,
-            Self::ExportBao(cmd) => cmd.hash,
-            Self::ExportRanges(cmd) => cmd.hash,
-            Self::ImportBao(cmd) => cmd.hash,
-            Self::Observe(cmd) => cmd.hash,
-            Self::DeleteBlobs(cmd) => {
-                debug_assert!(!cmd.hashes.contains(&Hash::EMPTY), "{cmd:?}");
-                return;
-            }
-            _ => return,
-        };
-        debug_assert_ne!(hash, Hash::EMPTY, "{self:?}");
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -554,8 +534,9 @@ pub enum AddProgressItem {
     Size(u64),
     /// The copy part of the import operation is done.
     ///
-    /// This is a guaranteed progress event, so you can rely on getting exactly
-    /// one of these.
+    /// This is only sent if the import copied the data, and then exactly once.
+    /// An import that references a file where it is, see
+    /// [`ImportMode::TryReference`], does not copy it and does not send this.
     CopyDone,
     /// Progress computing the outboard and root hash of the imported data.
     ///

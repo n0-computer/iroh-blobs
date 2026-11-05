@@ -175,7 +175,7 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) -> Option<ShutdownMsg> {
-        cmd.debug_assert_not_empty_hash();
+        debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
             Command::ImportBao(ImportBaoMsg {
                 inner: ImportBaoRequest { hash, size },
