@@ -51,6 +51,7 @@ use n0_future::Stream;
 use range_collections::RangeSet2;
 use serde::{Deserialize, Serialize};
 pub(crate) mod bitfield;
+pub(crate) mod rules;
 pub use bitfield::Bitfield;
 
 use crate::{store::util::Tag, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat};

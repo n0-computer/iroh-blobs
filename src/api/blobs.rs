@@ -30,7 +30,7 @@ use n0_future::{future, stream, Stream, StreamExt};
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use tracing::{error, trace};
+use tracing::trace;
 mod reader;
 pub use reader::BlobReader;
 
@@ -46,6 +46,7 @@ pub use super::proto::{
 };
 use super::{
     proto::{
+        rules::{ExportBaoRules, ExportRangesRules, Step, StreamRules},
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
         ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
@@ -1026,13 +1027,16 @@ impl ExportRangesProgress {
                     return;
                 }
             };
-            let mut end = ExportRangesEnd::default();
+            let mut rules = ExportRangesRules::new(self.ranges);
             let item = loop {
                 match rx.recv().await {
                     Ok(Some(item)) => {
-                        let last = end.is_last(&self.ranges, &item);
+                        let step = match rules.check(&item) {
+                            Ok(step) => step,
+                            Err(cause) => break ExportRangesItem::Error(cause.into()),
+                        };
                         co.yield_(item).await;
-                        if last {
+                        if step == Step::Last {
                             return;
                         }
                     }
@@ -1052,12 +1056,12 @@ impl ExportRangesProgress {
     /// Like [`Self::concatenate`], but also returns the size of the blob.
     pub(crate) async fn concatenate_with_size(self) -> RequestResult<(Option<u64>, Vec<u8>)> {
         let mut rx = self.inner.await?;
-        let mut end = ExportRangesEnd::default();
+        let mut rules = ExportRangesRules::new(self.ranges.clone());
         let mut size = None;
         let mut data = BTreeMap::new();
         loop {
             let item = rx.recv().await?.ok_or_else(export_ranges_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 ExportRangesItem::Size(s) => size = Some(s),
                 ExportRangesItem::Data(leaf) => {
@@ -1088,46 +1092,6 @@ impl ExportRangesProgress {
             }
         }
         Ok((size, res))
-    }
-}
-
-/// Finds the last item of an [`ExportRangesItem`] stream.
-///
-/// A store sends [`ExportRangesItem::Size`] first, then the requested ranges
-/// clipped to the size, in ascending order, and then drops the sender. So the
-/// stream is complete with the item that reaches the end of the last clipped
-/// range, and a stream that ends before that was cut short. An error is always
-/// the last item.
-#[derive(Debug, Default)]
-enum ExportRangesEnd {
-    /// Nothing received yet, the size comes first.
-    #[default]
-    Start,
-    /// Got the size, the data ends at `end`.
-    Data { end: u64 },
-}
-
-impl ExportRangesEnd {
-    /// Feed the items of a stream for `ranges` in order. Returns true for the
-    /// item that completes the stream, or for an error.
-    fn is_last(&mut self, ranges: &RangeSet2<u64>, item: &ExportRangesItem) -> bool {
-        match (&*self, item) {
-            (Self::Start, ExportRangesItem::Size(size)) => {
-                let clipped = ranges & &RangeSet2::from(0..*size);
-                // clipped is bounded, so the last boundary is its end
-                let end = clipped.boundaries().last().copied().unwrap_or(0);
-                *self = Self::Data { end };
-                end == 0
-            }
-            (Self::Data { end }, ExportRangesItem::Data(leaf)) => {
-                leaf.offset + leaf.data.len() as u64 >= *end
-            }
-            (_, ExportRangesItem::Error(_)) => true,
-            _ => {
-                error!("export ranges: unexpected item in state {self:?}");
-                false
-            }
-        }
     }
 }
 
@@ -1212,11 +1176,11 @@ impl ExportBaoProgress {
 
     pub async fn data_to_bytes(self) -> super::ExportBaoResult<Bytes> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         let mut data = Vec::new();
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Leaf(leaf) => {
                     data.push(leaf.data);
@@ -1243,11 +1207,11 @@ impl ExportBaoProgress {
 
     pub async fn data_to_vec(self) -> super::ExportBaoResult<Vec<u8>> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         let mut data = Vec::new();
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Leaf(leaf) => {
                     data.extend_from_slice(&leaf.data);
@@ -1266,10 +1230,10 @@ impl ExportBaoProgress {
 
     pub async fn write<W: AsyncStreamWriter>(self, target: &mut W) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Size(size) => {
                     target.write(&size.to_le_bytes()).await?;
@@ -1302,10 +1266,10 @@ impl ExportBaoProgress {
         index: u64,
     ) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Size(size) => {
                     progress.send_transfer_started(index, hash, size).await;
@@ -1364,13 +1328,16 @@ impl ExportBaoProgress {
                     return;
                 }
             };
-            let mut end = ExportBaoEnd::default();
+            let mut rules = ExportBaoRules::new(&self.ranges);
             let item = loop {
                 match rx.recv().await {
                     Ok(Some(item)) => {
-                        let last = end.is_last(&self.ranges, &item);
+                        let step = match rules.check(&item) {
+                            Ok(step) => step,
+                            Err(cause) => break EncodedItem::Error(cause.into()),
+                        };
                         co.yield_(item).await;
-                        if last {
+                        if step == Step::Last {
                             return;
                         }
                     }
@@ -1380,56 +1347,6 @@ impl ExportBaoProgress {
             };
             co.yield_(item).await;
         })
-    }
-}
-
-/// Finds the last item of an [`EncodedItem`] stream.
-///
-/// A store sends [`EncodedItem::Size`] first, then parents and leaves for the
-/// requested ranges in pre-order, so leaves come in ascending order, and then
-/// drops the sender. A range past the end of the blob stands for the last
-/// chunk, so the data ends at the end of the requested ranges or at the size,
-/// whichever comes first. The leaf that reaches that point is the last item,
-/// and a stream that ends before it was cut short. An error is always the last
-/// item. [`EncodedItem::Done`] is not needed, but counts as the last item too.
-#[derive(Debug, Default)]
-enum ExportBaoEnd {
-    /// Nothing received yet, the size comes first.
-    #[default]
-    Start,
-    /// Got the size, the data ends at `end`.
-    Data { end: u64 },
-}
-
-impl ExportBaoEnd {
-    /// Feed the items of a stream for `ranges` in order. Returns true for the
-    /// item that completes the stream, or for an error.
-    fn is_last(&mut self, ranges: &ChunkRanges, item: &EncodedItem) -> bool {
-        match (&*self, item) {
-            (Self::Start, EncodedItem::Size(size)) => {
-                let boundaries = ranges.boundaries();
-                let requested = if boundaries.len() % 2 == 1 {
-                    // open range, up to the end of the blob
-                    u64::MAX
-                } else {
-                    boundaries
-                        .last()
-                        .map_or(0, |end| end.0.saturating_mul(1024))
-                };
-                let end = requested.min(*size);
-                *self = Self::Data { end };
-                end == 0
-            }
-            (Self::Data { .. }, EncodedItem::Parent(_)) => false,
-            (Self::Data { end }, EncodedItem::Leaf(leaf)) => {
-                leaf.offset + leaf.data.len() as u64 >= *end
-            }
-            (_, EncodedItem::Error(_) | EncodedItem::Done) => true,
-            _ => {
-                error!("export bao: unexpected item in state {self:?}");
-                false
-            }
-        }
     }
 }
 
@@ -1504,8 +1421,11 @@ mod tests {
                         .any(|item| matches!(item, ExportRangesItem::Error(_))),
                     "size {size}, ranges {ranges:?}: unexpected error in {items:?}"
                 );
-                let mut end = ExportRangesEnd::default();
-                let Some(last) = items.iter().position(|item| end.is_last(&ranges, item)) else {
+                let mut rules = ExportRangesRules::new(ranges.clone());
+                let Some(last) = items
+                    .iter()
+                    .position(|item| rules.feed(item).unwrap() == Step::Last)
+                else {
                     panic!("size {size}, ranges {ranges:?}: no last item in {items:?}");
                 };
                 assert_eq!(
@@ -1562,8 +1482,11 @@ mod tests {
                         .any(|item| matches!(item, EncodedItem::Error(_))),
                     "size {size}, ranges {ranges:?}: unexpected error in {items:?}"
                 );
-                let mut end = ExportBaoEnd::default();
-                let Some(last) = items.iter().position(|item| end.is_last(&ranges, item)) else {
+                let mut rules = ExportBaoRules::new(&ranges);
+                let Some(last) = items
+                    .iter()
+                    .position(|item| rules.feed(item).unwrap() == Step::Last)
+                else {
                     panic!("size {size}, ranges {ranges:?}: no last item in {items:?}");
                 };
                 for item in &items[last + 1..] {
