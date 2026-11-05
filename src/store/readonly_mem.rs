@@ -63,7 +63,7 @@ impl Deref for ReadonlyMemStore {
 
 impl From<ReadonlyMemStore> for crate::api::Store {
     fn from(value: ReadonlyMemStore) -> Self {
-        crate::api::Store::from_sender(value.client)
+        crate::api::Store::from_client(value.client)
     }
 }
 

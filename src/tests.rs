@@ -771,7 +771,7 @@ async fn empty_export_reaches_store() -> TestResult<()> {
     let target = dir.path().join("keep");
     std::fs::write(&target, b"keep me")?;
     let (tx, mut rx) = mpsc::channel(1);
-    let store = Store::from_sender(irpc::LocalSender::from(tx).into());
+    let store = Store::from_client(tx);
     let export = async { store.blobs().export(Hash::EMPTY, &target).await };
     tokio::pin!(export);
     let cmd = tokio::select! {
@@ -804,7 +804,7 @@ async fn export_ended_early_fails() -> TestResult<()> {
 
     let dir = tempfile::tempdir()?;
     let (tx, mut rx) = mpsc::channel(1);
-    let store = Store::from_sender(irpc::LocalSender::from(tx).into());
+    let store = Store::from_client(tx);
     let export = store
         .blobs()
         .export(Hash::new(b"a"), dir.path().join("a"))

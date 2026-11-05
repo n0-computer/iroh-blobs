@@ -1502,7 +1502,7 @@ pub struct FsStore {
 
 impl From<FsStore> for Store {
     fn from(value: FsStore) -> Self {
-        Store::from_sender(value.sender)
+        Store::from_client(value.sender)
     }
 }
 
