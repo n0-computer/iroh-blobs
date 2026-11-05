@@ -30,8 +30,7 @@ pub mod tags;
 use crate::{api::proto::WaitIdleRequest, provider::events::ProgressError};
 pub use crate::{store::util::Tag, util::temp_tag::TempTag};
 
-/// The type of the local rpc client backing a [`Store`].
-pub type ApiClient = irpc::Client<proto::Request>;
+pub(crate) type ApiClient = irpc::Client<proto::Request>;
 
 #[allow(missing_docs)]
 #[non_exhaustive]
@@ -258,7 +257,7 @@ impl Store {
     #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
     pub fn connect(endpoint: noq::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::noq(endpoint, addr);
-        Store::from_sender(sender)
+        Store::from_client(sender)
     }
 
     /// Listen on a noq endpoint for incoming rpc connections.
@@ -302,13 +301,46 @@ impl Store {
         Ok(())
     }
 
-    /// Create a store from a custom local rpc client.
-    pub fn local(client: ApiClient) -> Self {
+    /// Create a store from a client for the store protocol.
+    ///
+    /// This is how you back a [`Store`] with your own implementation: run an
+    /// actor that handles [`proto::Command`]s, and pass a local client for it.
+    ///
+    /// The actor only has to handle the commands that are actually used. To
+    /// serve data with [`crate::BlobsProtocol`], those are:
+    ///
+    /// - `ExportBao`, for get and get-many requests, and to read hash sequences,
+    /// - `Observe`, for observe requests,
+    /// - `ImportBao`, for push requests.
+    ///
+    /// Answer the other commands with an error, or drop them where they have
+    /// no error channel, which the caller sees as a closed channel. The client
+    /// answers reads of [`crate::Hash::EMPTY`] itself, so the actor never sees
+    /// them.
+    ///
+    /// The client can also be a remote one, but [`Store::connect`] is the usual
+    /// way to use a remote store.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iroh_blobs::api::{proto::Command, Store};
+    ///
+    /// # async fn example() {
+    /// let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
+    /// tokio::spawn(async move {
+    ///     while let Some(cmd) = rx.recv().await {
+    ///         match cmd {
+    ///             // answer the commands this store supports, here none
+    ///             _ => {}
+    ///         }
+    ///     }
+    /// });
+    /// let store = Store::from_client(irpc::Client::local(tx));
+    /// # }
+    /// ```
+    pub fn from_client(client: irpc::Client<proto::Request>) -> Self {
         Self { client }
-    }
-
-    pub(crate) fn from_sender(client: ApiClient) -> Self {
-        Self::local(client)
     }
 
     pub(crate) fn ref_from_sender(client: &ApiClient) -> &Self {

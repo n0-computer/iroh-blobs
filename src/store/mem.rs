@@ -82,7 +82,7 @@ pub struct MemStore {
 
 impl From<MemStore> for crate::api::Store {
     fn from(value: MemStore) -> Self {
-        crate::api::Store::from_sender(value.client)
+        crate::api::Store::from_client(value.client)
     }
 }
 
@@ -114,10 +114,6 @@ enum TaskResult {
 }
 
 impl MemStore {
-    pub fn from_sender(client: ApiClient) -> Self {
-        Self { client }
-    }
-
     pub fn new() -> Self {
         Self::new_with_opts(Options::default())
     }
@@ -141,7 +137,9 @@ impl MemStore {
             .run(),
         );
 
-        let store = Self::from_sender(sender.into());
+        let store = Self {
+            client: sender.into(),
+        };
         if let Some(gc_config) = opts.gc_config {
             n0_future::task::spawn(run_gc(gc_sender, gc_config));
         }
