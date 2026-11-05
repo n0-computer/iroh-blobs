@@ -236,6 +236,18 @@ pub struct ObserveRequest {
 /// Export the given ranges in bao format, with the iroh block size.
 ///
 /// The returned stream should be verified by the store.
+///
+/// The response starts with the [`EncodedItem::Size`] of the blob, followed by
+/// [`EncodedItem::Parent`] and [`EncodedItem::Leaf`] items for the requested
+/// ranges in pre-order, so leaves come in ascending order and end at the size
+/// at the latest. A range past the end of the blob stands for the last chunk.
+/// The stream is complete with the leaf that reaches the end of the requested
+/// ranges or the size, whichever comes first, or right after the size if there
+/// is nothing to send. A stream that ends before that was cut short. An
+/// [`EncodedItem::Error`] can come at any time, and is the last item.
+/// [`EncodedItem::Done`] is not needed, but counts as the last item too.
+///
+#[doc = include_str!("../../docs/img/export_bao.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportBaoRequest {
     pub hash: Hash,

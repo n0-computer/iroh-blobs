@@ -163,6 +163,9 @@ impl StreamRules<ExportRangesItem> for ExportRangesRules {
 /// whichever comes first. The leaf that reaches that point is the last item,
 /// and a stream that ends before it was cut short. An error is always the last
 /// item. [`EncodedItem::Done`] is not needed, but counts as the last item too.
+///
+/// [`super::ExportBaoRequest`] has a diagram of these rules, keep the two in
+/// sync.
 #[derive(Debug)]
 pub(crate) struct ExportBaoRules {
     /// The end of the requested ranges in bytes, `u64::MAX` if open.
