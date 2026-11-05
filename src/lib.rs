@@ -47,6 +47,7 @@ pub mod protocol;
 pub mod provider;
 pub mod ticket;
 
+#[cfg(feature = "unstable-util")]
 #[doc(hidden)]
 pub mod test;
 pub mod util;
