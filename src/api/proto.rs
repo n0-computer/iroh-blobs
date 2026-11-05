@@ -130,7 +130,8 @@ pub enum Request {
     ImportPath(ImportPathRequest),
     #[rpc(tx = mpsc::Sender<ExportProgressItem>)]
     ExportPath(ExportPathRequest),
-    #[rpc(tx = oneshot::Sender<Vec<super::Result<TagInfo>>>)]
+    /// Lists matching tags. An error is the last item; closing the stream ends the listing.
+    #[rpc(tx = mpsc::Sender<super::Result<TagInfo>>)]
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
@@ -140,7 +141,8 @@ pub enum Request {
     RenameTag(RenameTagRequest),
     #[rpc(tx = oneshot::Sender<super::Result<Tag>>)]
     CreateTag(CreateTagRequest),
-    #[rpc(tx = oneshot::Sender<Vec<HashAndFormat>>)]
+    /// Lists temporary protections in all scopes. An error is the last item.
+    #[rpc(tx = mpsc::Sender<super::Result<HashAndFormat>>)]
     ListTempTags(ListTempTagsRequest),
     #[rpc(tx = oneshot::Sender<TempTag>)]
     CreateTempTag(CreateTempTagRequest),

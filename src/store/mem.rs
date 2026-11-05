@@ -322,8 +322,14 @@ impl Actor {
                         hash: value.hash,
                         format: value.format,
                     })
-                    .map(Ok);
-                tx.send(tags.collect()).await.ok();
+                    .collect::<Vec<_>>();
+                self.spawn(async move {
+                    for tag in tags {
+                        if tx.send(Ok(tag)).await.is_err() {
+                            break;
+                        }
+                    }
+                });
             }
             Command::SetTag(SetTagMsg {
                 inner: SetTagRequest { name: tag, value },
@@ -349,7 +355,13 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                self.spawn(async move {
+                    for tt in tts {
+                        if cmd.tx.send(Ok(tt)).await.is_err() {
+                            break;
+                        }
+                    }
+                });
             }
             Command::ListBlobs(cmd) => {
                 let ListBlobsMsg { tx, .. } = cmd;

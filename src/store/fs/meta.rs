@@ -22,7 +22,7 @@ use crate::{
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
             CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            ListTagsMsg, ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -330,43 +330,45 @@ async fn handle_get_blob_status(
     Ok(())
 }
 
-async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> ActorResult<()> {
-    trace!("{msg:?}");
-    let ListTagsMsg {
-        inner:
-            ListTagsRequest {
-                from,
-                to,
-                raw,
-                hash_seq,
-            },
-        tx,
-        ..
-    } = msg;
+/// Streams a snapshot without making the metadata actor wait for the reader.
+pub async fn list_tags(snapshot: ReadOnlyTables, cmd: ListTagsMsg) {
+    let ListTagsMsg { mut tx, inner, .. } = cmd;
+    if let Err(cause) = list_tags_impl(snapshot, inner, &mut tx).await {
+        tx.send(Err(cause)).await.ok();
+    }
+}
+
+async fn list_tags_impl(
+    snapshot: ReadOnlyTables,
+    request: ListTagsRequest,
+    tx: &mut mpsc::Sender<api::Result<TagInfo>>,
+) -> api::Result<()> {
+    let ListTagsRequest {
+        from,
+        to,
+        raw,
+        hash_seq,
+    } = request;
     let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    let mut res = Vec::new();
-    for item in tables
+    for item in snapshot
         .tags()
         .range((from, to))
-        .map_err(|e| e!(ActorError::Storage, e))?
+        .map_err(api_error_from_storage_error)?
     {
-        match item {
-            Ok((k, v)) => {
-                let v = v.value();
-                if raw && v.format.is_raw() || hash_seq && v.format.is_hash_seq() {
-                    let info = TagInfo {
-                        name: k.value(),
-                        hash: v.hash,
-                        format: v.format,
-                    };
-                    res.push(crate::api::Result::Ok(info));
-                }
+        let (k, v) = item.map_err(api_error_from_storage_error)?;
+        let v = v.value();
+        if raw && v.format.is_raw() || hash_seq && v.format.is_hash_seq() {
+            let info = TagInfo {
+                name: k.value(),
+                hash: v.hash,
+                format: v.format,
+            };
+            if tx.send(Ok(info)).await.is_err() {
+                break;
             }
-            Err(e) => res.push(Err(api_error_from_storage_error(e))),
         }
     }
-    tx.send(res).await.ok();
     Ok(())
 }
 
@@ -580,7 +582,6 @@ impl Actor {
         match cmd {
             ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables),
             ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
-            ReadOnlyCommand::ListTags(cmd) => handle_list_tags(cmd, tables).await,
             ReadOnlyCommand::ClearProtected(cmd) => handle_clear_protected(cmd, protected).await,
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }

@@ -71,6 +71,7 @@ pub(super) async fn gc_mark_task(
     trace!("traversing temp roots");
     let mut tts = store.tags().list_temp_tags().await?;
     while let Some(tt) = tts.next().await {
+        let tt = tt?;
         trace!("adding temp root {:?}", tt);
         add_root(tt);
     }
@@ -519,6 +520,44 @@ mod tests {
             }
         });
         Store::from_client(tx)
+    }
+
+    #[tokio::test]
+    async fn gc_aborts_on_temp_tag_listing_error() -> TestResult {
+        use crate::api::proto::Command;
+
+        let store = crate::store::mem::MemStore::new();
+        let tag = store
+            .add_slice("must survive a failed mark")
+            .temp_tag()
+            .await?;
+        let hash = tag.hash();
+        drop(tag);
+        let inner = store.client().as_local().expect("a local store");
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
+        let responder = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if let Command::ListTempTags(cmd) = cmd {
+                    cmd.tx
+                        .send(Err(crate::api::Error::io(
+                            io::ErrorKind::Unsupported,
+                            "temp tag listing unsupported",
+                        )))
+                        .await
+                        .unwrap();
+                } else if inner.send_raw(cmd).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let proxy = Store::from_client(tx);
+        assert!(gc_run_once(&proxy, &mut HashSet::new(), None)
+            .await
+            .is_err());
+        assert!(store.has(hash).await?, "GC swept after a failed mark");
+        drop(proxy);
+        responder.await?;
+        Ok(())
     }
 
     /// A blob whose temp tag is replaced by a named tag during the mark, as
