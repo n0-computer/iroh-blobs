@@ -1,6 +1,5 @@
 #![cfg(feature = "fs-store")]
 use std::{collections::HashSet, time::Duration};
-
 #[cfg(feature = "rpc")]
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
