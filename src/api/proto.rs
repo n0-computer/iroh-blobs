@@ -13,6 +13,18 @@
 //!
 //! The file system store is quite complex and optimized, so to get started take a look at
 //! the much simpler memory store.
+//!
+//! # The empty blob
+//!
+//! The empty blob, [`Hash::EMPTY`], is always present. The client in [`crate::api`]
+//! answers every request that reads or deletes it without asking the store, so a store
+//! never gets such a request, and [`Request::ListBlobs`] must not list it.
+//! Like everything else about this protocol, this is not enforced: a store may rely on
+//! it, but a client that sends such a request anyway gets unspecified results.
+//!
+//! An import only learns that its data is empty once it is hashed. At that point a
+//! store does nothing but answer with a [`TempTag`] that is not tracked, since the
+//! empty blob never needs protection. It does not create an entry for it.
 use std::{
     fmt::{self, Debug},
     io,
@@ -135,6 +147,28 @@ pub enum Request {
     Shutdown(ShutdownRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     ClearProtected(ClearProtectedRequest),
+}
+
+impl Command {
+    /// Checks, in debug builds, that this command is not about [`Hash::EMPTY`].
+    ///
+    /// The client answers those itself, see the [module docs](self).
+    pub(crate) fn debug_assert_not_empty_hash(&self) {
+        let hash = match self {
+            Self::BlobStatus(cmd) => cmd.hash,
+            Self::ExportBao(cmd) => cmd.hash,
+            Self::ExportRanges(cmd) => cmd.hash,
+            Self::ExportPath(cmd) => cmd.hash,
+            Self::ImportBao(cmd) => cmd.hash,
+            Self::Observe(cmd) => cmd.hash,
+            Self::DeleteBlobs(cmd) => {
+                debug_assert!(!cmd.hashes.contains(&Hash::EMPTY), "{cmd:?}");
+                return;
+            }
+            _ => return,
+        };
+        debug_assert_ne!(hash, Hash::EMPTY, "{self:?}");
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

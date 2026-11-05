@@ -86,17 +86,6 @@ impl TempTag {
         Self { inner, on_drop }
     }
 
-    /// The empty temp tag. We don't track the empty blob since we always have it.
-    pub fn leaking_empty(format: BlobFormat) -> Self {
-        Self {
-            inner: HashAndFormat {
-                hash: Hash::EMPTY,
-                format,
-            },
-            on_drop: None,
-        }
-    }
-
     /// The hash of the pinned item
     pub fn hash(&self) -> Hash {
         self.inner.hash

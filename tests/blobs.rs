@@ -76,8 +76,10 @@ async fn blobs_smoke(path: &Path, blobs: &Blobs) -> TestResult<()> {
     }
 
     {
+        // the 3 blobs added above, and the empty blob, which is always present
         let hashes = blobs.list().hashes().await?;
-        assert_eq!(hashes.len(), 3);
+        assert_eq!(hashes.len(), 4);
+        assert!(hashes.contains(&Hash::EMPTY));
     }
     Ok(())
 }
