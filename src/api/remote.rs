@@ -26,7 +26,7 @@ use crate::{
     get::{
         fsm::{
             AtBlobHeader, AtConnected, AtEndBlob, BlobContentNext, ConnectedNext, DecodeError,
-            EndBlobNext,
+            EndBlobNext, InitialNextError,
         },
         GetError, GetResult, Stats, StreamPair,
     },
@@ -671,12 +671,10 @@ impl Remote {
     ) -> GetResult<Stats> {
         let store = self.store();
         let root = request.hash;
-        let conn = conn.open_stream_pair().await.map_err(|e| {
-            e!(
-                GetError::LocalFailure,
-                n0_error::anyerr!("failed to open stream pair: {e}")
-            )
-        })?;
+        let conn = conn
+            .open_stream_pair()
+            .await
+            .map_err(|e| e!(InitialNextError::Open, e))?;
         // I am cloning the connection, but it's fine because the original connection or ConnectionRef stays alive
         // for the duration of the operation.
         let connected =
@@ -928,12 +926,16 @@ async fn get_blob_ranges_impl<R: RecvStream>(
         })
     };
     let complete = async move {
-        handle.rx.await.map_err(|e| {
-            e!(
-                GetError::LocalFailure,
-                n0_error::anyerr!("error reading from import stream: {e}")
-            )
-        })
+        handle
+            .rx
+            .await
+            .map_err(|e| {
+                e!(
+                    GetError::LocalFailure,
+                    n0_error::anyerr!("error reading from import stream: {e}")
+                )
+            })?
+            .map_err(|e| e!(GetError::LocalFailure, e.into()))
     };
     let (_, end) = tokio::try_join!(complete, write)?;
     Ok(end)

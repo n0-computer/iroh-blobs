@@ -93,8 +93,6 @@ impl fmt::Debug for Set {
 pub use crate::api::proto::CreateTagMsg;
 /// Modification method: remove a range of tags.
 pub use crate::api::proto::DeleteTagsMsg;
-/// Read method: list a range of tags.
-pub use crate::api::proto::ListTagsMsg;
 /// Modification method: rename a tag.
 pub use crate::api::proto::RenameTagMsg;
 /// Modification method: set a tag to a value, or remove it.
@@ -105,7 +103,6 @@ pub use crate::api::proto::SetTagMsg;
 pub enum ReadOnlyCommand {
     Get(Get),
     Dump(Dump),
-    ListTags(ListTagsMsg),
     ClearProtected(ClearProtectedMsg),
     GetBlobStatus(BlobStatusMsg),
 }
@@ -121,7 +118,6 @@ impl ReadOnlyCommand {
         match self {
             Self::Get(x) => Some(&x.span),
             Self::Dump(x) => Some(&x.span),
-            Self::ListTags(x) => x.parent_span_opt(),
             Self::ClearProtected(x) => x.parent_span_opt(),
             Self::GetBlobStatus(x) => x.parent_span_opt(),
         }

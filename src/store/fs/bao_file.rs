@@ -3,7 +3,7 @@ use std::{
     fs::{File, OpenOptions},
     io,
     ops::Deref,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use bao_tree::{
@@ -90,6 +90,33 @@ fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
         .create(true)
         .truncate(false)
         .open(path)
+}
+
+/// Opens the first external data file that can be opened.
+///
+/// Fails with `NotFound` only if all files are missing. Otherwise the first
+/// error that is not `NotFound` is returned, so real IO faults stay visible.
+/// An empty list never happens in normal use and is reported as corrupt metadata.
+fn open_external(paths: &[PathBuf]) -> io::Result<File> {
+    let mut error: Option<io::Error> = None;
+    for path in paths {
+        match File::open(path) {
+            Ok(file) => return Ok(file),
+            Err(cause) => {
+                debug!(
+                    "failed to open external data file {}: {cause}",
+                    path.display()
+                );
+                if error
+                    .as_ref()
+                    .is_none_or(|e| e.kind() == io::ErrorKind::NotFound)
+                {
+                    error = Some(cause);
+                }
+            }
+        }
+    }
+    Err(error.unwrap_or_else(|| io::Error::other("no external data path")))
 }
 
 /// Read from the given file at the given offset, until end of file or max bytes.
@@ -591,10 +618,7 @@ impl BaoFileStorage {
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                     DataLocation::External(paths, size) => {
-                        let Some(path) = paths.into_iter().next() else {
-                            return Err(io::Error::other("no external data path"));
-                        };
-                        let file = std::fs::File::open(&path)?;
+                        let file = open_external(&paths)?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                 };

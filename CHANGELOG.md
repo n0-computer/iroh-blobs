@@ -2,6 +2,91 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.104.1](https://github.com/n0-computer/iroh-blobs/compare/v0.104.0..0.104.1) - 2026-11-04
+
+### 🐛 Bug Fixes
+
+- *(api)* Accept a stream that is not Sync in add_stream ([#333](https://github.com/n0-computer/iroh-blobs/issues/333)) - ([19ecb4a](https://github.com/n0-computer/iroh-blobs/commit/19ecb4a8befa7ed1ead4c535be94f4ec8a35e5be))
+- *(fs-store)* Do not leave temp files behind when an import does not complete ([#326](https://github.com/n0-computer/iroh-blobs/issues/326)) - ([be30d3e](https://github.com/n0-computer/iroh-blobs/commit/be30d3e2ca7313e6589f5ba9dced4eaa1bc6f29d))
+- *(fs-store)* Answer an import_bao before closing its input ([#336](https://github.com/n0-computer/iroh-blobs/issues/336)) - ([0e2616e](https://github.com/n0-computer/iroh-blobs/commit/0e2616e1083419cb7f2e1f4594af2019058de408))
+- *(fs-store)* Don't report idle while a task's follow-up is queued ([#337](https://github.com/n0-computer/iroh-blobs/issues/337)) - ([4fa89c1](https://github.com/n0-computer/iroh-blobs/commit/4fa89c1e73cac9a14ebf8b7ef1f070af7e51bdd9))
+- *(fs-store)* Remove the files an entry no longer uses when its state changes ([#334](https://github.com/n0-computer/iroh-blobs/issues/334)) - ([688a0a7](https://github.com/n0-computer/iroh-blobs/commit/688a0a77af7df5f686f3c0c147ab9165b35634dc))
+- *(gc)* Swap enumeration order in gc mark phase to avoid TOCTOU bug ([#248](https://github.com/n0-computer/iroh-blobs/issues/248)) - ([ecdcef5](https://github.com/n0-computer/iroh-blobs/commit/ecdcef564876172e9e6bdd40a2832e304a6c6127))
+- *(gc)* Capture the protect set after the mark phase so live blobs are not swept ([#240](https://github.com/n0-computer/iroh-blobs/issues/240)) - ([12604ba](https://github.com/n0-computer/iroh-blobs/commit/12604ba1dda33f869a278a3115c61f82cfd2583f))
+- *(mem-store)* Answer export_bao for an entry without data like a missing entry ([#328](https://github.com/n0-computer/iroh-blobs/issues/328)) - ([e58a8f8](https://github.com/n0-computer/iroh-blobs/commit/e58a8f8e363405135c09d77d0feb5a750cf536b5))
+- *(mem-store)* Protect blobs written during a gc run ([#324](https://github.com/n0-computer/iroh-blobs/issues/324)) - ([fcee2a4](https://github.com/n0-computer/iroh-blobs/commit/fcee2a4d648a91bbbf6917bb2326a30697d491dc))
+- *(mem-store)* Don't block the browser thread while hashing imports ([#323](https://github.com/n0-computer/iroh-blobs/issues/323)) - ([7f84e38](https://github.com/n0-computer/iroh-blobs/commit/7f84e387337edd3047a31abfcd1e778e95a35687))
+- *(remote)* Report a failure to open the get stream as a connection error ([#329](https://github.com/n0-computer/iroh-blobs/issues/329)) - ([cff83c9](https://github.com/n0-computer/iroh-blobs/commit/cff83c9723f0777192502cf201a04608be2d29f6))
+- *(store)* Do not let the gc task keep the store alive ([#331](https://github.com/n0-computer/iroh-blobs/issues/331)) - ([2db8422](https://github.com/n0-computer/iroh-blobs/commit/2db8422ddfbde610e70c87ec017aed37d11de6b0))
+
+### 📚 Documentation
+
+- *(api)* Document ObserveProgress::await_completion ([#327](https://github.com/n0-computer/iroh-blobs/issues/327)) - ([db3c55a](https://github.com/n0-computer/iroh-blobs/commit/db3c55a18f8d27d332947cf2c0ae19de1cc4028d))
+- *(api)* Document the tags created by the AddProgress methods ([#325](https://github.com/n0-computer/iroh-blobs/issues/325)) - ([4408447](https://github.com/n0-computer/iroh-blobs/commit/4408447e8b1b0af03dce66d754bb165ed6209566))
+
+### 🧪 Testing
+
+- *(fs-store)* Requests after shutdown must not panic ([#330](https://github.com/n0-computer/iroh-blobs/issues/330)) - ([340487b](https://github.com/n0-computer/iroh-blobs/commit/340487ba93750635744b9e091f00704b63b819b7))
+- *(fs-store)* Fix and re-enable test_roundtrip_bytes_small ([#338](https://github.com/n0-computer/iroh-blobs/issues/338)) - ([14d1b7e](https://github.com/n0-computer/iroh-blobs/commit/14d1b7e2a87a248312b48e40cae1bc120f78edd3))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump the github-actions group across 1 directory with 9 updates ([#289](https://github.com/n0-computer/iroh-blobs/issues/289)) - ([6339606](https://github.com/n0-computer/iroh-blobs/commit/6339606f56f3ccfa47b2234447103a6872685fcd))
+- *(deps)* Bump iroh from 1.3.0 to 1.4.1 ([#318](https://github.com/n0-computer/iroh-blobs/issues/318)) - ([e3ac58f](https://github.com/n0-computer/iroh-blobs/commit/e3ac58f3369f9668586e11e1d2408c6e3f53b279))
+- *(deps)* Bump tokio from 1.53.3 to 1.54.1 ([#320](https://github.com/n0-computer/iroh-blobs/issues/320)) - ([08f8af3](https://github.com/n0-computer/iroh-blobs/commit/08f8af37e691838f42d2db0bd0b8f469799fb0fd))
+
+### Build
+
+- *(deps)* Bump constant_time_eq from 0.4.2 to 0.6.1 ([#284](https://github.com/n0-computer/iroh-blobs/issues/284)) - ([0271d28](https://github.com/n0-computer/iroh-blobs/commit/0271d2858a1de751689bbd22aa18c934ce233255))
+- Disable genawaiter's default features ([#332](https://github.com/n0-computer/iroh-blobs/issues/332)) - ([6de3b7f](https://github.com/n0-computer/iroh-blobs/commit/6de3b7fda5a22f722a9bf5d6df1190e61bca97a2))
+
+## [0.104.0](https://github.com/n0-computer/iroh-blobs/compare/v0.103.1..0.104.0) - 2026-10-28
+
+### ⛰️  Features
+
+- Add Downloader::builder with custom ALPN support ([#283](https://github.com/n0-computer/iroh-blobs/issues/283)) - ([1ff1585](https://github.com/n0-computer/iroh-blobs/commit/1ff1585abaa84d18678f984e8ef95c440b9e8b25))
+
+### 🐛 Bug Fixes
+
+- *(api)* Do not overflow in Bitfield::total_bytes on a range past size ([#313](https://github.com/n0-computer/iroh-blobs/issues/313)) - ([cd2780e](https://github.com/n0-computer/iroh-blobs/commit/cd2780e8e878f0dc12e64e2e68f77542f44a6c13))
+- *(api)* Report source stream errors from add_stream instead of hanging ([#299](https://github.com/n0-computer/iroh-blobs/issues/299)) - ([2e9dfc3](https://github.com/n0-computer/iroh-blobs/commit/2e9dfc3ac7e9e39df6d5f1bb43974b78b7dd59b5))
+- *(api)* Detect truncated export_ranges streams ([#297](https://github.com/n0-computer/iroh-blobs/issues/297)) - ([3369597](https://github.com/n0-computer/iroh-blobs/commit/3369597fa5d35804f1634d4a6be7c3ed3a7f05f6))
+- *(api)* Detect truncated export_bao streams without relying on Done ([#298](https://github.com/n0-computer/iroh-blobs/issues/298)) - ([2cd6ed8](https://github.com/n0-computer/iroh-blobs/commit/2cd6ed8e7bbbd14fd713419cb88a5b8c09a35889))
+- *(fs-store)* Shut down the store runtime without blocking ([#293](https://github.com/n0-computer/iroh-blobs/issues/293)) - ([5727503](https://github.com/n0-computer/iroh-blobs/commit/572750398ef6af36d6de939cdf29540fd4c4692e))
+- *(fs-store)* Let a finished import replace a poisoned entry ([#296](https://github.com/n0-computer/iroh-blobs/issues/296)) - ([55f9c06](https://github.com/n0-computer/iroh-blobs/commit/55f9c06ddcf4dc67d4901bff65023e43dea80521))
+- *(fs-store)* Handle poisoned entries consistently ([#294](https://github.com/n0-computer/iroh-blobs/issues/294)) - ([b1dee5e](https://github.com/n0-computer/iroh-blobs/commit/b1dee5e6c54ec888bb6754a65d7d31099baeb456))
+- *(fs-store)* Open the first external data file that exists ([#302](https://github.com/n0-computer/iroh-blobs/issues/302)) - ([75d40f1](https://github.com/n0-computer/iroh-blobs/commit/75d40f1d231e0ba8f44b86ff924472ca8c569f63))
+- *(gc)* Traverse HashSeq roots even when they are already live ([#317](https://github.com/n0-computer/iroh-blobs/issues/317)) - ([49f5573](https://github.com/n0-computer/iroh-blobs/commit/49f557341ef54d5e54a08cd0ce9b307bb1f0259a))
+- *(protocol)* Reject non-canonical RangeSpecSeq on deserialize ([#309](https://github.com/n0-computer/iroh-blobs/issues/309)) - ([b85f24b](https://github.com/n0-computer/iroh-blobs/commit/b85f24b2a58bf5cacd11497d73481354515cf63a))
+- *(remote)* Do not swallow store errors when importing a blob during a get ([#295](https://github.com/n0-computer/iroh-blobs/issues/295)) - ([27789ab](https://github.com/n0-computer/iroh-blobs/commit/27789ab90b502d0422b85ea7b0e6542d7428eb40))
+- Read hash seqs lazily instead of loading them into memory ([#275](https://github.com/n0-computer/iroh-blobs/issues/275)) - ([10fec96](https://github.com/n0-computer/iroh-blobs/commit/10fec96dad8168c99d8945253cd024b20c270343))
+- Build without the rpc feature when irpc/rpc is enabled ([#280](https://github.com/n0-computer/iroh-blobs/issues/280)) - ([8368de6](https://github.com/n0-computer/iroh-blobs/commit/8368de668ac67e85c9134c4386b17f20b87a6e05))
+- Do not panic when parsing invalid hashes ([#282](https://github.com/n0-computer/iroh-blobs/issues/282)) - ([2b80214](https://github.com/n0-computer/iroh-blobs/commit/2b8021482e133c8ab12cc9c53fb10029734f9136))
+- Use max_write_duration for write batches ([#285](https://github.com/n0-computer/iroh-blobs/issues/285)) - ([dda1d5e](https://github.com/n0-computer/iroh-blobs/commit/dda1d5e270da119df23b9cdd1afe831eb238cc6a))
+
+### 🚜 Refactor
+
+- *(api)* [**breaking**] Return impl Display from Hash::fmt_short, drop arrayvec ([#304](https://github.com/n0-computer/iroh-blobs/issues/304)) - ([abe564b](https://github.com/n0-computer/iroh-blobs/commit/abe564b9208a06dc327ad476bc61765ad326a275))
+
+### 🧪 Testing
+
+- Use traced_test everywhere ([#276](https://github.com/n0-computer/iroh-blobs/issues/276)) - ([a29d86c](https://github.com/n0-computer/iroh-blobs/commit/a29d86cdf806fefe9911510a4b21df589c65b411))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump proptest from 1.11.0 to 1.12.0 ([#311](https://github.com/n0-computer/iroh-blobs/issues/311)) - ([4685efa](https://github.com/n0-computer/iroh-blobs/commit/4685efa4041faedc2ae350d0070a9cb90b1a900b))
+- *(secruity)* Hardening + lock files + dependabot cooldown ([#267](https://github.com/n0-computer/iroh-blobs/issues/267)) - ([1ea527c](https://github.com/n0-computer/iroh-blobs/commit/1ea527c15a9203c9beefb0efd6c5dca79f62a041))
+- Run the i686 tests with nextest, one process per test ([#281](https://github.com/n0-computer/iroh-blobs/issues/281)) - ([986d6f0](https://github.com/n0-computer/iroh-blobs/commit/986d6f06ed209bc37e0071aef39fee52fcedc8c3))
+- Adjust git-cliff config so tags for patch releases do not throw off the changelog generation - ([e2a6221](https://github.com/n0-computer/iroh-blobs/commit/e2a6221e3e87b8c84a7a09b4b9d040e24f1b2258))
+
+### Build
+
+- *(deps)* Bump redb from 4.3.0 to 4.4.0 ([#310](https://github.com/n0-computer/iroh-blobs/issues/310)) - ([00123fa](https://github.com/n0-computer/iroh-blobs/commit/00123fafa4df9674ba8cb13e5e6d7938857e96bc))
+
+### Deps
+
+- Update lockfile and iroh-mdns-address-lookup ([#272](https://github.com/n0-computer/iroh-blobs/issues/272)) - ([ca70e39](https://github.com/n0-computer/iroh-blobs/commit/ca70e39daffe48f119d942dcfac3618b54d698b9))
+
 ## [0.103.1](https://github.com/n0-computer/iroh-blobs/compare/v0.103.0..0.103.1) - 2026-10-06
 
 ### 🐛 Bug Fixes

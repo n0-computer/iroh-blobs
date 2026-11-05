@@ -21,8 +21,9 @@ use crate::{
         blobs::BlobStatus,
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
+            ListRequest, ListTagsItem, ListTagsMsg, ListTagsRequest, RenameTagRequest,
+            SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -330,43 +331,46 @@ async fn handle_get_blob_status(
     Ok(())
 }
 
-async fn handle_list_tags(msg: ListTagsMsg, tables: &impl ReadableTables) -> ActorResult<()> {
-    trace!("{msg:?}");
-    let ListTagsMsg {
-        inner:
-            ListTagsRequest {
-                from,
-                to,
-                raw,
-                hash_seq,
-            },
-        tx,
-        ..
-    } = msg;
+/// Streams a snapshot without making the metadata actor wait for the reader.
+pub async fn list_tags(snapshot: ReadOnlyTables, cmd: ListTagsMsg) {
+    let ListTagsMsg { mut tx, inner, .. } = cmd;
+    if let Err(cause) = list_tags_impl(snapshot, inner, &mut tx).await {
+        tx.send(ListTagsItem::Error(cause)).await.ok();
+    }
+}
+
+async fn list_tags_impl(
+    snapshot: ReadOnlyTables,
+    request: ListTagsRequest,
+    tx: &mut mpsc::Sender<ListTagsItem>,
+) -> api::Result<()> {
+    let ListTagsRequest {
+        from,
+        to,
+        raw,
+        hash_seq,
+    } = request;
     let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    let mut res = Vec::new();
-    for item in tables
+    for item in snapshot
         .tags()
         .range((from, to))
-        .map_err(|e| e!(ActorError::Storage, e))?
+        .map_err(api_error_from_storage_error)?
     {
-        match item {
-            Ok((k, v)) => {
-                let v = v.value();
-                if raw && v.format.is_raw() || hash_seq && v.format.is_hash_seq() {
-                    let info = TagInfo {
-                        name: k.value(),
-                        hash: v.hash,
-                        format: v.format,
-                    };
-                    res.push(crate::api::Result::Ok(info));
-                }
+        let (k, v) = item.map_err(api_error_from_storage_error)?;
+        let v = v.value();
+        if raw && v.format.is_raw() || hash_seq && v.format.is_hash_seq() {
+            let info = TagInfo {
+                name: k.value(),
+                hash: v.hash,
+                format: v.format,
+            };
+            if tx.send(ListTagsItem::Tag(info)).await.is_err() {
+                return Ok(());
             }
-            Err(e) => res.push(Err(api_error_from_storage_error(e))),
         }
     }
-    tx.send(res).await.ok();
+    tx.send(ListTagsItem::Done).await.ok();
     Ok(())
 }
 
@@ -402,12 +406,10 @@ fn handle_update(
     };
     let state = match old_entry_opt {
         Some(old) => {
-            let partial_to_complete = old.is_partial() && state.is_complete();
+            let was_partial = old.is_partial();
             let res = EntryState::union(old, state)?;
-            if partial_to_complete {
-                tables
-                    .ftx
-                    .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+            if was_partial {
+                delete_partial_files(tables, hash, &res);
             }
             res
         }
@@ -459,10 +461,14 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    tables
+    let was_partial = tables
         .blobs
-        .insert(hash, state)
-        .map_err(|e| e!(ActorError::Storage, e))?;
+        .insert(hash, &state)
+        .map_err(|e| e!(ActorError::Storage, e))?
+        .is_some_and(|old| old.value().is_partial());
+    if was_partial {
+        delete_partial_files(tables, hash, &state);
+    }
     if let Some(data) = data {
         tables
             .inline_data
@@ -477,6 +483,30 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     }
     tx.send(Ok(()));
     Ok(())
+}
+
+/// Removes the files of a partial entry that its complete state no longer uses.
+///
+/// Inlined data and outboards are safe to delete: whether they are inlined depends
+/// only on the size, so no concurrent import of the same hash writes those files.
+/// Owned data is never deleted, since a re-import can replace that file at any time.
+fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
+    let EntryState::Complete {
+        data_location,
+        outboard_location,
+    } = new
+    else {
+        return;
+    };
+    tables
+        .ftx
+        .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+    if matches!(data_location, DataLocation::Inline(_)) {
+        tables.ftx.delete(hash, [BaoFilePart::Data]);
+    }
+    if !matches!(outboard_location, OutboardLocation::Owned) {
+        tables.ftx.delete(hash, [BaoFilePart::Outboard]);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -554,7 +584,6 @@ impl Actor {
         match cmd {
             ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables),
             ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
-            ReadOnlyCommand::ListTags(cmd) => handle_list_tags(cmd, tables).await,
             ReadOnlyCommand::ClearProtected(cmd) => handle_clear_protected(cmd, protected).await,
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }
@@ -956,19 +985,16 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
 
 pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
     let ListBlobsMsg { mut tx, inner, .. } = cmd;
-    match list_blobs_impl(snapshot, inner, &mut tx).await {
-        Ok(()) => {}
-        Err(e) => {
-            error!("error listing blobs: {}", e);
-            tx.send(Err(e)).await.ok();
-        }
+    if let Err(cause) = list_blobs_impl(snapshot, inner, &mut tx).await {
+        error!("error listing blobs: {}", cause);
+        tx.send(ListBlobsItem::Error(cause)).await.ok();
     }
 }
 
 async fn list_blobs_impl(
     snapshot: ReadOnlyTables,
     _cmd: ListRequest,
-    tx: &mut mpsc::Sender<api::Result<Hash>>,
+    tx: &mut mpsc::Sender<ListBlobsItem>,
 ) -> api::Result<()> {
     for item in snapshot
         .blobs
@@ -976,8 +1002,90 @@ async fn list_blobs_impl(
         .map_err(api_error_from_storage_error)?
     {
         let (k, _) = item.map_err(api_error_from_storage_error)?;
-        let k = k.value();
-        tx.send(Ok(k)).await.ok();
+        if tx.send(ListBlobsItem::Hash(k.value())).await.is_err() {
+            return Ok(());
+        }
     }
+    tx.send(ListBlobsItem::Done).await.ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{
+        super::{delete_set, options::PathOptions},
+        *,
+    };
+
+    #[test]
+    fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Arc::new(PathOptions::new(dir.path()));
+        std::fs::create_dir_all(&paths.data_path)?;
+        let (protect, mut deletes) = delete_set::pair(paths.clone());
+        let db = Database::create(dir.path().join("db"))?;
+        let hash = Hash::new(b"content");
+        let owned = paths.data_path(&hash);
+        let external = dir.path().join("exported");
+        std::fs::write(&owned, b"content")?;
+        let ftx = deletes.begin_write();
+        let tx = db.begin_write()?;
+        let mut tables = Tables::new(&tx, &ftx)?;
+        tables.blobs.insert(
+            hash,
+            EntryState::Complete {
+                data_location: DataLocation::Owned(7),
+                outboard_location: OutboardLocation::NotNeeded,
+            },
+        )?;
+        // Export queues Set; another import writes before the db handles it.
+        std::fs::rename(&owned, &external)?;
+        protect.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
+        std::fs::write(&owned, b"content")?;
+        let mut protected = HashSet::new();
+        let (reply, _rx) = oneshot::channel();
+        handle_set(
+            Set {
+                hash,
+                state: EntryState::Complete {
+                    data_location: DataLocation::External(vec![external], 7),
+                    outboard_location: OutboardLocation::NotNeeded,
+                },
+                tx: reply,
+                span: Span::none(),
+            },
+            &mut protected,
+            &mut tables,
+        )?;
+        handle_update(
+            Update {
+                hash,
+                state: EntryState::Complete {
+                    data_location: DataLocation::Owned(7),
+                    outboard_location: OutboardLocation::NotNeeded,
+                },
+                tx: None,
+                span: Span::none(),
+            },
+            &mut protected,
+            &mut tables,
+        )?;
+        assert!(matches!(
+            tables.blobs.get(hash)?.unwrap().value(),
+            EntryState::Complete {
+                data_location: DataLocation::Owned(_),
+                ..
+            }
+        ));
+        drop(tables);
+        tx.commit()?;
+        ftx.commit();
+        assert!(
+            owned.exists(),
+            "committed metadata still refers to this file"
+        );
+        Ok(())
+    }
 }
