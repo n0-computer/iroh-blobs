@@ -848,6 +848,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn progress_notifications_survive_a_dropped_receiver() -> TestResult {
+        let (events, mut rx) = EventSender::channel(1, get_mask(RequestMode::NotifyLog));
+        let mut tracker = events.request(get, 0, 0).await?;
+        let Some(ProviderMessage::GetRequestReceivedNotify(mut msg)) = rx.recv().await else {
+            panic!("expected a get notification");
+        };
+        // First establish that this request actually delivers progress updates.
+        tracker.transfer_progress(1024, 1024).await?;
+        let update =
+            tokio::time::timeout(std::time::Duration::from_secs(5), msg.rx.recv()).await??;
+        assert!(matches!(
+            update,
+            Some(RequestUpdate::Progress(TransferProgress {
+                end_offset: 1024
+            }))
+        ));
+        // Losing the handler after tracking starts must not abort the transfer.
+        drop(msg);
+        drop(rx);
+        tracker.transfer_progress(1024, 2048).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn decisions_fail_closed_with_a_dead_handler() {
         for mode in [RequestMode::Intercept, RequestMode::InterceptLog] {
             assert!(dead(get_mask(mode)).request(get, 0, 0).await.is_err());
