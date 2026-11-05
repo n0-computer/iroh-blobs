@@ -291,6 +291,15 @@ pub struct ImportByteStreamRequest {
     pub scope: Scope,
 }
 
+/// The items a client sends to the store for an [`ImportByteStreamRequest`].
+///
+/// The client sends the data as [`Self::Bytes`] items, and then
+/// [`Self::Done`]. Unlike the response streams, dropping the sender does not
+/// complete the stream: the store only imports the data after [`Self::Done`],
+/// and treats a stream that ends without it as aborted. So a client that goes
+/// away in the middle of an upload never produces a truncated blob.
+///
+#[doc = include_str!("../../docs/img/import_byte_stream.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ImportByteStreamUpdate {
     Bytes(Bytes),
