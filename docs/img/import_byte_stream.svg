@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="490" height="250" viewBox="0 0 490 250" style="max-width: 100%; height: auto" font-family="sans-serif" font-size="13" fill="none" stroke="currentColor" role="img" aria-label="State machine of an import byte stream">
+  <!--
+    State machine of the stream of ImportByteStreamUpdate items that a client
+    sends to the store, included in the rustdoc of ImportByteStreamUpdate in
+    src/api/proto.rs. The stores implement it in import_byte_stream in
+    src/store/mem.rs and into_stream in src/store/fs/import.rs, update them
+    together.
+    Conventions, since this is inlined into a markdown doc comment:
+    - no blank lines, they would end the html block
+    - only currentColor, so it works in the light and dark rustdoc themes
+    - ids are unique on the page, so they are prefixed with import-byte-stream
+    - events that are not items, like the sender being dropped, are in plain
+      text instead of monospace
+    Layout: states are 140 x 50 boxes at y = 105, final states are 140 x 44
+    pills. Each state is a group in local coordinates, with its self loop and
+    the loop label above the box. Transitions use page coordinates and end at
+    the border of the box they point to.
+    To check a change, render it in both themes and look at the result:
+      rsvg-convert -w 980 -b white import_byte_stream.svg -o light.png
+      rsvg-convert -w 980 -b '#353535' -s dark.css import_byte_stream.svg -o dark.png
+    where dark.css contains: svg { color: #ddd; }
+  -->
+  <defs>
+    <marker id="import-byte-stream-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor" stroke="none"/>
+    </marker>
+  </defs>
+  <!-- states -->
+  <g id="import-byte-stream-receiving" transform="translate(50 105)">
+    <rect width="140" height="50" rx="8"/>
+    <path d="M50,0 C45,-40 95,-40 90,-2" marker-end="url(#import-byte-stream-arrow)"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">receiving</text>
+      <text x="70" y="39" font-size="11">collecting the data</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">Bytes</text>
+    </g>
+  </g>
+  <g id="import-byte-stream-finished" transform="translate(320 108)">
+    <rect width="140" height="44" rx="22" stroke-width="2.5"/>
+    <text x="70" y="27" fill="currentColor" stroke="none" text-anchor="middle">finished</text>
+  </g>
+  <g id="import-byte-stream-aborted" transform="translate(320 190)">
+    <rect width="140" height="44" rx="22" stroke-width="2.5"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="19">aborted</text>
+      <text x="70" y="35" font-size="11">nothing is imported</text>
+    </g>
+  </g>
+  <!-- transitions, each a path with its label -->
+  <g fill="currentColor" stroke="none" font-family="monospace" font-size="12" text-anchor="middle">
+    <!-- start: into receiving -->
+    <circle cx="18" cy="130" r="6" stroke="currentColor"/>
+    <path d="M24,130 H48" fill="none" stroke="currentColor" marker-end="url(#import-byte-stream-arrow)"/>
+    <!-- receiving to finished: Done -->
+    <path d="M190,130 H318" fill="none" stroke="currentColor" marker-end="url(#import-byte-stream-arrow)"/>
+    <text x="254" y="122">Done</text>
+    <!-- receiving to aborted: the sender is dropped before Done -->
+    <path d="M120,155 C120,195 200,212 318,212" fill="none" stroke="currentColor" marker-end="url(#import-byte-stream-arrow)"/>
+    <text x="196" y="232" font-family="sans-serif" font-size="11">sender dropped</text>
+  </g>
+</svg>

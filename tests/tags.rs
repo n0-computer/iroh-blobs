@@ -14,6 +14,7 @@ use iroh_blobs::{
     BlobFormat, Hash, HashAndFormat,
 };
 use n0_future::{Stream, StreamExt};
+use n0_tracing_test::traced_test;
 use testresult::TestResult;
 
 async fn to_vec<T>(stream: impl Stream<Item = api::Result<T>>) -> api::Result<Vec<T>> {
@@ -132,23 +133,23 @@ async fn tags_smoke(tags: &Tags) -> TestResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn tags_smoke_mem() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let store = MemStore::new();
     tags_smoke(store.tags()).await
 }
 
 #[tokio::test]
+#[traced_test]
 async fn tags_smoke_fs() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let td = tempfile::tempdir()?;
     let store = FsStore::load(td.path().join("a")).await?;
     tags_smoke(store.tags()).await
 }
 
 #[tokio::test]
+#[traced_test]
 async fn tags_smoke_fs_rpc() -> TestResult<()> {
-    tracing_subscriber::fmt::try_init().ok();
     let unspecified = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
     let (server, cert) = irpc::util::make_server_endpoint(unspecified)?;
     let client = irpc::util::make_client_endpoint(unspecified, &[cert.as_ref()])?;

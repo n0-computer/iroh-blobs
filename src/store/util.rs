@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, fmt};
+use std::{borrow::Borrow, fmt, io};
 
 use bao_tree::io::mixed::EncodedItem;
 use bytes::Bytes;
@@ -22,6 +22,38 @@ mod mem_or_file;
 #[cfg(feature = "fs-store")]
 #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub use mem_or_file::{FixedSize, MemOrFile};
+
+/// Exports the empty blob on the store's filesystem without creating a blob entry.
+pub(crate) async fn export_empty(cmd: crate::api::proto::ExportPathMsg) {
+    use crate::api::proto::ExportProgressItem;
+
+    let result = (|| -> io::Result<()> {
+        let target = &cmd.target;
+        if !target.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path is not absolute",
+            ));
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::File::create(target)?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            cmd.tx.send(ExportProgressItem::Size(0)).await.ok();
+            cmd.tx.send(ExportProgressItem::Done).await.ok();
+        }
+        Err(cause) => {
+            cmd.tx
+                .send(ExportProgressItem::Error(cause.into()))
+                .await
+                .ok();
+        }
+    }
+}
 
 /// A named, persistent tag.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, From, Into)]
@@ -169,7 +201,6 @@ mod fs {
         path::Path,
     };
 
-    use arrayvec::ArrayString;
     use bao_tree::blake3;
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -319,13 +350,13 @@ mod fs {
         fn addr(&self) -> usize;
 
         // a short symbol string for the address
-        fn addr_short(&self) -> ArrayString<12> {
+        fn addr_short(&self) -> String {
             let addr = self.addr().to_le_bytes();
             symbol_string(&addr)
         }
 
         #[allow(dead_code)]
-        fn hash_short(&self) -> ArrayString<10> {
+        fn hash_short(&self) -> impl fmt::Display + Copy + 'static {
             crate::Hash::new(self.as_ref()).fmt_short()
         }
     }
@@ -335,12 +366,12 @@ mod fs {
             self.as_ref() as *const [u8] as *const u8 as usize
         }
 
-        fn hash_short(&self) -> ArrayString<10> {
+        fn hash_short(&self) -> impl fmt::Display + Copy + 'static {
             crate::Hash::new(self.as_ref()).fmt_short()
         }
     }
 
-    pub fn symbol_string(data: &[u8]) -> ArrayString<12> {
+    pub fn symbol_string(data: &[u8]) -> String {
         const SYMBOLS: &[char] = &[
             '😀', '😂', '😍', '😎', '😢', '😡', '😱', '😴', '🤓', '🤔', '🤗', '🤢', '🤡', '🤖',
             '👽', '👾', '👻', '💀', '💩', '♥', '💥', '💦', '💨', '💫', '💬', '💭', '💰', '💳',
@@ -354,8 +385,7 @@ mod fs {
         let hash = blake3::hash(data);
         let bytes = hash.as_bytes(); // 32-byte hash
 
-        // Create an ArrayString with capacity 12 (bytes)
-        let mut result = ArrayString::<12>::new();
+        let mut result = String::with_capacity(12);
 
         // Fill with 3 symbols
         for byte in bytes.iter().take(3) {
@@ -415,7 +445,6 @@ impl bao_tree::io::mixed::Sender for BaoTreeSender {
 }
 
 #[cfg(test)]
-#[cfg(feature = "fs-store")]
 pub mod tests {
     use bao_tree::{io::outboard::PreOrderMemOutboard, ChunkRanges};
     use n0_error::{Result, StdResultExt};
