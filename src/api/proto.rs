@@ -14,14 +14,11 @@
 //! The file system store is quite complex and optimized, so to get started take a look at
 //! the much simpler memory store.
 //!
-//! # Tag listings
+//! # Listings
 //!
-//! [`Request::ListTags`] and [`Request::ListTempTags`] send zero or more `Tag`
-//! items followed by `Done` on success, or a terminal `Error` on failure. Even an
-//! empty listing must send `Done`. Closing the stream before either terminal
-//! item is an error, since dropping a sender does not prove enumeration finished.
-//! Clients stop at the terminal item without waiting for the sender to close.
-//! See [`ListTagsItem`] for the state diagram shared by both listings.
+//! [`Request::ListBlobs`], [`Request::ListTags`] and [`Request::ListTempTags`]
+//! end with an explicit `Done` or `Error`, since the client can not tell from
+//! the items when a listing is complete. See [`ListBlobsItem`].
 //!
 //! # The empty blob
 //!
@@ -115,7 +112,7 @@ impl HashSpecific for CreateTagMsg {
 #[rpc_requests(message = Command, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]
+    #[rpc(tx = mpsc::Sender<ListBlobsItem>)]
     ListBlobs(ListRequest),
     #[rpc(tx = oneshot::Sender<Scope>, rx = mpsc::Receiver<BatchResponse>)]
     Batch(BatchRequest),
@@ -139,7 +136,6 @@ pub enum Request {
     ImportPath(ImportPathRequest),
     #[rpc(tx = mpsc::Sender<ExportProgressItem>)]
     ExportPath(ExportPathRequest),
-    /// Lists matching tags. Ends with `Done` or `Error`; closure alone is incomplete.
     #[rpc(tx = mpsc::Sender<ListTagsItem>)]
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
@@ -150,7 +146,6 @@ pub enum Request {
     RenameTag(RenameTagRequest),
     #[rpc(tx = oneshot::Sender<super::Result<Tag>>)]
     CreateTag(CreateTagRequest),
-    /// Lists temporary protections in all scopes. Ends with `Done` or `Error`.
     #[rpc(tx = mpsc::Sender<ListTempTagsItem>)]
     ListTempTags(ListTempTagsRequest),
     #[rpc(tx = oneshot::Sender<TempTag>)]
@@ -400,40 +395,52 @@ impl ListTagsRequest {
     }
 }
 
-/// An item in a named-tag listing. `Done` and `Error` are terminal.
+/// An item of a [`Request::ListBlobs`] listing.
 ///
-/// Send zero or more [`Self::Tag`] items, then [`Self::Done`] on success or
-/// [`Self::Error`] on failure. An empty listing still sends [`Self::Done`].
-/// Closure before either terminal item is reported as
-/// [`std::io::ErrorKind::UnexpectedEof`]. Clients stop at the terminal item,
-/// without waiting for the sender to close or reading any later items.
+/// A listing is zero or more [`Self::Hash`] items, followed by [`Self::Done`]
+/// on success or [`Self::Error`] on failure. An empty listing still sends
+/// [`Self::Done`]. Unlike for the other response streams, dropping the sender
+/// does not complete a listing: a store task that panics or is aborted drops
+/// its sender, and the client can not tell from the items that some are
+/// missing. So a client reports a listing that closes before its terminal item
+/// as an error, and stops at the terminal item without waiting for the close.
 ///
-/// This state machine also applies to [`ListTempTagsItem`].
+/// [`ListTagsItem`] and [`ListTempTagsItem`] work the same way.
 ///
-#[doc = include_str!("../../docs/img/tag_list.svg")]
+#[doc = include_str!("../../docs/img/list.svg")]
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListBlobsItem {
+    /// A blob in the store.
+    Hash(Hash),
+    /// The listing is complete.
+    Done,
+    /// The listing failed, the items before it are not complete.
+    Error(super::Error),
+}
+
+/// An item of a [`Request::ListTags`] listing.
+///
+/// Ends like a [blob listing](ListBlobsItem).
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ListTagsItem {
     /// A matching named tag.
     Tag(TagInfo),
-    /// The complete listing has been sent, including when it is empty.
+    /// The listing is complete.
     Done,
-    /// The listing failed and must not be treated as complete.
+    /// The listing failed, the items before it are not complete.
     Error(super::Error),
 }
 
-/// An item in a temporary-tag listing. `Done` and `Error` are terminal.
+/// An item of a [`Request::ListTempTags`] listing.
 ///
-/// Follows the same [state machine as named-tag listings](ListTagsItem).
-/// Send zero or more [`Self::Tag`] items, then [`Self::Done`] on success or
-/// [`Self::Error`] on failure. An empty listing still sends [`Self::Done`];
-/// closure before either terminal item is an unexpected EOF.
+/// Ends like a [blob listing](ListBlobsItem).
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ListTempTagsItem {
     /// Content protected by a temporary tag.
     Tag(HashAndFormat),
-    /// The complete listing has been sent, including when it is empty.
+    /// The listing is complete.
     Done,
-    /// The listing failed and must not be treated as complete.
+    /// The listing failed, the items before it are not complete.
     Error(super::Error),
 }
 

@@ -194,8 +194,11 @@ impl Actor {
                 let hashes: Vec<Hash> = self.data.keys().cloned().collect();
                 self.tasks.spawn(async move {
                     for hash in hashes {
-                        cmd.tx.send(Ok(hash)).await.ok();
+                        if cmd.tx.send(proto::ListBlobsItem::Hash(hash)).await.is_err() {
+                            return;
+                        }
                     }
+                    cmd.tx.send(proto::ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {

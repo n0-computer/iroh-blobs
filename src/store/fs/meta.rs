@@ -21,9 +21,9 @@ use crate::{
         blobs::BlobStatus,
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsItem, ListTagsMsg, ListTagsRequest, RenameTagRequest, SetTagRequest,
-            ShutdownMsg, SyncDbMsg,
+            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
+            ListRequest, ListTagsItem, ListTagsMsg, ListTagsRequest, RenameTagRequest,
+            SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -985,19 +985,16 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
 
 pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
     let ListBlobsMsg { mut tx, inner, .. } = cmd;
-    match list_blobs_impl(snapshot, inner, &mut tx).await {
-        Ok(()) => {}
-        Err(e) => {
-            error!("error listing blobs: {}", e);
-            tx.send(Err(e)).await.ok();
-        }
+    if let Err(cause) = list_blobs_impl(snapshot, inner, &mut tx).await {
+        error!("error listing blobs: {}", cause);
+        tx.send(ListBlobsItem::Error(cause)).await.ok();
     }
 }
 
 async fn list_blobs_impl(
     snapshot: ReadOnlyTables,
     _cmd: ListRequest,
-    tx: &mut mpsc::Sender<api::Result<Hash>>,
+    tx: &mut mpsc::Sender<ListBlobsItem>,
 ) -> api::Result<()> {
     for item in snapshot
         .blobs
@@ -1005,9 +1002,11 @@ async fn list_blobs_impl(
         .map_err(api_error_from_storage_error)?
     {
         let (k, _) = item.map_err(api_error_from_storage_error)?;
-        let k = k.value();
-        tx.send(Ok(k)).await.ok();
+        if tx.send(ListBlobsItem::Hash(k.value())).await.is_err() {
+            return Ok(());
+        }
     }
+    tx.send(ListBlobsItem::Done).await.ok();
     Ok(())
 }
 

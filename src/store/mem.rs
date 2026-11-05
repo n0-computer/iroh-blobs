@@ -52,9 +52,10 @@ use crate::{
             DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
             ExportRangesItem, ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
-            ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsItem, ListTagsMsg,
-            ListTagsRequest, ListTempTagsItem, ObserveMsg, ObserveRequest, RenameTagMsg,
-            RenameTagRequest, Scope, SetTagMsg, SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
+            ImportPathMsg, ImportPathRequest, ListBlobsItem, ListBlobsMsg, ListTagsItem,
+            ListTagsMsg, ListTagsRequest, ListTempTagsItem, ObserveMsg, ObserveRequest,
+            RenameTagMsg, RenameTagRequest, Scope, SetTagMsg, SetTagRequest, ShutdownMsg,
+            SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -370,10 +371,11 @@ impl Actor {
                 let blobs = self.state.data.keys().cloned().collect::<Vec<Hash>>();
                 self.spawn(async move {
                     for blob in blobs {
-                        if tx.send(Ok(blob)).await.is_err() {
-                            break;
+                        if tx.send(ListBlobsItem::Hash(blob)).await.is_err() {
+                            return;
                         }
                     }
+                    tx.send(ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {

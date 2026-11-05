@@ -523,8 +523,16 @@ impl Actor {
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
-                if let Ok(snapshot) = self.db().snapshot(cmd.span.clone()).await {
-                    self.spawn(list_blobs(snapshot, cmd));
+                match self.db().snapshot(cmd.span.clone()).await {
+                    Ok(snapshot) => self.spawn(list_blobs(snapshot, cmd)),
+                    Err(cause) => {
+                        self.spawn(async move {
+                            cmd.tx
+                                .send(proto::ListBlobsItem::Error(api::Error::other(cause)))
+                                .await
+                                .ok();
+                        });
+                    }
                 }
             }
             Command::Batch(cmd) => {

@@ -15,8 +15,8 @@ use bao_tree::{
 use range_collections::RangeSet2;
 
 use super::{
-    AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem, ListTagsItem,
-    ListTempTagsItem,
+    AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem, ListBlobsItem,
+    ListTagsItem, ListTempTagsItem,
 };
 use crate::Hash;
 
@@ -214,17 +214,17 @@ impl StreamRules<EncodedItem> for ExportBaoRules {
 
 /// The rules of a [`super::Request::ListBlobs`] stream.
 ///
-/// The store never lists [`Hash::EMPTY`], since the client adds that. An error
-/// is always the last item.
+/// `Done` and `Error` are the last item, and the store never lists
+/// [`Hash::EMPTY`], since the client adds that.
 #[derive(Debug, Default)]
 pub(crate) struct ListBlobsRules;
 
-impl StreamRules<crate::api::Result<Hash>> for ListBlobsRules {
-    fn feed(&mut self, item: &crate::api::Result<Hash>) -> Result<Step, Violation> {
+impl StreamRules<ListBlobsItem> for ListBlobsRules {
+    fn feed(&mut self, item: &ListBlobsItem) -> Result<Step, Violation> {
         match item {
-            Err(_) => Ok(Step::Last),
-            Ok(hash) if *hash == Hash::EMPTY => Err(Violation::EmptyHashListed),
-            Ok(_) => Ok(Step::More),
+            ListBlobsItem::Hash(hash) if *hash == Hash::EMPTY => Err(Violation::EmptyHashListed),
+            ListBlobsItem::Hash(_) => Ok(Step::More),
+            ListBlobsItem::Done | ListBlobsItem::Error(_) => Ok(Step::Last),
         }
     }
 }
@@ -557,11 +557,15 @@ mod tests {
     #[test]
     fn list_blobs_violations() {
         let mut rules = ListBlobsRules;
-        assert_eq!(rules.feed(&Ok(Hash::new(b"a"))), Ok(Step::More));
         assert_eq!(
-            rules.feed(&Ok(Hash::EMPTY)),
+            rules.feed(&ListBlobsItem::Hash(Hash::new(b"a"))),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&ListBlobsItem::Hash(Hash::EMPTY)),
             Err(Violation::EmptyHashListed)
         );
+        assert_eq!(rules.feed(&ListBlobsItem::Done), Ok(Step::Last));
     }
 
     #[test]

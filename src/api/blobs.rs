@@ -52,7 +52,7 @@ use super::{
         },
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
-        ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
+        ImportBytesRequest, ImportPathRequest, ListBlobsItem, ListRequest, Scope,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -992,12 +992,12 @@ impl ImportBaoHandle {
 
 /// A progress handle for a blobs list operation.
 pub struct BlobsListProgress {
-    inner: future::Boxed<irpc::Result<mpsc::Receiver<super::Result<Hash>>>>,
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListBlobsItem>>>,
 }
 
 impl BlobsListProgress {
     fn new(
-        fut: impl Future<Output = irpc::Result<mpsc::Receiver<super::Result<Hash>>>> + Send + 'static,
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListBlobsItem>>> + Send + 'static,
     ) -> Self {
         Self {
             inner: Box::pin(fut),
@@ -1006,11 +1006,9 @@ impl BlobsListProgress {
 
     /// All hashes in the store, starting with [`Hash::EMPTY`], which is always present.
     pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
-        let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
-        let mut rules = ListBlobsRules;
-        let mut hashes = vec![Hash::EMPTY];
-        while let Some(item) = rx.recv().await? {
-            rules.check(&item)?;
+        let mut stream = self.stream().await?;
+        let mut hashes = Vec::new();
+        while let Some(item) = stream.next().await {
             hashes.push(item?);
         }
         Ok(hashes)
@@ -1022,7 +1020,22 @@ impl BlobsListProgress {
         Ok(Gen::new(|co| async move {
             co.yield_(Ok(Hash::EMPTY)).await;
             let mut rules = ListBlobsRules;
-            while let Ok(Some(item)) = rx.recv().await {
+            loop {
+                let item = match rx.recv().await {
+                    Ok(Some(item)) => item,
+                    Ok(None) => {
+                        co.yield_(Err(super::Error::io(
+                            io::ErrorKind::UnexpectedEof,
+                            "blob listing ended before completion",
+                        )))
+                        .await;
+                        return;
+                    }
+                    Err(cause) => {
+                        co.yield_(Err(cause.into())).await;
+                        return;
+                    }
+                };
                 let step = match rules.check(&item) {
                     Ok(step) => step,
                     Err(cause) => {
@@ -1030,7 +1043,11 @@ impl BlobsListProgress {
                         return;
                     }
                 };
-                co.yield_(item).await;
+                match item {
+                    ListBlobsItem::Hash(hash) => co.yield_(Ok(hash)).await,
+                    ListBlobsItem::Done => {}
+                    ListBlobsItem::Error(cause) => co.yield_(Err(cause)).await,
+                }
                 if step == Step::Last {
                     return;
                 }
@@ -1468,10 +1485,13 @@ mod tests {
     async fn list_blobs_stops_at_error() -> TestResult<()> {
         for extra in [false, true] {
             let (tx, rx) = mpsc::channel(2);
-            tx.send(Err(io::Error::other("store failed").into()))
-                .await?;
+            tx.send(ListBlobsItem::Error(
+                io::Error::other("store failed").into(),
+            ))
+            .await?;
             if extra {
-                tx.send(Ok(Hash::new(b"unexpected"))).await?;
+                tx.send(ListBlobsItem::Hash(Hash::new(b"unexpected")))
+                    .await?;
             }
             let progress = BlobsListProgress::new(async { Ok(rx) });
             let items: Vec<_> = tokio::time::timeout(
@@ -1483,6 +1503,31 @@ mod tests {
             assert_eq!(*items[0].as_ref().unwrap(), Hash::EMPTY);
             assert!(items[1].is_err());
             drop(tx);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_blobs_needs_done() -> TestResult<()> {
+        let hash = Hash::new(b"listed");
+        for done in [false, true] {
+            let (tx, rx) = mpsc::channel(2);
+            tx.send(ListBlobsItem::Hash(hash)).await?;
+            if done {
+                tx.send(ListBlobsItem::Done).await?;
+            }
+            drop(tx);
+            let progress = BlobsListProgress::new(async { Ok(rx) });
+            let items: Vec<_> = progress.stream().await?.collect().await;
+            assert_eq!(*items[0].as_ref().unwrap(), Hash::EMPTY);
+            assert_eq!(*items[1].as_ref().unwrap(), hash);
+            if done {
+                assert_eq!(items.len(), 2);
+            } else {
+                assert_eq!(items.len(), 3);
+                let super::super::Error::Io(cause) = items[2].as_ref().unwrap_err();
+                assert_eq!(cause.kind(), io::ErrorKind::UnexpectedEof);
+            }
         }
         Ok(())
     }
