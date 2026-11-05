@@ -18,7 +18,7 @@
 <a href=#18 id=18 data-nosnippet>18</a>//!
 <a href=#19 id=19 data-nosnippet>19</a>//! The empty blob, [`Hash::EMPTY`], is always present. The client in [`crate::api`]
 <a href=#20 id=20 data-nosnippet>20</a>//! answers every request that reads or deletes it without asking the store, so a store
-<a href=#21 id=21 data-nosnippet>21</a>//! never gets such a request, and [`Request::ListBlobs`] does not need to list it.
+<a href=#21 id=21 data-nosnippet>21</a>//! never gets such a request, and [`Request::ListBlobs`] must not list it.
 <a href=#22 id=22 data-nosnippet>22</a>//! Like everything else about this protocol, this is not enforced: a store may rely on
 <a href=#23 id=23 data-nosnippet>23</a>//! it, but a client that sends such a request anyway gets unspecified results.
 <a href=#24 id=24 data-nosnippet>24</a>//!

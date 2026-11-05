@@ -1231,8 +1231,8 @@
 <a href=#1231 id=1231 data-nosnippet>1231</a>    <span class="kw">let </span>outboard = ctx.outboard()<span class="question-mark">?</span>;
 <a href=#1232 id=1232 data-nosnippet>1232</a>    <span class="kw">let </span>size = outboard.tree.size();
 <a href=#1233 id=1233 data-nosnippet>1233</a>    <span class="kw">if </span>size == <span class="number">0 </span>{
-<a href=#1234 id=1234 data-nosnippet>1234</a>        <span class="comment">// an entry without any data, not even the size, is answered like a missing one
-<a href=#1235 id=1235 data-nosnippet>1235</a>        </span><span class="kw">return </span><span class="prelude-val">Err</span>(io::Error::new(io::ErrorKind::NotFound, <span class="string">"hash not found"</span>));
+<a href=#1234 id=1234 data-nosnippet>1234</a>        <span class="comment">// we have no data whatsoever, so we stop here
+<a href=#1235 id=1235 data-nosnippet>1235</a>        </span><span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#1236 id=1236 data-nosnippet>1236</a>    }
 <a href=#1237 id=1237 data-nosnippet>1237</a>    <span class="macro">trace!</span>(<span class="string">"exporting bao: {hash} {ranges:?} size={size}"</span>,);
 <a href=#1238 id=1238 data-nosnippet>1238</a>    <span class="kw">let </span>data = ctx.data_reader();
