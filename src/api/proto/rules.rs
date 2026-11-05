@@ -6,7 +6,10 @@
 //! never panic or log, the caller decides what to do with a [`Violation`].
 use std::io;
 
-use bao_tree::{io::mixed::EncodedItem, ChunkRanges};
+use bao_tree::{
+    io::{mixed::EncodedItem, Leaf},
+    ChunkRanges,
+};
 use range_collections::RangeSet2;
 
 use super::ExportRangesItem;
@@ -27,6 +30,39 @@ pub(crate) enum Violation {
     DataBeforeSize,
     #[display("the size was sent twice")]
     SizeTwice,
+    #[display("data out of order")]
+    DataOutOfOrder,
+    #[display("data past the size")]
+    DataPastSize,
+}
+
+/// Where the data of an export stream is, once the size is known.
+#[derive(Debug, Clone, Copy)]
+struct DataPos {
+    size: u64,
+    /// The end of the data that completes the stream.
+    end: u64,
+    /// The end of the data received so far.
+    pos: u64,
+}
+
+impl DataPos {
+    fn new(size: u64, end: u64) -> (Self, Step) {
+        (Self { size, end, pos: 0 }, last_if(end == 0))
+    }
+
+    /// Data comes in ascending order and ends at the size at the latest.
+    fn feed(&mut self, leaf: &Leaf) -> Result<Step, Violation> {
+        let leaf_end = leaf.offset + leaf.data.len() as u64;
+        if leaf.offset < self.pos {
+            return Err(Violation::DataOutOfOrder);
+        }
+        if leaf_end > self.size {
+            return Err(Violation::DataPastSize);
+        }
+        self.pos = leaf_end;
+        Ok(last_if(leaf_end >= self.end))
+    }
 }
 
 /// The rules of a response stream with items of type `T`.
@@ -60,30 +96,28 @@ pub(crate) trait StreamRules<T> {
 #[derive(Debug)]
 pub(crate) struct ExportRangesRules {
     ranges: RangeSet2<u64>,
-    /// The end of the data, once the size is known.
-    end: Option<u64>,
+    data: Option<DataPos>,
 }
 
 impl ExportRangesRules {
     pub(crate) fn new(ranges: RangeSet2<u64>) -> Self {
-        Self { ranges, end: None }
+        Self { ranges, data: None }
     }
 }
 
 impl StreamRules<ExportRangesItem> for ExportRangesRules {
     fn feed(&mut self, item: &ExportRangesItem) -> Result<Step, Violation> {
-        match (self.end, item) {
+        match (&mut self.data, item) {
             (_, ExportRangesItem::Error(_)) => Ok(Step::Last),
             (None, ExportRangesItem::Size(size)) => {
                 let clipped = &self.ranges & &RangeSet2::from(0..*size);
                 // clipped is bounded, so the last boundary is its end
                 let end = clipped.boundaries().last().copied().unwrap_or(0);
-                self.end = Some(end);
-                Ok(last_if(end == 0))
+                let (data, step) = DataPos::new(*size, end);
+                self.data = Some(data);
+                Ok(step)
             }
-            (Some(end), ExportRangesItem::Data(leaf)) => {
-                Ok(last_if(leaf.offset + leaf.data.len() as u64 >= end))
-            }
+            (Some(data), ExportRangesItem::Data(leaf)) => data.feed(leaf),
             (None, ExportRangesItem::Data(_)) => Err(Violation::DataBeforeSize),
             (Some(_), ExportRangesItem::Size(_)) => Err(Violation::SizeTwice),
         }
@@ -103,8 +137,7 @@ impl StreamRules<ExportRangesItem> for ExportRangesRules {
 pub(crate) struct ExportBaoRules {
     /// The end of the requested ranges in bytes, `u64::MAX` if open.
     requested: u64,
-    /// The end of the data, once the size is known.
-    end: Option<u64>,
+    data: Option<DataPos>,
 }
 
 impl ExportBaoRules {
@@ -120,24 +153,22 @@ impl ExportBaoRules {
         };
         Self {
             requested,
-            end: None,
+            data: None,
         }
     }
 }
 
 impl StreamRules<EncodedItem> for ExportBaoRules {
     fn feed(&mut self, item: &EncodedItem) -> Result<Step, Violation> {
-        match (self.end, item) {
+        match (&mut self.data, item) {
             (_, EncodedItem::Error(_) | EncodedItem::Done) => Ok(Step::Last),
             (None, EncodedItem::Size(size)) => {
-                let end = self.requested.min(*size);
-                self.end = Some(end);
-                Ok(last_if(end == 0))
+                let (data, step) = DataPos::new(*size, self.requested.min(*size));
+                self.data = Some(data);
+                Ok(step)
             }
             (Some(_), EncodedItem::Parent(_)) => Ok(Step::More),
-            (Some(end), EncodedItem::Leaf(leaf)) => {
-                Ok(last_if(leaf.offset + leaf.data.len() as u64 >= end))
-            }
+            (Some(data), EncodedItem::Leaf(leaf)) => data.feed(leaf),
             (None, EncodedItem::Parent(_) | EncodedItem::Leaf(_)) => Err(Violation::DataBeforeSize),
             (Some(_), EncodedItem::Size(_)) => Err(Violation::SizeTwice),
         }
@@ -154,7 +185,7 @@ fn last_if(last: bool) -> Step {
 
 #[cfg(test)]
 mod tests {
-    use bao_tree::io::{mixed::EncodedItem, Leaf};
+
     use bytes::Bytes;
 
     use super::*;
@@ -182,6 +213,28 @@ mod tests {
     }
 
     #[test]
+    fn export_bao_order() {
+        let mut rules = ExportBaoRules::new(&ChunkRanges::all());
+        assert_eq!(rules.feed(&EncodedItem::Size(4096)), Ok(Step::More));
+        assert_eq!(
+            rules.feed(&EncodedItem::Leaf(leaf(1024, 1024))),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&EncodedItem::Leaf(leaf(0, 1024))),
+            Err(Violation::DataOutOfOrder)
+        );
+        assert_eq!(
+            rules.feed(&EncodedItem::Leaf(leaf(2048, 4096))),
+            Err(Violation::DataPastSize)
+        );
+        assert_eq!(
+            rules.feed(&EncodedItem::Leaf(leaf(2048, 2048))),
+            Ok(Step::Last)
+        );
+    }
+
+    #[test]
     fn export_ranges_violations() {
         let mut rules = ExportRangesRules::new(RangeSet2::all());
         assert_eq!(
@@ -193,6 +246,10 @@ mod tests {
         assert_eq!(
             rules.feed(&ExportRangesItem::Size(20)),
             Err(Violation::SizeTwice)
+        );
+        assert_eq!(
+            rules.feed(&ExportRangesItem::Data(leaf(0, 30))),
+            Err(Violation::DataPastSize)
         );
         assert_eq!(
             rules.feed(&ExportRangesItem::Data(leaf(0, 20))),
