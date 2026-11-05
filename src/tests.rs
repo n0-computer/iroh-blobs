@@ -370,18 +370,51 @@ async fn two_nodes_observe(
     Ok(())
 }
 
+/// Events for a provider that allows observe requests, which are disabled by default.
+fn observe_enabled() -> EventSender {
+    EventSender::tracing()
+}
+
 #[tokio::test]
 #[traced_test]
 async fn two_nodes_observe_fs() -> TestResult<()> {
-    let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
+    let testdir = tempfile::tempdir()?;
+    let (r1, store1, _, sp1) =
+        node_test_setup_with_events_fs(testdir.path().join("a"), observe_enabled()).await?;
+    let (r2, store2, _, sp2) = node_test_setup_fs(testdir.path().join("b")).await?;
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_observe(r1, &store1, r2, &store2).await
 }
 
 #[tokio::test]
 #[traced_test]
 async fn two_nodes_observe_mem() -> TestResult<()> {
-    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    let (r1, store1, sp1) = node_test_setup_with_events_mem(observe_enabled()).await?;
+    let (r2, store2, sp2) = node_test_setup_mem().await?;
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_observe(r1, &store1, r2, &store2).await
+}
+
+/// Observe requests must be rejected with the default event mask.
+#[tokio::test]
+#[traced_test]
+async fn two_nodes_observe_disabled_by_default() -> TestResult<()> {
+    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    let hash = store1.add_bytes(test_data(1024)).await?.hash;
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+    let mut stream = store2.remote().observe(conn, ObserveRequest::new(hash));
+    let item = stream.next().await;
+    assert!(
+        matches!(item, Some(Err(_))),
+        "observe request was not rejected: {item:?}"
+    );
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
 }
 
 async fn two_nodes_get_many(
@@ -563,7 +596,7 @@ async fn two_nodes_push_rejected_default() -> TestResult<()> {
 #[traced_test]
 async fn two_nodes_push_rejected_readonly() -> TestResult<()> {
     let (r1, store1, sp1) = node_test_setup_mem().await?;
-    let events = EventSender::DEFAULT.tracing(EventMask::ALL_READONLY);
+    let events = EventSender::tracing();
     let (r2, store2, sp2) = node_test_setup_with_events_mem(events).await?;
     sp1.add_endpoint_info(r2.endpoint().addr());
     sp2.add_endpoint_info(r1.endpoint().addr());
