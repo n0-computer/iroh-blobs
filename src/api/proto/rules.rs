@@ -120,6 +120,9 @@ pub(crate) trait StreamRules<T> {
 /// stream is complete with the item that reaches the end of the last clipped
 /// range, and a stream that ends before that was cut short. An error is always
 /// the last item.
+///
+/// [`super::ExportRangesRequest`] has a diagram of these rules, keep the two
+/// in sync.
 #[derive(Debug)]
 pub(crate) struct ExportRangesRules {
     ranges: RangeSet2<u64>,

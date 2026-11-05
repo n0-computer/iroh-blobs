@@ -246,6 +246,14 @@ pub struct ExportBaoRequest {
 ///
 /// Missing blobs or requested chunks produce an [`std::io::ErrorKind::NotFound`]
 /// error. Ranges past the end of the blob are clipped.
+///
+/// The response starts with the `Size` of the blob, followed by `Data` for the
+/// requested ranges clipped to the size, in ascending order. The stream is
+/// complete with the `Data` that reaches the end of the last clipped range, or
+/// right after the size if there is nothing to send. A stream that ends before
+/// that was cut short. An `Error` can come at any time, and is the last item.
+///
+#[doc = include_str!("../../docs/img/export_ranges.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportRangesRequest {
     pub hash: Hash,
