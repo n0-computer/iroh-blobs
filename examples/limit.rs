@@ -1,6 +1,9 @@
 /// Example how to limit blob requests by hash and endpoint id, and to add
 /// throttling or limiting the maximum number of connections.
 ///
+/// Limiting by endpoint id can also open the store for push requests, so the
+/// allowed endpoints can write to it.
+///
 /// Limiting is done via a fn that returns an EventSender and internally
 /// makes liberal use of spawn to spawn background tasks.
 ///
@@ -23,6 +26,7 @@ use clap::Parser;
 use common::setup_logging;
 use iroh::{endpoint::presets, protocol::Router, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::{
+    protocol::{ChunkRangesSeq, PushRequest},
     provider::events::{
         AbortReason, ConnectMode, EventMask, EventSender, ProviderMessage, RequestMode,
         ThrottleMode,
@@ -31,6 +35,7 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
+use iroh_tickets::endpoint::EndpointTicket;
 
 use crate::common::get_or_generate_secret_key;
 
@@ -42,11 +47,14 @@ pub enum Args {
         /// Path for files to add.
         paths: Vec<PathBuf>,
         #[clap(long("allow"))]
-        /// Endpoints that are allowed to download content.
+        /// Endpoints that are allowed to connect.
         allowed_endpoints: Vec<EndpointId>,
         /// Number of secrets to generate for allowed endpoint ids.
         #[clap(long, default_value_t = 1)]
         secrets: usize,
+        /// Also allow the allowed endpoints to push blobs to the store.
+        #[clap(long)]
+        allow_push: bool,
     },
     /// Limit requests by hash, only first hash is allowed
     ByHash {
@@ -74,13 +82,28 @@ pub enum Args {
         /// Ticket for the blob to download
         ticket: BlobTicket,
     },
+    /// Push files to an endpoint started with `by-endpoint-id --allow-push`.
+    Push {
+        /// Ticket for the endpoint to push to
+        ticket: EndpointTicket,
+        /// Path for files to push.
+        paths: Vec<PathBuf>,
+    },
 }
 
-fn limit_by_node_id(allowed_nodes: HashSet<EndpointId>) -> EventSender {
+fn limit_by_node_id(allowed_nodes: HashSet<EndpointId>, allow_push: bool) -> EventSender {
     let mask = EventMask {
         // We want a request for each incoming connection so we can accept
         // or reject them. We don't need any other events.
         connected: ConnectMode::Intercept,
+        // Push requests are disabled by default, since they write to the store.
+        // Only allowed endpoints get a connection, so we can allow push for all
+        // requests without events.
+        push: if allow_push {
+            RequestMode::None
+        } else {
+            RequestMode::Disabled
+        },
         ..EventMask::DEFAULT
     };
     let (tx, mut rx) = EventSender::channel(32, mask);
@@ -252,10 +275,28 @@ async fn main() -> Result<()> {
             println!("Downloaded {} bytes", data.len());
             println!("Stats: {stats:?}");
         }
+        Args::Push { ticket, paths } => {
+            let store = MemStore::new();
+            let hashes = add_paths(&store, paths).await?;
+            let addr = ticket.endpoint_addr().clone();
+            let connection = endpoint.connect(addr.clone(), iroh_blobs::ALPN).await?;
+            for (path, hash) in hashes {
+                let request = PushRequest::new(hash, ChunkRangesSeq::root());
+                // Returns once the data is stored on the receiving side.
+                store
+                    .remote()
+                    .execute_push(connection.clone(), request)
+                    .complete()
+                    .await?;
+                let ticket = BlobTicket::new(addr.clone(), hash, BlobFormat::Raw);
+                println!("Pushed {}: {ticket}", path.display());
+            }
+        }
         Args::ByEndpointId {
             paths,
             allowed_endpoints,
             secrets,
+            allow_push,
         } => {
             let mut allowed_endpoints = allowed_endpoints.into_iter().collect::<HashSet<_>>();
             if secrets > 0 {
@@ -270,7 +311,7 @@ async fn main() -> Result<()> {
 
             let store = MemStore::new();
             let hashes = add_paths(&store, paths).await?;
-            let events = limit_by_node_id(allowed_endpoints.clone());
+            let events = limit_by_node_id(allowed_endpoints.clone(), allow_push);
             let (router, addr) = setup(store, events).await?;
 
             for (path, hash) in hashes {
@@ -279,6 +320,9 @@ async fn main() -> Result<()> {
             }
             println!();
             println!("Endpoint id: {}\n", router.endpoint().id());
+            if allow_push {
+                println!("Push ticket: {}\n", EndpointTicket::from(addr));
+            }
             for id in &allowed_endpoints {
                 println!("Allowed endpoint: {id}");
             }
