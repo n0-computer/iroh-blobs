@@ -521,9 +521,10 @@ async fn two_nodes_push_blobs(
                 Drain,
             )
             .await?;
-        count_rx.changed().await?;
+        // a successful push returns once the data is stored on the target
         let actual = store2.get_bytes(hash).await?;
         assert_eq!(actual, test_data(size));
+        count_rx.changed().await?;
     }
     tokio::try_join!(r1.shutdown(), r2.shutdown())?;
     Ok(())
@@ -542,10 +543,8 @@ async fn two_nodes_push_blobs_fs() -> TestResult<()> {
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
 }
 
-/// Push a blob from `r1` to `r2` and check that it does not end up in `store2`.
-///
-/// The pushing side currently does not learn whether the request was rejected,
-/// so we wait a bounded time for the blob to show up on the receiving side.
+/// Push a blob from `r1` to `r2` and check that the push fails and the blob
+/// does not end up in `store2`.
 async fn two_nodes_push_rejected(
     r1: Router,
     store1: &Store,
@@ -558,19 +557,15 @@ async fn two_nodes_push_rejected(
         .endpoint()
         .connect(r2.endpoint().addr(), crate::ALPN)
         .await?;
-    // keep `conn` alive, so a wrongly accepted push is not cut short
-    store1
+    let res = store1
         .remote()
         .execute_push_sink(
             conn.clone(),
             PushRequest::new(hash, ChunkRangesSeq::root()),
             Drain,
         )
-        .await
-        .ok();
-    // Wait a bit for a wrongly accepted push to land. We don't use `observe`
-    // here because that would create an empty entry in the store.
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        .await;
+    assert!(res.is_err(), "push was not rejected");
     let status = store2.blobs().status(hash).await?;
     assert!(
         matches!(status, BlobStatus::NotFound),
