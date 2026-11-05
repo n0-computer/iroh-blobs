@@ -848,90 +848,114 @@
 <a href=#848 id=848 data-nosnippet>848</a>    }
 <a href=#849 id=849 data-nosnippet>849</a>
 <a href=#850 id=850 data-nosnippet>850</a>    <span class="attr">#[tokio::test]
-<a href=#851 id=851 data-nosnippet>851</a>    </span><span class="kw">async fn </span>decisions_fail_closed_with_a_dead_handler() {
-<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">for </span>mode <span class="kw">in </span>[RequestMode::Intercept, RequestMode::InterceptLog] {
-<a href=#853 id=853 data-nosnippet>853</a>            <span class="macro">assert!</span>(dead(get_mask(mode)).request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>.is_err());
-<a href=#854 id=854 data-nosnippet>854</a>        }
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="macro">assert!</span>(dead(observe_mask(ObserveMode::Intercept))
-<a href=#856 id=856 data-nosnippet>856</a>            .request(observe, <span class="number">0</span>, <span class="number">0</span>)
-<a href=#857 id=857 data-nosnippet>857</a>            .<span class="kw">await
-<a href=#858 id=858 data-nosnippet>858</a>            </span>.is_err());
-<a href=#859 id=859 data-nosnippet>859</a>        <span class="kw">let </span>events = dead(EventMask {
-<a href=#860 id=860 data-nosnippet>860</a>            connected: ConnectMode::Intercept,
-<a href=#861 id=861 data-nosnippet>861</a>            ..EventMask::DEFAULT
-<a href=#862 id=862 data-nosnippet>862</a>        });
-<a href=#863 id=863 data-nosnippet>863</a>        <span class="macro">assert!</span>(events
-<a href=#864 id=864 data-nosnippet>864</a>            .client_connected(|| ClientConnected {
-<a href=#865 id=865 data-nosnippet>865</a>                connection_id: <span class="number">0</span>,
-<a href=#866 id=866 data-nosnippet>866</a>                endpoint_id: <span class="prelude-val">None</span>,
-<a href=#867 id=867 data-nosnippet>867</a>            })
-<a href=#868 id=868 data-nosnippet>868</a>            .<span class="kw">await
-<a href=#869 id=869 data-nosnippet>869</a>            </span>.is_err());
-<a href=#870 id=870 data-nosnippet>870</a>    }
-<a href=#871 id=871 data-nosnippet>871</a>
-<a href=#872 id=872 data-nosnippet>872</a>    <span class="attr">#[tokio::test]
-<a href=#873 id=873 data-nosnippet>873</a>    </span><span class="kw">async fn </span>decisions_fail_closed_without_a_handler() {
-<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw">let </span>without = |mask| EventSender { mask, inner: <span class="prelude-val">None </span>};
-<a href=#875 id=875 data-nosnippet>875</a>        <span class="kw">for </span>mode <span class="kw">in </span>[RequestMode::Intercept, RequestMode::InterceptLog] {
-<a href=#876 id=876 data-nosnippet>876</a>            <span class="kw">let </span>error = without(get_mask(mode)).request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
-<a href=#877 id=877 data-nosnippet>877</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
+<a href=#851 id=851 data-nosnippet>851</a>    </span><span class="kw">async fn </span>progress_notifications_survive_a_dropped_receiver() -&gt; TestResult {
+<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">let </span>(events, <span class="kw-2">mut </span>rx) = EventSender::channel(<span class="number">1</span>, get_mask(RequestMode::NotifyLog));
+<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw">let </span><span class="kw-2">mut </span>tracker = events.request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#854 id=854 data-nosnippet>854</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(ProviderMessage::GetRequestReceivedNotify(<span class="kw-2">mut </span>msg)) = rx.recv().<span class="kw">await else </span>{
+<a href=#855 id=855 data-nosnippet>855</a>            <span class="macro">panic!</span>(<span class="string">"expected a get notification"</span>);
+<a href=#856 id=856 data-nosnippet>856</a>        };
+<a href=#857 id=857 data-nosnippet>857</a>        <span class="comment">// First establish that this request actually delivers progress updates.
+<a href=#858 id=858 data-nosnippet>858</a>        </span>tracker.transfer_progress(<span class="number">1024</span>, <span class="number">1024</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#859 id=859 data-nosnippet>859</a>        <span class="kw">let </span>update =
+<a href=#860 id=860 data-nosnippet>860</a>            tokio::time::timeout(std::time::Duration::from_secs(<span class="number">5</span>), msg.rx.recv()).<span class="kw">await</span><span class="question-mark">??</span>;
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#862 id=862 data-nosnippet>862</a>            update,
+<a href=#863 id=863 data-nosnippet>863</a>            <span class="prelude-val">Some</span>(RequestUpdate::Progress(TransferProgress {
+<a href=#864 id=864 data-nosnippet>864</a>                end_offset: <span class="number">1024
+<a href=#865 id=865 data-nosnippet>865</a>            </span>}))
+<a href=#866 id=866 data-nosnippet>866</a>        ));
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="comment">// Losing the handler after tracking starts must not abort the transfer.
+<a href=#868 id=868 data-nosnippet>868</a>        </span>drop(msg);
+<a href=#869 id=869 data-nosnippet>869</a>        drop(rx);
+<a href=#870 id=870 data-nosnippet>870</a>        tracker.transfer_progress(<span class="number">1024</span>, <span class="number">2048</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#871 id=871 data-nosnippet>871</a>        <span class="prelude-val">Ok</span>(())
+<a href=#872 id=872 data-nosnippet>872</a>    }
+<a href=#873 id=873 data-nosnippet>873</a>
+<a href=#874 id=874 data-nosnippet>874</a>    <span class="attr">#[tokio::test]
+<a href=#875 id=875 data-nosnippet>875</a>    </span><span class="kw">async fn </span>decisions_fail_closed_with_a_dead_handler() {
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">for </span>mode <span class="kw">in </span>[RequestMode::Intercept, RequestMode::InterceptLog] {
+<a href=#877 id=877 data-nosnippet>877</a>            <span class="macro">assert!</span>(dead(get_mask(mode)).request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>.is_err());
 <a href=#878 id=878 data-nosnippet>878</a>        }
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="kw">let </span>throttled = without(EventMask {
-<a href=#880 id=880 data-nosnippet>880</a>            throttle: ThrottleMode::Intercept,
-<a href=#881 id=881 data-nosnippet>881</a>            ..EventMask::DEFAULT
-<a href=#882 id=882 data-nosnippet>882</a>        });
-<a href=#883 id=883 data-nosnippet>883</a>        <span class="kw">let </span>error = throttled.request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
-<a href=#884 id=884 data-nosnippet>884</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
-<a href=#885 id=885 data-nosnippet>885</a>        <span class="kw">let </span>events = without(EventMask {
-<a href=#886 id=886 data-nosnippet>886</a>            connected: ConnectMode::Intercept,
-<a href=#887 id=887 data-nosnippet>887</a>            ..EventMask::DEFAULT
-<a href=#888 id=888 data-nosnippet>888</a>        });
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw">let </span>error = events
-<a href=#890 id=890 data-nosnippet>890</a>            .client_connected(|| ClientConnected {
-<a href=#891 id=891 data-nosnippet>891</a>                connection_id: <span class="number">0</span>,
-<a href=#892 id=892 data-nosnippet>892</a>                endpoint_id: <span class="prelude-val">None</span>,
-<a href=#893 id=893 data-nosnippet>893</a>            })
-<a href=#894 id=894 data-nosnippet>894</a>            .<span class="kw">await</span>;
-<a href=#895 id=895 data-nosnippet>895</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
-<a href=#896 id=896 data-nosnippet>896</a>    }
-<a href=#897 id=897 data-nosnippet>897</a>
-<a href=#898 id=898 data-nosnippet>898</a>    <span class="attr">#[tokio::test]
-<a href=#899 id=899 data-nosnippet>899</a>    </span><span class="kw">async fn </span>disabled_rejects_even_with_a_handler() {
-<a href=#900 id=900 data-nosnippet>900</a>        <span class="kw">let </span>(tx, _rx) = tokio::sync::mpsc::channel(<span class="number">1</span>);
-<a href=#901 id=901 data-nosnippet>901</a>        <span class="kw">let </span>events = EventSender::new(
-<a href=#902 id=902 data-nosnippet>902</a>            tx,
-<a href=#903 id=903 data-nosnippet>903</a>            EventMask {
-<a href=#904 id=904 data-nosnippet>904</a>                get: RequestMode::Disabled,
-<a href=#905 id=905 data-nosnippet>905</a>                observe: ObserveMode::Disabled,
-<a href=#906 id=906 data-nosnippet>906</a>                ..EventMask::DEFAULT
-<a href=#907 id=907 data-nosnippet>907</a>            },
-<a href=#908 id=908 data-nosnippet>908</a>        );
-<a href=#909 id=909 data-nosnippet>909</a>        <span class="kw">let </span>error = events.request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
-<a href=#911 id=911 data-nosnippet>911</a>        <span class="kw">let </span>error = events.request(observe, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
-<a href=#912 id=912 data-nosnippet>912</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
-<a href=#913 id=913 data-nosnippet>913</a>    }
-<a href=#914 id=914 data-nosnippet>914</a>
-<a href=#915 id=915 data-nosnippet>915</a>    <span class="attr">#[tokio::test]
-<a href=#916 id=916 data-nosnippet>916</a>    </span><span class="kw">async fn </span>only_tracing_rw_allows_push() -&gt; TestResult {
-<a href=#917 id=917 data-nosnippet>917</a>        <span class="kw">let </span>push = || PushRequest::new(Hash::new(<span class="string">b"a"</span>), <span class="kw">crate</span>::protocol::ChunkRangesSeq::root());
-<a href=#918 id=918 data-nosnippet>918</a>        <span class="kw">let </span>error = EventSender::tracing().request(push, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#879 id=879 data-nosnippet>879</a>        <span class="macro">assert!</span>(dead(observe_mask(ObserveMode::Intercept))
+<a href=#880 id=880 data-nosnippet>880</a>            .request(observe, <span class="number">0</span>, <span class="number">0</span>)
+<a href=#881 id=881 data-nosnippet>881</a>            .<span class="kw">await
+<a href=#882 id=882 data-nosnippet>882</a>            </span>.is_err());
+<a href=#883 id=883 data-nosnippet>883</a>        <span class="kw">let </span>events = dead(EventMask {
+<a href=#884 id=884 data-nosnippet>884</a>            connected: ConnectMode::Intercept,
+<a href=#885 id=885 data-nosnippet>885</a>            ..EventMask::DEFAULT
+<a href=#886 id=886 data-nosnippet>886</a>        });
+<a href=#887 id=887 data-nosnippet>887</a>        <span class="macro">assert!</span>(events
+<a href=#888 id=888 data-nosnippet>888</a>            .client_connected(|| ClientConnected {
+<a href=#889 id=889 data-nosnippet>889</a>                connection_id: <span class="number">0</span>,
+<a href=#890 id=890 data-nosnippet>890</a>                endpoint_id: <span class="prelude-val">None</span>,
+<a href=#891 id=891 data-nosnippet>891</a>            })
+<a href=#892 id=892 data-nosnippet>892</a>            .<span class="kw">await
+<a href=#893 id=893 data-nosnippet>893</a>            </span>.is_err());
+<a href=#894 id=894 data-nosnippet>894</a>    }
+<a href=#895 id=895 data-nosnippet>895</a>
+<a href=#896 id=896 data-nosnippet>896</a>    <span class="attr">#[tokio::test]
+<a href=#897 id=897 data-nosnippet>897</a>    </span><span class="kw">async fn </span>decisions_fail_closed_without_a_handler() {
+<a href=#898 id=898 data-nosnippet>898</a>        <span class="kw">let </span>without = |mask| EventSender { mask, inner: <span class="prelude-val">None </span>};
+<a href=#899 id=899 data-nosnippet>899</a>        <span class="kw">for </span>mode <span class="kw">in </span>[RequestMode::Intercept, RequestMode::InterceptLog] {
+<a href=#900 id=900 data-nosnippet>900</a>            <span class="kw">let </span>error = without(get_mask(mode)).request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#901 id=901 data-nosnippet>901</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
+<a href=#902 id=902 data-nosnippet>902</a>        }
+<a href=#903 id=903 data-nosnippet>903</a>        <span class="kw">let </span>throttled = without(EventMask {
+<a href=#904 id=904 data-nosnippet>904</a>            throttle: ThrottleMode::Intercept,
+<a href=#905 id=905 data-nosnippet>905</a>            ..EventMask::DEFAULT
+<a href=#906 id=906 data-nosnippet>906</a>        });
+<a href=#907 id=907 data-nosnippet>907</a>        <span class="kw">let </span>error = throttled.request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#908 id=908 data-nosnippet>908</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
+<a href=#909 id=909 data-nosnippet>909</a>        <span class="kw">let </span>events = without(EventMask {
+<a href=#910 id=910 data-nosnippet>910</a>            connected: ConnectMode::Intercept,
+<a href=#911 id=911 data-nosnippet>911</a>            ..EventMask::DEFAULT
+<a href=#912 id=912 data-nosnippet>912</a>        });
+<a href=#913 id=913 data-nosnippet>913</a>        <span class="kw">let </span>error = events
+<a href=#914 id=914 data-nosnippet>914</a>            .client_connected(|| ClientConnected {
+<a href=#915 id=915 data-nosnippet>915</a>                connection_id: <span class="number">0</span>,
+<a href=#916 id=916 data-nosnippet>916</a>                endpoint_id: <span class="prelude-val">None</span>,
+<a href=#917 id=917 data-nosnippet>917</a>            })
+<a href=#918 id=918 data-nosnippet>918</a>            .<span class="kw">await</span>;
 <a href=#919 id=919 data-nosnippet>919</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
-<a href=#920 id=920 data-nosnippet>920</a>        EventSender::tracing_rw().request(push, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#921 id=921 data-nosnippet>921</a>        EventSender::tracing().request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#922 id=922 data-nosnippet>922</a>        EventSender::tracing().request(observe, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#923 id=923 data-nosnippet>923</a>        <span class="prelude-val">Ok</span>(())
-<a href=#924 id=924 data-nosnippet>924</a>    }
-<a href=#925 id=925 data-nosnippet>925</a>
-<a href=#926 id=926 data-nosnippet>926</a>    <span class="attr">#[tokio::test]
-<a href=#927 id=927 data-nosnippet>927</a>    </span><span class="kw">async fn </span>connection_closed_only_with_connect_events() -&gt; TestResult {
-<a href=#928 id=928 data-nosnippet>928</a>        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = tokio::sync::mpsc::channel(<span class="number">1</span>);
-<a href=#929 id=929 data-nosnippet>929</a>        <span class="kw">let </span>events = EventSender::new(tx, EventMask::DEFAULT);
-<a href=#930 id=930 data-nosnippet>930</a>        events
-<a href=#931 id=931 data-nosnippet>931</a>            .connection_closed(|| ConnectionClosed { connection_id: <span class="number">0 </span>})
-<a href=#932 id=932 data-nosnippet>932</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#933 id=933 data-nosnippet>933</a>        <span class="macro">assert!</span>(rx.try_recv().is_err());
-<a href=#934 id=934 data-nosnippet>934</a>        <span class="prelude-val">Ok</span>(())
-<a href=#935 id=935 data-nosnippet>935</a>    }
-<a href=#936 id=936 data-nosnippet>936</a>}
+<a href=#920 id=920 data-nosnippet>920</a>    }
+<a href=#921 id=921 data-nosnippet>921</a>
+<a href=#922 id=922 data-nosnippet>922</a>    <span class="attr">#[tokio::test]
+<a href=#923 id=923 data-nosnippet>923</a>    </span><span class="kw">async fn </span>disabled_rejects_even_with_a_handler() {
+<a href=#924 id=924 data-nosnippet>924</a>        <span class="kw">let </span>(tx, _rx) = tokio::sync::mpsc::channel(<span class="number">1</span>);
+<a href=#925 id=925 data-nosnippet>925</a>        <span class="kw">let </span>events = EventSender::new(
+<a href=#926 id=926 data-nosnippet>926</a>            tx,
+<a href=#927 id=927 data-nosnippet>927</a>            EventMask {
+<a href=#928 id=928 data-nosnippet>928</a>                get: RequestMode::Disabled,
+<a href=#929 id=929 data-nosnippet>929</a>                observe: ObserveMode::Disabled,
+<a href=#930 id=930 data-nosnippet>930</a>                ..EventMask::DEFAULT
+<a href=#931 id=931 data-nosnippet>931</a>            },
+<a href=#932 id=932 data-nosnippet>932</a>        );
+<a href=#933 id=933 data-nosnippet>933</a>        <span class="kw">let </span>error = events.request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#934 id=934 data-nosnippet>934</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
+<a href=#935 id=935 data-nosnippet>935</a>        <span class="kw">let </span>error = events.request(observe, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#936 id=936 data-nosnippet>936</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
+<a href=#937 id=937 data-nosnippet>937</a>    }
+<a href=#938 id=938 data-nosnippet>938</a>
+<a href=#939 id=939 data-nosnippet>939</a>    <span class="attr">#[tokio::test]
+<a href=#940 id=940 data-nosnippet>940</a>    </span><span class="kw">async fn </span>only_tracing_rw_allows_push() -&gt; TestResult {
+<a href=#941 id=941 data-nosnippet>941</a>        <span class="kw">let </span>push = || PushRequest::new(Hash::new(<span class="string">b"a"</span>), <span class="kw">crate</span>::protocol::ChunkRangesSeq::root());
+<a href=#942 id=942 data-nosnippet>942</a>        <span class="kw">let </span>error = EventSender::tracing().request(push, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#943 id=943 data-nosnippet>943</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(error, <span class="prelude-val">Err</span>(ProgressError::Permission { .. })));
+<a href=#944 id=944 data-nosnippet>944</a>        EventSender::tracing_rw().request(push, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#945 id=945 data-nosnippet>945</a>        EventSender::tracing().request(get, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#946 id=946 data-nosnippet>946</a>        EventSender::tracing().request(observe, <span class="number">0</span>, <span class="number">0</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#947 id=947 data-nosnippet>947</a>        <span class="prelude-val">Ok</span>(())
+<a href=#948 id=948 data-nosnippet>948</a>    }
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>    <span class="attr">#[tokio::test]
+<a href=#951 id=951 data-nosnippet>951</a>    </span><span class="kw">async fn </span>connection_closed_only_with_connect_events() -&gt; TestResult {
+<a href=#952 id=952 data-nosnippet>952</a>        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = tokio::sync::mpsc::channel(<span class="number">1</span>);
+<a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span>events = EventSender::new(tx, EventMask::DEFAULT);
+<a href=#954 id=954 data-nosnippet>954</a>        events
+<a href=#955 id=955 data-nosnippet>955</a>            .connection_closed(|| ConnectionClosed { connection_id: <span class="number">0 </span>})
+<a href=#956 id=956 data-nosnippet>956</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert!</span>(rx.try_recv().is_err());
+<a href=#958 id=958 data-nosnippet>958</a>        <span class="prelude-val">Ok</span>(())
+<a href=#959 id=959 data-nosnippet>959</a>    }
+<a href=#960 id=960 data-nosnippet>960</a>}
 </code></pre></div></section></main></body></html>
