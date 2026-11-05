@@ -794,6 +794,35 @@ async fn empty_export_reaches_store() -> TestResult<()> {
     Ok(())
 }
 
+/// An export whose store drops the sender without [`Done`] fails instead of
+/// waiting forever.
+///
+/// [`Done`]: crate::api::proto::ExportProgressItem::Done
+#[tokio::test]
+async fn export_ended_early_fails() -> TestResult<()> {
+    use crate::api::proto::{Command, ExportProgressItem};
+
+    let dir = tempfile::tempdir()?;
+    let (tx, mut rx) = mpsc::channel(1);
+    let store = Store::from_sender(irpc::LocalSender::from(tx).into());
+    let export = store
+        .blobs()
+        .export(Hash::new(b"a"), dir.path().join("a"))
+        .finish();
+    let store_side = async {
+        let Some(Command::ExportPath(cmd)) = rx.recv().await else {
+            panic!("expected a file export");
+        };
+        cmd.tx.send(ExportProgressItem::Size(1)).await.ok();
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(export, store_side)
+    })
+    .await?;
+    assert!(result.is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn empty_hash_readonly_mem() -> TestResult<()> {
     let store = crate::store::readonly_mem::ReadonlyMemStore::new([b"".as_slice()]);

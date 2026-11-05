@@ -916,22 +916,19 @@ impl ExportProgress {
         let mut rules = ExportPathRules::default();
         let mut size = None;
         loop {
-            let item = rx.recv().await?;
-            if let Some(item) = &item {
-                rules.check(item)?;
-            }
+            let item = rx
+                .recv()
+                .await?
+                .ok_or_else(|| io::Error::other("unexpected end of stream"))?;
+            rules.check(&item)?;
             match item {
-                Some(ExportProgressItem::Done) => break,
-                Some(ExportProgressItem::Size(s)) => size = Some(s),
-                Some(ExportProgressItem::Error(cause)) => return Err(cause.into()),
-                _ => {}
+                ExportProgressItem::Done => break,
+                ExportProgressItem::Size(s) => size = Some(s),
+                ExportProgressItem::Error(cause) => return Err(cause.into()),
+                ExportProgressItem::CopyProgress(_) => {}
             }
         }
-        if let Some(size) = size {
-            Ok(size)
-        } else {
-            Err(io::Error::other("unexpected end of stream").into())
-        }
+        size.ok_or_else(|| io::Error::other("unexpected end of stream").into())
     }
 }
 
