@@ -278,6 +278,8 @@ impl StreamRules<Bitfield> for ObserveRules {
 ///
 /// The size comes first, then copy progress up to the size, and then
 /// [`ExportProgressItem::Done`]. An error is always the last item.
+///
+/// [`ExportProgressItem`] has a diagram of these rules, keep the two in sync.
 #[derive(Debug, Default)]
 pub(crate) struct ExportPathRules {
     size: Option<u64>,

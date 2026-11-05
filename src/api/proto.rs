@@ -596,11 +596,13 @@ impl From<Leaf> for ExportRangesItem {
 /// Progress events for exporting to a local file.
 ///
 /// Exporting does not involve outboard computation, so the events are simpler
-/// than [`AddProgressItem`].
+/// than [`AddProgressItem`]. The [`Self::Size`] comes first, then the data is
+/// copied, and finally [`Self::Done`] comes. Only the size and the final
+/// [`Self::Done`] or [`Self::Error`] are guaranteed; [`Self::CopyProgress`] is
+/// best effort and may not come at all. Progress never goes backwards or past
+/// the size. An [`Self::Error`] can come at any time, and is the last event.
 ///
-/// Size -> CopyProgress(*n) -> Done
-///
-/// Errors can happen at any time, and will be reported as an `Error` event.
+#[doc = include_str!("../../docs/img/export_progress.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ExportProgressItem {
     /// The size of the file being exported.
