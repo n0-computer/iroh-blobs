@@ -30,6 +30,12 @@ pub const INTERESTING_SIZES: [usize; 8] = [
 ];
 
 async fn blobs_smoke(path: &Path, blobs: &Blobs) -> TestResult<()> {
+    // Empty file exports also go through the store, including over RPC.
+    let target = path.join("empty-export");
+    std::fs::write(&target, b"replace me")?;
+    assert_eq!(blobs.export(Hash::EMPTY, &target).await?, 0);
+    assert_eq!(std::fs::read(target)?, b"");
+
     // test importing and exporting bytes
     {
         let expected = b"hello".to_vec();
@@ -76,8 +82,10 @@ async fn blobs_smoke(path: &Path, blobs: &Blobs) -> TestResult<()> {
     }
 
     {
+        // the 3 blobs added above, and the empty blob, which is always present
         let hashes = blobs.list().hashes().await?;
-        assert_eq!(hashes.len(), 3);
+        assert_eq!(hashes.len(), 4);
+        assert!(hashes.contains(&Hash::EMPTY));
     }
     Ok(())
 }

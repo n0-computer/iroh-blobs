@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="270" viewBox="0 0 760 270" style="max-width: 100%; height: auto" font-family="sans-serif" font-size="13" fill="none" stroke="currentColor" role="img" aria-label="State machine of an add progress stream">
+  <!--
+    State machine of an AddProgressItem stream, included in the rustdoc of
+    AddProgressItem in src/api/proto.rs. It must match AddProgressRules in
+    src/api/proto/rules.rs, update both together.
+    Conventions, since this is inlined into a markdown doc comment:
+    - no blank lines, they would end the html block
+    - only currentColor, so it works in the light and dark rustdoc themes
+    - ids are unique on the page, so they are prefixed with add-progress
+    Layout: states are 140 x 50 boxes in a row at y = 105, starting at
+    x = 50 with a step of 270. Each state is a group in local coordinates,
+    with its self loop and the loop label above the box. Transitions use
+    page coordinates and end at the border of the box they point to.
+    To check a change, render it in both themes and look at the result:
+      rsvg-convert -w 1520 -b white add_progress.svg -o light.png
+      rsvg-convert -w 1520 -b '#353535' -s dark.css add_progress.svg -o dark.png
+    where dark.css contains: svg { color: #ddd; }
+  -->
+  <defs>
+    <marker id="add-progress-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor" stroke="none"/>
+    </marker>
+  </defs>
+  <!-- states -->
+  <g id="add-progress-copying-size-unknown" transform="translate(50 105)">
+    <rect width="140" height="50" rx="8"/>
+    <path d="M50,0 C45,-40 95,-40 90,-2" marker-end="url(#add-progress-arrow)"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">copying</text>
+      <text x="70" y="39" font-size="11">size unknown</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">CopyProgress</text>
+    </g>
+  </g>
+  <g id="add-progress-copying-size-known" transform="translate(320 105)">
+    <rect width="140" height="50" rx="8"/>
+    <path d="M50,0 C45,-40 95,-40 90,-2" marker-end="url(#add-progress-arrow)"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">copying</text>
+      <text x="70" y="39" font-size="11">size known</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">CopyProgress</text>
+    </g>
+  </g>
+  <g id="add-progress-hashing" transform="translate(590 105)">
+    <rect width="140" height="50" rx="8"/>
+    <path d="M50,0 C45,-40 95,-40 90,-2" marker-end="url(#add-progress-arrow)"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">hashing</text>
+      <text x="70" y="39" font-size="11">computing the outboard</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">OutboardProgress</text>
+    </g>
+  </g>
+  <g id="add-progress-finished" transform="translate(590 205)">
+    <rect width="140" height="44" rx="22" stroke-width="2.5"/>
+    <text x="70" y="27" fill="currentColor" stroke="none" text-anchor="middle">finished</text>
+  </g>
+  <!-- transitions, each a path with its label -->
+  <g fill="currentColor" stroke="none" font-family="monospace" font-size="12" text-anchor="middle">
+    <!-- start: into copying, size unknown -->
+    <circle cx="18" cy="130" r="6" stroke="currentColor"/>
+    <path d="M24,130 H48" fill="none" stroke="currentColor" marker-end="url(#add-progress-arrow)"/>
+    <!-- copying, size unknown to copying, size known: Size -->
+    <path d="M190,130 H318" fill="none" stroke="currentColor" marker-end="url(#add-progress-arrow)"/>
+    <text x="254" y="122">Size</text>
+    <!-- copying, size known to hashing: CopyDone or OutboardProgress -->
+    <path d="M460,130 H588" fill="none" stroke="currentColor" marker-end="url(#add-progress-arrow)"/>
+    <text x="524" y="104">CopyDone or</text>
+    <text x="524" y="122">OutboardProgress</text>
+    <!-- hashing to finished: Done -->
+    <path d="M660,155 V203" fill="none" stroke="currentColor" marker-end="url(#add-progress-arrow)"/>
+    <text x="684" y="184" text-anchor="start">Done</text>
+    <!-- copying, size known to finished: Done, with no outboard progress -->
+    <path d="M390,155 C390,215 480,227 588,227" fill="none" stroke="currentColor" marker-end="url(#add-progress-arrow)"/>
+    <text x="470" y="245">Done</text>
+  </g>
+  <!-- an error ends the stream from any state, a note instead of an arrow per state -->
+  <text x="18" y="262" fill="currentColor" stroke="none" font-size="12">An Error ends the stream in any state.</text>
+</svg>

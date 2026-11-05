@@ -646,7 +646,7 @@ mod tests {
     use std::ops::Deref;
 
     use bao_tree::ChunkRanges;
-    use iroh::{endpoint::presets, protocol::Router, Endpoint, RelayMode};
+    use iroh::protocol::Router;
     use n0_future::StreamExt;
     use testresult::TestResult;
 
@@ -659,6 +659,7 @@ mod tests {
         net_protocol::BlobsProtocol,
         protocol::{GetManyRequest, GetRequest},
         store::mem::MemStore,
+        test_net::test_endpoint,
         tests::{node_test_setup_fs, node_test_setup_mem},
         Hash,
     };
@@ -801,10 +802,7 @@ mod tests {
         const CUSTOM_ALPN: &[u8] = b"/custom-blobs/1";
         // provider that only accepts the custom ALPN
         let store1 = MemStore::new();
-        let ep1 = Endpoint::builder(presets::Minimal)
-            .relay_mode(RelayMode::Default)
-            .bind()
-            .await?;
+        let ep1 = test_endpoint().await?;
         let r1 = Router::builder(ep1)
             .accept(CUSTOM_ALPN, BlobsProtocol::new(&store1, None))
             .spawn();

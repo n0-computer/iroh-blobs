@@ -30,7 +30,7 @@ use n0_future::{future, stream, Stream, StreamExt};
 use range_collections::{range_set::RangeSetRange, RangeSet2};
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
-use tracing::{error, trace};
+use tracing::trace;
 mod reader;
 pub use reader::BlobReader;
 
@@ -46,9 +46,13 @@ pub use super::proto::{
 };
 use super::{
     proto::{
+        rules::{
+            AddProgressRules, DebugOnly, ExportBaoRules, ExportPathRules, ExportRangesRules,
+            ListBlobsRules, ObserveRules, Step, StreamRules,
+        },
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
-        ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
+        ImportBytesRequest, ImportPathRequest, ListBlobsItem, ListRequest, Scope,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -156,8 +160,10 @@ impl Blobs {
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
-    pub(crate) async fn delete_with_opts(&self, options: DeleteOptions) -> RequestResult<()> {
+    pub(crate) async fn delete_with_opts(&self, mut options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
+        // the empty blob is always present, so it is never deleted
+        options.hashes.retain(|hash| *hash != Hash::EMPTY);
         self.client.rpc(options).await??;
         Ok(())
     }
@@ -341,6 +347,12 @@ impl Blobs {
 
     pub fn export_ranges_with_opts(&self, options: ExportRangesOptions) -> ExportRangesProgress {
         trace!("{options:?}");
+        if options.hash == Hash::EMPTY {
+            return ExportRangesProgress::new(
+                options.ranges,
+                local_response([ExportRangesItem::Size(0)]),
+            );
+        }
         ExportRangesProgress::new(
             options.ranges.clone(),
             self.client.server_streaming(options, 32),
@@ -353,6 +365,9 @@ impl Blobs {
         local_update_cap: usize,
     ) -> ExportBaoProgress {
         trace!("{options:?}");
+        if options.hash == Hash::EMPTY {
+            return ExportBaoProgress::new(options.ranges, local_response([EncodedItem::Size(0)]));
+        }
         let ranges = options.ranges.clone();
         ExportBaoProgress::new(
             ranges,
@@ -412,17 +427,15 @@ impl Blobs {
     pub fn observe_with_opts(&self, options: ObserveOptions) -> ObserveProgress {
         trace!("{:?}", options);
         if options.hash == Hash::EMPTY {
-            return ObserveProgress::new(async move {
-                let (tx, rx) = mpsc::channel(1);
-                tx.send(Bitfield::complete(0)).await.ok();
-                Ok(rx)
-            });
+            return ObserveProgress::new(local_response([Bitfield::complete(0)]));
         }
         ObserveProgress::new(self.client.server_streaming(options, 32))
     }
 
     pub fn export_with_opts(&self, options: ExportOptions) -> ExportProgress {
         trace!("{:?}", options);
+        // Even Hash::EMPTY must reach the store: the target path belongs to the
+        // store's filesystem, which may be on a different machine from the client.
         ExportProgress::new(self.client.server_streaming(options, 32))
     }
 
@@ -712,9 +725,26 @@ impl<'a> IntoFuture for AddProgress<'a> {
 
 impl<'a> AddProgress<'a> {
     fn new(blobs: &'a Blobs, stream: impl Stream<Item = AddProgressItem> + Send + 'static) -> Self {
+        let mut stream = Box::pin(stream);
+        let checked = Gen::new(|co| async move {
+            let mut rules = AddProgressRules::default();
+            while let Some(item) = stream.next().await {
+                let step = match rules.check(&item) {
+                    Ok(step) => step,
+                    Err(cause) => {
+                        co.yield_(AddProgressItem::Error(cause)).await;
+                        return;
+                    }
+                };
+                co.yield_(item).await;
+                if step == Step::Last {
+                    return;
+                }
+            }
+        });
         Self {
             blobs,
-            inner: Box::pin(stream),
+            inner: Box::pin(checked),
         }
     }
 
@@ -833,7 +863,12 @@ impl ObserveProgress {
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = Bitfield>> {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
+            let mut rules = DebugOnly::new(ObserveRules::default());
             while let Ok(Some(item)) = rx.recv().await {
+                if rules.check(&item).is_err() {
+                    // a bitfield can not carry the error, so the stream just ends
+                    return;
+                }
                 co.yield_(item).await;
             }
         }))
@@ -882,29 +917,56 @@ impl ExportProgress {
                     return;
                 }
             };
+            let mut rules = ExportPathRules::default();
             while let Ok(Some(item)) = rx.recv().await {
+                let step = match rules.check(&item) {
+                    Ok(step) => step,
+                    Err(cause) => {
+                        co.yield_(ExportProgressItem::Error(cause.into())).await;
+                        return;
+                    }
+                };
                 co.yield_(item).await;
+                if step == Step::Last {
+                    return;
+                }
             }
         })
     }
 
     pub async fn finish(self) -> RequestResult<u64> {
         let mut rx = self.inner.await?;
+        let mut rules = ExportPathRules::default();
         let mut size = None;
         loop {
-            match rx.recv().await? {
-                Some(ExportProgressItem::Done) => break,
-                Some(ExportProgressItem::Size(s)) => size = Some(s),
-                Some(ExportProgressItem::Error(cause)) => return Err(cause.into()),
-                _ => {}
+            let item = rx
+                .recv()
+                .await?
+                .ok_or_else(|| io::Error::other("unexpected end of stream"))?;
+            rules.check(&item)?;
+            match item {
+                ExportProgressItem::Done => break,
+                ExportProgressItem::Size(s) => size = Some(s),
+                ExportProgressItem::Error(cause) => return Err(cause.into()),
+                ExportProgressItem::CopyProgress(_) => {}
             }
         }
-        if let Some(size) = size {
-            Ok(size)
-        } else {
-            Err(io::Error::other("unexpected end of stream").into())
-        }
+        size.ok_or_else(|| io::Error::other("unexpected end of stream").into())
     }
+}
+
+/// Answers a request without asking the store, for requests about the empty blob.
+///
+/// See [`super::proto`] for why the store never sees these.
+async fn local_response<T: irpc::RpcMessage>(
+    items: impl IntoIterator<Item = T>,
+) -> irpc::Result<mpsc::Receiver<T>> {
+    let items = items.into_iter().collect::<Vec<_>>();
+    let (tx, rx) = mpsc::channel(items.len().max(1));
+    for item in items {
+        tx.send(item).await.ok();
+    }
+    Ok(rx)
 }
 
 /// A handle for an ongoing bao import operation.
@@ -930,32 +992,65 @@ impl ImportBaoHandle {
 
 /// A progress handle for a blobs list operation.
 pub struct BlobsListProgress {
-    inner: future::Boxed<irpc::Result<mpsc::Receiver<super::Result<Hash>>>>,
+    inner: future::Boxed<irpc::Result<mpsc::Receiver<ListBlobsItem>>>,
 }
 
 impl BlobsListProgress {
     fn new(
-        fut: impl Future<Output = irpc::Result<mpsc::Receiver<super::Result<Hash>>>> + Send + 'static,
+        fut: impl Future<Output = irpc::Result<mpsc::Receiver<ListBlobsItem>>> + Send + 'static,
     ) -> Self {
         Self {
             inner: Box::pin(fut),
         }
     }
 
+    /// All hashes in the store, starting with [`Hash::EMPTY`], which is always present.
     pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
-        let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
+        let mut stream = self.stream().await?;
         let mut hashes = Vec::new();
-        while let Some(item) = rx.recv().await? {
+        while let Some(item) = stream.next().await {
             hashes.push(item?);
         }
         Ok(hashes)
     }
 
+    /// A stream of all hashes in the store, starting with [`Hash::EMPTY`], which is always present.
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = super::Result<Hash>>> {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
-            while let Ok(Some(item)) = rx.recv().await {
-                co.yield_(item).await;
+            co.yield_(Ok(Hash::EMPTY)).await;
+            let mut rules = ListBlobsRules;
+            loop {
+                let item = match rx.recv().await {
+                    Ok(Some(item)) => item,
+                    Ok(None) => {
+                        co.yield_(Err(super::Error::io(
+                            io::ErrorKind::UnexpectedEof,
+                            "blob listing ended before completion",
+                        )))
+                        .await;
+                        return;
+                    }
+                    Err(cause) => {
+                        co.yield_(Err(cause.into())).await;
+                        return;
+                    }
+                };
+                let step = match rules.check(&item) {
+                    Ok(step) => step,
+                    Err(cause) => {
+                        co.yield_(Err(cause.into())).await;
+                        return;
+                    }
+                };
+                match item {
+                    ListBlobsItem::Hash(hash) => co.yield_(Ok(hash)).await,
+                    ListBlobsItem::Done => {}
+                    ListBlobsItem::Error(cause) => co.yield_(Err(cause)).await,
+                }
+                if step == Step::Last {
+                    return;
+                }
             }
         }))
     }
@@ -1000,13 +1095,16 @@ impl ExportRangesProgress {
                     return;
                 }
             };
-            let mut end = ExportRangesEnd::default();
+            let mut rules = ExportRangesRules::new(self.ranges);
             let item = loop {
                 match rx.recv().await {
                     Ok(Some(item)) => {
-                        let last = end.is_last(&self.ranges, &item);
+                        let step = match rules.check(&item) {
+                            Ok(step) => step,
+                            Err(cause) => break ExportRangesItem::Error(cause.into()),
+                        };
                         co.yield_(item).await;
-                        if last {
+                        if step == Step::Last {
                             return;
                         }
                     }
@@ -1026,12 +1124,12 @@ impl ExportRangesProgress {
     /// Like [`Self::concatenate`], but also returns the size of the blob.
     pub(crate) async fn concatenate_with_size(self) -> RequestResult<(Option<u64>, Vec<u8>)> {
         let mut rx = self.inner.await?;
-        let mut end = ExportRangesEnd::default();
+        let mut rules = ExportRangesRules::new(self.ranges.clone());
         let mut size = None;
         let mut data = BTreeMap::new();
         loop {
             let item = rx.recv().await?.ok_or_else(export_ranges_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 ExportRangesItem::Size(s) => size = Some(s),
                 ExportRangesItem::Data(leaf) => {
@@ -1062,46 +1160,6 @@ impl ExportRangesProgress {
             }
         }
         Ok((size, res))
-    }
-}
-
-/// Finds the last item of an [`ExportRangesItem`] stream.
-///
-/// A store sends [`ExportRangesItem::Size`] first, then the requested ranges
-/// clipped to the size, in ascending order, and then drops the sender. So the
-/// stream is complete with the item that reaches the end of the last clipped
-/// range, and a stream that ends before that was cut short. An error is always
-/// the last item.
-#[derive(Debug, Default)]
-enum ExportRangesEnd {
-    /// Nothing received yet, the size comes first.
-    #[default]
-    Start,
-    /// Got the size, the data ends at `end`.
-    Data { end: u64 },
-}
-
-impl ExportRangesEnd {
-    /// Feed the items of a stream for `ranges` in order. Returns true for the
-    /// item that completes the stream, or for an error.
-    fn is_last(&mut self, ranges: &RangeSet2<u64>, item: &ExportRangesItem) -> bool {
-        match (&*self, item) {
-            (Self::Start, ExportRangesItem::Size(size)) => {
-                let clipped = ranges & &RangeSet2::from(0..*size);
-                // clipped is bounded, so the last boundary is its end
-                let end = clipped.boundaries().last().copied().unwrap_or(0);
-                *self = Self::Data { end };
-                end == 0
-            }
-            (Self::Data { end }, ExportRangesItem::Data(leaf)) => {
-                leaf.offset + leaf.data.len() as u64 >= *end
-            }
-            (_, ExportRangesItem::Error(_)) => true,
-            _ => {
-                error!("export ranges: unexpected item in state {self:?}");
-                false
-            }
-        }
     }
 }
 
@@ -1186,11 +1244,11 @@ impl ExportBaoProgress {
 
     pub async fn data_to_bytes(self) -> super::ExportBaoResult<Bytes> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         let mut data = Vec::new();
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Leaf(leaf) => {
                     data.push(leaf.data);
@@ -1217,11 +1275,11 @@ impl ExportBaoProgress {
 
     pub async fn data_to_vec(self) -> super::ExportBaoResult<Vec<u8>> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         let mut data = Vec::new();
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Leaf(leaf) => {
                     data.extend_from_slice(&leaf.data);
@@ -1240,10 +1298,10 @@ impl ExportBaoProgress {
 
     pub async fn write<W: AsyncStreamWriter>(self, target: &mut W) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Size(size) => {
                     target.write(&size.to_le_bytes()).await?;
@@ -1276,10 +1334,10 @@ impl ExportBaoProgress {
         index: u64,
     ) -> super::ExportBaoResult<()> {
         let mut rx = self.inner.await?;
-        let mut end = ExportBaoEnd::default();
+        let mut rules = ExportBaoRules::new(&self.ranges);
         loop {
             let item = rx.recv().await?.ok_or_else(export_bao_ended_early)?;
-            let last = end.is_last(&self.ranges, &item);
+            let last = rules.check(&item)? == Step::Last;
             match item {
                 EncodedItem::Size(size) => {
                     progress.send_transfer_started(index, hash, size).await;
@@ -1338,13 +1396,16 @@ impl ExportBaoProgress {
                     return;
                 }
             };
-            let mut end = ExportBaoEnd::default();
+            let mut rules = ExportBaoRules::new(&self.ranges);
             let item = loop {
                 match rx.recv().await {
                     Ok(Some(item)) => {
-                        let last = end.is_last(&self.ranges, &item);
+                        let step = match rules.check(&item) {
+                            Ok(step) => step,
+                            Err(cause) => break EncodedItem::Error(cause.into()),
+                        };
                         co.yield_(item).await;
-                        if last {
+                        if step == Step::Last {
                             return;
                         }
                     }
@@ -1354,56 +1415,6 @@ impl ExportBaoProgress {
             };
             co.yield_(item).await;
         })
-    }
-}
-
-/// Finds the last item of an [`EncodedItem`] stream.
-///
-/// A store sends [`EncodedItem::Size`] first, then parents and leaves for the
-/// requested ranges in pre-order, so leaves come in ascending order, and then
-/// drops the sender. A range past the end of the blob stands for the last
-/// chunk, so the data ends at the end of the requested ranges or at the size,
-/// whichever comes first. The leaf that reaches that point is the last item,
-/// and a stream that ends before it was cut short. An error is always the last
-/// item. [`EncodedItem::Done`] is not needed, but counts as the last item too.
-#[derive(Debug, Default)]
-enum ExportBaoEnd {
-    /// Nothing received yet, the size comes first.
-    #[default]
-    Start,
-    /// Got the size, the data ends at `end`.
-    Data { end: u64 },
-}
-
-impl ExportBaoEnd {
-    /// Feed the items of a stream for `ranges` in order. Returns true for the
-    /// item that completes the stream, or for an error.
-    fn is_last(&mut self, ranges: &ChunkRanges, item: &EncodedItem) -> bool {
-        match (&*self, item) {
-            (Self::Start, EncodedItem::Size(size)) => {
-                let boundaries = ranges.boundaries();
-                let requested = if boundaries.len() % 2 == 1 {
-                    // open range, up to the end of the blob
-                    u64::MAX
-                } else {
-                    boundaries
-                        .last()
-                        .map_or(0, |end| end.0.saturating_mul(1024))
-                };
-                let end = requested.min(*size);
-                *self = Self::Data { end };
-                end == 0
-            }
-            (Self::Data { .. }, EncodedItem::Parent(_)) => false,
-            (Self::Data { end }, EncodedItem::Leaf(leaf)) => {
-                leaf.offset + leaf.data.len() as u64 >= *end
-            }
-            (_, EncodedItem::Error(_) | EncodedItem::Done) => true,
-            _ => {
-                error!("export bao: unexpected item in state {self:?}");
-                false
-            }
-        }
     }
 }
 
@@ -1437,6 +1448,114 @@ mod tests {
     #[cfg(feature = "fs-store")]
     use crate::store::fs::FsStore;
     use crate::{api::Store, store::mem::MemStore};
+
+    /// Terminal items end the public stream even if the store keeps its sender
+    /// open or queues more items afterwards.
+    #[tokio::test]
+    async fn export_path_stops_at_terminal_item() -> TestResult<()> {
+        for success in [false, true] {
+            for extra in [false, true] {
+                let (tx, rx) = mpsc::channel(3);
+                tx.send(ExportProgressItem::Size(1)).await?;
+                let terminal = if success {
+                    ExportProgressItem::Done
+                } else {
+                    ExportProgressItem::Error(io::Error::other("store failed").into())
+                };
+                tx.send(terminal).await?;
+                if extra {
+                    tx.send(ExportProgressItem::CopyProgress(1)).await?;
+                }
+                let progress = ExportProgress::new(async { Ok(rx) });
+                let items: Vec<_> = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    progress.stream().await.collect(),
+                )
+                .await?;
+                assert_eq!(items.len(), 2);
+                assert!(matches!(items[0], ExportProgressItem::Size(1)));
+                assert_eq!(matches!(items[1], ExportProgressItem::Done), success);
+                drop(tx);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_blobs_stops_at_error() -> TestResult<()> {
+        for extra in [false, true] {
+            let (tx, rx) = mpsc::channel(2);
+            tx.send(ListBlobsItem::Error(
+                io::Error::other("store failed").into(),
+            ))
+            .await?;
+            if extra {
+                tx.send(ListBlobsItem::Hash(Hash::new(b"unexpected")))
+                    .await?;
+            }
+            let progress = BlobsListProgress::new(async { Ok(rx) });
+            let items: Vec<_> = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                progress.stream().await?.collect(),
+            )
+            .await?;
+            assert_eq!(items.len(), 2);
+            assert_eq!(*items[0].as_ref().unwrap(), Hash::EMPTY);
+            assert!(items[1].is_err());
+            drop(tx);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_blobs_needs_done() -> TestResult<()> {
+        let hash = Hash::new(b"listed");
+        for done in [false, true] {
+            let (tx, rx) = mpsc::channel(2);
+            tx.send(ListBlobsItem::Hash(hash)).await?;
+            if done {
+                tx.send(ListBlobsItem::Done).await?;
+            }
+            drop(tx);
+            let progress = BlobsListProgress::new(async { Ok(rx) });
+            let items: Vec<_> = progress.stream().await?.collect().await;
+            assert_eq!(*items[0].as_ref().unwrap(), Hash::EMPTY);
+            assert_eq!(*items[1].as_ref().unwrap(), hash);
+            if done {
+                assert_eq!(items.len(), 2);
+            } else {
+                assert_eq!(items.len(), 3);
+                let super::super::Error::Io(cause) = items[2].as_ref().unwrap_err();
+                assert_eq!(cause.kind(), io::ErrorKind::UnexpectedEof);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_progress_stops_at_terminal_item() -> TestResult<()> {
+        let store = MemStore::new();
+        for success in [false, true] {
+            let terminal = if success {
+                AddProgressItem::Done(TempTag::new(HashAndFormat::raw(Hash::EMPTY), None))
+            } else {
+                AddProgressItem::Error(io::Error::other("store failed"))
+            };
+            let source = stream::iter([AddProgressItem::Size(0), terminal]).chain(stream::poll_fn(
+                |_| -> std::task::Poll<Option<AddProgressItem>> {
+                    panic!("polled the store after its terminal item")
+                },
+            ));
+            let items: Vec<_> = AddProgress::new(store.blobs(), source)
+                .stream()
+                .await
+                .collect()
+                .await;
+            assert_eq!(items.len(), 2);
+            assert_eq!(matches!(items[1], AddProgressItem::Done(_)), success);
+        }
+        Ok(())
+    }
 
     fn data_of(items: &[ExportRangesItem]) -> Vec<u8> {
         let mut res = Vec::new();
@@ -1478,8 +1597,11 @@ mod tests {
                         .any(|item| matches!(item, ExportRangesItem::Error(_))),
                     "size {size}, ranges {ranges:?}: unexpected error in {items:?}"
                 );
-                let mut end = ExportRangesEnd::default();
-                let Some(last) = items.iter().position(|item| end.is_last(&ranges, item)) else {
+                let mut rules = ExportRangesRules::new(ranges.clone());
+                let Some(last) = items
+                    .iter()
+                    .position(|item| rules.feed(item).unwrap() == Step::Last)
+                else {
                     panic!("size {size}, ranges {ranges:?}: no last item in {items:?}");
                 };
                 assert_eq!(
@@ -1536,8 +1658,11 @@ mod tests {
                         .any(|item| matches!(item, EncodedItem::Error(_))),
                     "size {size}, ranges {ranges:?}: unexpected error in {items:?}"
                 );
-                let mut end = ExportBaoEnd::default();
-                let Some(last) = items.iter().position(|item| end.is_last(&ranges, item)) else {
+                let mut rules = ExportBaoRules::new(&ranges);
+                let Some(last) = items
+                    .iter()
+                    .position(|item| rules.feed(item).unwrap() == Step::Last)
+                else {
                     panic!("size {size}, ranges {ranges:?}: no last item in {items:?}");
                 };
                 for item in &items[last + 1..] {
