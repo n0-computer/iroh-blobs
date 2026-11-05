@@ -14,7 +14,10 @@ pub use super::proto::{
     TagInfo,
 };
 use super::{
-    proto::{CreateTempTagRequest, ListTagsItem, ListTempTagsItem, Scope},
+    proto::{
+        rules::{Step, StreamRules, TagListRules},
+        CreateTempTagRequest, ListTagsItem, ListTempTagsItem, Scope,
+    },
     ApiClient, Tag, TempTag,
 };
 use crate::{api::proto::ListTempTagsRequest, HashAndFormat};
@@ -41,22 +44,38 @@ impl Tags {
         trace!("{:?}", options);
         let mut rx = self.client.server_streaming(options, 32).await?;
         Ok(Gen::new(|co| async move {
+            let mut rules = TagListRules;
             loop {
-                let error = match rx.recv().await {
-                    Ok(Some(ListTempTagsItem::Tag(tag))) => {
-                        co.yield_(Ok(tag)).await;
-                        continue;
+                let item = match rx.recv().await {
+                    Ok(Some(item)) => item,
+                    Ok(None) => {
+                        co.yield_(Err(super::Error::io(
+                            io::ErrorKind::UnexpectedEof,
+                            "temporary-tag listing ended before completion",
+                        )))
+                        .await;
+                        break;
                     }
-                    Ok(Some(ListTempTagsItem::Done)) => break,
-                    Ok(Some(ListTempTagsItem::Error(error))) => error,
-                    Ok(None) => super::Error::io(
-                        io::ErrorKind::UnexpectedEof,
-                        "temporary-tag listing ended before completion",
-                    ),
-                    Err(error) => error.into(),
+                    Err(error) => {
+                        co.yield_(Err(error.into())).await;
+                        break;
+                    }
                 };
-                co.yield_(Err(error)).await;
-                break;
+                let step = match rules.check(&item) {
+                    Ok(step) => step,
+                    Err(error) => {
+                        co.yield_(Err(error.into())).await;
+                        break;
+                    }
+                };
+                match item {
+                    ListTempTagsItem::Tag(tag) => co.yield_(Ok(tag)).await,
+                    ListTempTagsItem::Done => {}
+                    ListTempTagsItem::Error(error) => co.yield_(Err(error)).await,
+                }
+                if step == Step::Last {
+                    break;
+                }
             }
         }))
     }
@@ -73,22 +92,38 @@ impl Tags {
         trace!("{:?}", options);
         let mut rx = self.client.server_streaming(options, 32).await?;
         Ok(Gen::new(|co| async move {
+            let mut rules = TagListRules;
             loop {
-                let error = match rx.recv().await {
-                    Ok(Some(ListTagsItem::Tag(tag))) => {
-                        co.yield_(Ok(tag)).await;
-                        continue;
+                let item = match rx.recv().await {
+                    Ok(Some(item)) => item,
+                    Ok(None) => {
+                        co.yield_(Err(super::Error::io(
+                            io::ErrorKind::UnexpectedEof,
+                            "tag listing ended before completion",
+                        )))
+                        .await;
+                        break;
                     }
-                    Ok(Some(ListTagsItem::Done)) => break,
-                    Ok(Some(ListTagsItem::Error(error))) => error,
-                    Ok(None) => super::Error::io(
-                        io::ErrorKind::UnexpectedEof,
-                        "tag listing ended before completion",
-                    ),
-                    Err(error) => error.into(),
+                    Err(error) => {
+                        co.yield_(Err(error.into())).await;
+                        break;
+                    }
                 };
-                co.yield_(Err(error)).await;
-                break;
+                let step = match rules.check(&item) {
+                    Ok(step) => step,
+                    Err(error) => {
+                        co.yield_(Err(error.into())).await;
+                        break;
+                    }
+                };
+                match item {
+                    ListTagsItem::Tag(tag) => co.yield_(Ok(tag)).await,
+                    ListTagsItem::Done => {}
+                    ListTagsItem::Error(error) => co.yield_(Err(error)).await,
+                }
+                if step == Step::Last {
+                    break;
+                }
             }
         }))
     }

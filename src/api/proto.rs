@@ -14,6 +14,15 @@
 //! The file system store is quite complex and optimized, so to get started take a look at
 //! the much simpler memory store.
 //!
+//! # Tag listings
+//!
+//! [`Request::ListTags`] and [`Request::ListTempTags`] send zero or more `Tag`
+//! items followed by `Done` on success, or a terminal `Error` on failure. Even an
+//! empty listing must send `Done`. Closing the stream before either terminal
+//! item is an error, since dropping a sender does not prove enumeration finished.
+//! Clients stop at the terminal item without waiting for the sender to close.
+//! See [`ListTagsItem`] for the state diagram shared by both listings.
+//!
 //! # The empty blob
 //!
 //! The empty blob, [`Hash::EMPTY`], is always present. The client in [`crate::api`]
@@ -296,8 +305,8 @@ pub struct ImportByteStreamRequest {
 /// The items a client sends to the store for an [`ImportByteStreamRequest`].
 ///
 /// The client sends the data as [`Self::Bytes`] items, and then
-/// [`Self::Done`]. Unlike the response streams, dropping the sender does not
-/// complete the stream: the store only imports the data after [`Self::Done`],
+/// [`Self::Done`]. Dropping the sender does not complete the stream:
+/// the store only imports the data after [`Self::Done`],
 /// and treats a stream that ends without it as aborted. So a client that goes
 /// away in the middle of an upload never produces a truncated blob.
 ///
@@ -392,6 +401,16 @@ impl ListTagsRequest {
 }
 
 /// An item in a named-tag listing. `Done` and `Error` are terminal.
+///
+/// Send zero or more [`Self::Tag`] items, then [`Self::Done`] on success or
+/// [`Self::Error`] on failure. An empty listing still sends [`Self::Done`].
+/// Closure before either terminal item is reported as
+/// [`std::io::ErrorKind::UnexpectedEof`]. Clients stop at the terminal item,
+/// without waiting for the sender to close or reading any later items.
+///
+/// This state machine also applies to [`ListTempTagsItem`].
+///
+#[doc = include_str!("../../docs/img/tag_list.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ListTagsItem {
     /// A matching named tag.
@@ -403,6 +422,11 @@ pub enum ListTagsItem {
 }
 
 /// An item in a temporary-tag listing. `Done` and `Error` are terminal.
+///
+/// Follows the same [state machine as named-tag listings](ListTagsItem).
+/// Send zero or more [`Self::Tag`] items, then [`Self::Done`] on success or
+/// [`Self::Error`] on failure. An empty listing still sends [`Self::Done`];
+/// closure before either terminal item is an unexpected EOF.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ListTempTagsItem {
     /// Content protected by a temporary tag.

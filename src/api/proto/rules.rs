@@ -1,10 +1,11 @@
 //! Rules of the protocol that the types can not express.
 //!
-//! Each response stream has a state machine that is fed the items in order. It
-//! says whether an item is the last one, since a store drops the sender instead
-//! of sending a terminal item, or which rule the item breaks. Requests are
-//! checked with [`Command::validate`]. None of this panics or logs, the caller
-//! decides what to do with a [`Violation`].
+//! Response stream rules are fed the items in order. They identify the last
+//! item, whether completion is explicit or follows from the requested data,
+//! and report which rule an item breaks. Callers stop at the last item and
+//! handle premature closure; they do not wait for later items to check them.
+//! Requests are checked with [`Command::validate`]. [`StreamRules::feed`] reports
+//! violations, while [`StreamRules::check`] also asserts in debug builds.
 use std::io;
 
 use bao_tree::{
@@ -13,7 +14,10 @@ use bao_tree::{
 };
 use range_collections::RangeSet2;
 
-use super::{AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem};
+use super::{
+    AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem, ListTagsItem,
+    ListTempTagsItem,
+};
 use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
@@ -222,6 +226,32 @@ impl StreamRules<crate::api::Result<Hash>> for ListBlobsRules {
             Ok(hash) if *hash == Hash::EMPTY => Err(Violation::EmptyHashListed),
             Ok(_) => Ok(Step::More),
         }
+    }
+}
+
+/// The shared rules of [`ListTagsItem`] and [`ListTempTagsItem`] streams.
+///
+/// Zero or more `Tag` items are followed by `Done` or `Error`. Both are terminal,
+/// so a client stops immediately and reports closure before either as an error.
+/// The diagram on [`ListTagsItem`] and the clients in `api::tags` must agree.
+#[derive(Debug, Default)]
+pub(crate) struct TagListRules;
+
+impl StreamRules<ListTagsItem> for TagListRules {
+    fn feed(&mut self, item: &ListTagsItem) -> Result<Step, Violation> {
+        Ok(match item {
+            ListTagsItem::Tag(_) => Step::More,
+            ListTagsItem::Done | ListTagsItem::Error(_) => Step::Last,
+        })
+    }
+}
+
+impl StreamRules<ListTempTagsItem> for TagListRules {
+    fn feed(&mut self, item: &ListTempTagsItem) -> Result<Step, Violation> {
+        Ok(match item {
+            ListTempTagsItem::Tag(_) => Step::More,
+            ListTempTagsItem::Done | ListTempTagsItem::Error(_) => Step::Last,
+        })
     }
 }
 
