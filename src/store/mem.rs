@@ -7,6 +7,9 @@
 //!
 //! For many use cases this can be quite useful, since it does not require write access
 //! to the file system.
+#[cfg(any(wasm_browser, test))]
+mod import_outboard;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     future::Future,
@@ -49,9 +52,10 @@ use crate::{
             DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
             ExportRangesItem, ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
-            ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
-            ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
+            ImportPathMsg, ImportPathRequest, ListBlobsItem, ListBlobsMsg, ListTagsItem,
+            ListTagsMsg, ListTagsRequest, ListTempTagsItem, ObserveMsg, ObserveRequest,
+            RenameTagMsg, RenameTagRequest, Scope, SetTagMsg, SetTagRequest, ShutdownMsg,
+            SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -62,7 +66,7 @@ use crate::{
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
-    util::temp_tag::{TagDrop, TempTagScope, TempTags},
+    util::temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -79,7 +83,7 @@ pub struct MemStore {
 
 impl From<MemStore> for crate::api::Store {
     fn from(value: MemStore) -> Self {
-        crate::api::Store::from_sender(value.client)
+        crate::api::Store::from_client(value.client)
     }
 }
 
@@ -111,16 +115,13 @@ enum TaskResult {
 }
 
 impl MemStore {
-    pub fn from_sender(client: ApiClient) -> Self {
-        Self { client }
-    }
-
     pub fn new() -> Self {
         Self::new_with_opts(Options::default())
     }
 
     pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
+        let gc_sender = sender.downgrade();
         n0_future::task::spawn(
             Actor {
                 commands: receiver,
@@ -128,7 +129,6 @@ impl MemStore {
                 state: State {
                     data: HashMap::new(),
                     tags: BTreeMap::new(),
-                    empty_hash: BaoFileHandle::new_partial(Hash::EMPTY),
                 },
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
@@ -138,9 +138,11 @@ impl MemStore {
             .run(),
         );
 
-        let store = Self::from_sender(sender.into());
+        let store = Self {
+            client: sender.into(),
+        };
         if let Some(gc_config) = opts.gc_config {
-            n0_future::task::spawn(run_gc(store.deref().clone(), gc_config));
+            n0_future::task::spawn(run_gc(gc_sender, gc_config));
         }
 
         store
@@ -172,6 +174,7 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) -> Option<ShutdownMsg> {
+        debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
             Command::ImportBao(ImportBaoMsg {
                 inner: ImportBaoRequest { hash, size },
@@ -179,6 +182,8 @@ impl Actor {
                 tx,
                 ..
             }) => {
+                // protect from a gc run that is already past the mark phase, like the fs store
+                self.protected.insert(hash);
                 let entry = self.get_or_create_entry(hash);
                 self.spawn(import_bao(entry, size, data, tx));
             }
@@ -226,6 +231,9 @@ impl Actor {
             }) => {
                 let entry = self.get(&hash);
                 self.spawn(export_bao(entry, ranges, tx))
+            }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.spawn(super::util::export_empty(cmd));
             }
             Command::ExportPath(cmd) => {
                 let entry = self.get(&cmd.hash);
@@ -315,8 +323,15 @@ impl Actor {
                         hash: value.hash,
                         format: value.format,
                     })
-                    .map(Ok);
-                tx.send(tags.collect()).await.ok();
+                    .collect::<Vec<_>>();
+                self.spawn(async move {
+                    for tag in tags {
+                        if tx.send(ListTagsItem::Tag(tag)).await.is_err() {
+                            return;
+                        }
+                    }
+                    tx.send(ListTagsItem::Done).await.ok();
+                });
             }
             Command::SetTag(SetTagMsg {
                 inner: SetTagRequest { name: tag, value },
@@ -342,17 +357,25 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                self.spawn(async move {
+                    for tt in tts {
+                        if cmd.tx.send(ListTempTagsItem::Tag(tt)).await.is_err() {
+                            return;
+                        }
+                    }
+                    cmd.tx.send(ListTempTagsItem::Done).await.ok();
+                });
             }
             Command::ListBlobs(cmd) => {
                 let ListBlobsMsg { tx, .. } = cmd;
                 let blobs = self.state.data.keys().cloned().collect::<Vec<Hash>>();
                 self.spawn(async move {
                     for blob in blobs {
-                        if tx.send(Ok(blob)).await.is_err() {
-                            break;
+                        if tx.send(ListBlobsItem::Hash(blob)).await.is_err() {
+                            return;
                         }
                     }
+                    tx.send(ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {
@@ -418,23 +441,15 @@ impl Actor {
     }
 
     fn get(&mut self, hash: &Hash) -> Option<BaoFileHandle> {
-        if *hash == Hash::EMPTY {
-            Some(self.state.empty_hash.clone())
-        } else {
-            self.state.data.get(hash).cloned()
-        }
+        self.state.data.get(hash).cloned()
     }
 
     fn get_or_create_entry(&mut self, hash: Hash) -> BaoFileHandle {
-        if hash == Hash::EMPTY {
-            self.state.empty_hash.clone()
-        } else {
-            self.state
-                .data
-                .entry(hash)
-                .or_insert_with(|| BaoFileHandle::new_partial(hash))
-                .clone()
-        }
+        self.state
+            .data
+            .entry(hash)
+            .or_insert_with(|| BaoFileHandle::new_partial(hash))
+            .clone()
     }
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
@@ -455,6 +470,20 @@ impl Actor {
             }
         };
         let hash = import_data.outboard.root().into();
+        if hash == Hash::EMPTY {
+            // the empty blob is always present, so there is nothing to store or protect
+            let tt = TempTag::new(
+                HashAndFormat {
+                    hash,
+                    format: import_data.format,
+                },
+                None,
+            );
+            import_data.tx.send(AddProgressItem::Done(tt)).await.ok();
+            return;
+        }
+        // protect from a gc run that is already past the mark phase, like the fs store
+        self.protected.insert(hash);
         let entry = self.get_or_create_entry(hash);
         entry
             .0
@@ -688,10 +717,14 @@ async fn export_bao(
     ranges: ChunkRanges,
     mut sender: mpsc::Sender<EncodedItem>,
 ) {
-    let Some(entry) = entry else {
-        let err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, "hash not found"));
-        sender.send(err.into()).await.ok();
-        return;
+    let entry = match entry {
+        // an entry without any data, not even the size, is answered like a missing one
+        Some(entry) if entry.outboard_reader().tree.size() != 0 => entry,
+        _ => {
+            let err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, "hash not found"));
+            sender.send(err.into()).await.ok();
+            return;
+        }
     };
     tracing::Span::current().record("hash", tracing::field::display(entry.hash));
     let data = entry.data_reader();
@@ -715,7 +748,10 @@ async fn import_bytes(
 ) -> Result<ImportEntry> {
     tx.send(AddProgressItem::Size(data.len() as u64)).await?;
     tx.send(AddProgressItem::CopyDone).await?;
+    #[cfg(not(wasm_browser))]
     let outboard = PreOrderMemOutboard::create(&data, IROH_BLOCK_SIZE);
+    #[cfg(wasm_browser)]
+    let outboard = import_outboard::create(data.clone()).await?;
     Ok(ImportEntry {
         data,
         outboard,
@@ -901,7 +937,6 @@ impl Outboard for OutboardReader {
 struct State {
     data: HashMap<Hash, BaoFileHandle>,
     tags: BTreeMap<Tag, HashAndFormat>,
-    empty_hash: BaoFileHandle,
 }
 
 #[derive(Debug, derive_more::From)]

@@ -2,7 +2,6 @@
 
 use std::{borrow::Borrow, fmt, str::FromStr};
 
-use arrayvec::ArrayString;
 use bao_tree::blake3;
 use n0_error::{e, stack_error, StdResultExt};
 use postcard::experimental::max_size::MaxSize;
@@ -22,6 +21,9 @@ impl fmt::Debug for Hash {
 
 impl Hash {
     /// The hash for the empty byte range (`b""`).
+    ///
+    /// Every store has the empty blob, whether or not it was ever added. See
+    /// [`crate::api::proto`] for how this works.
     pub const EMPTY: Hash = Hash::from_bytes([
         175, 19, 73, 185, 245, 249, 161, 166, 160, 64, 77, 234, 54, 220, 201, 73, 155, 203, 37,
         201, 173, 193, 18, 183, 204, 154, 147, 202, 228, 31, 50, 98,
@@ -50,12 +52,22 @@ impl Hash {
 
     /// Convert to a hex string limited to the first 5bytes for a friendly string
     /// representation of the hash.
-    pub fn fmt_short(&self) -> ArrayString<10> {
-        let mut res = ArrayString::new();
-        data_encoding::HEXLOWER
-            .encode_write(&self.as_bytes()[..5], &mut res)
-            .unwrap();
-        res
+    pub fn fmt_short(&self) -> impl fmt::Display + Copy + 'static {
+        HashShort(
+            self.as_bytes()[..5]
+                .try_into()
+                .expect("slice with incorrect length"),
+        )
+    }
+}
+
+/// Display helper for [`Hash::fmt_short`].
+#[derive(Clone, Copy)]
+struct HashShort([u8; 5]);
+
+impl fmt::Display for HashShort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        data_encoding::HEXLOWER.encode_write(&self.0, f)
     }
 }
 
@@ -459,6 +471,14 @@ mod tests {
     use serde_test::{assert_tokens, Configure, Token};
 
     use super::*;
+
+    #[test]
+    fn test_fmt_short() {
+        for i in 0..100 {
+            let hash: Hash = blake3::hash(&[i]).into();
+            assert_eq!(hash.fmt_short().to_string(), hash.to_hex()[..10]);
+        }
+    }
 
     #[test]
     fn test_display_parse_roundtrip() {

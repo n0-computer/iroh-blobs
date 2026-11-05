@@ -257,7 +257,7 @@ impl Store {
     #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
     pub fn connect(endpoint: noq::Endpoint, addr: std::net::SocketAddr) -> Self {
         let sender = irpc::Client::noq(endpoint, addr);
-        Store::from_sender(sender)
+        Store::from_client(sender)
     }
 
     /// Listen on a noq endpoint for incoming rpc connections.
@@ -301,11 +301,57 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn from_sender(client: ApiClient) -> Self {
-        Self { client }
+    /// Create a store from a client for the store protocol.
+    ///
+    /// This is how you back a [`Store`] with your own implementation: run an
+    /// actor that handles [`proto::Command`]s, and pass the sender of its
+    /// channel, or any other client for the protocol.
+    ///
+    /// The actor only has to handle the commands that are actually used. To
+    /// serve data with [`crate::BlobsProtocol`], those are:
+    ///
+    /// - `ExportBao`, for get and get-many requests, and to read hash sequences,
+    /// - `Observe`, for observe requests,
+    /// - `ImportBao`, for push requests.
+    ///
+    /// Answer the other commands with an error, or drop them where they have
+    /// no error channel, which the caller sees as a closed channel. The client
+    /// answers reads of [`crate::Hash::EMPTY`] itself, so the actor never sees
+    /// them.
+    ///
+    /// The client can also be a remote one, but [`Store::connect`] is the usual
+    /// way to use a remote store.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iroh_blobs::api::{proto::Command, Store};
+    ///
+    /// # async fn example() {
+    /// let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
+    /// tokio::spawn(async move {
+    ///     while let Some(cmd) = rx.recv().await {
+    ///         match cmd {
+    ///             // answer the commands this store supports, here none
+    ///             _ => {}
+    ///         }
+    ///     }
+    /// });
+    /// let store = Store::from_client(tx);
+    /// # }
+    /// ```
+    pub fn from_client(client: impl Into<irpc::Client<proto::Request>>) -> Self {
+        Self {
+            client: client.into(),
+        }
     }
 
     pub(crate) fn ref_from_sender(client: &ApiClient) -> &Self {
         Self::ref_cast(client)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn client(&self) -> &ApiClient {
+        &self.client
     }
 }

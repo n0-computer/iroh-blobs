@@ -427,6 +427,11 @@ mod main_actor {
             task
         }
 
+        /// Whether an entity actor has queued a follow-up for the manager.
+        pub fn has_pending(&self) -> bool {
+            !self.internal_recv.is_empty()
+        }
+
         /// This function needs to be polled by the owner of the actor state to advance the
         /// entity manager state machine. If it returns a future, that future must be spawned
         /// by the caller.

@@ -104,13 +104,13 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
-use meta::list_blobs;
+use meta::{list_blobs, list_tags};
 use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 
 use crate::{
     api::{
@@ -125,10 +125,7 @@ use crate::{
     protocol::ChunkRangesExt,
     store::{
         fs::{
-            bao_file::{
-                BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
-                OutboardReader,
-            },
+            bao_file::{BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader},
             util::entity_manager::{self, ActiveEntityState},
         },
         gc::run_gc,
@@ -296,20 +293,19 @@ impl SyncEntityApi for HashContext {
         });
         match action {
             Action::Load => {
-                let state = if self.id == Hash::EMPTY {
-                    BaoFileStorage::Complete(CompleteStorage {
-                        data: MemOrFile::Mem(Bytes::new()),
-                        outboard: MemOrFile::empty(),
-                    })
-                } else {
-                    // we must assign a new state even in the error case, otherwise
-                    // tasks waiting for loading would stall!
-                    match self.global.db.get(self.id).await {
-                        Ok(state) => match BaoFileStorage::open(state, self).await {
-                            Ok(handle) => handle,
-                            Err(_) => BaoFileStorage::Poisoned,
-                        },
-                        Err(_) => BaoFileStorage::Poisoned,
+                // we must assign a new state even in the error case, otherwise
+                // tasks waiting for loading would stall!
+                let state = match self.global.db.get(self.id).await {
+                    Ok(state) => match BaoFileStorage::open(state, self).await {
+                        Ok(handle) => handle,
+                        Err(cause) => {
+                            error!("failed to open {}, poisoning: {cause}", self.id);
+                            BaoFileStorage::Poisoned
+                        }
+                    },
+                    Err(cause) => {
+                        error!("failed to get {} from db, poisoning: {cause}", self.id);
+                        BaoFileStorage::Poisoned
                     }
                 };
                 self.state.send_replace(state);
@@ -330,9 +326,14 @@ impl SyncEntityApi for HashContext {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            let Ok((state1, update)) = state.take().write_batch(batch, bitfield, self) else {
-                res = Err(io::Error::other("write batch failed"));
-                return false;
+            let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
+                Ok(written) => written,
+                Err(cause) => {
+                    error!("failed to write batch for {}, poisoning: {cause}", self.id);
+                    res = Err(cause);
+                    // the entry is poisoned now, wake up observers so they can end
+                    return true;
+                }
             };
             res = Ok(update);
             *state = state1;
@@ -420,14 +421,7 @@ impl HashContext {
     }
 
     pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        let hash = self.id;
-        if hash == Hash::EMPTY {
-            return Ok(Some(EntryState::Complete {
-                data_location: DataLocation::Inline(Bytes::new()),
-                outboard_location: OutboardLocation::NotNeeded,
-            }));
-        };
-        self.db().get(hash).await
+        self.db().get(self.id).await
     }
 
     /// Update the entry state in the database, and wait for completion.
@@ -471,6 +465,7 @@ impl Actor {
     async fn handle_command(&mut self, cmd: Command) {
         let span = cmd.parent_span();
         let _entered = span.enter();
+        debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
             Command::SyncDb(cmd) => {
                 trace!("{cmd:?}");
@@ -478,13 +473,7 @@ impl Actor {
             }
             Command::WaitIdle(cmd) => {
                 trace!("{cmd:?}");
-                if self.tasks.is_empty() {
-                    // we are currently idle
-                    cmd.tx.send(()).await.ok();
-                } else {
-                    // wait for idle state
-                    self.idle_waiters.push(cmd.tx);
-                }
+                self.idle_waiters.push(cmd.tx);
             }
             Command::Shutdown(cmd) => {
                 trace!("{cmd:?}");
@@ -500,7 +489,17 @@ impl Actor {
             }
             Command::ListTags(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                match self.db().snapshot(cmd.span.clone()).await {
+                    Ok(snapshot) => self.spawn(list_tags(snapshot, cmd)),
+                    Err(cause) => {
+                        self.spawn(async move {
+                            cmd.tx
+                                .send(proto::ListTagsItem::Error(api::Error::other(cause)))
+                                .await
+                                .ok();
+                        });
+                    }
+                }
             }
             Command::DeleteTags(cmd) => {
                 trace!("{cmd:?}");
@@ -524,8 +523,16 @@ impl Actor {
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
-                if let Ok(snapshot) = self.db().snapshot(cmd.span.clone()).await {
-                    self.spawn(list_blobs(snapshot, cmd));
+                match self.db().snapshot(cmd.span.clone()).await {
+                    Ok(snapshot) => self.spawn(list_blobs(snapshot, cmd)),
+                    Err(cause) => {
+                        self.spawn(async move {
+                            cmd.tx
+                                .send(proto::ListBlobsItem::Error(api::Error::other(cause)))
+                                .await
+                                .ok();
+                        });
+                    }
                 }
             }
             Command::Batch(cmd) => {
@@ -540,7 +547,14 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                self.spawn(async move {
+                    for tt in tts {
+                        if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
+                            return;
+                        }
+                    }
+                    cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
+                });
             }
             Command::ImportBytes(cmd) => {
                 trace!("{cmd:?}");
@@ -553,6 +567,9 @@ impl Actor {
             Command::ImportPath(cmd) => {
                 trace!("{cmd:?}");
                 self.spawn(import_path(cmd, self.context()));
+            }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.spawn(super::util::export_empty(cmd));
             }
             Command::ExportPath(cmd) => {
                 trace!("{cmd:?}");
@@ -591,21 +608,18 @@ impl Actor {
             }
             InternalCommand::FinishImport(cmd) => {
                 trace!("{cmd:?}");
+                let value = HashAndFormat {
+                    hash: cmd.hash,
+                    format: cmd.format,
+                };
                 if cmd.hash == Hash::EMPTY {
-                    cmd.tx
-                        .send(AddProgressItem::Done(TempTag::leaking_empty(cmd.format)))
-                        .await
-                        .ok();
-                } else {
-                    let tt = self.temp_tags.create(
-                        cmd.scope,
-                        HashAndFormat {
-                            hash: cmd.hash,
-                            format: cmd.format,
-                        },
-                    );
-                    (tt, cmd).spawn(&mut self.handles, &mut self.tasks).await;
+                    // the empty blob is always present, so there is nothing to store or protect
+                    let tt = TempTag::new(value, None);
+                    cmd.tx.send(AddProgressItem::Done(tt)).await.ok();
+                    return;
                 }
+                let tt = self.temp_tags.create(cmd.scope, value);
+                (tt, cmd).spawn(&mut self.handles, &mut self.tasks).await;
             }
         }
     }
@@ -618,22 +632,29 @@ impl Actor {
                         self.spawn(task);
                     }
                 }
+                Some(cmd) = self.fs_cmd_rx.recv() => {
+                    self.handle_fs_command(cmd).await;
+                }
                 cmd = self.cmd_rx.recv() => {
                     let Some(cmd) = cmd else {
                         break;
                     };
                     self.handle_command(cmd).await;
                 }
-                Some(cmd) = self.fs_cmd_rx.recv() => {
-                    self.handle_fs_command(cmd).await;
-                }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     Self::log_task_result(res);
-                    if self.tasks.is_empty() {
-                        for tx in self.idle_waiters.drain(..) {
-                            tx.send(()).await.ok();
-                        }
-                    }
+                }
+            }
+            // Check after joining: a task may have queued work since select!
+            // polled the receivers. With no tasks left, no follow-ups can arrive.
+            // Queued API requests are new work and do not prevent idle.
+            if !self.idle_waiters.is_empty()
+                && self.tasks.is_empty()
+                && self.fs_cmd_rx.is_empty()
+                && !self.handles.has_pending()
+            {
+                for tx in self.idle_waiters.drain(..) {
+                    tx.send(()).await.ok();
                 }
             }
         }
@@ -672,6 +693,10 @@ impl Actor {
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
         let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
         let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        // We hold the database lock now, so no other store is importing into the temp
+        // directory. Anything in it is left over from imports that did not complete,
+        // for example because the process was killed.
+        remove_all_files(&options.path.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -689,6 +714,27 @@ impl Actor {
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
         })
+    }
+}
+
+/// Remove all files directly in `dir`, logging but otherwise ignoring failures.
+///
+/// Subdirectories and their contents are left alone.
+fn remove_all_files(dir: &Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(cause) => {
+            warn!("failed to read directory {}: {cause}", dir.display());
+            return;
+        }
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if !path.is_file() {
+            continue;
+        }
+        if let Err(cause) = fs::remove_file(&path) {
+            warn!("failed to remove file {}: {cause}", path.display());
+        }
     }
 }
 
@@ -924,13 +970,16 @@ impl EntityApi for HashContext {
         self.load().await;
         let ImportBaoMsg {
             inner: ImportBaoRequest { size, .. },
-            rx,
+            mut rx,
             tx,
             ..
         } = cmd;
-        let res = import_bao_impl(self, size, rx).await;
+        let res = import_bao_impl(self, size, &mut rx).await;
         trace!("{res:?}");
+        // Answer before dropping `rx`, so the sender sees our error rather
+        // than just a closed channel.
         tx.send(res).await.ok();
+        drop(rx);
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -1021,9 +1070,6 @@ impl EntityApi for HashContext {
 }
 
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
-    if ctx.id == Hash::EMPTY {
-        return Ok(()); // nothing to do for the empty hash
-    }
     let ImportEntry {
         source,
         hash,
@@ -1058,14 +1104,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             // possibly open with FILE_SHARE_DELETE on windows?
             let target = ctx.options().path.data_path(&hash);
             trace!(
-                "moving temp file to owned data location: {} -> {}",
-                path.display(),
+                "moving temp file to owned data location: {path:?} -> {}",
                 target.display()
             );
-            if let Err(cause) = fs::rename(&path, &target) {
+            if let Err(cause) = path.persist(&target) {
                 error!(
-                    "failed to move temp file {} to owned data location {}: {cause}",
-                    path.display(),
+                    "failed to move temp file to owned data location {}: {cause}",
                     target.display()
                 );
             }
@@ -1079,14 +1123,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(
-                "moving temp file to owned outboard location: {} -> {}",
-                path.display(),
+                "moving temp file to owned outboard location: {path:?} -> {}",
                 target.display()
             );
-            if let Err(cause) = fs::rename(&path, &target) {
+            if let Err(cause) = path.persist(&target) {
                 error!(
-                    "failed to move temp file {} to owned outboard location {}: {cause}",
-                    path.display(),
+                    "failed to move temp file to owned outboard location {}: {cause}",
                     target.display()
                 );
             }
@@ -1135,7 +1177,7 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 async fn import_bao_impl(
     ctx: &HashContext,
     size: NonZeroU64,
-    mut rx: mpsc::Receiver<BaoContentItem>,
+    rx: &mut mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
     trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
@@ -1216,7 +1258,7 @@ async fn export_bao_impl(
     let ExportBaoRequest { ranges, hash, .. } = cmd;
     let outboard = ctx.outboard()?;
     let size = outboard.tree.size();
-    if size == 0 && cmd.hash != Hash::EMPTY {
+    if size == 0 {
         // we have no data whatsoever, so we stop here
         return Ok(());
     }
@@ -1439,6 +1481,7 @@ impl FsStore {
         let rt = RtWrapper::from(builder.build()?);
         let handle = rt.handle().clone();
         let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(100);
+        let gc_sender = commands_tx.downgrade();
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let mut actor = handle
@@ -1459,7 +1502,7 @@ impl FsStore {
             ..FsStore::new(commands_tx.into(), fs_commands_tx)
         };
         if let Some(config) = gc_config {
-            handle.spawn(run_gc(store.deref().clone(), config));
+            handle.spawn(run_gc(gc_sender, config));
         }
         Ok(store)
     }
@@ -1484,7 +1527,7 @@ pub struct FsStore {
 
 impl From<FsStore> for Store {
     fn from(value: FsStore) -> Self {
-        Store::from_sender(value.sender)
+        Store::from_client(value.sender)
     }
 }
 
@@ -1548,11 +1591,12 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        api::blobs::Bitfield,
+        api::blobs::{AddPathOptions, Bitfield, ImportMode},
         store::{
             util::{read_checksummed, tests::create_n0_bao, SliceInfoExt, Tag},
             IROH_BLOCK_SIZE,
         },
+        BlobFormat,
     };
 
     /// Interesting sizes for testing.
@@ -1566,6 +1610,37 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
+
+    /// A last task can finish after its follow-up queue was polled empty.
+    #[tokio::test]
+    async fn test_idle_after_last_task_followup() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
+        let mut actor = Actor::new(
+            dir.path().join("blobs.db"),
+            cmd_rx,
+            fs_rx,
+            fs_tx.clone(),
+            Arc::new(Options::new(dir.path())),
+        )
+        .await?;
+        let (idle_tx, idle_rx) = irpc::channel::oneshot::channel();
+        actor.idle_waiters.push(idle_tx);
+        let (scope, _) = actor.temp_tags.create_scope();
+        actor.spawn(async move {
+            fs_tx.send(ClearScope { scope }.into()).await.unwrap();
+        });
+        // Start at the race's outcome: the last task is joined, but its
+        // follow-up is queued. Processing it does not spawn another task.
+        actor.tasks.join_next().await.unwrap()?;
+        assert!(!actor.fs_cmd_rx.is_empty());
+        let task = tokio::spawn(actor.run());
+        tokio::time::timeout(Duration::from_secs(5), idle_rx).await??;
+        drop(cmd_tx);
+        task.await?;
+        Ok(())
+    }
 
     pub fn round_up_request(size: u64, ranges: &ChunkRanges) -> ChunkRanges {
         let last_chunk = ChunkNum::chunks(size);
@@ -1683,7 +1758,6 @@ pub mod tests {
 
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
-    #[ignore = "flaky. I need a reliable way to keep the handle alive"]
     #[traced_test]
     async fn test_roundtrip_bytes_small() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
@@ -1695,7 +1769,10 @@ pub mod tests {
         {
             let expected = test_data(size);
             let expected_hash = Hash::new(&expected);
-            let obs = store.observe(expected_hash);
+            // An active observer keeps the handle alive. Otherwise it is persisted
+            // when idle, and the export reloads the data as a new instance.
+            let mut obs = std::pin::pin!(store.observe(expected_hash).stream().await?);
+            obs.next().await;
             let tt = store.add_bytes(expected.clone()).await?;
             assert_eq!(expected_hash, tt.hash);
             let actual = store.get_bytes(expected_hash).await?;
@@ -1706,10 +1783,6 @@ pub mod tests {
                 &actual.addr(),
                 "address mismatch for size {size}"
             );
-            // we must at some point see completion, otherwise the test will hang
-            // keep the handle alive by observing until the end, otherwise the handle
-            // will change and the bytes won't be the same instance anymore
-            obs.await_completion().await?;
         }
         store.shutdown().await?;
         Ok(())
@@ -2039,6 +2112,120 @@ pub mod tests {
         Ok(())
     }
 
+    /// Observing an entry whose data file is missing must end the stream
+    /// instead of panicking.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_observe_poisoned_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let data = test_data(1024 * 16 + 1);
+        let hash = Hash::new(&data);
+        {
+            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+            store.add_bytes(data.clone()).await?;
+            store.shutdown().await?;
+        }
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        assert!(store.observe(hash).await.is_err());
+        // the entity for the hash must still be alive, so re-adding works
+        store.add_bytes(data).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Importing into an entry whose data file is missing must fail.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_import_bao_poisoned_missing_data_file() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let data = test_data(1024 * 16 + 1);
+        let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
+        {
+            let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+            store.add_bytes(data).await?;
+            store.shutdown().await?;
+        }
+        std::fs::remove_file(options.path.data_path(&hash))?;
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        let res = store
+            .import_bao_bytes(hash, ChunkRanges::all(), encoded)
+            .await;
+        assert!(res.is_err());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// An observer must see the stream end when a write poisons the entry.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[traced_test]
+    async fn test_observe_ends_when_write_poisons() -> TestResult<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
+        // just over the inline limit, so the write has to create the data file
+        let data = test_data(1024 * 16 + 1);
+        let (hash, encoded) = create_n0_bao(&data, &ChunkRanges::all())?;
+        let mut stream = Box::pin(store.observe(hash).stream().await?);
+        assert!(stream.next().await.is_some());
+        // make it impossible to create the data file
+        let data_dir = db_dir.join("data");
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o555))?;
+        if std::fs::File::create(data_dir.join("probe")).is_ok() {
+            // running as root, permissions are not enforced
+            return Ok(());
+        }
+        let res = store
+            .import_bao_bytes(hash, ChunkRanges::all(), encoded)
+            .await;
+        let next = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await;
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755))?;
+        assert!(res.is_err());
+        assert!(matches!(next, Ok(None)));
+        Ok(())
+    }
+
+    /// Re-adding content in place from a new path must work after the old external file was deleted.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_reference_new_path_after_external_file_deleted() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_path = testdir.path().join("db").join("blobs.db");
+        let options = Options::new(&testdir.path().join("db"));
+        let data = test_data(1024 * 64);
+        let hash = Hash::new(&data);
+        // the old path sorts before the new one, so it is the first one in the db entry
+        let old = testdir.path().join("a.bin");
+        let new = testdir.path().join("b.bin");
+        std::fs::write(&old, &data)?;
+        std::fs::write(&new, &data)?;
+        let reference = |path: &Path| AddPathOptions {
+            path: path.to_owned(),
+            mode: ImportMode::TryReference,
+            format: BlobFormat::Raw,
+        };
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        store.add_path_with_opts(reference(&old)).await?;
+        store.shutdown().await?;
+        std::fs::remove_file(&old)?;
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        store.add_path_with_opts(reference(&new)).await?;
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        let store = FsStore::load_with_opts(db_path, options).await?;
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test_import_bytes_persistence_full() -> TestResult<()> {
@@ -2084,6 +2271,7 @@ pub mod tests {
             .tags()
             .list_temp_tags()
             .await?
+            .map(|item| item.unwrap())
             .collect::<HashSet<_>>()
             .await;
         assert!(tts.contains(&tt1.hash_and_format()));
@@ -2095,6 +2283,7 @@ pub mod tests {
             .tags()
             .list_temp_tags()
             .await?
+            .map(|item| item.unwrap())
             .collect::<HashSet<_>>()
             .await;
         // temp tag went out of scope, so it does not work anymore
@@ -2176,6 +2365,147 @@ pub mod tests {
             // }
             // store.import_bao_bytes(hash, ChunkRanges::all(), bao_tree.into()).await?;
         }
+        Ok(())
+    }
+
+    /// An import that does not complete must not leave its temp files behind.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_incomplete_import_removes_temp_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let temp_files =
+            || -> io::Result<usize> { Ok(std::fs::read_dir(&options.path.temp_path)?.count()) };
+        let size = 1024 * 1024 * 4;
+        // cancelled after the first progress item
+        let mut stream = store.add_bytes(vec![1u8; size]).stream().await;
+        stream.next().await;
+        drop(stream);
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "cancelled add_bytes");
+        // cancelled after the first progress item
+        let path = testdir.path().join("source");
+        std::fs::write(&path, vec![2u8; size])?;
+        let mut stream = store.add_path(&path).stream().await;
+        stream.next().await;
+        drop(stream);
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "cancelled add_path");
+        // the source fails after some data
+        let source = stream::iter([
+            Ok(Bytes::from(vec![3u8; size])),
+            Err(io::Error::other("source failed")),
+        ]);
+        assert!(store.add_stream(source).await.temp_tag().await.is_err());
+        store.wait_idle().await?;
+        assert_eq!(temp_files()?, 0, "failed add_stream");
+        Ok(())
+    }
+
+    /// Loading a store removes temp files left over by a previous run, and nothing else.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_load_removes_leftover_temp_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let db_path = db_dir.join("blobs.db");
+        let store = FsStore::load_with_opts(db_path.clone(), options.clone()).await?;
+        let data = vec![1u8; 1024 * 1024];
+        let hash = store.add_slice(&data).await?.hash;
+        store.shutdown().await?;
+        // as left by a process that was killed during an import
+        let leftover = options.path.temp_file_name();
+        std::fs::write(&leftover, b"leftover")?;
+        let store = FsStore::load_with_opts(db_path, options.clone()).await?;
+        assert!(!leftover.exists());
+        assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_slice());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// When a partial entry completes, the files the complete entry does not use are
+    /// removed, e.g. the data or outboard file when it gets inlined.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_complete_removes_unused_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        // 8 KiB gets inlined data, 1 MiB its own data file and an inlined outboard
+        for (size, by_import) in [
+            (8 * 1024, false),
+            (8 * 1024 + 1, true),
+            (1024 * 1024, false),
+            (1024 * 1024 + 1, true),
+        ] {
+            let data = test_data(size);
+            let half = ChunkRanges::from(..ChunkNum(4));
+            let (hash, bao) = create_n0_bao(&data, &half)?;
+            store.import_bao_bytes(hash, half, bao).await?;
+            store.wait_idle().await?;
+            assert!(path.data_path(&hash).exists());
+            assert!(path.outboard_path(&hash).exists());
+            if by_import {
+                // an import of the whole blob over the partial entry
+                drop(store.add_bytes(data.clone()).temp_tag().await?);
+            } else {
+                // the rest of the blob through the partial entry
+                let rest = ChunkRanges::from(ChunkNum(4)..);
+                let (_, bao) = create_n0_bao(&data, &rest)?;
+                store.import_bao_bytes(hash, rest, bao).await?;
+            }
+            store.wait_idle().await?;
+            store.sync_db().await?;
+            let inlined = size <= options.inline.max_data_inlined as usize;
+            assert_eq!(path.data_path(&hash).exists(), !inlined, "size={size}");
+            assert!(!path.outboard_path(&hash).exists(), "by_import={by_import}");
+            assert!(!path.sizes_path(&hash).exists(), "by_import={by_import}");
+            assert!(!path.bitfield_path(&hash).exists(), "by_import={by_import}");
+            assert_eq!(store.get_bytes(hash).await?, data);
+        }
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Requests that reach the store after its shutdown must not panic its tasks,
+    /// e.g. on an entry that the shutdown poisoned.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_requests_after_shutdown_do_not_panic() -> TestResult<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static PANICS: AtomicUsize = AtomicUsize::new(0);
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if info.to_string().contains("should not be used") {
+                PANICS.fetch_add(1, Ordering::SeqCst);
+            }
+            prev(info);
+        }));
+        let testdir = tempfile::tempdir()?;
+        let store = FsStore::load(testdir.path().join("db")).await?;
+        let complete = store.add_bytes(test_data(1024 * 1024)).await?.hash;
+        let unknown = Hash::new(b"unknown");
+        store.observe(complete).await?;
+        store.shutdown().await?;
+        for hash in [complete, unknown] {
+            let timeout = Duration::from_secs(5);
+            tokio::time::timeout(timeout, store.observe(hash))
+                .await
+                .ok();
+            tokio::time::timeout(
+                timeout,
+                store.export_bao(hash, ChunkRanges::all()).bao_to_vec(),
+            )
+            .await
+            .ok();
+        }
+        assert_eq!(PANICS.load(Ordering::SeqCst), 0);
         Ok(())
     }
 
