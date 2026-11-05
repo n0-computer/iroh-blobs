@@ -77,7 +77,10 @@ impl DataPos {
 
     /// Data comes in ascending order and ends at the size at the latest.
     fn feed(&mut self, leaf: &Leaf) -> Result<Step, Violation> {
-        let leaf_end = leaf.offset + leaf.data.len() as u64;
+        let leaf_end = leaf
+            .offset
+            .checked_add(leaf.data.len() as u64)
+            .ok_or(Violation::DataPastSize)?;
         if leaf.offset < self.pos {
             return Err(Violation::DataOutOfOrder);
         }
@@ -427,6 +430,33 @@ mod tests {
             offset,
             data: Bytes::from(vec![0u8; len]),
         }
+    }
+
+    #[test]
+    fn export_leaf_end_overflow() {
+        let mut bao = ExportBaoRules::new(&ChunkRanges::all());
+        let mut ranges = ExportRangesRules::new(RangeSet2::all());
+        bao.feed(&EncodedItem::Size(u64::MAX)).unwrap();
+        ranges.feed(&ExportRangesItem::Size(u64::MAX)).unwrap();
+        for (offset, len) in [(u64::MAX, 1), (u64::MAX - 1, 2)] {
+            assert_eq!(
+                bao.feed(&EncodedItem::Leaf(leaf(offset, len))),
+                Err(Violation::DataPastSize)
+            );
+            assert_eq!(
+                ranges.feed(&ExportRangesItem::Data(leaf(offset, len))),
+                Err(Violation::DataPastSize)
+            );
+        }
+        // Ending exactly at u64::MAX is valid and must not be confused with overflow.
+        assert_eq!(
+            bao.feed(&EncodedItem::Leaf(leaf(u64::MAX - 1, 1))),
+            Ok(Step::Last)
+        );
+        assert_eq!(
+            ranges.feed(&ExportRangesItem::Data(leaf(u64::MAX - 1, 1))),
+            Ok(Step::Last)
+        );
     }
 
     #[test]
