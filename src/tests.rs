@@ -24,8 +24,7 @@ use crate::{
     net_protocol::BlobsProtocol,
     protocol::{ChunkRangesSeq, GetManyRequest, ObserveRequest, PushRequest},
     provider::events::{
-        AbortReason, EventMask, EventSender, ObserveMode, ProviderMessage, RequestMode,
-        RequestUpdate,
+        AbortReason, EventMask, EventSender, ProviderMessage, RequestMode, RequestUpdate,
     },
     store::{
         fs::{
@@ -373,10 +372,7 @@ async fn two_nodes_observe(
 
 /// Events for a provider that allows observe requests, which are disabled by default.
 fn observe_enabled() -> EventSender {
-    EventSender::DEFAULT.tracing(EventMask {
-        observe: ObserveMode::None,
-        ..EventMask::DEFAULT
-    })
+    EventSender::tracing()
 }
 
 #[tokio::test]
@@ -600,7 +596,7 @@ async fn two_nodes_push_rejected_default() -> TestResult<()> {
 #[traced_test]
 async fn two_nodes_push_rejected_readonly() -> TestResult<()> {
     let (r1, store1, sp1) = node_test_setup_mem().await?;
-    let events = EventSender::DEFAULT.tracing(EventMask::ALL_READONLY);
+    let events = EventSender::tracing();
     let (r2, store2, sp2) = node_test_setup_with_events_mem(events).await?;
     sp1.add_endpoint_info(r2.endpoint().addr());
     sp2.add_endpoint_info(r1.endpoint().addr());

@@ -392,8 +392,27 @@ impl EventSender {
         (Self::new(tx, mask), rx)
     }
 
-    /// Log request events at trace level.
-    pub fn tracing(&self, mask: EventMask) -> Self {
+    /// Log all events for read-only requests at trace level, and allow every request.
+    ///
+    /// This uses [`EventMask::ALL_READONLY`], so push requests stay disabled.
+    /// Use [`Self::tracing_rw`] to also allow and log push requests.
+    pub fn tracing() -> Self {
+        Self::tracing_with(EventMask::ALL_READONLY)
+    }
+
+    /// Log all events at trace level, and allow every request, including push.
+    ///
+    /// Push requests write to the local store, so with this any peer that can
+    /// connect can add data. Only use it if that is intended.
+    pub fn tracing_rw() -> Self {
+        Self::tracing_with(EventMask {
+            push: RequestMode::InterceptLog,
+            ..EventMask::ALL_READONLY
+        })
+    }
+
+    /// Log events at trace level and approve every decision the mask asks for.
+    fn tracing_with(mask: EventMask) -> Self {
         use tracing::trace;
         let (tx, mut rx) = tokio::sync::mpsc::channel(32);
         n0_future::task::spawn(async move {
@@ -891,6 +910,17 @@ mod tests {
         assert!(matches!(error, Err(ProgressError::Permission { .. })));
         let error = events.request(observe, 0, 0).await;
         assert!(matches!(error, Err(ProgressError::Permission { .. })));
+    }
+
+    #[tokio::test]
+    async fn only_tracing_rw_allows_push() -> TestResult {
+        let push = || PushRequest::new(Hash::new(b"a"), crate::protocol::ChunkRangesSeq::root());
+        let error = EventSender::tracing().request(push, 0, 0).await;
+        assert!(matches!(error, Err(ProgressError::Permission { .. })));
+        EventSender::tracing_rw().request(push, 0, 0).await?;
+        EventSender::tracing().request(get, 0, 0).await?;
+        EventSender::tracing().request(observe, 0, 0).await?;
+        Ok(())
     }
 
     #[tokio::test]
