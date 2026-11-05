@@ -500,17 +500,17 @@ pub struct ProcessExitRequest {
 
 /// Progress events for importing from any local source.
 ///
-/// For sources with known size such as blobs or files, you will get the events
-/// in the following order:
+/// An import first copies the data. The [`Self::Size`] comes once, before the
+/// copy for sources of known size such as blobs and files, and after it for
+/// streams. [`Self::CopyDone`] follows if the data was copied, which an import
+/// that references a file where it is does not do. Then the outboard is
+/// computed, and finally [`Self::Done`] comes. Only the size and the final
+/// [`Self::Done`] or [`Self::Error`] are guaranteed; [`Self::CopyProgress`] and
+/// [`Self::OutboardProgress`] are best effort and may not come at all. Progress
+/// never goes backwards or past the size. An [`Self::Error`] can come at any
+/// time, and is the last event.
 ///
-/// Size -> CopyProgress(*n) -> CopyDone -> OutboardProgress(*n) -> Done
-///
-/// For sources with unknown size such as streams, you will get the events
-/// in the following order:
-///
-/// CopyProgress(*n) -> Size -> CopyDone -> OutboardProgress(*n) -> Done
-///
-/// Errors can happen at any time, and will be reported as an `Error` event.
+#[doc = include_str!("../../docs/img/add_progress.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum AddProgressItem {
     /// Progress copying the file into the data directory.

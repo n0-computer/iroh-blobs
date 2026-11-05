@@ -317,6 +317,8 @@ impl StreamRules<ExportProgressItem> for ExportPathRules {
 /// [`AddProgressItem::CopyDone`] after the size. Then outboard progress, and
 /// then [`AddProgressItem::Done`], which both need the size. Progress never
 /// goes backwards or past the size. An error is always the last item.
+///
+/// [`AddProgressItem`] has a diagram of these rules, keep the two in sync.
 #[derive(Debug, Default)]
 pub(crate) struct AddProgressRules {
     size: Option<u64>,
