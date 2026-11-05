@@ -194,8 +194,11 @@ impl Actor {
                 let hashes: Vec<Hash> = self.data.keys().cloned().collect();
                 self.tasks.spawn(async move {
                     for hash in hashes {
-                        cmd.tx.send(Ok(hash)).await.ok();
+                        if cmd.tx.send(proto::ListBlobsItem::Hash(hash)).await.is_err() {
+                            return;
+                        }
                     }
+                    cmd.tx.send(proto::ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {
@@ -211,7 +214,7 @@ impl Actor {
                 cmd.tx.send(status).await.ok();
             }
             Command::ListTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.send(proto::ListTagsItem::Done).await.ok();
             }
             Command::SetTag(cmd) => {
                 cmd.tx
@@ -220,7 +223,7 @@ impl Actor {
                     .ok();
             }
             Command::ListTempTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
             }
             Command::SyncDb(cmd) => {
                 cmd.tx.send(Ok(())).await.ok();

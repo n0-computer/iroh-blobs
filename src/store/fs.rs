@@ -104,7 +104,7 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
-use meta::list_blobs;
+use meta::{list_blobs, list_tags};
 use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
@@ -489,7 +489,17 @@ impl Actor {
             }
             Command::ListTags(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                match self.db().snapshot(cmd.span.clone()).await {
+                    Ok(snapshot) => self.spawn(list_tags(snapshot, cmd)),
+                    Err(cause) => {
+                        self.spawn(async move {
+                            cmd.tx
+                                .send(proto::ListTagsItem::Error(api::Error::other(cause)))
+                                .await
+                                .ok();
+                        });
+                    }
+                }
             }
             Command::DeleteTags(cmd) => {
                 trace!("{cmd:?}");
@@ -513,8 +523,16 @@ impl Actor {
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
-                if let Ok(snapshot) = self.db().snapshot(cmd.span.clone()).await {
-                    self.spawn(list_blobs(snapshot, cmd));
+                match self.db().snapshot(cmd.span.clone()).await {
+                    Ok(snapshot) => self.spawn(list_blobs(snapshot, cmd)),
+                    Err(cause) => {
+                        self.spawn(async move {
+                            cmd.tx
+                                .send(proto::ListBlobsItem::Error(api::Error::other(cause)))
+                                .await
+                                .ok();
+                        });
+                    }
                 }
             }
             Command::Batch(cmd) => {
@@ -529,7 +547,14 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                self.spawn(async move {
+                    for tt in tts {
+                        if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
+                            return;
+                        }
+                    }
+                    cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
+                });
             }
             Command::ImportBytes(cmd) => {
                 trace!("{cmd:?}");
@@ -2246,6 +2271,7 @@ pub mod tests {
             .tags()
             .list_temp_tags()
             .await?
+            .map(|item| item.unwrap())
             .collect::<HashSet<_>>()
             .await;
         assert!(tts.contains(&tt1.hash_and_format()));
@@ -2257,6 +2283,7 @@ pub mod tests {
             .tags()
             .list_temp_tags()
             .await?
+            .map(|item| item.unwrap())
             .collect::<HashSet<_>>()
             .await;
         // temp tag went out of scope, so it does not work anymore

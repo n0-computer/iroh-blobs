@@ -14,6 +14,12 @@
 //! The file system store is quite complex and optimized, so to get started take a look at
 //! the much simpler memory store.
 //!
+//! # Listings
+//!
+//! [`Request::ListBlobs`], [`Request::ListTags`] and [`Request::ListTempTags`]
+//! end with an explicit `Done` or `Error`, since the client can not tell from
+//! the items when a listing is complete. See [`ListBlobsItem`].
+//!
 //! # The empty blob
 //!
 //! The empty blob, [`Hash::EMPTY`], is always present. The client in [`crate::api`]
@@ -106,7 +112,7 @@ impl HashSpecific for CreateTagMsg {
 #[rpc_requests(message = Command, alias = "Msg", rpc_feature = "rpc")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    #[rpc(tx = mpsc::Sender<super::Result<Hash>>)]
+    #[rpc(tx = mpsc::Sender<ListBlobsItem>)]
     ListBlobs(ListRequest),
     #[rpc(tx = oneshot::Sender<Scope>, rx = mpsc::Receiver<BatchResponse>)]
     Batch(BatchRequest),
@@ -130,7 +136,7 @@ pub enum Request {
     ImportPath(ImportPathRequest),
     #[rpc(tx = mpsc::Sender<ExportProgressItem>)]
     ExportPath(ExportPathRequest),
-    #[rpc(tx = oneshot::Sender<Vec<super::Result<TagInfo>>>)]
+    #[rpc(tx = mpsc::Sender<ListTagsItem>)]
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
@@ -140,7 +146,7 @@ pub enum Request {
     RenameTag(RenameTagRequest),
     #[rpc(tx = oneshot::Sender<super::Result<Tag>>)]
     CreateTag(CreateTagRequest),
-    #[rpc(tx = oneshot::Sender<Vec<HashAndFormat>>)]
+    #[rpc(tx = mpsc::Sender<ListTempTagsItem>)]
     ListTempTags(ListTempTagsRequest),
     #[rpc(tx = oneshot::Sender<TempTag>)]
     CreateTempTag(CreateTempTagRequest),
@@ -294,8 +300,8 @@ pub struct ImportByteStreamRequest {
 /// The items a client sends to the store for an [`ImportByteStreamRequest`].
 ///
 /// The client sends the data as [`Self::Bytes`] items, and then
-/// [`Self::Done`]. Unlike the response streams, dropping the sender does not
-/// complete the stream: the store only imports the data after [`Self::Done`],
+/// [`Self::Done`]. Dropping the sender does not complete the stream:
+/// the store only imports the data after [`Self::Done`],
 /// and treats a stream that ends without it as aborted. So a client that goes
 /// away in the middle of an upload never produces a truncated blob.
 ///
@@ -387,6 +393,55 @@ impl ListTagsRequest {
             to: None,
         }
     }
+}
+
+/// An item of a [`Request::ListBlobs`] listing.
+///
+/// A listing is zero or more [`Self::Hash`] items, followed by [`Self::Done`]
+/// on success or [`Self::Error`] on failure. An empty listing still sends
+/// [`Self::Done`]. Dropping the sender does not complete a listing: a store
+/// task that panics or is aborted drops its sender, and the client can not
+/// tell from the items that some are missing. So a client reports a listing
+/// that closes before its terminal item as an error, and stops at the terminal
+/// item without waiting for the close.
+///
+/// [`ListTagsItem`] and [`ListTempTagsItem`] work the same way.
+///
+#[doc = include_str!("../../docs/img/list.svg")]
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListBlobsItem {
+    /// A blob in the store.
+    Hash(Hash),
+    /// The listing is complete.
+    Done,
+    /// The listing failed, the items before it are not complete.
+    Error(super::Error),
+}
+
+/// An item of a [`Request::ListTags`] listing.
+///
+/// Ends like a [blob listing](ListBlobsItem).
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTagsItem {
+    /// A matching named tag.
+    Tag(TagInfo),
+    /// The listing is complete.
+    Done,
+    /// The listing failed, the items before it are not complete.
+    Error(super::Error),
+}
+
+/// An item of a [`Request::ListTempTags`] listing.
+///
+/// Ends like a [blob listing](ListBlobsItem).
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTempTagsItem {
+    /// Content protected by a temporary tag.
+    Tag(HashAndFormat),
+    /// The listing is complete.
+    Done,
+    /// The listing failed, the items before it are not complete.
+    Error(super::Error),
 }
 
 /// Information about a tag.

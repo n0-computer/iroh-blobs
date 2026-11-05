@@ -1,4 +1,6 @@
 #![cfg(feature = "fs-store")]
+use std::{collections::HashSet, time::Duration};
+#[cfg(feature = "rpc")]
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Deref,
@@ -132,11 +134,56 @@ async fn tags_smoke(tags: &Tags) -> TestResult<()> {
     Ok(())
 }
 
+/// Listings larger than the channel capacity must not block other store requests.
+async fn listings_keep_store_responsive(store: &Store) -> TestResult<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let batch = store.batch().await?;
+        let mut guards = Vec::new();
+        for i in 0..96 {
+            let name = format!("stream/{i:03}");
+            let hash = Hash::new(&name);
+            store.tags().set(&name, hash).await?;
+            guards.push(batch.temp_tag(hash).await?);
+        }
+
+        let mut named = store.tags().list_prefix("stream/").await?;
+        assert!(named.next().await.transpose()?.is_some());
+        store.tags().set("after-list", Hash::new("after")).await?;
+        drop(named);
+        assert_eq!(
+            to_vec(store.tags().list_prefix("stream/").await?)
+                .await?
+                .len(),
+            96
+        );
+
+        let mut temporary = store.tags().list_temp_tags().await?;
+        assert!(temporary.next().await.transpose()?.is_some());
+        store.sync_db().await?;
+        drop(temporary);
+        let actual: HashSet<_> = to_vec(store.tags().list_temp_tags().await?)
+            .await?
+            .into_iter()
+            .collect();
+        let expected: HashSet<_> = guards.iter().map(|tag| tag.hash_and_format()).collect();
+        assert_eq!(actual, expected);
+
+        drop(guards);
+        drop(batch);
+        // Cancelled listing tasks must finish as well.
+        store.wait_idle().await?;
+        TestResult::Ok(())
+    })
+    .await??;
+    Ok(())
+}
+
 #[tokio::test]
 #[traced_test]
 async fn tags_smoke_mem() -> TestResult<()> {
     let store = MemStore::new();
-    tags_smoke(store.tags()).await
+    tags_smoke(store.tags()).await?;
+    listings_keep_store_responsive(&store).await
 }
 
 #[tokio::test]
@@ -144,11 +191,13 @@ async fn tags_smoke_mem() -> TestResult<()> {
 async fn tags_smoke_fs() -> TestResult<()> {
     let td = tempfile::tempdir()?;
     let store = FsStore::load(td.path().join("a")).await?;
-    tags_smoke(store.tags()).await
+    tags_smoke(store.tags()).await?;
+    listings_keep_store_responsive(&store).await
 }
 
 #[tokio::test]
 #[traced_test]
+#[cfg(feature = "rpc")]
 async fn tags_smoke_fs_rpc() -> TestResult<()> {
     let unspecified = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
     let (server, cert) = irpc::util::make_server_endpoint(unspecified)?;
@@ -158,6 +207,7 @@ async fn tags_smoke_fs_rpc() -> TestResult<()> {
     n0_future::task::spawn(store.deref().clone().listen(server.clone()));
     let api = Store::connect(client, server.local_addr()?);
     tags_smoke(api.tags()).await?;
+    listings_keep_store_responsive(&api).await?;
     api.shutdown().await?;
     Ok(())
 }

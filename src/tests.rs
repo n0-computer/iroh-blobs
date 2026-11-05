@@ -743,7 +743,10 @@ async fn empty_hash_is_complete(store: &Store, dir: &std::path::Path) -> TestRes
         .client()
         .server_streaming(crate::api::proto::ListRequest, 32)
         .await?;
-    assert!(rx.recv().await?.is_none());
+    assert!(matches!(
+        rx.recv().await?,
+        Some(crate::api::proto::ListBlobsItem::Done)
+    ));
     Ok(())
 }
 
@@ -831,7 +834,10 @@ async fn empty_hash_readonly_mem() -> TestResult<()> {
         .client()
         .server_streaming(crate::api::proto::ListRequest, 32)
         .await?;
-    assert!(rx.recv().await?.is_none());
+    assert!(matches!(
+        rx.recv().await?,
+        Some(crate::api::proto::ListBlobsItem::Done)
+    ));
     let dir = tempfile::tempdir()?;
     let target = dir.path().join("nested").join("empty");
     assert_eq!(store.blobs().export(Hash::EMPTY, &target).await?, 0);

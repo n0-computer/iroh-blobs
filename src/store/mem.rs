@@ -52,9 +52,10 @@ use crate::{
             DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
             ExportRangesItem, ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
-            ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
-            ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
+            ImportPathMsg, ImportPathRequest, ListBlobsItem, ListBlobsMsg, ListTagsItem,
+            ListTagsMsg, ListTagsRequest, ListTempTagsItem, ObserveMsg, ObserveRequest,
+            RenameTagMsg, RenameTagRequest, Scope, SetTagMsg, SetTagRequest, ShutdownMsg,
+            SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -322,8 +323,15 @@ impl Actor {
                         hash: value.hash,
                         format: value.format,
                     })
-                    .map(Ok);
-                tx.send(tags.collect()).await.ok();
+                    .collect::<Vec<_>>();
+                self.spawn(async move {
+                    for tag in tags {
+                        if tx.send(ListTagsItem::Tag(tag)).await.is_err() {
+                            return;
+                        }
+                    }
+                    tx.send(ListTagsItem::Done).await.ok();
+                });
             }
             Command::SetTag(SetTagMsg {
                 inner: SetTagRequest { name: tag, value },
@@ -349,17 +357,25 @@ impl Actor {
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
                 let tts = self.temp_tags.list();
-                cmd.tx.send(tts).await.ok();
+                self.spawn(async move {
+                    for tt in tts {
+                        if cmd.tx.send(ListTempTagsItem::Tag(tt)).await.is_err() {
+                            return;
+                        }
+                    }
+                    cmd.tx.send(ListTempTagsItem::Done).await.ok();
+                });
             }
             Command::ListBlobs(cmd) => {
                 let ListBlobsMsg { tx, .. } = cmd;
                 let blobs = self.state.data.keys().cloned().collect::<Vec<Hash>>();
                 self.spawn(async move {
                     for blob in blobs {
-                        if tx.send(Ok(blob)).await.is_err() {
-                            break;
+                        if tx.send(ListBlobsItem::Hash(blob)).await.is_err() {
+                            return;
                         }
                     }
+                    tx.send(ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {

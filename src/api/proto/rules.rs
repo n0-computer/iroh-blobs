@@ -1,10 +1,11 @@
 //! Rules of the protocol that the types can not express.
 //!
-//! Each response stream has a state machine that is fed the items in order. It
-//! says whether an item is the last one, since a store drops the sender instead
-//! of sending a terminal item, or which rule the item breaks. Requests are
-//! checked with [`Command::validate`]. None of this panics or logs, the caller
-//! decides what to do with a [`Violation`].
+//! Response stream rules are fed the items in order. They identify the last
+//! item, whether completion is explicit or follows from the requested data,
+//! and report which rule an item breaks. Callers stop at the last item and
+//! handle premature closure; they do not wait for later items to check them.
+//! Requests are checked with [`Command::validate`]. [`StreamRules::feed`] reports
+//! violations, while [`StreamRules::check`] also asserts in debug builds.
 use std::io;
 
 use bao_tree::{
@@ -13,7 +14,10 @@ use bao_tree::{
 };
 use range_collections::RangeSet2;
 
-use super::{AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem};
+use super::{
+    AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem, ListBlobsItem,
+    ListTagsItem, ListTempTagsItem,
+};
 use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
@@ -210,18 +214,44 @@ impl StreamRules<EncodedItem> for ExportBaoRules {
 
 /// The rules of a [`super::Request::ListBlobs`] stream.
 ///
-/// The store never lists [`Hash::EMPTY`], since the client adds that. An error
-/// is always the last item.
+/// `Done` and `Error` are the last item, and the store never lists
+/// [`Hash::EMPTY`], since the client adds that.
 #[derive(Debug, Default)]
 pub(crate) struct ListBlobsRules;
 
-impl StreamRules<crate::api::Result<Hash>> for ListBlobsRules {
-    fn feed(&mut self, item: &crate::api::Result<Hash>) -> Result<Step, Violation> {
+impl StreamRules<ListBlobsItem> for ListBlobsRules {
+    fn feed(&mut self, item: &ListBlobsItem) -> Result<Step, Violation> {
         match item {
-            Err(_) => Ok(Step::Last),
-            Ok(hash) if *hash == Hash::EMPTY => Err(Violation::EmptyHashListed),
-            Ok(_) => Ok(Step::More),
+            ListBlobsItem::Hash(hash) if *hash == Hash::EMPTY => Err(Violation::EmptyHashListed),
+            ListBlobsItem::Hash(_) => Ok(Step::More),
+            ListBlobsItem::Done | ListBlobsItem::Error(_) => Ok(Step::Last),
         }
+    }
+}
+
+/// The shared rules of [`ListTagsItem`] and [`ListTempTagsItem`] streams.
+///
+/// Zero or more `Tag` items are followed by `Done` or `Error`. Both are terminal,
+/// so a client stops immediately and reports closure before either as an error.
+/// The diagram on [`ListBlobsItem`] and the clients in `api::tags` must agree.
+#[derive(Debug, Default)]
+pub(crate) struct TagListRules;
+
+impl StreamRules<ListTagsItem> for TagListRules {
+    fn feed(&mut self, item: &ListTagsItem) -> Result<Step, Violation> {
+        Ok(match item {
+            ListTagsItem::Tag(_) => Step::More,
+            ListTagsItem::Done | ListTagsItem::Error(_) => Step::Last,
+        })
+    }
+}
+
+impl StreamRules<ListTempTagsItem> for TagListRules {
+    fn feed(&mut self, item: &ListTempTagsItem) -> Result<Step, Violation> {
+        Ok(match item {
+            ListTempTagsItem::Tag(_) => Step::More,
+            ListTempTagsItem::Done | ListTempTagsItem::Error(_) => Step::Last,
+        })
     }
 }
 
@@ -527,10 +557,33 @@ mod tests {
     #[test]
     fn list_blobs_violations() {
         let mut rules = ListBlobsRules;
-        assert_eq!(rules.feed(&Ok(Hash::new(b"a"))), Ok(Step::More));
         assert_eq!(
-            rules.feed(&Ok(Hash::EMPTY)),
+            rules.feed(&ListBlobsItem::Hash(Hash::new(b"a"))),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&ListBlobsItem::Hash(Hash::EMPTY)),
             Err(Violation::EmptyHashListed)
+        );
+        assert_eq!(rules.feed(&ListBlobsItem::Done), Ok(Step::Last));
+        let error = || crate::api::Error::other("failed");
+        assert_eq!(rules.feed(&ListBlobsItem::Error(error())), Ok(Step::Last));
+    }
+
+    #[test]
+    fn tag_list_steps() {
+        let error = || crate::api::Error::other("failed");
+        let tag = crate::api::tags::TagInfo::new("a", Hash::new(b"a"));
+        let mut rules = TagListRules;
+        assert_eq!(rules.feed(&ListTagsItem::Tag(tag)), Ok(Step::More));
+        assert_eq!(rules.feed(&ListTagsItem::Done), Ok(Step::Last));
+        assert_eq!(rules.feed(&ListTagsItem::Error(error())), Ok(Step::Last));
+        let tt = crate::HashAndFormat::raw(Hash::new(b"a"));
+        assert_eq!(rules.feed(&ListTempTagsItem::Tag(tt)), Ok(Step::More));
+        assert_eq!(rules.feed(&ListTempTagsItem::Done), Ok(Step::Last));
+        assert_eq!(
+            rules.feed(&ListTempTagsItem::Error(error())),
+            Ok(Step::Last)
         );
     }
 
