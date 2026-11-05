@@ -154,27 +154,6 @@ pub enum Request {
     ClearProtected(ClearProtectedRequest),
 }
 
-impl Command {
-    /// Checks, in debug builds, that commands answered by the client do not reach the store.
-    ///
-    /// The client answers those itself, see the [module docs](self).
-    pub(crate) fn debug_assert_not_empty_hash(&self) {
-        let hash = match self {
-            Self::BlobStatus(cmd) => cmd.hash,
-            Self::ExportBao(cmd) => cmd.hash,
-            Self::ExportRanges(cmd) => cmd.hash,
-            Self::ImportBao(cmd) => cmd.hash,
-            Self::Observe(cmd) => cmd.hash,
-            Self::DeleteBlobs(cmd) => {
-                debug_assert!(!cmd.hashes.contains(&Hash::EMPTY), "{cmd:?}");
-                return;
-            }
-            _ => return,
-        };
-        debug_assert_ne!(hash, Hash::EMPTY, "{self:?}");
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WaitIdleRequest;
 

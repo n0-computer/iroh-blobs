@@ -1,9 +1,10 @@
-//! Rules of the response streams that the types can not express.
+//! Rules of the protocol that the types can not express.
 //!
-//! Each stream has a state machine that is fed the items in order. It says
-//! whether an item is the last one, since a store drops the sender instead of
-//! sending a terminal item, or which rule the item breaks. The state machines
-//! never panic or log, the caller decides what to do with a [`Violation`].
+//! Each response stream has a state machine that is fed the items in order. It
+//! says whether an item is the last one, since a store drops the sender instead
+//! of sending a terminal item, or which rule the item breaks. Requests are
+//! checked with [`Command::validate`]. None of this panics or logs, the caller
+//! decides what to do with a [`Violation`].
 use std::io;
 
 use bao_tree::{
@@ -12,7 +13,7 @@ use bao_tree::{
 };
 use range_collections::RangeSet2;
 
-use super::{AddProgressItem, Bitfield, ExportProgressItem, ExportRangesItem};
+use super::{AddProgressItem, Bitfield, Command, ExportProgressItem, ExportRangesItem};
 use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
@@ -37,6 +38,8 @@ pub(crate) enum Violation {
     DataPastSize,
     #[display("the empty hash was listed")]
     EmptyHashListed,
+    #[display("a request for the empty hash")]
+    EmptyHashRequested,
     #[display("the bitfield lost ranges")]
     BitfieldShrank,
     #[display("progress before the size")]
@@ -382,6 +385,28 @@ impl StreamRules<AddProgressItem> for AddProgressRules {
     }
 }
 
+impl Command {
+    /// Checks that this command follows the rules of the protocol.
+    ///
+    /// The client answers reads and deletes of [`Hash::EMPTY`] itself, see the
+    /// [module docs](super), so they never reach the store.
+    pub(crate) fn validate(&self) -> Result<(), Violation> {
+        let hash = match self {
+            Self::BlobStatus(cmd) => cmd.hash,
+            Self::ExportBao(cmd) => cmd.hash,
+            Self::ExportRanges(cmd) => cmd.hash,
+            Self::ImportBao(cmd) => cmd.hash,
+            Self::Observe(cmd) => cmd.hash,
+            Self::DeleteBlobs(cmd) if cmd.hashes.contains(&Hash::EMPTY) => Hash::EMPTY,
+            _ => return Ok(()),
+        };
+        if hash == Hash::EMPTY {
+            return Err(Violation::EmptyHashRequested);
+        }
+        Ok(())
+    }
+}
+
 fn last_if(last: bool) -> Step {
     if last {
         Step::Last
@@ -439,6 +464,24 @@ mod tests {
             rules.feed(&EncodedItem::Leaf(leaf(2048, 2048))),
             Ok(Step::Last)
         );
+    }
+
+    #[test]
+    fn validate_requests() {
+        use crate::api::proto::{BlobStatusRequest, ObserveRequest};
+
+        let observe = |hash| {
+            let (tx, _) = irpc::channel::mpsc::channel(1);
+            Command::Observe((ObserveRequest { hash }, tx).into())
+        };
+        assert_eq!(observe(Hash::new(b"a")).validate(), Ok(()));
+        assert_eq!(
+            observe(Hash::EMPTY).validate(),
+            Err(Violation::EmptyHashRequested)
+        );
+        let (tx, _) = irpc::channel::oneshot::channel();
+        let status = Command::BlobStatus((BlobStatusRequest { hash: Hash::EMPTY }, tx).into());
+        assert_eq!(status.validate(), Err(Violation::EmptyHashRequested));
     }
 
     #[test]

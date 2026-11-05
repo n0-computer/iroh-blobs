@@ -465,7 +465,7 @@ impl Actor {
     async fn handle_command(&mut self, cmd: Command) {
         let span = cmd.parent_span();
         let _entered = span.enter();
-        cmd.debug_assert_not_empty_hash();
+        debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
             Command::SyncDb(cmd) => {
                 trace!("{cmd:?}");
