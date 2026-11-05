@@ -12,7 +12,7 @@ use bao_tree::{
 };
 use range_collections::RangeSet2;
 
-use super::{Bitfield, ExportProgressItem, ExportRangesItem};
+use super::{AddProgressItem, Bitfield, ExportProgressItem, ExportRangesItem};
 use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
@@ -47,6 +47,14 @@ pub(crate) enum Violation {
     ProgressPastSize,
     #[display("done before the size")]
     DoneBeforeSize,
+    #[display("copy progress after the copy")]
+    CopyProgressAfterCopy,
+    #[display("copy done before the size")]
+    CopyDoneBeforeSize,
+    #[display("copy done after the copy")]
+    CopyDoneAfterCopy,
+    #[display("outboard progress before the size")]
+    OutboardProgressBeforeSize,
 }
 
 /// Where the data of an export stream is, once the size is known.
@@ -297,6 +305,83 @@ impl StreamRules<ExportProgressItem> for ExportPathRules {
     }
 }
 
+/// The rules of an [`AddProgressItem`] stream.
+///
+/// First comes the copy: copy progress, the size once, and at most one
+/// [`AddProgressItem::CopyDone`] after the size. Then outboard progress, and
+/// then [`AddProgressItem::Done`], which both need the size. Progress never
+/// goes backwards or past the size. An error is always the last item.
+#[derive(Debug, Default)]
+pub(crate) struct AddProgressRules {
+    size: Option<u64>,
+    /// Copy done or outboard progress was sent, so the copy is over.
+    copy_over: bool,
+    /// The last copy progress.
+    copy: u64,
+    /// The last outboard progress.
+    outboard: u64,
+}
+
+impl AddProgressRules {
+    fn progress(&self, last: u64, offset: u64) -> Result<(), Violation> {
+        if offset < last {
+            return Err(Violation::ProgressBackwards);
+        }
+        if self.size.is_some_and(|size| offset > size) {
+            return Err(Violation::ProgressPastSize);
+        }
+        Ok(())
+    }
+}
+
+impl StreamRules<AddProgressItem> for AddProgressRules {
+    fn feed(&mut self, item: &AddProgressItem) -> Result<Step, Violation> {
+        match item {
+            AddProgressItem::Error(_) => return Ok(Step::Last),
+            AddProgressItem::CopyProgress(offset) => {
+                if self.copy_over {
+                    return Err(Violation::CopyProgressAfterCopy);
+                }
+                self.progress(self.copy, *offset)?;
+                self.copy = *offset;
+            }
+            AddProgressItem::Size(size) => {
+                if self.size.is_some() {
+                    return Err(Violation::SizeTwice);
+                }
+                if self.copy > *size {
+                    return Err(Violation::ProgressPastSize);
+                }
+                self.size = Some(*size);
+            }
+            AddProgressItem::CopyDone => {
+                if self.copy_over {
+                    return Err(Violation::CopyDoneAfterCopy);
+                }
+                if self.size.is_none() {
+                    return Err(Violation::CopyDoneBeforeSize);
+                }
+                self.copy_over = true;
+            }
+            AddProgressItem::OutboardProgress(offset) => {
+                if self.size.is_none() {
+                    return Err(Violation::OutboardProgressBeforeSize);
+                }
+                self.progress(self.outboard, *offset)?;
+                self.outboard = *offset;
+                self.copy_over = true;
+            }
+            AddProgressItem::Done(_) => {
+                if self.size.is_none() {
+                    return Err(Violation::DoneBeforeSize);
+                }
+                return Ok(Step::Last);
+            }
+        }
+        Ok(Step::More)
+    }
+}
+
 fn last_if(last: bool) -> Step {
     if last {
         Step::Last
@@ -411,6 +496,56 @@ mod tests {
             Err(Violation::ProgressPastSize)
         );
         assert_eq!(rules.feed(&ExportProgressItem::Done), Ok(Step::Last));
+    }
+
+    #[test]
+    fn add_progress_violations() {
+        let mut rules = AddProgressRules::default();
+        assert_eq!(
+            rules.feed(&AddProgressItem::CopyProgress(10)),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&AddProgressItem::CopyDone),
+            Err(Violation::CopyDoneBeforeSize)
+        );
+        assert_eq!(
+            rules.feed(&AddProgressItem::Size(5)),
+            Err(Violation::ProgressPastSize)
+        );
+        assert_eq!(rules.feed(&AddProgressItem::Size(100)), Ok(Step::More));
+        assert_eq!(rules.feed(&AddProgressItem::CopyDone), Ok(Step::More));
+        assert_eq!(
+            rules.feed(&AddProgressItem::CopyProgress(20)),
+            Err(Violation::CopyProgressAfterCopy)
+        );
+        assert_eq!(
+            rules.feed(&AddProgressItem::OutboardProgress(50)),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&AddProgressItem::OutboardProgress(40)),
+            Err(Violation::ProgressBackwards)
+        );
+        assert_eq!(
+            rules.feed(&AddProgressItem::CopyDone),
+            Err(Violation::CopyDoneAfterCopy)
+        );
+        // a reference import has no copy
+        let mut rules = AddProgressRules::default();
+        assert_eq!(
+            rules.feed(&AddProgressItem::OutboardProgress(0)),
+            Err(Violation::OutboardProgressBeforeSize)
+        );
+        assert_eq!(rules.feed(&AddProgressItem::Size(100)), Ok(Step::More));
+        assert_eq!(
+            rules.feed(&AddProgressItem::OutboardProgress(0)),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&AddProgressItem::CopyDone),
+            Err(Violation::CopyDoneAfterCopy)
+        );
     }
 
     #[test]

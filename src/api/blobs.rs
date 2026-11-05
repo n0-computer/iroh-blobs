@@ -47,8 +47,8 @@ pub use super::proto::{
 use super::{
     proto::{
         rules::{
-            DebugOnly, ExportBaoRules, ExportPathRules, ExportRangesRules, ListBlobsRules,
-            ObserveRules, Step, StreamRules,
+            AddProgressRules, DebugOnly, ExportBaoRules, ExportPathRules, ExportRangesRules,
+            ListBlobsRules, ObserveRules, Step, StreamRules,
         },
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
@@ -725,9 +725,20 @@ impl<'a> IntoFuture for AddProgress<'a> {
 
 impl<'a> AddProgress<'a> {
     fn new(blobs: &'a Blobs, stream: impl Stream<Item = AddProgressItem> + Send + 'static) -> Self {
+        let mut stream = Box::pin(stream);
+        let checked = Gen::new(|co| async move {
+            let mut rules = AddProgressRules::default();
+            while let Some(item) = stream.next().await {
+                if let Err(cause) = rules.check(&item) {
+                    co.yield_(AddProgressItem::Error(cause)).await;
+                    return;
+                }
+                co.yield_(item).await;
+            }
+        });
         Self {
             blobs,
-            inner: Box::pin(stream),
+            inner: Box::pin(checked),
         }
     }
 
