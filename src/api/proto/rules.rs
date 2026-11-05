@@ -13,6 +13,7 @@ use bao_tree::{
 use range_collections::RangeSet2;
 
 use super::ExportRangesItem;
+use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +35,8 @@ pub(crate) enum Violation {
     DataOutOfOrder,
     #[display("data past the size")]
     DataPastSize,
+    #[display("the empty hash was listed")]
+    EmptyHashListed,
 }
 
 /// Where the data of an export stream is, once the size is known.
@@ -175,6 +178,23 @@ impl StreamRules<EncodedItem> for ExportBaoRules {
     }
 }
 
+/// The rules of a [`super::Request::ListBlobs`] stream.
+///
+/// The store never lists [`Hash::EMPTY`], since the client adds that. An error
+/// is always the last item.
+#[derive(Debug, Default)]
+pub(crate) struct ListBlobsRules;
+
+impl StreamRules<crate::api::Result<Hash>> for ListBlobsRules {
+    fn feed(&mut self, item: &crate::api::Result<Hash>) -> Result<Step, Violation> {
+        match item {
+            Err(_) => Ok(Step::Last),
+            Ok(hash) if *hash == Hash::EMPTY => Err(Violation::EmptyHashListed),
+            Ok(_) => Ok(Step::More),
+        }
+    }
+}
+
 fn last_if(last: bool) -> Step {
     if last {
         Step::Last
@@ -231,6 +251,16 @@ mod tests {
         assert_eq!(
             rules.feed(&EncodedItem::Leaf(leaf(2048, 2048))),
             Ok(Step::Last)
+        );
+    }
+
+    #[test]
+    fn list_blobs_violations() {
+        let mut rules = ListBlobsRules;
+        assert_eq!(rules.feed(&Ok(Hash::new(b"a"))), Ok(Step::More));
+        assert_eq!(
+            rules.feed(&Ok(Hash::EMPTY)),
+            Err(Violation::EmptyHashListed)
         );
     }
 

@@ -46,7 +46,7 @@ pub use super::proto::{
 };
 use super::{
     proto::{
-        rules::{ExportBaoRules, ExportRangesRules, Step, StreamRules},
+        rules::{ExportBaoRules, ExportRangesRules, ListBlobsRules, Step, StreamRules},
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
         ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
@@ -969,8 +969,10 @@ impl BlobsListProgress {
     /// All hashes in the store, starting with [`Hash::EMPTY`], which is always present.
     pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
         let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
+        let mut rules = ListBlobsRules;
         let mut hashes = vec![Hash::EMPTY];
         while let Some(item) = rx.recv().await? {
+            rules.check(&item)?;
             hashes.push(item?);
         }
         Ok(hashes)
@@ -981,7 +983,12 @@ impl BlobsListProgress {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
             co.yield_(Ok(Hash::EMPTY)).await;
+            let mut rules = ListBlobsRules;
             while let Ok(Some(item)) = rx.recv().await {
+                if let Err(cause) = rules.check(&item) {
+                    co.yield_(Err(cause.into())).await;
+                    return;
+                }
                 co.yield_(item).await;
             }
         }))
