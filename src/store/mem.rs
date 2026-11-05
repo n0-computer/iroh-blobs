@@ -233,6 +233,9 @@ impl Actor {
                 let entry = self.get(&hash);
                 self.spawn(export_bao(entry, ranges, tx))
             }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.spawn(super::util::export_empty(cmd));
+            }
             Command::ExportPath(cmd) => {
                 let entry = self.get(&cmd.hash);
                 self.spawn(export_path(entry, cmd));

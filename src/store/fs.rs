@@ -543,6 +543,9 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.spawn(import_path(cmd, self.context()));
             }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.spawn(super::util::export_empty(cmd));
+            }
             Command::ExportPath(cmd) => {
                 trace!("{cmd:?}");
                 cmd.spawn(&mut self.handles, &mut self.tasks).await;

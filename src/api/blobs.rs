@@ -430,15 +430,8 @@ impl Blobs {
 
     pub fn export_with_opts(&self, options: ExportOptions) -> ExportProgress {
         trace!("{:?}", options);
-        if options.hash == Hash::EMPTY {
-            return ExportProgress::new(async move {
-                let items = match export_empty(&options.target) {
-                    Ok(()) => vec![ExportProgressItem::Size(0), ExportProgressItem::Done],
-                    Err(cause) => vec![ExportProgressItem::Error(cause.into())],
-                };
-                local_response(items).await
-            });
-        }
+        // Even Hash::EMPTY must reach the store: the target path belongs to the
+        // store's filesystem, which may be on a different machine from the client.
         ExportProgress::new(self.client.server_streaming(options, 32))
     }
 
@@ -935,21 +928,6 @@ async fn local_response<T: irpc::RpcMessage>(
         tx.send(item).await.ok();
     }
     Ok(rx)
-}
-
-/// Exports the empty blob to `target`, like a store would.
-fn export_empty(target: &Path) -> io::Result<()> {
-    if !target.is_absolute() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "path is not absolute",
-        ));
-    }
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::File::create(target)?;
-    Ok(())
 }
 
 /// A handle for an ongoing bao import operation.

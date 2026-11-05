@@ -86,6 +86,18 @@ impl TempTag {
         Self { inner, on_drop }
     }
 
+    /// The empty temp tag. We don't track the empty blob since we always have it.
+    #[deprecated(note = "Use TempTag::new(HashAndFormat { hash: Hash::EMPTY, format }, None)")]
+    pub fn leaking_empty(format: BlobFormat) -> Self {
+        Self::new(
+            HashAndFormat {
+                hash: Hash::EMPTY,
+                format,
+            },
+            None,
+        )
+    }
+
     /// The hash of the pinned item
     pub fn hash(&self) -> Hash {
         self.inner.hash

@@ -682,8 +682,8 @@ pub async fn node_test_setup_with_events_mem(
 
 /// The empty blob is always complete, whether or not it was ever added.
 ///
-/// The client answers all of these without asking the store, and the stores
-/// debug_assert that they never get a request for the empty hash.
+/// The client answers reads without asking the store. File exports reach the
+/// store, but neither exports nor imports create an entry for the empty hash.
 async fn empty_hash_is_complete(store: &Store, dir: &std::path::Path) -> TestResult<()> {
     use tokio::io::AsyncReadExt;
 
@@ -759,6 +759,55 @@ async fn empty_hash_is_complete_fs() -> TestResult<()> {
     let testdir = tempfile::tempdir()?;
     let store = FsStore::load(testdir.path().join("db")).await?;
     empty_hash_is_complete(&store, testdir.path()).await
+}
+
+/// Even an empty export must reach the store and respect its response, rather
+/// than creating or truncating a file on the client filesystem.
+#[tokio::test]
+async fn empty_export_reaches_store() -> TestResult<()> {
+    use crate::api::proto::{Command, ExportProgressItem};
+
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("keep");
+    std::fs::write(&target, b"keep me")?;
+    let (tx, mut rx) = mpsc::channel(1);
+    let store = Store::from_sender(irpc::LocalSender::from(tx).into());
+    let export = async { store.blobs().export(Hash::EMPTY, &target).await };
+    tokio::pin!(export);
+    let cmd = tokio::select! {
+        cmd = rx.recv() => cmd.unwrap(),
+        result = &mut export => panic!("export did not reach the store: {result:?}"),
+    };
+    let Command::ExportPath(cmd) = cmd else {
+        panic!("expected a file export");
+    };
+    assert_eq!(cmd.hash, Hash::EMPTY);
+    assert_eq!(cmd.target, target);
+    cmd.tx
+        .send(ExportProgressItem::Error(crate::api::Error::io(
+            io::ErrorKind::PermissionDenied,
+            "export denied by store",
+        )))
+        .await?;
+    assert!(export.await.is_err());
+    assert_eq!(std::fs::read(&target)?, b"keep me");
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_hash_readonly_mem() -> TestResult<()> {
+    let store = crate::store::readonly_mem::ReadonlyMemStore::new([b"".as_slice()]);
+    assert_eq!(store.blobs().list().hashes().await?, vec![Hash::EMPTY]);
+    let mut rx = store
+        .client()
+        .server_streaming(crate::api::proto::ListRequest, 32)
+        .await?;
+    assert!(rx.recv().await?.is_none());
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("nested").join("empty");
+    assert_eq!(store.blobs().export(Hash::EMPTY, &target).await?, 0);
+    assert_eq!(std::fs::read(target)?, b"");
+    Ok(())
 }
 
 /// Sets up two nodes with a router and a blob store each.

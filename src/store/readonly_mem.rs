@@ -147,6 +147,9 @@ impl Actor {
                 let entry = self.data.get(&hash).cloned();
                 self.tasks.spawn(export_bao(hash, entry, ranges, tx));
             }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.tasks.spawn(super::util::export_empty(cmd));
+            }
             Command::ExportPath(ExportPathMsg {
                 inner: ExportPathRequest { hash, target, .. },
                 tx,
@@ -369,6 +372,9 @@ impl ReadonlyMemStore {
     pub fn new(items: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
         let mut entries = HashMap::new();
         for item in items {
+            if item.as_ref().is_empty() {
+                continue;
+            }
             let data = Bytes::copy_from_slice(item.as_ref());
             let (hash, entry) = CompleteStorage::create(data);
             entries.insert(hash, entry);
