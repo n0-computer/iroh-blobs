@@ -806,7 +806,6 @@ mod tests {
     use std::io;
 
     use bao_tree::ChunkRanges;
-    use iroh::{endpoint::presets, Endpoint, RelayMode};
     use n0_error::{e, AnyError};
     use n0_future::StreamExt;
     use n0_tracing_test::traced_test;
@@ -820,6 +819,7 @@ mod tests {
         protocol::{ChunkRangesExt, GetRequest},
         provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
         store::{mem::MemStore, util::tests::create_n0_bao},
+        test_net::test_endpoint,
         Hash, ALPN,
     };
 
@@ -920,13 +920,8 @@ mod tests {
     /// Serves a single get request for `hash`, where the client drops the
     /// response after the first item, and returns the provider error.
     async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<AnyError> {
-        let bind = || {
-            Endpoint::builder(presets::Minimal)
-                .relay_mode(RelayMode::Disabled)
-                .alpns(vec![ALPN.to_vec()])
-                .bind()
-        };
-        let (server, client) = (bind().await?, bind().await?);
+        let (server, client) = (test_endpoint().await?, test_endpoint().await?);
+        server.set_alpns(vec![ALPN.to_vec()]);
         let addr = server.addr();
         let client_task = tokio::spawn(async move {
             let conn = client.connect(addr, ALPN).await?;

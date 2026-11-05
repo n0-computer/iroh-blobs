@@ -53,6 +53,8 @@ pub mod test;
 pub mod util;
 
 #[cfg(test)]
+mod test_net;
+#[cfg(test)]
 #[cfg(feature = "fs-store")]
 mod tests;
 
