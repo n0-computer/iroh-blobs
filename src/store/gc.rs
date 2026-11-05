@@ -271,7 +271,7 @@ pub async fn run_gc(store: WeakSender<Command>, config: GcConfig) {
             debug!("gc: store dropped, stopping");
             break;
         };
-        let store = Store::from_client(sender.into());
+        let store = Store::from_client(sender);
         if let Err(e) = gc_run_once(&store, &mut live, config.add_protected.as_ref()).await {
             error!("error during gc run: {e}");
             break;
@@ -518,7 +518,7 @@ mod tests {
                 }
             }
         });
-        Store::from_client(irpc::Client::local(tx))
+        Store::from_client(tx)
     }
 
     /// A blob whose temp tag is replaced by a named tag during the mark, as

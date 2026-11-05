@@ -304,7 +304,8 @@ impl Store {
     /// Create a store from a client for the store protocol.
     ///
     /// This is how you back a [`Store`] with your own implementation: run an
-    /// actor that handles [`proto::Command`]s, and pass a local client for it.
+    /// actor that handles [`proto::Command`]s, and pass the sender of its
+    /// channel, or any other client for the protocol.
     ///
     /// The actor only has to handle the commands that are actually used. To
     /// serve data with [`crate::BlobsProtocol`], those are:
@@ -336,11 +337,13 @@ impl Store {
     ///         }
     ///     }
     /// });
-    /// let store = Store::from_client(irpc::Client::local(tx));
+    /// let store = Store::from_client(tx);
     /// # }
     /// ```
-    pub fn from_client(client: irpc::Client<proto::Request>) -> Self {
-        Self { client }
+    pub fn from_client(client: impl Into<irpc::Client<proto::Request>>) -> Self {
+        Self {
+            client: client.into(),
+        }
     }
 
     pub(crate) fn ref_from_sender(client: &ApiClient) -> &Self {
