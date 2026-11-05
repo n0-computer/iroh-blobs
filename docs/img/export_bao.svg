@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="270" viewBox="0 0 760 270" style="max-width: 100%; height: auto" font-family="sans-serif" font-size="13" fill="none" stroke="currentColor" role="img" aria-label="State machine of an export bao stream">
+  <!--
+    State machine of the response stream of an ExportBaoRequest, included in
+    the rustdoc of ExportBaoRequest in src/api/proto.rs. It must match
+    ExportBaoRules in src/api/proto/rules.rs, update both together.
+    Conventions, since this is inlined into a markdown doc comment:
+    - no blank lines, they would end the html block
+    - only currentColor, so it works in the light and dark rustdoc themes
+    - ids are unique on the page, so they are prefixed with export-bao
+    - guards are in brackets after the item, like in UML
+    Layout: states are 140 x 50 boxes in a row at y = 105, starting at
+    x = 50 with a step of 270. Each state is a group in local coordinates,
+    with its self loop and the loop label above the box. Transitions use
+    page coordinates and end at the border of the box they point to.
+    To check a change, render it in both themes and look at the result:
+      rsvg-convert -w 1520 -b white export_bao.svg -o light.png
+      rsvg-convert -w 1520 -b '#353535' -s dark.css export_bao.svg -o dark.png
+    where dark.css contains: svg { color: #ddd; }
+  -->
+  <defs>
+    <marker id="export-bao-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor" stroke="none"/>
+    </marker>
+  </defs>
+  <!-- states -->
+  <g id="export-bao-started" transform="translate(50 105)">
+    <rect width="140" height="50" rx="8"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">started</text>
+      <text x="70" y="39" font-size="11">waiting for the size</text>
+    </g>
+  </g>
+  <g id="export-bao-data" transform="translate(320 105)">
+    <rect width="140" height="50" rx="8"/>
+    <path d="M50,0 C45,-40 95,-40 90,-2" marker-end="url(#export-bao-arrow)"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">sending data</text>
+      <text x="70" y="39" font-size="11">pre-order, within the size</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">Parent or Leaf</text>
+    </g>
+  </g>
+  <g id="export-bao-finished" transform="translate(590 108)">
+    <rect width="140" height="44" rx="22" stroke-width="2.5"/>
+    <text x="70" y="27" fill="currentColor" stroke="none" text-anchor="middle">finished</text>
+  </g>
+  <!-- transitions, each a path with its label -->
+  <g fill="currentColor" stroke="none" font-family="monospace" font-size="12" text-anchor="middle">
+    <!-- start: into started -->
+    <circle cx="18" cy="130" r="6" stroke="currentColor"/>
+    <path d="M24,130 H48" fill="none" stroke="currentColor" marker-end="url(#export-bao-arrow)"/>
+    <!-- started to sending data: Size, if there is data to send -->
+    <path d="M190,130 H318" fill="none" stroke="currentColor" marker-end="url(#export-bao-arrow)"/>
+    <text x="254" y="122">Size</text>
+    <!-- sending data to finished: the Leaf that reaches the end -->
+    <path d="M460,130 H588" fill="none" stroke="currentColor" marker-end="url(#export-bao-arrow)"/>
+    <text x="524" y="104">Leaf</text>
+    <text x="524" y="122" font-family="sans-serif" font-size="11">[reaches the end]</text>
+    <!-- started to finished: Size, if there is nothing to send -->
+    <path d="M120,155 C120,225 660,225 660,154" fill="none" stroke="currentColor" marker-end="url(#export-bao-arrow)"/>
+    <text x="390" y="228">Size <tspan font-family="sans-serif" font-size="11">[nothing to send]</tspan></text>
+  </g>
+  <!-- an error or done ends the stream from any state, a note instead of an arrow per state -->
+  <text x="18" y="262" fill="currentColor" stroke="none" font-size="12">An Error or Done ends the stream in any state.</text>
+</svg>

@@ -236,6 +236,18 @@ pub struct ObserveRequest {
 /// Export the given ranges in bao format, with the iroh block size.
 ///
 /// The returned stream should be verified by the store.
+///
+/// The response starts with the [`EncodedItem::Size`] of the blob, followed by
+/// [`EncodedItem::Parent`] and [`EncodedItem::Leaf`] items for the requested
+/// ranges in pre-order, so leaves come in ascending order and end at the size
+/// at the latest. A range past the end of the blob stands for the last chunk.
+/// The stream is complete with the leaf that reaches the end of the requested
+/// ranges or the size, whichever comes first, or right after the size if there
+/// is nothing to send. A stream that ends before that was cut short. An
+/// [`EncodedItem::Error`] can come at any time, and is the last item.
+/// [`EncodedItem::Done`] is not needed, but counts as the last item too.
+///
+#[doc = include_str!("../../docs/img/export_bao.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportBaoRequest {
     pub hash: Hash,
@@ -246,6 +258,14 @@ pub struct ExportBaoRequest {
 ///
 /// Missing blobs or requested chunks produce an [`std::io::ErrorKind::NotFound`]
 /// error. Ranges past the end of the blob are clipped.
+///
+/// The response starts with the `Size` of the blob, followed by `Data` for the
+/// requested ranges clipped to the size, in ascending order. The stream is
+/// complete with the `Data` that reaches the end of the last clipped range, or
+/// right after the size if there is nothing to send. A stream that ends before
+/// that was cut short. An `Error` can come at any time, and is the last item.
+///
+#[doc = include_str!("../../docs/img/export_ranges.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportRangesRequest {
     pub hash: Hash,
@@ -271,6 +291,15 @@ pub struct ImportByteStreamRequest {
     pub scope: Scope,
 }
 
+/// The items a client sends to the store for an [`ImportByteStreamRequest`].
+///
+/// The client sends the data as [`Self::Bytes`] items, and then
+/// [`Self::Done`]. Unlike the response streams, dropping the sender does not
+/// complete the stream: the store only imports the data after [`Self::Done`],
+/// and treats a stream that ends without it as aborted. So a client that goes
+/// away in the middle of an upload never produces a truncated blob.
+///
+#[doc = include_str!("../../docs/img/import_byte_stream.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ImportByteStreamUpdate {
     Bytes(Bytes),
@@ -500,17 +529,17 @@ pub struct ProcessExitRequest {
 
 /// Progress events for importing from any local source.
 ///
-/// For sources with known size such as blobs or files, you will get the events
-/// in the following order:
+/// An import first copies the data. The [`Self::Size`] comes once, before the
+/// copy for sources of known size such as blobs and files, and after it for
+/// streams. [`Self::CopyDone`] follows if the data was copied, which an import
+/// that references a file where it is does not do. Then the outboard is
+/// computed, and finally [`Self::Done`] comes. Only the size and the final
+/// [`Self::Done`] or [`Self::Error`] are guaranteed; [`Self::CopyProgress`] and
+/// [`Self::OutboardProgress`] are best effort and may not come at all. Progress
+/// never goes backwards or past the size. An [`Self::Error`] can come at any
+/// time, and is the last event.
 ///
-/// Size -> CopyProgress(*n) -> CopyDone -> OutboardProgress(*n) -> Done
-///
-/// For sources with unknown size such as streams, you will get the events
-/// in the following order:
-///
-/// CopyProgress(*n) -> Size -> CopyDone -> OutboardProgress(*n) -> Done
-///
-/// Errors can happen at any time, and will be reported as an `Error` event.
+#[doc = include_str!("../../docs/img/add_progress.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum AddProgressItem {
     /// Progress copying the file into the data directory.
@@ -596,11 +625,13 @@ impl From<Leaf> for ExportRangesItem {
 /// Progress events for exporting to a local file.
 ///
 /// Exporting does not involve outboard computation, so the events are simpler
-/// than [`AddProgressItem`].
+/// than [`AddProgressItem`]. The [`Self::Size`] comes first, then the data is
+/// copied, and finally [`Self::Done`] comes. Only the size and the final
+/// [`Self::Done`] or [`Self::Error`] are guaranteed; [`Self::CopyProgress`] is
+/// best effort and may not come at all. Progress never goes backwards or past
+/// the size. An [`Self::Error`] can come at any time, and is the last event.
 ///
-/// Size -> CopyProgress(*n) -> Done
-///
-/// Errors can happen at any time, and will be reported as an `Error` event.
+#[doc = include_str!("../../docs/img/export_progress.svg")]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ExportProgressItem {
     /// The size of the file being exported.

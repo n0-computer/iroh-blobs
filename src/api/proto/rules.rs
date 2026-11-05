@@ -120,6 +120,9 @@ pub(crate) trait StreamRules<T> {
 /// stream is complete with the item that reaches the end of the last clipped
 /// range, and a stream that ends before that was cut short. An error is always
 /// the last item.
+///
+/// [`super::ExportRangesRequest`] has a diagram of these rules, keep the two
+/// in sync.
 #[derive(Debug)]
 pub(crate) struct ExportRangesRules {
     ranges: RangeSet2<u64>,
@@ -160,6 +163,9 @@ impl StreamRules<ExportRangesItem> for ExportRangesRules {
 /// whichever comes first. The leaf that reaches that point is the last item,
 /// and a stream that ends before it was cut short. An error is always the last
 /// item. [`EncodedItem::Done`] is not needed, but counts as the last item too.
+///
+/// [`super::ExportBaoRequest`] has a diagram of these rules, keep the two in
+/// sync.
 #[derive(Debug)]
 pub(crate) struct ExportBaoRules {
     /// The end of the requested ranges in bytes, `u64::MAX` if open.
@@ -278,6 +284,8 @@ impl StreamRules<Bitfield> for ObserveRules {
 ///
 /// The size comes first, then copy progress up to the size, and then
 /// [`ExportProgressItem::Done`]. An error is always the last item.
+///
+/// [`ExportProgressItem`] has a diagram of these rules, keep the two in sync.
 #[derive(Debug, Default)]
 pub(crate) struct ExportPathRules {
     size: Option<u64>,
@@ -317,6 +325,8 @@ impl StreamRules<ExportProgressItem> for ExportPathRules {
 /// [`AddProgressItem::CopyDone`] after the size. Then outboard progress, and
 /// then [`AddProgressItem::Done`], which both need the size. Progress never
 /// goes backwards or past the size. An error is always the last item.
+///
+/// [`AddProgressItem`] has a diagram of these rules, keep the two in sync.
 #[derive(Debug, Default)]
 pub(crate) struct AddProgressRules {
     size: Option<u64>,
