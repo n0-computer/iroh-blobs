@@ -536,7 +536,7 @@ mod tests {
                 drop(tt);
             })
         });
-        gc_run_once(&proxy, &mut HashSet::new()).await?;
+        gc_run_once(&proxy, &mut HashSet::new(), None).await?;
         assert!(store.has(hash).await?, "the handed over blob was swept");
         Ok(())
     }
