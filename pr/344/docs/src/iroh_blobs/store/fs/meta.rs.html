@@ -21,9 +21,9 @@
 <a href=#21 id=21 data-nosnippet>21</a>        blobs::BlobStatus,
 <a href=#22 id=22 data-nosnippet>22</a>        proto::{
 <a href=#23 id=23 data-nosnippet>23</a>            BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-<a href=#24 id=24 data-nosnippet>24</a>            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListItem,
-<a href=#25 id=25 data-nosnippet>25</a>            ListRequest, ListTagsMsg, ListTagsRequest, RenameTagRequest, SetTagRequest,
-<a href=#26 id=26 data-nosnippet>26</a>            ShutdownMsg, SyncDbMsg,
+<a href=#24 id=24 data-nosnippet>24</a>            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
+<a href=#25 id=25 data-nosnippet>25</a>            ListRequest, ListTagsItem, ListTagsMsg, ListTagsRequest, RenameTagRequest,
+<a href=#26 id=26 data-nosnippet>26</a>            SetTagRequest, ShutdownMsg, SyncDbMsg,
 <a href=#27 id=27 data-nosnippet>27</a>        },
 <a href=#28 id=28 data-nosnippet>28</a>        tags::TagInfo,
 <a href=#29 id=29 data-nosnippet>29</a>        Tag,
@@ -335,14 +335,14 @@
 <a href=#335 id=335 data-nosnippet>335</a></span><span class="kw">pub async fn </span>list_tags(snapshot: ReadOnlyTables, cmd: ListTagsMsg) {
 <a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">let </span>ListTagsMsg { <span class="kw-2">mut </span>tx, inner, .. } = cmd;
 <a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = list_tags_impl(snapshot, inner, <span class="kw-2">&amp;mut </span>tx).<span class="kw">await </span>{
-<a href=#338 id=338 data-nosnippet>338</a>        tx.send(ListItem::Error(cause)).<span class="kw">await</span>.ok();
+<a href=#338 id=338 data-nosnippet>338</a>        tx.send(ListTagsItem::Error(cause)).<span class="kw">await</span>.ok();
 <a href=#339 id=339 data-nosnippet>339</a>    }
 <a href=#340 id=340 data-nosnippet>340</a>}
 <a href=#341 id=341 data-nosnippet>341</a>
 <a href=#342 id=342 data-nosnippet>342</a><span class="kw">async fn </span>list_tags_impl(
 <a href=#343 id=343 data-nosnippet>343</a>    snapshot: ReadOnlyTables,
 <a href=#344 id=344 data-nosnippet>344</a>    request: ListTagsRequest,
-<a href=#345 id=345 data-nosnippet>345</a>    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ListItem&lt;TagInfo&gt;&gt;,
+<a href=#345 id=345 data-nosnippet>345</a>    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ListTagsItem&gt;,
 <a href=#346 id=346 data-nosnippet>346</a>) -&gt; api::Result&lt;()&gt; {
 <a href=#347 id=347 data-nosnippet>347</a>    <span class="kw">let </span>ListTagsRequest {
 <a href=#348 id=348 data-nosnippet>348</a>        from,
@@ -365,12 +365,12 @@
 <a href=#365 id=365 data-nosnippet>365</a>                hash: v.hash,
 <a href=#366 id=366 data-nosnippet>366</a>                format: v.format,
 <a href=#367 id=367 data-nosnippet>367</a>            };
-<a href=#368 id=368 data-nosnippet>368</a>            <span class="kw">if </span>tx.send(ListItem::Item(info)).<span class="kw">await</span>.is_err() {
+<a href=#368 id=368 data-nosnippet>368</a>            <span class="kw">if </span>tx.send(ListTagsItem::Tag(info)).<span class="kw">await</span>.is_err() {
 <a href=#369 id=369 data-nosnippet>369</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#370 id=370 data-nosnippet>370</a>            }
 <a href=#371 id=371 data-nosnippet>371</a>        }
 <a href=#372 id=372 data-nosnippet>372</a>    }
-<a href=#373 id=373 data-nosnippet>373</a>    tx.send(ListItem::Done).<span class="kw">await</span>.ok();
+<a href=#373 id=373 data-nosnippet>373</a>    tx.send(ListTagsItem::Done).<span class="kw">await</span>.ok();
 <a href=#374 id=374 data-nosnippet>374</a>    <span class="prelude-val">Ok</span>(())
 <a href=#375 id=375 data-nosnippet>375</a>}
 <a href=#376 id=376 data-nosnippet>376</a>
@@ -987,14 +987,14 @@
 <a href=#987 id=987 data-nosnippet>987</a>    <span class="kw">let </span>ListBlobsMsg { <span class="kw-2">mut </span>tx, inner, .. } = cmd;
 <a href=#988 id=988 data-nosnippet>988</a>    <span class="kw">if let </span><span class="prelude-val">Err</span>(cause) = list_blobs_impl(snapshot, inner, <span class="kw-2">&amp;mut </span>tx).<span class="kw">await </span>{
 <a href=#989 id=989 data-nosnippet>989</a>        <span class="macro">error!</span>(<span class="string">"error listing blobs: {}"</span>, cause);
-<a href=#990 id=990 data-nosnippet>990</a>        tx.send(ListItem::Error(cause)).<span class="kw">await</span>.ok();
+<a href=#990 id=990 data-nosnippet>990</a>        tx.send(ListBlobsItem::Error(cause)).<span class="kw">await</span>.ok();
 <a href=#991 id=991 data-nosnippet>991</a>    }
 <a href=#992 id=992 data-nosnippet>992</a>}
 <a href=#993 id=993 data-nosnippet>993</a>
 <a href=#994 id=994 data-nosnippet>994</a><span class="kw">async fn </span>list_blobs_impl(
 <a href=#995 id=995 data-nosnippet>995</a>    snapshot: ReadOnlyTables,
 <a href=#996 id=996 data-nosnippet>996</a>    _cmd: ListRequest,
-<a href=#997 id=997 data-nosnippet>997</a>    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ListItem&lt;Hash&gt;&gt;,
+<a href=#997 id=997 data-nosnippet>997</a>    tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;ListBlobsItem&gt;,
 <a href=#998 id=998 data-nosnippet>998</a>) -&gt; api::Result&lt;()&gt; {
 <a href=#999 id=999 data-nosnippet>999</a>    <span class="kw">for </span>item <span class="kw">in </span>snapshot
 <a href=#1000 id=1000 data-nosnippet>1000</a>        .blobs
@@ -1002,11 +1002,11 @@
 <a href=#1002 id=1002 data-nosnippet>1002</a>        .map_err(api_error_from_storage_error)<span class="question-mark">?
 <a href=#1003 id=1003 data-nosnippet>1003</a>    </span>{
 <a href=#1004 id=1004 data-nosnippet>1004</a>        <span class="kw">let </span>(k, <span class="kw">_</span>) = item.map_err(api_error_from_storage_error)<span class="question-mark">?</span>;
-<a href=#1005 id=1005 data-nosnippet>1005</a>        <span class="kw">if </span>tx.send(ListItem::Item(k.value())).<span class="kw">await</span>.is_err() {
+<a href=#1005 id=1005 data-nosnippet>1005</a>        <span class="kw">if </span>tx.send(ListBlobsItem::Hash(k.value())).<span class="kw">await</span>.is_err() {
 <a href=#1006 id=1006 data-nosnippet>1006</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#1007 id=1007 data-nosnippet>1007</a>        }
 <a href=#1008 id=1008 data-nosnippet>1008</a>    }
-<a href=#1009 id=1009 data-nosnippet>1009</a>    tx.send(ListItem::Done).<span class="kw">await</span>.ok();
+<a href=#1009 id=1009 data-nosnippet>1009</a>    tx.send(ListBlobsItem::Done).<span class="kw">await</span>.ok();
 <a href=#1010 id=1010 data-nosnippet>1010</a>    <span class="prelude-val">Ok</span>(())
 <a href=#1011 id=1011 data-nosnippet>1011</a>}
 <a href=#1012 id=1012 data-nosnippet>1012</a>
