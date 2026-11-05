@@ -12,7 +12,7 @@ use bao_tree::{
 };
 use range_collections::RangeSet2;
 
-use super::{Bitfield, ExportRangesItem};
+use super::{Bitfield, ExportProgressItem, ExportRangesItem};
 use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
@@ -39,6 +39,14 @@ pub(crate) enum Violation {
     EmptyHashListed,
     #[display("the bitfield lost ranges")]
     BitfieldShrank,
+    #[display("progress before the size")]
+    ProgressBeforeSize,
+    #[display("progress went backwards")]
+    ProgressBackwards,
+    #[display("progress past the size")]
+    ProgressPastSize,
+    #[display("done before the size")]
+    DoneBeforeSize,
 }
 
 /// Where the data of an export stream is, once the size is known.
@@ -252,6 +260,43 @@ impl StreamRules<Bitfield> for ObserveRules {
     }
 }
 
+/// The rules of a [`super::Request::ExportPath`] stream.
+///
+/// The size comes first, then copy progress up to the size, and then
+/// [`ExportProgressItem::Done`]. An error is always the last item.
+#[derive(Debug, Default)]
+pub(crate) struct ExportPathRules {
+    size: Option<u64>,
+    /// The last copy progress.
+    pos: u64,
+}
+
+impl StreamRules<ExportProgressItem> for ExportPathRules {
+    fn feed(&mut self, item: &ExportProgressItem) -> Result<Step, Violation> {
+        match (self.size, item) {
+            (_, ExportProgressItem::Error(_)) => Ok(Step::Last),
+            (None, ExportProgressItem::Size(size)) => {
+                self.size = Some(*size);
+                Ok(Step::More)
+            }
+            (Some(_), ExportProgressItem::Size(_)) => Err(Violation::SizeTwice),
+            (None, ExportProgressItem::CopyProgress(_)) => Err(Violation::ProgressBeforeSize),
+            (Some(size), ExportProgressItem::CopyProgress(offset)) => {
+                if *offset < self.pos {
+                    return Err(Violation::ProgressBackwards);
+                }
+                if *offset > size {
+                    return Err(Violation::ProgressPastSize);
+                }
+                self.pos = *offset;
+                Ok(Step::More)
+            }
+            (None, ExportProgressItem::Done) => Err(Violation::DoneBeforeSize),
+            (Some(_), ExportProgressItem::Done) => Ok(Step::Last),
+        }
+    }
+}
+
 fn last_if(last: bool) -> Step {
     if last {
         Step::Last
@@ -339,6 +384,33 @@ mod tests {
             rules.feed(&Bitfield::new(chunks(1..3), 4096)),
             Err(Violation::BitfieldShrank)
         );
+    }
+
+    #[test]
+    fn export_path_violations() {
+        let mut rules = ExportPathRules::default();
+        assert_eq!(
+            rules.feed(&ExportProgressItem::CopyProgress(0)),
+            Err(Violation::ProgressBeforeSize)
+        );
+        assert_eq!(
+            rules.feed(&ExportProgressItem::Done),
+            Err(Violation::DoneBeforeSize)
+        );
+        assert_eq!(rules.feed(&ExportProgressItem::Size(100)), Ok(Step::More));
+        assert_eq!(
+            rules.feed(&ExportProgressItem::CopyProgress(50)),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&ExportProgressItem::CopyProgress(40)),
+            Err(Violation::ProgressBackwards)
+        );
+        assert_eq!(
+            rules.feed(&ExportProgressItem::CopyProgress(200)),
+            Err(Violation::ProgressPastSize)
+        );
+        assert_eq!(rules.feed(&ExportProgressItem::Done), Ok(Step::Last));
     }
 
     #[test]

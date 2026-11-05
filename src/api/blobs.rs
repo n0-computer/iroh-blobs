@@ -47,8 +47,8 @@ pub use super::proto::{
 use super::{
     proto::{
         rules::{
-            DebugOnly, ExportBaoRules, ExportRangesRules, ListBlobsRules, ObserveRules, Step,
-            StreamRules,
+            DebugOnly, ExportBaoRules, ExportPathRules, ExportRangesRules, ListBlobsRules,
+            ObserveRules, Step, StreamRules,
         },
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
@@ -900,7 +900,12 @@ impl ExportProgress {
                     return;
                 }
             };
+            let mut rules = ExportPathRules::default();
             while let Ok(Some(item)) = rx.recv().await {
+                if let Err(cause) = rules.check(&item) {
+                    co.yield_(ExportProgressItem::Error(cause.into())).await;
+                    return;
+                }
                 co.yield_(item).await;
             }
         })
@@ -908,9 +913,14 @@ impl ExportProgress {
 
     pub async fn finish(self) -> RequestResult<u64> {
         let mut rx = self.inner.await?;
+        let mut rules = ExportPathRules::default();
         let mut size = None;
         loop {
-            match rx.recv().await? {
+            let item = rx.recv().await?;
+            if let Some(item) = &item {
+                rules.check(item)?;
+            }
+            match item {
                 Some(ExportProgressItem::Done) => break,
                 Some(ExportProgressItem::Size(s)) => size = Some(s),
                 Some(ExportProgressItem::Error(cause)) => return Err(cause.into()),
