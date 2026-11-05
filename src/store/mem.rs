@@ -52,9 +52,9 @@ use crate::{
             DeleteTagsRequest, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
             ExportRangesItem, ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
             ImportByteStreamMsg, ImportByteStreamUpdate, ImportBytesMsg, ImportBytesRequest,
-            ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsMsg, ListTagsRequest,
-            ObserveMsg, ObserveRequest, RenameTagMsg, RenameTagRequest, Scope, SetTagMsg,
-            SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
+            ImportPathMsg, ImportPathRequest, ListBlobsMsg, ListTagsItem, ListTagsMsg,
+            ListTagsRequest, ListTempTagsItem, ObserveMsg, ObserveRequest, RenameTagMsg,
+            RenameTagRequest, Scope, SetTagMsg, SetTagRequest, ShutdownMsg, SyncDbMsg, WaitIdleMsg,
         },
         tags::TagInfo,
         ApiClient,
@@ -325,10 +325,11 @@ impl Actor {
                     .collect::<Vec<_>>();
                 self.spawn(async move {
                     for tag in tags {
-                        if tx.send(Ok(tag)).await.is_err() {
-                            break;
+                        if tx.send(ListTagsItem::Tag(tag)).await.is_err() {
+                            return;
                         }
                     }
+                    tx.send(ListTagsItem::Done).await.ok();
                 });
             }
             Command::SetTag(SetTagMsg {
@@ -357,10 +358,11 @@ impl Actor {
                 let tts = self.temp_tags.list();
                 self.spawn(async move {
                     for tt in tts {
-                        if cmd.tx.send(Ok(tt)).await.is_err() {
-                            break;
+                        if cmd.tx.send(ListTempTagsItem::Tag(tt)).await.is_err() {
+                            return;
                         }
                     }
+                    cmd.tx.send(ListTempTagsItem::Done).await.ok();
                 });
             }
             Command::ListBlobs(cmd) => {

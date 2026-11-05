@@ -22,7 +22,8 @@ use crate::{
         proto::{
             BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
             CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsMsg, ListRequest,
-            ListTagsMsg, ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            ListTagsItem, ListTagsMsg, ListTagsRequest, RenameTagRequest, SetTagRequest,
+            ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -334,14 +335,14 @@ async fn handle_get_blob_status(
 pub async fn list_tags(snapshot: ReadOnlyTables, cmd: ListTagsMsg) {
     let ListTagsMsg { mut tx, inner, .. } = cmd;
     if let Err(cause) = list_tags_impl(snapshot, inner, &mut tx).await {
-        tx.send(Err(cause)).await.ok();
+        tx.send(ListTagsItem::Error(cause)).await.ok();
     }
 }
 
 async fn list_tags_impl(
     snapshot: ReadOnlyTables,
     request: ListTagsRequest,
-    tx: &mut mpsc::Sender<api::Result<TagInfo>>,
+    tx: &mut mpsc::Sender<ListTagsItem>,
 ) -> api::Result<()> {
     let ListTagsRequest {
         from,
@@ -364,11 +365,12 @@ async fn list_tags_impl(
                 hash: v.hash,
                 format: v.format,
             };
-            if tx.send(Ok(info)).await.is_err() {
-                break;
+            if tx.send(ListTagsItem::Tag(info)).await.is_err() {
+                return Ok(());
             }
         }
     }
+    tx.send(ListTagsItem::Done).await.ok();
     Ok(())
 }
 

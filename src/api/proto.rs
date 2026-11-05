@@ -130,8 +130,8 @@ pub enum Request {
     ImportPath(ImportPathRequest),
     #[rpc(tx = mpsc::Sender<ExportProgressItem>)]
     ExportPath(ExportPathRequest),
-    /// Lists matching tags. An error is the last item; closing the stream ends the listing.
-    #[rpc(tx = mpsc::Sender<super::Result<TagInfo>>)]
+    /// Lists matching tags. Ends with `Done` or `Error`; closure alone is incomplete.
+    #[rpc(tx = mpsc::Sender<ListTagsItem>)]
     ListTags(ListTagsRequest),
     #[rpc(tx = oneshot::Sender<super::Result<()>>)]
     SetTag(SetTagRequest),
@@ -141,8 +141,8 @@ pub enum Request {
     RenameTag(RenameTagRequest),
     #[rpc(tx = oneshot::Sender<super::Result<Tag>>)]
     CreateTag(CreateTagRequest),
-    /// Lists temporary protections in all scopes. An error is the last item.
-    #[rpc(tx = mpsc::Sender<super::Result<HashAndFormat>>)]
+    /// Lists temporary protections in all scopes. Ends with `Done` or `Error`.
+    #[rpc(tx = mpsc::Sender<ListTempTagsItem>)]
     ListTempTags(ListTempTagsRequest),
     #[rpc(tx = oneshot::Sender<TempTag>)]
     CreateTempTag(CreateTempTagRequest),
@@ -389,6 +389,28 @@ impl ListTagsRequest {
             to: None,
         }
     }
+}
+
+/// An item in a named-tag listing. `Done` and `Error` are terminal.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTagsItem {
+    /// A matching named tag.
+    Tag(TagInfo),
+    /// The complete listing has been sent, including when it is empty.
+    Done,
+    /// The listing failed and must not be treated as complete.
+    Error(super::Error),
+}
+
+/// An item in a temporary-tag listing. `Done` and `Error` are terminal.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ListTempTagsItem {
+    /// Content protected by a temporary tag.
+    Tag(HashAndFormat),
+    /// The complete listing has been sent, including when it is empty.
+    Done,
+    /// The listing failed and must not be treated as complete.
+    Error(super::Error),
 }
 
 /// Information about a tag.

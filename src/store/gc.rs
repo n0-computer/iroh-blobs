@@ -524,6 +524,15 @@ mod tests {
 
     #[tokio::test]
     async fn gc_aborts_on_temp_tag_listing_error() -> TestResult {
+        gc_aborts_on_incomplete_temp_tag_listing(false).await
+    }
+
+    #[tokio::test]
+    async fn gc_aborts_on_temp_tag_listing_closed_early() -> TestResult {
+        gc_aborts_on_incomplete_temp_tag_listing(true).await
+    }
+
+    async fn gc_aborts_on_incomplete_temp_tag_listing(close_early: bool) -> TestResult {
         use crate::api::proto::Command;
 
         let store = crate::store::mem::MemStore::new();
@@ -538,11 +547,16 @@ mod tests {
         let responder = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 if let Command::ListTempTags(cmd) = cmd {
+                    if close_early {
+                        continue;
+                    }
                     cmd.tx
-                        .send(Err(crate::api::Error::io(
-                            io::ErrorKind::Unsupported,
-                            "temp tag listing unsupported",
-                        )))
+                        .send(crate::api::proto::ListTempTagsItem::Error(
+                            crate::api::Error::io(
+                                io::ErrorKind::Unsupported,
+                                "temp tag listing unsupported",
+                            ),
+                        ))
                         .await
                         .unwrap();
                 } else if inner.send_raw(cmd).await.is_err() {

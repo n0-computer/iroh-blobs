@@ -493,7 +493,10 @@ impl Actor {
                     Ok(snapshot) => self.spawn(list_tags(snapshot, cmd)),
                     Err(cause) => {
                         self.spawn(async move {
-                            cmd.tx.send(Err(api::Error::other(cause))).await.ok();
+                            cmd.tx
+                                .send(proto::ListTagsItem::Error(api::Error::other(cause)))
+                                .await
+                                .ok();
                         });
                     }
                 }
@@ -538,10 +541,11 @@ impl Actor {
                 let tts = self.temp_tags.list();
                 self.spawn(async move {
                     for tt in tts {
-                        if cmd.tx.send(Ok(tt)).await.is_err() {
-                            break;
+                        if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
+                            return;
                         }
                     }
+                    cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
                 });
             }
             Command::ImportBytes(cmd) => {

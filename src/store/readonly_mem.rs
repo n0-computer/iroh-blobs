@@ -210,14 +210,18 @@ impl Actor {
                 };
                 cmd.tx.send(status).await.ok();
             }
-            Command::ListTags(_) => {}
+            Command::ListTags(cmd) => {
+                cmd.tx.send(proto::ListTagsItem::Done).await.ok();
+            }
             Command::SetTag(cmd) => {
                 cmd.tx
                     .send(Err(unsupported("set tag not supported").into()))
                     .await
                     .ok();
             }
-            Command::ListTempTags(_) => {}
+            Command::ListTempTags(cmd) => {
+                cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
+            }
             Command::SyncDb(cmd) => {
                 cmd.tx.send(Ok(())).await.ok();
             }
