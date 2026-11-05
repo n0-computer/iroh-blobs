@@ -125,10 +125,7 @@ use crate::{
     protocol::ChunkRangesExt,
     store::{
         fs::{
-            bao_file::{
-                BaoFileStorage, BaoFileStorageSubscriber, CompleteStorage, DataReader,
-                OutboardReader,
-            },
+            bao_file::{BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader},
             util::entity_manager::{self, ActiveEntityState},
         },
         gc::run_gc,
@@ -296,26 +293,19 @@ impl SyncEntityApi for HashContext {
         });
         match action {
             Action::Load => {
-                let state = if self.id == Hash::EMPTY {
-                    BaoFileStorage::Complete(CompleteStorage {
-                        data: MemOrFile::Mem(Bytes::new()),
-                        outboard: MemOrFile::empty(),
-                    })
-                } else {
-                    // we must assign a new state even in the error case, otherwise
-                    // tasks waiting for loading would stall!
-                    match self.global.db.get(self.id).await {
-                        Ok(state) => match BaoFileStorage::open(state, self).await {
-                            Ok(handle) => handle,
-                            Err(cause) => {
-                                error!("failed to open {}, poisoning: {cause}", self.id);
-                                BaoFileStorage::Poisoned
-                            }
-                        },
+                // we must assign a new state even in the error case, otherwise
+                // tasks waiting for loading would stall!
+                let state = match self.global.db.get(self.id).await {
+                    Ok(state) => match BaoFileStorage::open(state, self).await {
+                        Ok(handle) => handle,
                         Err(cause) => {
-                            error!("failed to get {} from db, poisoning: {cause}", self.id);
+                            error!("failed to open {}, poisoning: {cause}", self.id);
                             BaoFileStorage::Poisoned
                         }
+                    },
+                    Err(cause) => {
+                        error!("failed to get {} from db, poisoning: {cause}", self.id);
+                        BaoFileStorage::Poisoned
                     }
                 };
                 self.state.send_replace(state);
@@ -431,14 +421,7 @@ impl HashContext {
     }
 
     pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        let hash = self.id;
-        if hash == Hash::EMPTY {
-            return Ok(Some(EntryState::Complete {
-                data_location: DataLocation::Inline(Bytes::new()),
-                outboard_location: OutboardLocation::NotNeeded,
-            }));
-        };
-        self.db().get(hash).await
+        self.db().get(self.id).await
     }
 
     /// Update the entry state in the database, and wait for completion.
@@ -482,6 +465,7 @@ impl Actor {
     async fn handle_command(&mut self, cmd: Command) {
         let span = cmd.parent_span();
         let _entered = span.enter();
+        cmd.debug_assert_not_empty_hash();
         match cmd {
             Command::SyncDb(cmd) => {
                 trace!("{cmd:?}");
@@ -559,6 +543,9 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.spawn(import_path(cmd, self.context()));
             }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.spawn(super::util::export_empty(cmd));
+            }
             Command::ExportPath(cmd) => {
                 trace!("{cmd:?}");
                 cmd.spawn(&mut self.handles, &mut self.tasks).await;
@@ -596,21 +583,18 @@ impl Actor {
             }
             InternalCommand::FinishImport(cmd) => {
                 trace!("{cmd:?}");
+                let value = HashAndFormat {
+                    hash: cmd.hash,
+                    format: cmd.format,
+                };
                 if cmd.hash == Hash::EMPTY {
-                    cmd.tx
-                        .send(AddProgressItem::Done(TempTag::leaking_empty(cmd.format)))
-                        .await
-                        .ok();
-                } else {
-                    let tt = self.temp_tags.create(
-                        cmd.scope,
-                        HashAndFormat {
-                            hash: cmd.hash,
-                            format: cmd.format,
-                        },
-                    );
-                    (tt, cmd).spawn(&mut self.handles, &mut self.tasks).await;
+                    // the empty blob is always present, so there is nothing to store or protect
+                    let tt = TempTag::new(value, None);
+                    cmd.tx.send(AddProgressItem::Done(tt)).await.ok();
+                    return;
                 }
+                let tt = self.temp_tags.create(cmd.scope, value);
+                (tt, cmd).spawn(&mut self.handles, &mut self.tasks).await;
             }
         }
     }
@@ -1061,9 +1045,6 @@ impl EntityApi for HashContext {
 }
 
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
-    if ctx.id == Hash::EMPTY {
-        return Ok(()); // nothing to do for the empty hash
-    }
     let ImportEntry {
         source,
         hash,
@@ -1252,7 +1233,7 @@ async fn export_bao_impl(
     let ExportBaoRequest { ranges, hash, .. } = cmd;
     let outboard = ctx.outboard()?;
     let size = outboard.tree.size();
-    if size == 0 && cmd.hash != Hash::EMPTY {
+    if size == 0 {
         // we have no data whatsoever, so we stop here
         return Ok(());
     }

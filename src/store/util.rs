@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, fmt};
+use std::{borrow::Borrow, fmt, io};
 
 use bao_tree::io::mixed::EncodedItem;
 use bytes::Bytes;
@@ -22,6 +22,38 @@ mod mem_or_file;
 #[cfg(feature = "fs-store")]
 #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub use mem_or_file::{FixedSize, MemOrFile};
+
+/// Exports the empty blob on the store's filesystem without creating a blob entry.
+pub(crate) async fn export_empty(cmd: crate::api::proto::ExportPathMsg) {
+    use crate::api::proto::ExportProgressItem;
+
+    let result = (|| -> io::Result<()> {
+        let target = &cmd.target;
+        if !target.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path is not absolute",
+            ));
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::File::create(target)?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            cmd.tx.send(ExportProgressItem::Size(0)).await.ok();
+            cmd.tx.send(ExportProgressItem::Done).await.ok();
+        }
+        Err(cause) => {
+            cmd.tx
+                .send(ExportProgressItem::Error(cause.into()))
+                .await
+                .ok();
+        }
+    }
+}
 
 /// A named, persistent tag.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, From, Into)]

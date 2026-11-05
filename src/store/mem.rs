@@ -65,7 +65,7 @@ use crate::{
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
-    util::temp_tag::{TagDrop, TempTagScope, TempTags},
+    util::temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -132,7 +132,6 @@ impl MemStore {
                 state: State {
                     data: HashMap::new(),
                     tags: BTreeMap::new(),
-                    empty_hash: BaoFileHandle::new_partial(Hash::EMPTY),
                 },
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
@@ -176,6 +175,7 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) -> Option<ShutdownMsg> {
+        cmd.debug_assert_not_empty_hash();
         match cmd {
             Command::ImportBao(ImportBaoMsg {
                 inner: ImportBaoRequest { hash, size },
@@ -232,6 +232,9 @@ impl Actor {
             }) => {
                 let entry = self.get(&hash);
                 self.spawn(export_bao(entry, ranges, tx))
+            }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.spawn(super::util::export_empty(cmd));
             }
             Command::ExportPath(cmd) => {
                 let entry = self.get(&cmd.hash);
@@ -424,23 +427,15 @@ impl Actor {
     }
 
     fn get(&mut self, hash: &Hash) -> Option<BaoFileHandle> {
-        if *hash == Hash::EMPTY {
-            Some(self.state.empty_hash.clone())
-        } else {
-            self.state.data.get(hash).cloned()
-        }
+        self.state.data.get(hash).cloned()
     }
 
     fn get_or_create_entry(&mut self, hash: Hash) -> BaoFileHandle {
-        if hash == Hash::EMPTY {
-            self.state.empty_hash.clone()
-        } else {
-            self.state
-                .data
-                .entry(hash)
-                .or_insert_with(|| BaoFileHandle::new_partial(hash))
-                .clone()
-        }
+        self.state
+            .data
+            .entry(hash)
+            .or_insert_with(|| BaoFileHandle::new_partial(hash))
+            .clone()
     }
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
@@ -461,6 +456,18 @@ impl Actor {
             }
         };
         let hash = import_data.outboard.root().into();
+        if hash == Hash::EMPTY {
+            // the empty blob is always present, so there is nothing to store or protect
+            let tt = TempTag::new(
+                HashAndFormat {
+                    hash,
+                    format: import_data.format,
+                },
+                None,
+            );
+            import_data.tx.send(AddProgressItem::Done(tt)).await.ok();
+            return;
+        }
         // protect from a gc run that is already past the mark phase, like the fs store
         self.protected.insert(hash);
         let entry = self.get_or_create_entry(hash);
@@ -698,9 +705,7 @@ async fn export_bao(
 ) {
     let entry = match entry {
         // an entry without any data, not even the size, is answered like a missing one
-        Some(entry) if entry.hash == Hash::EMPTY || entry.outboard_reader().tree.size() != 0 => {
-            entry
-        }
+        Some(entry) if entry.outboard_reader().tree.size() != 0 => entry,
         _ => {
             let err = EncodeError::Io(io::Error::new(io::ErrorKind::NotFound, "hash not found"));
             sender.send(err.into()).await.ok();
@@ -918,7 +923,6 @@ impl Outboard for OutboardReader {
 struct State {
     data: HashMap<Hash, BaoFileHandle>,
     tags: BTreeMap<Tag, HashAndFormat>,
-    empty_hash: BaoFileHandle,
 }
 
 #[derive(Debug, derive_more::From)]

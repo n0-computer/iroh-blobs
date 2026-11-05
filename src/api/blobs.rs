@@ -156,8 +156,10 @@ impl Blobs {
     /// clears the protections before.
     ///
     /// Users should rely only on garbage collection for blob deletion.
-    pub(crate) async fn delete_with_opts(&self, options: DeleteOptions) -> RequestResult<()> {
+    pub(crate) async fn delete_with_opts(&self, mut options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
+        // the empty blob is always present, so it is never deleted
+        options.hashes.retain(|hash| *hash != Hash::EMPTY);
         self.client.rpc(options).await??;
         Ok(())
     }
@@ -341,6 +343,12 @@ impl Blobs {
 
     pub fn export_ranges_with_opts(&self, options: ExportRangesOptions) -> ExportRangesProgress {
         trace!("{options:?}");
+        if options.hash == Hash::EMPTY {
+            return ExportRangesProgress::new(
+                options.ranges,
+                local_response([ExportRangesItem::Size(0)]),
+            );
+        }
         ExportRangesProgress::new(
             options.ranges.clone(),
             self.client.server_streaming(options, 32),
@@ -353,6 +361,9 @@ impl Blobs {
         local_update_cap: usize,
     ) -> ExportBaoProgress {
         trace!("{options:?}");
+        if options.hash == Hash::EMPTY {
+            return ExportBaoProgress::new(options.ranges, local_response([EncodedItem::Size(0)]));
+        }
         let ranges = options.ranges.clone();
         ExportBaoProgress::new(
             ranges,
@@ -412,17 +423,15 @@ impl Blobs {
     pub fn observe_with_opts(&self, options: ObserveOptions) -> ObserveProgress {
         trace!("{:?}", options);
         if options.hash == Hash::EMPTY {
-            return ObserveProgress::new(async move {
-                let (tx, rx) = mpsc::channel(1);
-                tx.send(Bitfield::complete(0)).await.ok();
-                Ok(rx)
-            });
+            return ObserveProgress::new(local_response([Bitfield::complete(0)]));
         }
         ObserveProgress::new(self.client.server_streaming(options, 32))
     }
 
     pub fn export_with_opts(&self, options: ExportOptions) -> ExportProgress {
         trace!("{:?}", options);
+        // Even Hash::EMPTY must reach the store: the target path belongs to the
+        // store's filesystem, which may be on a different machine from the client.
         ExportProgress::new(self.client.server_streaming(options, 32))
     }
 
@@ -907,6 +916,20 @@ impl ExportProgress {
     }
 }
 
+/// Answers a request without asking the store, for requests about the empty blob.
+///
+/// See [`super::proto`] for why the store never sees these.
+async fn local_response<T: irpc::RpcMessage>(
+    items: impl IntoIterator<Item = T>,
+) -> irpc::Result<mpsc::Receiver<T>> {
+    let items = items.into_iter().collect::<Vec<_>>();
+    let (tx, rx) = mpsc::channel(items.len().max(1));
+    for item in items {
+        tx.send(item).await.ok();
+    }
+    Ok(rx)
+}
+
 /// A handle for an ongoing bao import operation.
 pub struct ImportBaoHandle {
     pub tx: mpsc::Sender<BaoContentItem>,
@@ -942,18 +965,21 @@ impl BlobsListProgress {
         }
     }
 
+    /// All hashes in the store, starting with [`Hash::EMPTY`], which is always present.
     pub async fn hashes(self) -> RequestResult<Vec<Hash>> {
         let mut rx: mpsc::Receiver<Result<Hash, super::Error>> = self.inner.await?;
-        let mut hashes = Vec::new();
+        let mut hashes = vec![Hash::EMPTY];
         while let Some(item) = rx.recv().await? {
             hashes.push(item?);
         }
         Ok(hashes)
     }
 
+    /// A stream of all hashes in the store, starting with [`Hash::EMPTY`], which is always present.
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = super::Result<Hash>>> {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
+            co.yield_(Ok(Hash::EMPTY)).await;
             while let Ok(Some(item)) = rx.recv().await {
                 co.yield_(item).await;
             }
