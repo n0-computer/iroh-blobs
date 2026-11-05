@@ -12,7 +12,7 @@ use bao_tree::{
 };
 use range_collections::RangeSet2;
 
-use super::ExportRangesItem;
+use super::{Bitfield, ExportRangesItem};
 use crate::Hash;
 
 /// What an item that follows the rules means for the stream.
@@ -37,6 +37,8 @@ pub(crate) enum Violation {
     DataPastSize,
     #[display("the empty hash was listed")]
     EmptyHashListed,
+    #[display("the bitfield lost ranges")]
+    BitfieldShrank,
 }
 
 /// Where the data of an export stream is, once the size is known.
@@ -195,6 +197,61 @@ impl StreamRules<crate::api::Result<Hash>> for ListBlobsRules {
     }
 }
 
+/// Rules that are only checked in debug builds, because they allocate.
+///
+/// Rules that only compare a few numbers are checked in every build. For the
+/// others, completion of the stream must not depend on them, since in release
+/// builds this is a zero sized type that accepts every item as [`Step::More`].
+#[derive(Debug, Default)]
+pub(crate) struct DebugOnly<R> {
+    #[cfg(debug_assertions)]
+    rules: R,
+    #[cfg(not(debug_assertions))]
+    rules: std::marker::PhantomData<fn() -> R>,
+}
+
+impl<R> DebugOnly<R> {
+    #[allow(unused_variables)]
+    pub(crate) fn new(rules: R) -> Self {
+        Self {
+            #[cfg(debug_assertions)]
+            rules,
+            #[cfg(not(debug_assertions))]
+            rules: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, R: StreamRules<T>> StreamRules<T> for DebugOnly<R> {
+    #[allow(unused_variables)]
+    fn feed(&mut self, item: &T) -> Result<Step, Violation> {
+        #[cfg(debug_assertions)]
+        return self.rules.feed(item);
+        #[cfg(not(debug_assertions))]
+        Ok(Step::More)
+    }
+}
+
+/// The rules of a [`super::Request::Observe`] stream.
+///
+/// The first bitfield is the current state, and every following one is the
+/// whole new state. The ranges only ever grow: if something is taken away, the
+/// store ends the stream instead of sending a smaller bitfield.
+#[derive(Debug, Default)]
+pub(crate) struct ObserveRules {
+    ranges: ChunkRanges,
+}
+
+impl StreamRules<Bitfield> for ObserveRules {
+    fn feed(&mut self, item: &Bitfield) -> Result<Step, Violation> {
+        if !item.ranges.is_superset(&self.ranges) {
+            return Err(Violation::BitfieldShrank);
+        }
+        self.ranges = item.ranges.clone();
+        Ok(Step::More)
+    }
+}
+
 fn last_if(last: bool) -> Step {
     if last {
         Step::Last
@@ -261,6 +318,26 @@ mod tests {
         assert_eq!(
             rules.feed(&Ok(Hash::EMPTY)),
             Err(Violation::EmptyHashListed)
+        );
+    }
+
+    #[test]
+    fn observe_violations() {
+        let mut rules = ObserveRules::default();
+        let chunks = |r: std::ops::Range<u64>| {
+            ChunkRanges::from(bao_tree::ChunkNum(r.start)..bao_tree::ChunkNum(r.end))
+        };
+        assert_eq!(
+            rules.feed(&Bitfield::new(chunks(0..2), 4096)),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&Bitfield::new(chunks(0..3), 4096)),
+            Ok(Step::More)
+        );
+        assert_eq!(
+            rules.feed(&Bitfield::new(chunks(1..3), 4096)),
+            Err(Violation::BitfieldShrank)
         );
     }
 

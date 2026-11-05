@@ -46,7 +46,10 @@ pub use super::proto::{
 };
 use super::{
     proto::{
-        rules::{ExportBaoRules, ExportRangesRules, ListBlobsRules, Step, StreamRules},
+        rules::{
+            DebugOnly, ExportBaoRules, ExportRangesRules, ListBlobsRules, ObserveRules, Step,
+            StreamRules,
+        },
         BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
         ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
         ImportBytesRequest, ImportPathRequest, ListRequest, Scope,
@@ -843,7 +846,12 @@ impl ObserveProgress {
     pub async fn stream(self) -> irpc::Result<impl Stream<Item = Bitfield>> {
         let mut rx = self.inner.await?;
         Ok(Gen::new(|co| async move {
+            let mut rules = DebugOnly::new(ObserveRules::default());
             while let Ok(Some(item)) = rx.recv().await {
+                if rules.check(&item).is_err() {
+                    // a bitfield can not carry the error, so the stream just ends
+                    return;
+                }
                 co.yield_(item).await;
             }
         }))
