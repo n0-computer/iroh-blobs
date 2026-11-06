@@ -295,7 +295,7 @@ impl SyncEntityApi for HashContext {
             Action::Load => {
                 // we must assign a new state even in the error case, otherwise
                 // tasks waiting for loading would stall!
-                let state = match self.global.db.get(self.id).await {
+                let state = match self.get_entry_state().await {
                     Ok(state) => match BaoFileStorage::open(state, self).await {
                         Ok(handle) => handle,
                         Err(cause) => {
@@ -340,7 +340,7 @@ impl SyncEntityApi for HashContext {
             true
         });
         if let Some(update) = res? {
-            self.global.db.update(self.id, update).await?;
+            self.update(update).await?;
         }
         Ok(())
     }
@@ -418,6 +418,11 @@ impl HashContext {
     pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
         self.db().update_await(self.id, state).await?;
         Ok(())
+    }
+
+    /// Update the entry state in the database, without waiting for completion.
+    pub async fn update(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db().update(self.id, state).await
     }
 
     pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
