@@ -827,7 +827,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.6",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2003,9 +2003,9 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3623d6ff582b415904b29bbe6ebcb4a4f9a262ccdee05a45fdd003ef0950c386"
+source = "git+https://github.com/n0-computer/irpc.git?branch=main#f1100ae47bac33e27b7e42e07d6e53f2bbbdc57d"
 dependencies = [
+ "derive_more",
  "futures-buffered",
  "futures-util",
  "irpc-derive",
@@ -2025,12 +2025,11 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35c254013736de16472140d26904e6ac98e8f3887284dcf4af40f88c77411b56"
+source = "git+https://github.com/n0-computer/irpc.git?branch=main#f1100ae47bac33e27b7e42e07d6e53f2bbbdc57d"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.6",
 ]
 
 [[package]]

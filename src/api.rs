@@ -126,10 +126,8 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
             #[cfg(feature = "rpc")]
             irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
-            // Without our `rpc` feature, another crate can still enable irpc's, which adds
-            // `Write`. We cannot name it here, since it may not exist.
-            #[cfg(not(feature = "rpc"))]
-            #[allow(unreachable_patterns)]
+            // `irpc::Error` is non-exhaustive. Without our `rpc` feature, another crate can
+            // also enable irpc's, which adds `Write`, so we cannot name it here.
             e => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
     }
@@ -264,12 +262,9 @@ impl Store {
     #[cfg(feature = "rpc")]
     #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
     pub async fn listen(self, endpoint: noq::Endpoint) {
-        use irpc::rpc::RemoteService;
-
         use self::proto::Request;
         let local = self.client.as_local().unwrap().clone();
-        let handler = Request::remote_handler(local);
-        irpc::rpc::listen::<Request>(endpoint, handler).await
+        irpc::noq::listen::<Request>(endpoint, local).await
     }
 
     pub async fn sync_db(&self) -> RequestResult<()> {
