@@ -47,10 +47,13 @@ pub mod protocol;
 pub mod provider;
 pub mod ticket;
 
+#[cfg(feature = "unstable-util")]
 #[doc(hidden)]
 pub mod test;
 pub mod util;
 
+#[cfg(test)]
+mod test_net;
 #[cfg(test)]
 #[cfg(feature = "fs-store")]
 mod tests;

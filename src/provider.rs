@@ -127,20 +127,17 @@ impl<R: RecvStream, W: SendStream> StreamPair<R, W> {
         ))
     }
 
-    pub async fn into_reader(
-        mut self,
-        tracker: RequestTracker,
-    ) -> Result<ProgressReader<R>, io::Error> {
-        self.writer.sync().await?;
-        drop(self.writer);
-        Ok(ProgressReader {
+    /// We are done with the request. Return a ProgressReader for the payload, and the writer to report the outcome.
+    fn into_reader_and_writer(self, tracker: RequestTracker) -> (ProgressReader<R>, W) {
+        let reader = ProgressReader {
             inner: self.reader,
             context: ReaderContext {
                 t0: self.t0,
                 other_bytes_read: self.other_bytes_read,
                 tracker,
             },
-        })
+        };
+        (reader, self.writer)
     }
 
     pub async fn get_request(
@@ -332,6 +329,8 @@ async fn handle_read_request_result<R: RecvStream, W: SendStream, T, E: HasError
         Ok(x) => Ok(x),
         Err(e) => {
             pair.writer.reset(e.code()).ok();
+            // Don't let a rejected push send all its data first.
+            pair.reader.stop(e.code()).ok();
             Err(e)
         }
     }
@@ -665,8 +664,19 @@ pub async fn handle_push<R: RecvStream, W: SendStream>(
 ) -> n0_error::Result<()> {
     let res = pair.push_request(|| request.clone()).await;
     let tracker = handle_read_request_result(&mut pair, res).await?;
-    let mut reader = pair.into_reader(tracker).await?;
+    // Keep our half open until the data is stored. The pusher reads it to the
+    // end: a finish means stored, a reset carries the error code.
+    let (mut reader, mut writer) = pair.into_reader_and_writer(tracker);
     let res = handle_push_impl(store, request, &mut reader).await;
+    match &res {
+        Ok(()) => {
+            writer.sync().await.ok();
+        }
+        Err(e) => {
+            writer.reset(e.code()).ok();
+        }
+    }
+    drop(writer);
     handle_read_result(&mut reader, res).await?;
     Ok(())
 }
@@ -806,7 +816,6 @@ mod tests {
     use std::io;
 
     use bao_tree::ChunkRanges;
-    use iroh::{endpoint::presets, Endpoint, RelayMode};
     use n0_error::{e, AnyError};
     use n0_future::StreamExt;
     use n0_tracing_test::traced_test;
@@ -820,6 +829,7 @@ mod tests {
         protocol::{ChunkRangesExt, GetRequest},
         provider::events::{EventMask, EventSender, ProgressError, ThrottleMode},
         store::{mem::MemStore, util::tests::create_n0_bao},
+        test_net::test_endpoint,
         Hash, ALPN,
     };
 
@@ -920,13 +930,8 @@ mod tests {
     /// Serves a single get request for `hash`, where the client drops the
     /// response after the first item, and returns the provider error.
     async fn serve_one(store: &MemStore, hash: Hash) -> TestResult<AnyError> {
-        let bind = || {
-            Endpoint::builder(presets::Minimal)
-                .relay_mode(RelayMode::Disabled)
-                .alpns(vec![ALPN.to_vec()])
-                .bind()
-        };
-        let (server, client) = (bind().await?, bind().await?);
+        let (server, client) = (test_endpoint().await?, test_endpoint().await?);
+        server.set_alpns(vec![ALPN.to_vec()]);
         let addr = server.addr();
         let client_task = tokio::spawn(async move {
             let conn = client.connect(addr, ALPN).await?;

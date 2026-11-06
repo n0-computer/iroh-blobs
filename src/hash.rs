@@ -21,6 +21,9 @@ impl fmt::Debug for Hash {
 
 impl Hash {
     /// The hash for the empty byte range (`b""`).
+    ///
+    /// Every store has the empty blob, whether or not it was ever added. See
+    /// [`crate::api::proto`] for how this works.
     pub const EMPTY: Hash = Hash::from_bytes([
         175, 19, 73, 185, 245, 249, 161, 166, 160, 64, 77, 234, 54, 220, 201, 73, 155, 203, 37,
         201, 173, 193, 18, 183, 204, 154, 147, 202, 228, 31, 50, 98,

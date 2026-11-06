@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="300" viewBox="0 0 560 300" style="max-width: 100%; height: auto" font-family="sans-serif" font-size="13" fill="none" stroke="currentColor" role="img" aria-label="State machine of a listing">
+  <!--
+    State machine of the listings ListBlobsItem, ListTagsItem and
+    ListTempTagsItem, included in the rustdoc of ListBlobsItem in
+    src/api/proto.rs. It must match ListBlobsRules and TagListRules in
+    src/api/proto/rules.rs, update them together.
+    Conventions, since this is inlined into a markdown doc comment:
+    - no blank lines, they would end the html block
+    - only currentColor, so it works in the light and dark rustdoc themes
+    - ids are unique on the page, so they are prefixed with list
+    Item labels are monospace, the close of the stream is in the normal font.
+    Labels use the ListBlobsItem variants, the tag listings have Tag for Hash.
+    To check a change, render it in both themes and look at the result:
+      rsvg-convert -w 1120 -b white list.svg -o light.png
+      rsvg-convert -w 1120 -b '#353535' -s dark.css list.svg -o dark.png
+    where dark.css contains: svg { color: #ddd; }
+  -->
+  <defs>
+    <marker id="list-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor" stroke="none"/>
+    </marker>
+  </defs>
+  <g id="list-listing" transform="translate(50 105)">
+    <rect width="140" height="50" rx="8"/>
+    <path d="M50,0 C45,-40 95,-40 90,-2" marker-end="url(#list-arrow)"/>
+    <g fill="currentColor" stroke="none" text-anchor="middle">
+      <text x="70" y="21">listing</text>
+      <text x="70" y="39" font-size="11">zero or more items</text>
+      <text x="70" y="-45" font-family="monospace" font-size="12">Hash</text>
+    </g>
+  </g>
+  <g id="list-complete" transform="translate(390 108)">
+    <rect width="140" height="44" rx="22" stroke-width="2.5"/>
+    <text x="70" y="27" fill="currentColor" stroke="none" text-anchor="middle">complete</text>
+  </g>
+  <g id="list-failed" transform="translate(390 220)">
+    <rect width="140" height="44" rx="22" stroke-width="2.5"/>
+    <text x="70" y="27" fill="currentColor" stroke="none" text-anchor="middle">failed</text>
+  </g>
+  <g fill="currentColor" stroke="none" font-family="monospace" font-size="12" text-anchor="middle">
+    <circle cx="18" cy="130" r="6"/>
+    <path d="M24,130 H48" fill="none" stroke="currentColor" marker-end="url(#list-arrow)"/>
+    <path d="M190,130 H388" fill="none" stroke="currentColor" marker-end="url(#list-arrow)"/>
+    <text x="290" y="122">Done</text>
+    <path d="M190,145 C280,145 305,232 388,232" fill="none" stroke="currentColor" marker-end="url(#list-arrow)"/>
+    <text x="307" y="183">Error</text>
+    <path d="M120,155 C120,254 220,254 388,254" fill="none" stroke="currentColor" marker-end="url(#list-arrow)"/>
+    <text x="300" y="272" font-family="sans-serif" font-size="11">closed</text>
+  </g>
+</svg>

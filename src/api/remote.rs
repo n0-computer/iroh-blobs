@@ -597,8 +597,6 @@ impl Remote {
             payload_bytes_sent: 0,
             sender: progress,
         };
-        // we are not going to need this!
-        recv.stop(0u32.into()).anyerr()?;
         // write the request. Unlike for reading, we can just serialize it sync using postcard.
         let request = write_push_request(request, &mut send).await?;
         let mut request_ranges = request.ranges.iter_infinite();
@@ -613,6 +611,7 @@ impl Remote {
         if request.ranges.is_blob() {
             // we are done
             send.finish().anyerr()?;
+            push_outcome(&mut recv).await?;
             return Ok(Default::default());
         }
         let mut hash_seq = LazyHashSeq::new(self.store().blobs().clone(), root);
@@ -629,6 +628,7 @@ impl Remote {
                 .await?;
         }
         send.finish().anyerr()?;
+        push_outcome(&mut recv).await?;
         Ok(Default::default())
     }
 
@@ -972,6 +972,16 @@ impl HashSeqChunk {
     pub fn base(&self) -> u64 {
         self.offset / 32
     }
+}
+
+/// Waits for the provider to end its half of a push stream.
+///
+/// The provider sends no data on it. It finishes its half once the pushed data
+/// is stored, and resets it with an error code if it rejects the request or
+/// fails to store the data.
+async fn push_outcome(recv: &mut iroh::endpoint::RecvStream) -> Result<()> {
+    recv.read_to_end(0).await.std_context("push failed")?;
+    Ok(())
 }
 
 async fn write_push_request(

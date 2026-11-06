@@ -63,7 +63,7 @@ impl Deref for ReadonlyMemStore {
 
 impl From<ReadonlyMemStore> for crate::api::Store {
     fn from(value: ReadonlyMemStore) -> Self {
-        crate::api::Store::from_sender(value.client)
+        crate::api::Store::from_client(value.client)
     }
 }
 
@@ -94,6 +94,7 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) -> Option<irpc::channel::oneshot::Sender<()>> {
+        debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
             Command::ImportBao(ImportBaoMsg { tx, .. }) => {
                 tx.send(Err(unsupported("import not supported").into()))
@@ -147,6 +148,9 @@ impl Actor {
                 let entry = self.data.get(&hash).cloned();
                 self.tasks.spawn(export_bao(hash, entry, ranges, tx));
             }
+            Command::ExportPath(cmd) if cmd.hash == Hash::EMPTY => {
+                self.tasks.spawn(super::util::export_empty(cmd));
+            }
             Command::ExportPath(ExportPathMsg {
                 inner: ExportPathRequest { hash, target, .. },
                 tx,
@@ -190,8 +194,11 @@ impl Actor {
                 let hashes: Vec<Hash> = self.data.keys().cloned().collect();
                 self.tasks.spawn(async move {
                     for hash in hashes {
-                        cmd.tx.send(Ok(hash)).await.ok();
+                        if cmd.tx.send(proto::ListBlobsItem::Hash(hash)).await.is_err() {
+                            return;
+                        }
                     }
+                    cmd.tx.send(proto::ListBlobsItem::Done).await.ok();
                 });
             }
             Command::BlobStatus(cmd) => {
@@ -207,7 +214,7 @@ impl Actor {
                 cmd.tx.send(status).await.ok();
             }
             Command::ListTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.send(proto::ListTagsItem::Done).await.ok();
             }
             Command::SetTag(cmd) => {
                 cmd.tx
@@ -216,7 +223,7 @@ impl Actor {
                     .ok();
             }
             Command::ListTempTags(cmd) => {
-                cmd.tx.send(Vec::new()).await.ok();
+                cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
             }
             Command::SyncDb(cmd) => {
                 cmd.tx.send(Ok(())).await.ok();
@@ -369,6 +376,9 @@ impl ReadonlyMemStore {
     pub fn new(items: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
         let mut entries = HashMap::new();
         for item in items {
+            if item.as_ref().is_empty() {
+                continue;
+            }
             let data = Bytes::copy_from_slice(item.as_ref());
             let (hash, entry) = CompleteStorage::create(data);
             entries.insert(hash, entry);

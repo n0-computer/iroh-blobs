@@ -2,10 +2,7 @@ use std::{collections::HashSet, io, ops::Range, path::PathBuf};
 
 use bao_tree::ChunkRanges;
 use bytes::Bytes;
-use iroh::{
-    address_lookup::MemoryLookup, endpoint::presets, protocol::Router, Endpoint, EndpointId,
-    RelayMode,
-};
+use iroh::{address_lookup::MemoryLookup, protocol::Router, EndpointId};
 use irpc::RpcMessage;
 use n0_future::{task::AbortOnDropHandle, StreamExt};
 use n0_tracing_test::traced_test;
@@ -34,6 +31,7 @@ use crate::{
         mem::MemStore,
         util::{observer::Combine, tests::create_n0_bao},
     },
+    test_net::test_endpoint,
     util::sink::Drain,
     BlobFormat, Hash, HashAndFormat,
 };
@@ -370,18 +368,51 @@ async fn two_nodes_observe(
     Ok(())
 }
 
+/// Events for a provider that allows observe requests, which are disabled by default.
+fn observe_enabled() -> EventSender {
+    EventSender::tracing()
+}
+
 #[tokio::test]
 #[traced_test]
 async fn two_nodes_observe_fs() -> TestResult<()> {
-    let (_testdir, (r1, store1, _), (r2, store2, _)) = two_node_test_setup_fs().await?;
+    let testdir = tempfile::tempdir()?;
+    let (r1, store1, _, sp1) =
+        node_test_setup_with_events_fs(testdir.path().join("a"), observe_enabled()).await?;
+    let (r2, store2, _, sp2) = node_test_setup_fs(testdir.path().join("b")).await?;
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_observe(r1, &store1, r2, &store2).await
 }
 
 #[tokio::test]
 #[traced_test]
 async fn two_nodes_observe_mem() -> TestResult<()> {
-    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    let (r1, store1, sp1) = node_test_setup_with_events_mem(observe_enabled()).await?;
+    let (r2, store2, sp2) = node_test_setup_mem().await?;
+    sp1.add_endpoint_info(r2.endpoint().addr());
+    sp2.add_endpoint_info(r1.endpoint().addr());
     two_nodes_observe(r1, &store1, r2, &store2).await
+}
+
+/// Observe requests must be rejected with the default event mask.
+#[tokio::test]
+#[traced_test]
+async fn two_nodes_observe_disabled_by_default() -> TestResult<()> {
+    let ((r1, store1), (r2, store2)) = two_node_test_setup_mem().await?;
+    let hash = store1.add_bytes(test_data(1024)).await?.hash;
+    let conn = r2
+        .endpoint()
+        .connect(r1.endpoint().addr(), crate::ALPN)
+        .await?;
+    let mut stream = store2.remote().observe(conn, ObserveRequest::new(hash));
+    let item = stream.next().await;
+    assert!(
+        matches!(item, Some(Err(_))),
+        "observe request was not rejected: {item:?}"
+    );
+    tokio::try_join!(r1.shutdown(), r2.shutdown())?;
+    Ok(())
 }
 
 async fn two_nodes_get_many(
@@ -490,9 +521,10 @@ async fn two_nodes_push_blobs(
                 Drain,
             )
             .await?;
-        count_rx.changed().await?;
+        // a successful push returns once the data is stored on the target
         let actual = store2.get_bytes(hash).await?;
         assert_eq!(actual, test_data(size));
+        count_rx.changed().await?;
     }
     tokio::try_join!(r1.shutdown(), r2.shutdown())?;
     Ok(())
@@ -511,10 +543,8 @@ async fn two_nodes_push_blobs_fs() -> TestResult<()> {
     two_nodes_push_blobs(r1, &store1, r2, &store2, count_rx).await
 }
 
-/// Push a blob from `r1` to `r2` and check that it does not end up in `store2`.
-///
-/// The pushing side currently does not learn whether the request was rejected,
-/// so we wait a bounded time for the blob to show up on the receiving side.
+/// Push a blob from `r1` to `r2` and check that the push fails and the blob
+/// does not end up in `store2`.
 async fn two_nodes_push_rejected(
     r1: Router,
     store1: &Store,
@@ -527,19 +557,15 @@ async fn two_nodes_push_rejected(
         .endpoint()
         .connect(r2.endpoint().addr(), crate::ALPN)
         .await?;
-    // keep `conn` alive, so a wrongly accepted push is not cut short
-    store1
+    let res = store1
         .remote()
         .execute_push_sink(
             conn.clone(),
             PushRequest::new(hash, ChunkRangesSeq::root()),
             Drain,
         )
-        .await
-        .ok();
-    // Wait a bit for a wrongly accepted push to land. We don't use `observe`
-    // here because that would create an empty entry in the store.
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        .await;
+    assert!(res.is_err(), "push was not rejected");
     let status = store2.blobs().status(hash).await?;
     assert!(
         matches!(status, BlobStatus::NotFound),
@@ -563,7 +589,7 @@ async fn two_nodes_push_rejected_default() -> TestResult<()> {
 #[traced_test]
 async fn two_nodes_push_rejected_readonly() -> TestResult<()> {
     let (r1, store1, sp1) = node_test_setup_mem().await?;
-    let events = EventSender::DEFAULT.tracing(EventMask::ALL_READONLY);
+    let events = EventSender::tracing();
     let (r2, store2, sp2) = node_test_setup_with_events_mem(events).await?;
     sp1.add_endpoint_info(r2.endpoint().addr());
     sp2.add_endpoint_info(r1.endpoint().addr());
@@ -651,11 +677,8 @@ pub async fn node_test_setup_with_events_fs(
 ) -> TestResult<(Router, FsStore, PathBuf, MemoryLookup)> {
     let store = crate::store::fs::FsStore::load(&db_path).await?;
     let sp = MemoryLookup::new();
-    let ep = Endpoint::builder(presets::Minimal)
-        .relay_mode(RelayMode::Default)
-        .address_lookup(sp.clone())
-        .bind()
-        .await?;
+    let ep = test_endpoint().await?;
+    ep.address_lookup()?.add(sp.clone());
     let blobs = BlobsProtocol::new(&store, Some(events));
     let router = Router::builder(ep).accept(crate::ALPN, blobs).spawn();
     Ok((router, store, db_path, sp))
@@ -670,19 +693,20 @@ pub async fn node_test_setup_with_events_mem(
 ) -> TestResult<(Router, MemStore, MemoryLookup)> {
     let store = MemStore::new();
     let sp = MemoryLookup::new();
-    let ep = Endpoint::builder(presets::Minimal)
-        .relay_mode(RelayMode::Default)
-        .address_lookup(sp.clone())
-        .bind()
-        .await?;
+    let ep = test_endpoint().await?;
+    ep.address_lookup()?.add(sp.clone());
     let blobs = BlobsProtocol::new(&store, Some(events));
     let router = Router::builder(ep).accept(crate::ALPN, blobs).spawn();
     Ok((router, store, sp))
 }
 
-/// The empty blob is always complete, and `status`/`has` must agree with
-/// `observe`/`export_bao` on every backend.
-async fn empty_hash_is_complete(store: &Store) -> TestResult<()> {
+/// The empty blob is always complete, whether or not it was ever added.
+///
+/// The client answers reads without asking the store. File exports reach the
+/// store, but neither exports nor imports create an entry for the empty hash.
+async fn empty_hash_is_complete(store: &Store, dir: &std::path::Path) -> TestResult<()> {
+    use tokio::io::AsyncReadExt;
+
     use crate::api::blobs::BlobStatus;
     let status = store.blobs().status(Hash::EMPTY).await?;
     assert_eq!(status, BlobStatus::Complete { size: 0 });
@@ -695,20 +719,150 @@ async fn empty_hash_is_complete(store: &Store) -> TestResult<()> {
         .data_to_bytes()
         .await?;
     assert!(exported.is_empty());
+    let bao = store
+        .export_bao(Hash::EMPTY, ChunkRanges::all())
+        .bao_to_vec()
+        .await?;
+    assert_eq!(bao, 0u64.to_le_bytes());
+    let ranges = store
+        .export_ranges(Hash::EMPTY, 0..u64::MAX)
+        .concatenate()
+        .await?;
+    assert!(ranges.is_empty());
+    let mut read = Vec::new();
+    store
+        .blobs()
+        .reader(Hash::EMPTY)
+        .read_to_end(&mut read)
+        .await?;
+    assert!(read.is_empty());
+    let target = dir.join("export").join("empty");
+    assert_eq!(store.blobs().export(Hash::EMPTY, &target).await?, 0);
+    assert_eq!(std::fs::read(&target)?, b"");
+    let list = store.blobs().list().hashes().await?;
+    assert_eq!(list, vec![Hash::EMPTY]);
+    store.blobs().delete([Hash::EMPTY]).await?;
+    assert!(store.blobs().has(Hash::EMPTY).await?);
+    // adding it does not change any of this, and it is listed once
+    let tt = store.add_slice(b"").temp_tag().await?;
+    assert_eq!(tt.hash(), Hash::EMPTY);
+    let source = dir.join("empty-source");
+    std::fs::write(&source, b"")?;
+    let tt = store.add_path(&source).temp_tag().await?;
+    assert_eq!(tt.hash(), Hash::EMPTY);
+    let tt = store
+        .add_stream(n0_future::stream::empty())
+        .await
+        .temp_tag()
+        .await?;
+    assert_eq!(tt.hash(), Hash::EMPTY);
+    let list = store.blobs().list().hashes().await?;
+    assert_eq!(list, vec![Hash::EMPTY]);
+    // the store itself did not create an entry for it
+    let mut rx = store
+        .client()
+        .server_streaming(crate::api::proto::ListRequest, 32)
+        .await?;
+    assert!(matches!(
+        rx.recv().await?,
+        Some(crate::api::proto::ListBlobsItem::Done)
+    ));
     Ok(())
 }
 
 #[tokio::test]
 async fn empty_hash_is_complete_mem() -> TestResult<()> {
+    let testdir = tempfile::tempdir()?;
     let store = MemStore::new();
-    empty_hash_is_complete(&store).await
+    empty_hash_is_complete(&store, testdir.path()).await
 }
 
 #[tokio::test]
 async fn empty_hash_is_complete_fs() -> TestResult<()> {
     let testdir = tempfile::tempdir()?;
     let store = FsStore::load(testdir.path().join("db")).await?;
-    empty_hash_is_complete(&store).await
+    empty_hash_is_complete(&store, testdir.path()).await
+}
+
+/// Even an empty export must reach the store and respect its response, rather
+/// than creating or truncating a file on the client filesystem.
+#[tokio::test]
+async fn empty_export_reaches_store() -> TestResult<()> {
+    use crate::api::proto::{Command, ExportProgressItem};
+
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("keep");
+    std::fs::write(&target, b"keep me")?;
+    let (tx, mut rx) = mpsc::channel(1);
+    let store = Store::from_client(tx);
+    let export = async { store.blobs().export(Hash::EMPTY, &target).await };
+    tokio::pin!(export);
+    let cmd = tokio::select! {
+        cmd = rx.recv() => cmd.unwrap(),
+        result = &mut export => panic!("export did not reach the store: {result:?}"),
+    };
+    let Command::ExportPath(cmd) = cmd else {
+        panic!("expected a file export");
+    };
+    assert_eq!(cmd.hash, Hash::EMPTY);
+    assert_eq!(cmd.target, target);
+    cmd.tx
+        .send(ExportProgressItem::Error(crate::api::Error::io(
+            io::ErrorKind::PermissionDenied,
+            "export denied by store",
+        )))
+        .await?;
+    assert!(export.await.is_err());
+    assert_eq!(std::fs::read(&target)?, b"keep me");
+    Ok(())
+}
+
+/// An export whose store drops the sender without [`Done`] fails instead of
+/// waiting forever.
+///
+/// [`Done`]: crate::api::proto::ExportProgressItem::Done
+#[tokio::test]
+async fn export_ended_early_fails() -> TestResult<()> {
+    use crate::api::proto::{Command, ExportProgressItem};
+
+    let dir = tempfile::tempdir()?;
+    let (tx, mut rx) = mpsc::channel(1);
+    let store = Store::from_client(tx);
+    let export = store
+        .blobs()
+        .export(Hash::new(b"a"), dir.path().join("a"))
+        .finish();
+    let store_side = async {
+        let Some(Command::ExportPath(cmd)) = rx.recv().await else {
+            panic!("expected a file export");
+        };
+        cmd.tx.send(ExportProgressItem::Size(1)).await.ok();
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(export, store_side)
+    })
+    .await?;
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_hash_readonly_mem() -> TestResult<()> {
+    let store = crate::store::readonly_mem::ReadonlyMemStore::new([b"".as_slice()]);
+    assert_eq!(store.blobs().list().hashes().await?, vec![Hash::EMPTY]);
+    let mut rx = store
+        .client()
+        .server_streaming(crate::api::proto::ListRequest, 32)
+        .await?;
+    assert!(matches!(
+        rx.recv().await?,
+        Some(crate::api::proto::ListBlobsItem::Done)
+    ));
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("nested").join("empty");
+    assert_eq!(store.blobs().export(Hash::EMPTY, &target).await?, 0);
+    assert_eq!(std::fs::read(target)?, b"");
+    Ok(())
 }
 
 /// Sets up two nodes with a router and a blob store each.
@@ -801,14 +955,14 @@ async fn node_serve_hash_seq() -> TestResult<()> {
     let hash_seq = tts.iter().map(|x| x.hash).collect::<HashSeq>();
     let root_tt = store.add_bytes(hash_seq).await?;
     let root = root_tt.hash;
-    let endpoint = Endpoint::bind(presets::N0).await?;
+    let endpoint = test_endpoint().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
     let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::bind(presets::N0).await?;
+    let endpoint2 = test_endpoint().await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     let (hs, sizes) = get::request::get_hash_seq_and_sizes(&conn, &root, 1024, None).await?;
     println!("hash seq: {hs:?}");
@@ -833,14 +987,14 @@ async fn node_serve_blobs() -> TestResult<()> {
     for size in sizes {
         tts.push(store.add_bytes(test_data(size)).await?);
     }
-    let endpoint = Endpoint::bind(presets::N0).await?;
+    let endpoint = test_endpoint().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(&store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
     let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::bind(presets::N0).await?;
+    let endpoint2 = test_endpoint().await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     for size in sizes {
         let expected = test_data(size);
@@ -874,14 +1028,14 @@ async fn node_smoke_mem() -> TestResult<()> {
 async fn node_smoke(store: &Store) -> TestResult<()> {
     let tt = store.add_bytes(b"hello world".to_vec()).temp_tag().await?;
     let hash = tt.hash();
-    let endpoint = Endpoint::bind(presets::N0).await?;
+    let endpoint = test_endpoint().await?;
     let blobs = crate::net_protocol::BlobsProtocol::new(store, None);
     let r1 = Router::builder(endpoint)
         .accept(crate::protocol::ALPN, blobs)
         .spawn();
     let addr1 = r1.endpoint().addr();
     info!("node addr: {addr1:?}");
-    let endpoint2 = Endpoint::bind(presets::N0).await?;
+    let endpoint2 = test_endpoint().await?;
     let conn = endpoint2.connect(addr1, crate::protocol::ALPN).await?;
     let (size, stats) = get::request::get_unverified_size(&conn, &hash).await?;
     info!("size: {} stats: {:?}", size, stats);

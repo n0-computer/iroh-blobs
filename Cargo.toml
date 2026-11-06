@@ -1,6 +1,6 @@
 [package]
 name = "iroh-blobs"
-version = "0.104.0"
+version = "0.104.1"
 edition = "2021"
 description = "content-addressed blobs for iroh"
 license = "MIT OR Apache-2.0"
@@ -68,7 +68,7 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
 n0-tracing-test = "0.3"
 walkdir = "2.5.0"
 atomic_refcell = "0.1.13"
-iroh = { version = "1.0.0" }
+iroh = { version = "1.0.0", features = ["test-utils"] }
 iroh-mdns-address-lookup = "0.6.0"
 async-compression = { version = "0.4.30", features = ["lz4", "tokio"] }
 concat_const = "0.2.0"
@@ -90,6 +90,8 @@ metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
 fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs", "tokio/rt-multi-thread"]
 rpc = ["dep:noq", "irpc/rpc", "irpc/noq_endpoint_setup"]
+# Unstable: utility APIs that are not covered by semver guarantees (may change without notice)
+unstable-util = []
 
 [[example]]
 name = "expiring-tags"
@@ -97,7 +99,7 @@ required-features = ["fs-store"]
 
 [[example]]
 name = "random_store"
-required-features = ["fs-store"]
+required-features = ["fs-store", "unstable-util"]
 
 [patch.crates-io]
 irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
