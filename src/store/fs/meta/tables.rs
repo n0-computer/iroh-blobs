@@ -1,6 +1,4 @@
 //! Table definitions and accessors for the redb database.
-use std::collections::HashSet;
-
 use redb::{ReadableTable, TableDefinition, TableError};
 
 use super::EntryState;
@@ -33,8 +31,6 @@ pub(super) struct Tables<'a> {
     pub tags: redb::Table<'a, Tag, HashAndFormat>,
     pub inline_data: redb::Table<'a, Hash, &'static [u8]>,
     pub inline_outboard: redb::Table<'a, Hash, &'static [u8]>,
-    /// Hashes whose entry was written or removed in this transaction.
-    pub written: HashSet<Hash>,
 }
 
 impl<'txn> Tables<'txn> {
@@ -44,7 +40,6 @@ impl<'txn> Tables<'txn> {
             tags: tx.open_table(TAGS_TABLE)?,
             inline_data: tx.open_table(INLINE_DATA_TABLE)?,
             inline_outboard: tx.open_table(INLINE_OUTBOARD_TABLE)?,
-            written: HashSet::new(),
         })
     }
 }

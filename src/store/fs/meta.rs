@@ -446,15 +446,14 @@ async fn list_tags_impl(
 
 fn handle_update(
     cmd: Update,
-    protected: &mut HashSet<Hash>,
+    bookkeeping: &mut Bookkeeping,
     tables: &mut Tables,
 ) -> ActorResult<()> {
     trace!("{cmd:?}");
     let Update {
         hash, state, tx, ..
     } = cmd;
-    protected.insert(hash);
-    tables.written.insert(hash);
+    bookkeeping.written(hash);
     trace!("updating hash {} to {}", hash.to_hex(), state.fmt_short());
     let old_entry_opt = tables.blobs.get(hash)?.map(|e| e.value());
     let (state, data, outboard): (_, Option<Bytes>, Option<Bytes>) = match state {
@@ -501,12 +500,12 @@ fn handle_update(
     Ok(())
 }
 
-fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> ActorResult<()> {
+fn handle_set(cmd: Set, bookkeeping: &mut Bookkeeping, tables: &mut Tables) -> ActorResult<()> {
     trace!("{cmd:?}");
     let Set {
         state, hash, tx, ..
     } = cmd;
-    protected.insert(hash);
+    bookkeeping.written(hash);
     let (state, data, outboard): (_, Option<Bytes>, Option<Bytes>) = match state {
         EntryState::Complete {
             data_location,
@@ -525,7 +524,6 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    tables.written.insert(hash);
     tables
         .blobs
         .insert(hash, &state)
@@ -546,31 +544,52 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     Ok(())
 }
 
-/// Decide which owned files to delete after a batch.
-///
-/// A candidate whose entity is live at the end of the batch is parked, since the
-/// entity may have written files the metadata does not reference yet. All others
-/// lose the owned files their state at the end of the batch does not reference.
-/// This may name files that do not exist.
-fn plan_file_deletes(
-    tables: &impl ReadableTables,
-    candidates: impl IntoIterator<Item = Hash>,
-    live: &LiveEntities,
-    parked: &mut HashSet<Hash>,
-) -> ActorResult<Vec<(Hash, Vec<BaoFilePart>)>> {
-    let mut res = Vec::new();
-    for hash in candidates {
-        if live.is_live(&hash) {
-            parked.insert(hash);
-            continue;
-        }
-        let state = tables.blobs().get(hash)?.map(|e| e.value());
-        let parts = unreferenced_parts(state.as_ref());
-        if !parts.is_empty() {
-            res.push((hash, parts));
-        }
+/// In-memory bookkeeping of the metadata actor, next to the database.
+#[derive(Debug, Default)]
+struct Bookkeeping {
+    /// Hashes written since the last `ClearProtected`, which gc must not delete.
+    protected: HashSet<Hash>,
+    live: LiveEntities,
+    /// Hashes whose entry was written or removed in the current write batch.
+    written: HashSet<Hash>,
+    /// Hashes whose file deletes wait until their entity is no longer live.
+    parked: HashSet<Hash>,
+}
+
+impl Bookkeeping {
+    /// Note a write to the entry of a hash.
+    fn written(&mut self, hash: Hash) {
+        self.protected.insert(hash);
+        self.written.insert(hash);
     }
-    Ok(res)
+
+    /// Decide which owned files to delete after a batch.
+    ///
+    /// The candidates are the hashes written in the batch, and those parked
+    /// earlier. A candidate whose entity is live at the end of the batch is
+    /// parked, since the entity may have written files the metadata does not
+    /// reference yet. All others lose the owned files their state at the end of
+    /// the batch does not reference. This may name files that do not exist.
+    fn plan_file_deletes(
+        &mut self,
+        tables: &impl ReadableTables,
+    ) -> ActorResult<Vec<(Hash, Vec<BaoFilePart>)>> {
+        let mut candidates = std::mem::take(&mut self.parked);
+        candidates.extend(self.written.drain());
+        let mut res = Vec::new();
+        for hash in candidates {
+            if self.live.is_live(&hash) {
+                self.parked.insert(hash);
+                continue;
+            }
+            let state = tables.blobs().get(hash)?.map(|e| e.value());
+            let parts = unreferenced_parts(state.as_ref());
+            if !parts.is_empty() {
+                res.push((hash, parts));
+            }
+        }
+        Ok(res)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -596,10 +615,7 @@ pub struct Actor {
     cmds: PeekableReceiver<Command>,
     paths: Arc<PathOptions>,
     options: BatchOptions,
-    protected: HashSet<Hash>,
-    live: LiveEntities,
-    /// Hashes whose file deletes wait until their entity is no longer live.
-    parked: HashSet<Hash>,
+    state: Bookkeeping,
 }
 
 impl Actor {
@@ -630,15 +646,12 @@ impl Actor {
             cmds,
             paths,
             options,
-            protected: Default::default(),
-            live: Default::default(),
-            parked: Default::default(),
+            state: Default::default(),
         })
     }
 
     async fn handle_readonly(
-        protected: &mut HashSet<Hash>,
-        live: &mut LiveEntities,
+        state: &mut Bookkeeping,
         tables: &impl ReadableTables,
         cmd: ReadOnlyCommand,
         op: TxnNum,
@@ -652,23 +665,25 @@ impl Actor {
         match cmd {
             ReadOnlyCommand::Get(cmd) => {
                 if cmd.load {
-                    live.load(cmd.hash);
+                    state.live.load(cmd.hash);
                 }
                 handle_get(cmd, tables)
             }
             ReadOnlyCommand::Inactive(cmd) => {
                 trace!("{cmd:?}");
-                live.inactive(cmd.hash);
+                state.live.inactive(cmd.hash);
                 Ok(())
             }
             ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
-            ReadOnlyCommand::ClearProtected(cmd) => handle_clear_protected(cmd, protected).await,
+            ReadOnlyCommand::ClearProtected(cmd) => {
+                handle_clear_protected(cmd, &mut state.protected).await
+            }
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }
     }
 
     async fn delete(
-        protected: &mut HashSet<Hash>,
+        state: &mut Bookkeeping,
         tables: &mut Tables<'_>,
         cmd: DeleteBlobsMsg,
     ) -> ActorResult<()> {
@@ -677,14 +692,14 @@ impl Actor {
             ..
         } = cmd;
         for hash in hashes {
-            if !force && protected.contains(&hash) {
+            if !force && state.protected.contains(&hash) {
                 trace!("delete {hash}: skip (protected)");
                 continue;
             }
             if let Some(entry) = tables.blobs.remove(hash)? {
                 trace!("delete {hash}");
                 // owned files are deleted after commit, see plan_file_deletes
-                tables.written.insert(hash);
+                state.written.insert(hash);
                 if let EntryState::Complete {
                     data_location,
                     outboard_location,
@@ -782,7 +797,7 @@ impl Actor {
     }
 
     async fn handle_readwrite(
-        protected: &mut HashSet<Hash>,
+        state: &mut Bookkeeping,
         tables: &mut Tables<'_>,
         cmd: ReadWriteCommand,
         op: TxnNum,
@@ -794,9 +809,9 @@ impl Actor {
         );
         let _guard = span.enter();
         match cmd {
-            ReadWriteCommand::Update(cmd) => handle_update(cmd, protected, tables),
-            ReadWriteCommand::Set(cmd) => handle_set(cmd, protected, tables),
-            ReadWriteCommand::DeleteBlobw(cmd) => Self::delete(protected, tables, cmd).await,
+            ReadWriteCommand::Update(cmd) => handle_update(cmd, state, tables),
+            ReadWriteCommand::Set(cmd) => handle_set(cmd, state, tables),
+            ReadWriteCommand::DeleteBlobw(cmd) => Self::delete(state, tables, cmd).await,
             ReadWriteCommand::SetTag(cmd) => Self::set_tag(tables, cmd).await,
             ReadWriteCommand::CreateTag(cmd) => Self::create_tag(tables, cmd).await,
             ReadWriteCommand::DeleteTags(cmd) => Self::delete_tags(tables, cmd).await,
@@ -808,18 +823,17 @@ impl Actor {
     }
 
     async fn handle_non_toplevel(
-        protected: &mut HashSet<Hash>,
-        live: &mut LiveEntities,
+        state: &mut Bookkeeping,
         tables: &mut Tables<'_>,
         cmd: NonTopLevelCommand,
         op: TxnNum,
     ) -> ActorResult<()> {
         match cmd {
             NonTopLevelCommand::ReadOnly(cmd) => {
-                Self::handle_readonly(protected, live, tables, cmd, op).await
+                Self::handle_readonly(state, tables, cmd, op).await
             }
             NonTopLevelCommand::ReadWrite(cmd) => {
-                Self::handle_readwrite(protected, tables, cmd, op).await
+                Self::handle_readwrite(state, tables, cmd, op).await
             }
         }
     }
@@ -900,14 +914,7 @@ impl Actor {
                     let mut n = 0;
                     while let Some(cmd) = self.cmds.extract(Command::read_only, &mut timeout).await
                     {
-                        Self::handle_readonly(
-                            &mut self.protected,
-                            &mut self.live,
-                            &tables,
-                            cmd,
-                            op,
-                        )
-                        .await?;
+                        Self::handle_readonly(&mut self.state, &tables, cmd, op).await?;
                         n += 1;
                         if n >= options.max_read_batch {
                             break;
@@ -915,10 +922,8 @@ impl Actor {
                     }
                     // Everything is committed, so parked hashes whose entity is
                     // no longer live can be decided now.
-                    if !self.parked.is_empty() {
-                        let candidates = std::mem::take(&mut self.parked);
-                        let deletes =
-                            plan_file_deletes(&tables, candidates, &self.live, &mut self.parked)?;
+                    if !self.state.parked.is_empty() {
+                        let deletes = self.state.plan_file_deletes(&tables)?;
                         for (hash, parts) in deletes {
                             delete_files(&self.paths, &hash, &parts);
                         }
@@ -939,23 +944,13 @@ impl Actor {
                         .extract(Command::non_top_level, &mut timeout)
                         .await
                     {
-                        Self::handle_non_toplevel(
-                            &mut self.protected,
-                            &mut self.live,
-                            &mut tables,
-                            cmd,
-                            op,
-                        )
-                        .await?;
+                        Self::handle_non_toplevel(&mut self.state, &mut tables, cmd, op).await?;
                         n += 1;
                         if n >= options.max_write_batch {
                             break;
                         }
                     }
-                    let mut candidates = std::mem::take(&mut self.parked);
-                    candidates.extend(tables.written.iter().copied());
-                    let deletes =
-                        plan_file_deletes(&tables, candidates, &self.live, &mut self.parked)?;
+                    let deletes = self.state.plan_file_deletes(&tables)?;
                     drop(tables);
                     tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
                     // Delete only after the commit, and before handling the next
@@ -1110,17 +1105,14 @@ mod tests {
     /// Run one write batch the way the actor does, including the file deletes.
     fn write_batch(
         db: &Database,
-        live: &LiveEntities,
-        parked: &mut HashSet<Hash>,
+        state: &mut Bookkeeping,
         paths: &PathOptions,
-        f: impl FnOnce(&mut Tables) -> testresult::TestResult<()>,
+        f: impl FnOnce(&mut Tables, &mut Bookkeeping) -> testresult::TestResult<()>,
     ) -> testresult::TestResult<()> {
         let tx = db.begin_write()?;
         let mut tables = Tables::new(&tx)?;
-        f(&mut tables)?;
-        let mut candidates = std::mem::take(parked);
-        candidates.extend(tables.written.iter().copied());
-        let deletes = plan_file_deletes(&tables, candidates, live, parked)?;
+        f(&mut tables, state)?;
+        let deletes = state.plan_file_deletes(&tables)?;
         drop(tables);
         tx.commit()?;
         for (hash, parts) in deletes {
@@ -1136,9 +1128,8 @@ mod tests {
         let owned = paths.data_path(&hash);
         let external = dir.path().join("exported");
         std::fs::write(&owned, b"content")?;
-        let live = LiveEntities::default();
-        let mut parked = HashSet::new();
-        write_batch(&db, &live, &mut parked, &paths, |tables| {
+        let mut state = Bookkeeping::default();
+        write_batch(&db, &mut state, &paths, |tables, state| {
             tables.blobs.insert(
                 hash,
                 EntryState::Complete {
@@ -1149,7 +1140,6 @@ mod tests {
             // Export queues Set; another import writes before the db handles it.
             std::fs::rename(&owned, &external)?;
             std::fs::write(&owned, b"content")?;
-            let mut protected = HashSet::new();
             let (reply, _rx) = oneshot::channel();
             handle_set(
                 Set {
@@ -1161,7 +1151,7 @@ mod tests {
                     tx: reply,
                     span: Span::none(),
                 },
-                &mut protected,
+                state,
                 tables,
             )?;
             handle_update(
@@ -1174,7 +1164,7 @@ mod tests {
                     tx: None,
                     span: Span::none(),
                 },
-                &mut protected,
+                state,
                 tables,
             )?;
             Ok(())
@@ -1196,32 +1186,31 @@ mod tests {
             paths.sizes_path(&hash),
             paths.bitfield_path(&hash),
         ];
-        let mut live = LiveEntities::default();
-        let mut parked = HashSet::new();
+        let mut state = Bookkeeping::default();
         // An entity loads the hash and writes its partial files.
-        live.load(hash);
+        state.live.load(hash);
         for file in &files {
             std::fs::write(file, b"x")?;
         }
         // The entry is removed while the entity is live.
-        write_batch(&db, &live, &mut parked, &paths, |tables| {
+        write_batch(&db, &mut state, &paths, |tables, state| {
             tables
                 .blobs
                 .insert(hash, EntryState::Partial { size: None })?;
             tables.blobs.remove(hash)?;
-            tables.written.insert(hash);
+            state.written(hash);
             Ok(())
         })?;
         assert!(files.iter().all(|f| f.exists()), "entity is live");
-        assert!(parked.contains(&hash));
+        assert!(state.parked.contains(&hash));
         // Once the entity is inactive, the next batch decides by the committed state.
-        live.inactive(hash);
-        write_batch(&db, &live, &mut parked, &paths, |_| Ok(()))?;
+        state.live.inactive(hash);
+        write_batch(&db, &mut state, &paths, |_, _| Ok(()))?;
         assert!(
             files.iter().all(|f| !f.exists()),
             "no entry, no live entity"
         );
-        assert!(parked.is_empty());
+        assert!(state.parked.is_empty());
         Ok(())
     }
 }
