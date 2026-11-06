@@ -98,7 +98,6 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use bytes::Bytes;
 use delete_set::{BaoFilePart, ProtectHandle};
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
@@ -295,7 +294,7 @@ impl SyncEntityApi for HashContext {
             Action::Load => {
                 // we must assign a new state even in the error case, otherwise
                 // tasks waiting for loading would stall!
-                let state = match self.get_entry_state().await {
+                let state = match self.meta().get().await {
                     Ok(state) => match BaoFileStorage::open(state, self).await {
                         Ok(handle) => handle,
                         Err(cause) => {
@@ -340,7 +339,7 @@ impl SyncEntityApi for HashContext {
             true
         });
         if let Some(update) = res? {
-            self.update(update).await?;
+            self.meta().update(update).await?;
         }
         Ok(())
     }
@@ -402,8 +401,9 @@ impl HashContext {
         })
     }
 
-    fn db(&self) -> &meta::Db {
-        &self.global.db
+    /// The metadata of this entry.
+    pub fn meta(&self) -> meta::EntryMeta<'_> {
+        self.global.db.entry(self.id)
     }
 
     pub fn options(&self) -> &Arc<Options> {
@@ -412,26 +412,6 @@ impl HashContext {
 
     pub fn protect(&self, parts: impl IntoIterator<Item = BaoFilePart>) {
         self.global.protect.protect(self.id, parts);
-    }
-
-    /// Update the entry state in the database, and wait for completion.
-    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().update_await(self.id, state).await?;
-        Ok(())
-    }
-
-    /// Update the entry state in the database, without waiting for completion.
-    pub async fn update(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().update(self.id, state).await
-    }
-
-    pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        self.db().get(self.id).await
-    }
-
-    /// Update the entry state in the database, and wait for completion.
-    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().set(self.id, state).await
     }
 }
 
@@ -1169,7 +1149,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         data_location,
         outboard_location,
     };
-    ctx.update_await(state).await?;
+    ctx.meta().update_await(state).await?;
     Ok(())
 }
 
@@ -1289,7 +1269,7 @@ async fn export_path_impl(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    let state = ctx.get_entry_state().await?;
+    let state = ctx.meta().get().await?;
     let (data_location, outboard_location) = match state {
         Some(EntryState::Complete {
             data_location,
@@ -1374,11 +1354,12 @@ async fn export_path_impl(
                     external.push(target);
                 };
                 // setting the new entry state will also take care of deleting the owned data file!
-                ctx.set(EntryState::Complete {
-                    data_location: DataLocation::External(external, size),
-                    outboard_location,
-                })
-                .await?;
+                ctx.meta()
+                    .set(EntryState::Complete {
+                        data_location: DataLocation::External(external, size),
+                        outboard_location,
+                    })
+                    .await?;
             }
         },
     }
@@ -1589,6 +1570,7 @@ pub mod tests {
     };
 
     use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
+    use bytes::Bytes;
     use n0_future::{stream, Stream, StreamExt};
     use n0_tracing_test::traced_test;
     use testresult::TestResult;

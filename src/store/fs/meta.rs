@@ -190,6 +190,11 @@ impl Db {
         Ok(res.state?)
     }
 
+    /// A view of this database scoped to a single entry.
+    pub fn entry(&self, hash: Hash) -> EntryMeta<'_> {
+        EntryMeta { db: self, hash }
+    }
+
     /// Send a command. This exists so the main actor can directly forward commands.
     ///
     /// This will fail only if the database actor is dead. In that case the main
@@ -200,6 +205,37 @@ impl Db {
             .await
             .map_err(|_e| io::Error::other("actor down"))?;
         Ok(())
+    }
+}
+
+/// The metadata of a single entry.
+///
+/// This is all an entity gets to see of the database.
+#[derive(Debug, Clone, Copy)]
+pub struct EntryMeta<'a> {
+    db: &'a Db,
+    hash: Hash,
+}
+
+impl EntryMeta<'_> {
+    /// Get the entry state.
+    pub async fn get(&self) -> io::Result<Option<EntryState<Bytes>>> {
+        self.db.get(self.hash).await
+    }
+
+    /// Replace the entry state, and wait for completion.
+    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db.set(self.hash, state).await
+    }
+
+    /// Merge into the entry state, without waiting for completion.
+    pub async fn update(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db.update(self.hash, state).await
+    }
+
+    /// Merge into the entry state, and wait for completion.
+    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db.update_await(self.hash, state).await
     }
 }
 

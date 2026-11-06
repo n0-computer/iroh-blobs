@@ -647,7 +647,7 @@ impl BaoFileStorage {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
             debug!("File was reconstructed as complete");
-            ctx.set(entry_state).await?;
+            ctx.meta().set(entry_state).await?;
             storage.into()
         } else {
             storage.into()
