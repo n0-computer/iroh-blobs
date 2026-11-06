@@ -22,6 +22,8 @@ use crate::{
 /// of the inline data and inline outboard tables if necessary.
 pub struct Get {
     pub hash: Hash,
+    /// Whether this is the load of a newly live entity, which marks the hash live.
+    pub load: bool,
     pub tx: oneshot::Sender<GetResult>,
     pub span: Span,
 }
@@ -32,6 +34,15 @@ impl fmt::Debug for Get {
             .field("hash", &DD(self.hash.to_hex()))
             .finish_non_exhaustive()
     }
+}
+
+/// The entity for a hash is no longer live.
+///
+/// Sent at the end of the entity's shutdown, after all its other metadata writes.
+#[derive(Debug)]
+pub struct Inactive {
+    pub hash: Hash,
+    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -102,6 +113,7 @@ pub use crate::api::proto::SetTagMsg;
 #[enum_conversions(Command)]
 pub enum ReadOnlyCommand {
     Get(Get),
+    Inactive(Inactive),
     Dump(Dump),
     ClearProtected(ClearProtectedMsg),
     GetBlobStatus(BlobStatusMsg),
@@ -117,6 +129,7 @@ impl ReadOnlyCommand {
     pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
         match self {
             Self::Get(x) => Some(&x.span),
+            Self::Inactive(x) => Some(&x.span),
             Self::Dump(x) => Some(&x.span),
             Self::ClearProtected(x) => x.parent_span_opt(),
             Self::GetBlobStatus(x) => x.parent_span_opt(),

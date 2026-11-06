@@ -26,12 +26,11 @@ use tracing::{debug, info, trace};
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     options::{Options, PathOptions},
-    BaoFilePart,
 };
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
+        fs::{meta::raw_outboard_size, util::entity_manager, EntityApi, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -647,7 +646,7 @@ impl BaoFileStorage {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
             debug!("File was reconstructed as complete");
-            ctx.global.db.set(*hash, entry_state).await?;
+            ctx.meta().set(entry_state).await?;
             storage.into()
         } else {
             storage.into()
@@ -695,15 +694,6 @@ impl PartialMemStorage {
     fn persist(self, ctx: &HashContext) -> io::Result<PartialFileStorage> {
         let options = &ctx.global.options.path;
         let hash = &ctx.id;
-        ctx.global.protect.protect(
-            *hash,
-            [
-                BaoFilePart::Data,
-                BaoFilePart::Outboard,
-                BaoFilePart::Sizes,
-                BaoFilePart::Bitfield,
-            ],
-        );
         let mut data = create_read_write(options.data_path(hash))?;
         let mut outboard = create_read_write(options.outboard_path(hash))?;
         let mut sizes = create_read_write(options.sizes_path(hash))?;

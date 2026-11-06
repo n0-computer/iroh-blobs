@@ -98,8 +98,7 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use bytes::Bytes;
-use delete_set::{BaoFilePart, ProtectHandle};
+use delete_set::BaoFilePart;
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
@@ -212,8 +211,6 @@ struct TaskContext {
     pub db: meta::Db,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
-    /// Handle to protect files from deletion.
-    pub protect: ProtectHandle,
 }
 
 impl TaskContext {
@@ -241,6 +238,8 @@ impl entity_manager::Params for EmParams {
     ) {
         trace!("persist {:?} due to {cause:?}", state.id);
         state.persist().await;
+        // Must come after all file and metadata writes of this entity.
+        state.meta().inactive().await.ok();
     }
 }
 
@@ -295,7 +294,7 @@ impl SyncEntityApi for HashContext {
             Action::Load => {
                 // we must assign a new state even in the error case, otherwise
                 // tasks waiting for loading would stall!
-                let state = match self.global.db.get(self.id).await {
+                let state = match self.meta().load().await {
                     Ok(state) => match BaoFileStorage::open(state, self).await {
                         Ok(handle) => handle,
                         Err(cause) => {
@@ -340,7 +339,7 @@ impl SyncEntityApi for HashContext {
             true
         });
         if let Some(update) = res? {
-            self.global.db.update(self.id, update).await?;
+            self.meta().update(update).await?;
         }
         Ok(())
     }
@@ -391,42 +390,8 @@ impl SyncEntityApi for HashContext {
 }
 
 impl HashContext {
-    /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id),
-            tree,
-            data: outboard,
-        })
-    }
-
-    fn db(&self) -> &meta::Db {
-        &self.global.db
-    }
-
     pub fn options(&self) -> &Arc<Options> {
         &self.global.options
-    }
-
-    pub fn protect(&self, parts: impl IntoIterator<Item = BaoFilePart>) {
-        self.global.protect.protect(self.id, parts);
-    }
-
-    /// Update the entry state in the database, and wait for completion.
-    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().update_await(self.id, state).await?;
-        Ok(())
-    }
-
-    pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        self.db().get(self.id).await
-    }
-
-    /// Update the entry state in the database, and wait for completion.
-    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().set(self.id, state).await
     }
 }
 
@@ -691,8 +656,8 @@ impl Actor {
         );
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
-        let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
-        let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        let paths = Arc::new(options.path.clone());
+        let db_actor = meta::Actor::new(db_path, db_recv, paths, options.batch.clone())?;
         // We hold the database lock now, so no other store is importing into the temp
         // directory. Anything in it is left over from imports that did not complete,
         // for example because the process was killed.
@@ -701,7 +666,6 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            protect,
         });
         tokio::spawn(db_actor.run());
         Ok(Self {
@@ -922,6 +886,10 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 
 /// The minimal API you need to implement for an entity for a store to work.
 trait EntityApi {
+    /// The hash of the entry.
+    fn id(&self) -> Hash;
+    /// The metadata of the entry.
+    fn meta(&self) -> meta::EntryMeta<'_>;
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -960,10 +928,29 @@ trait SyncEntityApi: EntityApi {
 
     /// Write a batch of content items to the entry.
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+
+    /// The outboard for the entry.
+    fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
+        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let outboard = self.outboard_reader();
+        Ok(PreOrderOutboard {
+            root: blake3::Hash::from(self.id()),
+            tree,
+            data: outboard,
+        })
+    }
 }
 
 /// The high level entry point per entry.
 impl EntityApi for HashContext {
+    fn id(&self) -> Hash {
+        self.id
+    }
+
+    fn meta(&self) -> meta::EntryMeta<'_> {
+        self.global.db.entry(self.id)
+    }
+
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
@@ -1095,7 +1082,6 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     //   the entry exists in the db, but we don't have a handle
     //   the entry does not exist at all.
     // convert the import source to a data location and drop the open files
-    ctx.protect([BaoFilePart::Data, BaoFilePart::Outboard]);
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
@@ -1164,7 +1150,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         data_location,
         outboard_location,
     };
-    ctx.update_await(state).await?;
+    ctx.meta().update_await(state).await?;
     Ok(())
 }
 
@@ -1175,11 +1161,11 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 async fn import_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     size: NonZeroU64,
     rx: &mut mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
+    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
@@ -1208,7 +1194,7 @@ async fn import_bao_impl(
 }
 
 async fn export_ranges_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
 ) -> io::Result<()> {
@@ -1251,7 +1237,7 @@ async fn export_ranges_impl(
 }
 
 async fn export_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
 ) -> io::Result<()> {
@@ -1284,7 +1270,7 @@ async fn export_path_impl(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    let state = ctx.get_entry_state().await?;
+    let state = ctx.meta().get().await?;
     let (data_location, outboard_location) = match state {
         Some(EntryState::Complete {
             data_location,
@@ -1369,11 +1355,12 @@ async fn export_path_impl(
                     external.push(target);
                 };
                 // setting the new entry state will also take care of deleting the owned data file!
-                ctx.set(EntryState::Complete {
-                    data_location: DataLocation::External(external, size),
-                    outboard_location,
-                })
-                .await?;
+                ctx.meta()
+                    .set(EntryState::Complete {
+                        data_location: DataLocation::External(external, size),
+                        outboard_location,
+                    })
+                    .await?;
             }
         },
     }
@@ -1584,6 +1571,7 @@ pub mod tests {
     };
 
     use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
+    use bytes::Bytes;
     use n0_future::{stream, Stream, StreamExt};
     use n0_tracing_test::traced_test;
     use testresult::TestResult;
@@ -2469,6 +2457,55 @@ pub mod tests {
             assert!(!path.bitfield_path(&hash).exists(), "by_import={by_import}");
             assert_eq!(store.get_bytes(hash).await?, data);
         }
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Deleting an entry must not delete the files of an entity that is still live.
+    ///
+    /// The files go once the entity is no longer live.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_delete_waits_for_live_entity() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        let data = test_data(1024 * 1024);
+        let half = ChunkRanges::from(..ChunkNum(4));
+        let (hash, bao) = create_n0_bao(&data, &half)?;
+        store.import_bao_bytes(hash, half, bao).await?;
+        store.wait_idle().await?;
+        let files = [
+            path.data_path(&hash),
+            path.outboard_path(&hash),
+            path.sizes_path(&hash),
+        ];
+        assert!(files.iter().all(|f| f.exists()));
+        // An open observe stream keeps the entity live.
+        let mut obs = Box::pin(store.observe(hash).stream().await?);
+        obs.next().await.expect("initial bitfield");
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        store.sync_db().await?;
+        assert!(
+            files.iter().all(|f| f.exists()),
+            "the entity is live and may still use its files"
+        );
+        drop(obs);
+        store.wait_idle().await?;
+        store.sync_db().await?;
+        assert!(
+            files.iter().all(|f| !f.exists()),
+            "no entry and no live entity, so the files must go"
+        );
+        assert!(!path.bitfield_path(&hash).exists());
         store.shutdown().await?;
         Ok(())
     }
