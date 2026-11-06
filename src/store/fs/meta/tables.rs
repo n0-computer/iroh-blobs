@@ -1,8 +1,10 @@
 //! Table definitions and accessors for the redb database.
+use std::collections::HashSet;
+
 use redb::{ReadableTable, TableDefinition, TableError};
 
 use super::EntryState;
-use crate::{api::Tag, store::fs::delete_set::FileTransaction, Hash, HashAndFormat};
+use crate::{api::Tag, Hash, HashAndFormat};
 
 pub(super) const BLOBS_TABLE: TableDefinition<Hash, EntryState> = TableDefinition::new("blobs-0");
 
@@ -31,20 +33,18 @@ pub(super) struct Tables<'a> {
     pub tags: redb::Table<'a, Tag, HashAndFormat>,
     pub inline_data: redb::Table<'a, Hash, &'static [u8]>,
     pub inline_outboard: redb::Table<'a, Hash, &'static [u8]>,
-    pub ftx: &'a FileTransaction<'a>,
+    /// Hashes whose entry was written or removed in this transaction.
+    pub written: HashSet<Hash>,
 }
 
 impl<'txn> Tables<'txn> {
-    pub fn new(
-        tx: &'txn redb::WriteTransaction,
-        ds: &'txn FileTransaction<'txn>,
-    ) -> std::result::Result<Self, TableError> {
+    pub fn new(tx: &'txn redb::WriteTransaction) -> std::result::Result<Self, TableError> {
         Ok(Self {
             blobs: tx.open_table(BLOBS_TABLE)?,
             tags: tx.open_table(TAGS_TABLE)?,
             inline_data: tx.open_table(INLINE_DATA_TABLE)?,
             inline_outboard: tx.open_table(INLINE_OUTBOARD_TABLE)?,
-            ftx: ds,
+            written: HashSet::new(),
         })
     }
 }

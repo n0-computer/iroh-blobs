@@ -26,7 +26,6 @@ use tracing::{debug, info, trace};
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     options::{Options, PathOptions},
-    BaoFilePart,
 };
 use crate::{
     api::blobs::Bitfield,
@@ -695,15 +694,6 @@ impl PartialMemStorage {
     fn persist(self, ctx: &HashContext) -> io::Result<PartialFileStorage> {
         let options = &ctx.global.options.path;
         let hash = &ctx.id;
-        ctx.global.protect.protect(
-            *hash,
-            [
-                BaoFilePart::Data,
-                BaoFilePart::Outboard,
-                BaoFilePart::Sizes,
-                BaoFilePart::Bitfield,
-            ],
-        );
         let mut data = create_read_write(options.data_path(hash))?;
         let mut outboard = create_read_write(options.outboard_path(hash))?;
         let mut sizes = create_read_write(options.sizes_path(hash))?;

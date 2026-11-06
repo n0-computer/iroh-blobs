@@ -98,7 +98,7 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use delete_set::{BaoFilePart, ProtectHandle};
+use delete_set::BaoFilePart;
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
@@ -211,8 +211,6 @@ struct TaskContext {
     pub db: meta::Db,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
-    /// Handle to protect files from deletion.
-    pub protect: ProtectHandle,
 }
 
 impl TaskContext {
@@ -240,6 +238,8 @@ impl entity_manager::Params for EmParams {
     ) {
         trace!("persist {:?} due to {cause:?}", state.id);
         state.persist().await;
+        // Must come after all file and metadata writes of this entity.
+        state.meta().inactive().await.ok();
     }
 }
 
@@ -294,7 +294,7 @@ impl SyncEntityApi for HashContext {
             Action::Load => {
                 // we must assign a new state even in the error case, otherwise
                 // tasks waiting for loading would stall!
-                let state = match self.meta().get().await {
+                let state = match self.meta().load().await {
                     Ok(state) => match BaoFileStorage::open(state, self).await {
                         Ok(handle) => handle,
                         Err(cause) => {
@@ -392,10 +392,6 @@ impl SyncEntityApi for HashContext {
 impl HashContext {
     pub fn options(&self) -> &Arc<Options> {
         &self.global.options
-    }
-
-    pub fn protect(&self, parts: impl IntoIterator<Item = BaoFilePart>) {
-        self.global.protect.protect(self.id, parts);
     }
 }
 
@@ -660,8 +656,8 @@ impl Actor {
         );
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
-        let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
-        let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        let paths = Arc::new(options.path.clone());
+        let db_actor = meta::Actor::new(db_path, db_recv, paths, options.batch.clone())?;
         // We hold the database lock now, so no other store is importing into the temp
         // directory. Anything in it is left over from imports that did not complete,
         // for example because the process was killed.
@@ -670,7 +666,6 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            protect,
         });
         tokio::spawn(db_actor.run());
         Ok(Self {
@@ -1087,7 +1082,6 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     //   the entry exists in the db, but we don't have a handle
     //   the entry does not exist at all.
     // convert the import source to a data location and drop the open files
-    ctx.protect([BaoFilePart::Data, BaoFilePart::Outboard]);
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
@@ -2463,6 +2457,55 @@ pub mod tests {
             assert!(!path.bitfield_path(&hash).exists(), "by_import={by_import}");
             assert_eq!(store.get_bytes(hash).await?, data);
         }
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Deleting an entry must not delete the files of an entity that is still live.
+    ///
+    /// The files go once the entity is no longer live.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_delete_waits_for_live_entity() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        let data = test_data(1024 * 1024);
+        let half = ChunkRanges::from(..ChunkNum(4));
+        let (hash, bao) = create_n0_bao(&data, &half)?;
+        store.import_bao_bytes(hash, half, bao).await?;
+        store.wait_idle().await?;
+        let files = [
+            path.data_path(&hash),
+            path.outboard_path(&hash),
+            path.sizes_path(&hash),
+        ];
+        assert!(files.iter().all(|f| f.exists()));
+        // An open observe stream keeps the entity live.
+        let mut obs = Box::pin(store.observe(hash).stream().await?);
+        obs.next().await.expect("initial bitfield");
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        store.sync_db().await?;
+        assert!(
+            files.iter().all(|f| f.exists()),
+            "the entity is live and may still use its files"
+        );
+        drop(obs);
+        store.wait_idle().await?;
+        store.sync_db().await?;
+        assert!(
+            files.iter().all(|f| !f.exists()),
+            "no entry and no live entity, so the files must go"
+        );
+        assert!(!path.bitfield_path(&hash).exists());
         store.shutdown().await?;
         Ok(())
     }
