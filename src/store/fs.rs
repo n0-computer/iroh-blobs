@@ -390,22 +390,6 @@ impl SyncEntityApi for HashContext {
 }
 
 impl HashContext {
-    /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id),
-            tree,
-            data: outboard,
-        })
-    }
-
-    /// The metadata of this entry.
-    pub fn meta(&self) -> meta::EntryMeta<'_> {
-        self.global.db.entry(self.id)
-    }
-
     pub fn options(&self) -> &Arc<Options> {
         &self.global.options
     }
@@ -907,6 +891,10 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 
 /// The minimal API you need to implement for an entity for a store to work.
 trait EntityApi {
+    /// The hash of the entry.
+    fn id(&self) -> Hash;
+    /// The metadata of the entry.
+    fn meta(&self) -> meta::EntryMeta<'_>;
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -945,10 +933,29 @@ trait SyncEntityApi: EntityApi {
 
     /// Write a batch of content items to the entry.
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+
+    /// The outboard for the entry.
+    fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
+        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let outboard = self.outboard_reader();
+        Ok(PreOrderOutboard {
+            root: blake3::Hash::from(self.id()),
+            tree,
+            data: outboard,
+        })
+    }
 }
 
 /// The high level entry point per entry.
 impl EntityApi for HashContext {
+    fn id(&self) -> Hash {
+        self.id
+    }
+
+    fn meta(&self) -> meta::EntryMeta<'_> {
+        self.global.db.entry(self.id)
+    }
+
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
@@ -1160,11 +1167,11 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 async fn import_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     size: NonZeroU64,
     rx: &mut mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
+    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
@@ -1193,7 +1200,7 @@ async fn import_bao_impl(
 }
 
 async fn export_ranges_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
 ) -> io::Result<()> {
@@ -1236,7 +1243,7 @@ async fn export_ranges_impl(
 }
 
 async fn export_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
 ) -> io::Result<()> {

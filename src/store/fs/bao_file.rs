@@ -31,7 +31,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
+        fs::{meta::raw_outboard_size, util::entity_manager, EntityApi, HashContext},
         util::{
             read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
