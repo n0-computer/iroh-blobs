@@ -124,10 +124,7 @@ impl From<irpc::Error> for ExportBaoError {
             irpc::Error::OneshotRecv { source: e, .. } => e!(ExportBaoError::OneshotRecv, e),
             irpc::Error::Send { source: e, .. } => e!(ExportBaoError::Send, e),
             irpc::Error::Request { source: e, .. } => e!(ExportBaoError::Request, e),
-            #[cfg(feature = "rpc")]
-            irpc::Error::Write { source: e, .. } => e!(ExportBaoError::ExportBaoIo, e.into()),
-            // `irpc::Error` is non-exhaustive. Without our `rpc` feature, another crate can
-            // also enable irpc's, which adds `Write`, so we cannot name it here.
+            // `irpc::Error` is non-exhaustive.
             e => e!(ExportBaoError::ExportBaoIo, e.into()),
         }
     }
@@ -175,14 +172,6 @@ impl From<RequestError> for Error {
 
 impl From<irpc::channel::mpsc::RecvError> for Error {
     fn from(e: irpc::channel::mpsc::RecvError) -> Self {
-        Self::Io(e.into())
-    }
-}
-
-#[cfg(feature = "rpc")]
-#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "rpc")))]
-impl From<irpc::rpc::WriteError> for Error {
-    fn from(e: irpc::rpc::WriteError) -> Self {
         Self::Io(e.into())
     }
 }
