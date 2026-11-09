@@ -827,7 +827,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -2002,8 +2002,9 @@ dependencies = [
 
 [[package]]
 name = "irpc"
-version = "0.17.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#867335f0e0c3c440b48d7bbefd05c303aa98569e"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fecfcc2a6db86a2a0c1d8138fd58cd83e882e9923cb9e4faf5962ffa2b5a6f7e"
 dependencies = [
  "derive_more",
  "futures-buffered",
@@ -2024,8 +2025,9 @@ dependencies = [
 
 [[package]]
 name = "irpc-derive"
-version = "0.17.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=main#867335f0e0c3c440b48d7bbefd05c303aa98569e"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c29e19b1a86c662125cdaa33860723dc966c4f50cad207d21ea64b4a14b51aa"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2298,9 +2300,9 @@ dependencies = [
 
 [[package]]
 name = "n0-error"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3039042840b0f37fcc56e965e84f49479c7e0c6eeca0a8ed105a459fb5bb0909"
+checksum = "96c2215d16de3a55894583a539e6b151fb45236c3a6da45a18a40af73dc00636"
 dependencies = [
  "n0-error-macros",
  "spez",
@@ -2308,9 +2310,9 @@ dependencies = [
 
 [[package]]
 name = "n0-error-macros"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e03695957bd59b6dccaf68d3c4934ef189a1b93ff7440413e14149b152fd20d6"
+checksum = "6217fd5f567ce1e53f324744c14fab04899861e397539c5f3cc08bd7c1dcd2de"
 dependencies = [
  "proc-macro2",
  "quote",

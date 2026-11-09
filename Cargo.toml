@@ -37,7 +37,7 @@ self_cell = "1.1.0"
 genawaiter = { version = "0.99.1", default-features = false, features = ["futures03"] }
 iroh-base = "1.0.0"
 iroh-tickets = "1.0.0"
-irpc = { version = "0.17.0", features = ["stream", "derive", "varint-util"], default-features = false }
+irpc = { version = "1.0.0", features = ["stream", "derive", "varint-util"], default-features = false }
 iroh-metrics = { version = "1.0.1" }
 iroh-util = "0.7.0"
 redb = { version = "4.1.0", optional = true }
@@ -100,7 +100,3 @@ required-features = ["fs-store"]
 [[example]]
 name = "random_store"
 required-features = ["fs-store", "unstable-util"]
-
-[patch.crates-io]
-irpc = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
-irpc-derive = { git = "https://github.com/n0-computer/irpc.git", branch = "main" }
