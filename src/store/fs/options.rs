@@ -112,6 +112,12 @@ pub struct Options {
     pub batch: BatchOptions,
     /// Gc configuration.
     pub gc: Option<GcConfig>,
+    /// Whether an import syncs the blob's files to disk before the store
+    /// records it as complete.
+    ///
+    /// Without it, a crash can leave a complete entry whose data never
+    /// reached the disk.
+    pub sync_imports: bool,
 }
 
 impl Options {
@@ -122,6 +128,7 @@ impl Options {
             inline: InlineOptions::default(),
             batch: BatchOptions::default(),
             gc: None,
+            sync_imports: true,
         }
     }
 

@@ -1069,6 +1069,15 @@ impl EntityApi for HashContext {
     }
 }
 
+/// Syncs the directory at `path`, where the platform allows it.
+fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
     let ImportEntry {
         source,
@@ -1099,7 +1108,10 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
-        ImportSource::TempFile(path, _file, size) => {
+        ImportSource::TempFile(path, file, size) => {
+            if options.sync_imports {
+                file.sync_data()?;
+            }
             // this will always work on any unix, but on windows there might be an issue if the target file is open!
             // possibly open with FILE_SHARE_DELETE on windows?
             let target = ctx.options().path.data_path(&hash);
@@ -1120,6 +1132,9 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
         MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
         MemOrFile::File(path) => {
+            if options.sync_imports {
+                fs::File::open(&path)?.sync_data()?;
+            }
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(
@@ -1135,6 +1150,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             OutboardLocation::Owned
         }
     };
+    let moved = matches!(data_location, DataLocation::Owned(_))
+        || matches!(outboard_location, OutboardLocation::Owned);
+    if options.sync_imports && moved {
+        // A rename survives a crash only once its directory is synced.
+        sync_dir(&options.path.data_path)?;
+    }
     let data = match &data_location {
         DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
         DataLocation::Owned(size) => {
