@@ -7,10 +7,7 @@ use tracing::Span;
 
 use super::{ActorResult, ReadOnlyTables};
 use crate::{
-    api::proto::{
-        BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ProcessExitRequest, ShutdownMsg,
-        SyncDbMsg,
-    },
+    api::proto::{BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ShutdownMsg, SyncDbMsg},
     store::{fs::entry_state::EntryState, util::DD},
     util::channel::oneshot,
     Hash,
@@ -89,6 +86,15 @@ impl fmt::Debug for Set {
     }
 }
 
+/// Exit the process from inside a write transaction.
+///
+/// Meant for crash tests. Nothing sends it yet.
+#[derive(Debug)]
+pub struct ProcessExit {
+    pub code: i32,
+    pub span: Span,
+}
+
 /// Modification method: create a new unique tag and set it to a value.
 pub use crate::api::proto::CreateTagMsg;
 /// Modification method: remove a range of tags.
@@ -109,17 +115,11 @@ pub enum ReadOnlyCommand {
 
 impl ReadOnlyCommand {
     pub fn parent_span(&self) -> tracing::Span {
-        self.parent_span_opt()
-            .cloned()
-            .unwrap_or_else(tracing::Span::current)
-    }
-
-    pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
         match self {
-            Self::Get(x) => Some(&x.span),
-            Self::Dump(x) => Some(&x.span),
-            Self::ClearProtected(x) => Some(&x.span),
-            Self::GetBlobStatus(x) => Some(&x.span),
+            Self::Get(x) => x.span.clone(),
+            Self::Dump(x) => x.span.clone(),
+            Self::ClearProtected(x) => x.span.clone(),
+            Self::GetBlobStatus(x) => x.span.clone(),
         }
     }
 }
@@ -134,26 +134,20 @@ pub enum ReadWriteCommand {
     DeleteTags(DeleteTagsMsg),
     RenameTag(RenameTagMsg),
     CreateTag(CreateTagMsg),
-    ProcessExit(ProcessExitRequest),
+    ProcessExit(ProcessExit),
 }
 
 impl ReadWriteCommand {
     pub fn parent_span(&self) -> tracing::Span {
-        self.parent_span_opt()
-            .cloned()
-            .unwrap_or_else(tracing::Span::current)
-    }
-
-    pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
         match self {
-            Self::Update(x) => Some(&x.span),
-            Self::Set(x) => Some(&x.span),
-            Self::DeleteBlobw(x) => Some(&x.span),
-            Self::SetTag(x) => Some(&x.span),
-            Self::DeleteTags(x) => Some(&x.span),
-            Self::RenameTag(x) => Some(&x.span),
-            Self::CreateTag(x) => Some(&x.span),
-            Self::ProcessExit(_) => None,
+            Self::Update(x) => x.span.clone(),
+            Self::Set(x) => x.span.clone(),
+            Self::DeleteBlobw(x) => x.span.clone(),
+            Self::SetTag(x) => x.span.clone(),
+            Self::DeleteTags(x) => x.span.clone(),
+            Self::RenameTag(x) => x.span.clone(),
+            Self::CreateTag(x) => x.span.clone(),
+            Self::ProcessExit(x) => x.span.clone(),
         }
     }
 }
@@ -168,16 +162,10 @@ pub enum TopLevelCommand {
 
 impl TopLevelCommand {
     pub fn parent_span(&self) -> tracing::Span {
-        self.parent_span_opt()
-            .cloned()
-            .unwrap_or_else(tracing::Span::current)
-    }
-
-    pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
         match self {
-            Self::SyncDb(x) => Some(&x.span),
-            Self::Shutdown(x) => Some(&x.span),
-            Self::Snapshot(x) => Some(&x.span),
+            Self::SyncDb(x) => x.span.clone(),
+            Self::Shutdown(x) => x.span.clone(),
+            Self::Snapshot(x) => x.span.clone(),
         }
     }
 }
