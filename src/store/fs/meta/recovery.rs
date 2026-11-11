@@ -24,7 +24,7 @@ use crate::{
             entry_state::{DataLocation, EntryState, OutboardLocation},
             options::PathOptions,
         },
-        IROH_BLOCK_SIZE,
+        util::size_slot,
     },
     Hash,
 };
@@ -111,11 +111,10 @@ fn make_partial(
         let outboard = inline(&tables.inline_outboard, hash)?;
         fs::write(paths.outboard_path(hash), outboard).std_context("writing outboard")?;
     }
-    // the size goes in the slot of the last chunk group, as the partial file storage writes it
-    let last_group = size.saturating_sub(1) >> (IROH_BLOCK_SIZE.chunk_log() + 10);
+    // the size goes in the slot of the last chunk group
     let mut sizes = fs::File::create(paths.sizes_path(hash)).std_context("creating sizes")?;
     sizes
-        .write_all_at(last_group << 3, &size.to_le_bytes())
+        .write_all_at(size_slot(size.saturating_sub(1)), &size.to_le_bytes())
         .std_context("writing sizes")?;
     remove_if_exists(&paths.bitfield_path(hash)).std_context("removing a bitfield")?;
     tables.inline_data.remove(hash)?;
