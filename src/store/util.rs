@@ -246,11 +246,7 @@ mod fs {
         }
     }
 
-    pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(
-        path: P,
-        data: &T,
-        sync: bool,
-    ) -> io::Result<()> {
+    pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> io::Result<()> {
         // Build Vec with space for hash
         let mut buffer = Vec::with_capacity(32 + 128);
         buffer.extend_from_slice(&[0u8; 32]);
@@ -266,9 +262,6 @@ mod fs {
         // Write all at once
         let mut file = File::create(&path)?;
         file.write_all(&buffer)?;
-        if sync {
-            file.sync_all()?;
-        }
 
         Ok(())
     }
@@ -285,7 +278,12 @@ mod fs {
             .open(path)?;
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)?;
-        // the truncation marks the file dirty; a process crash sees it without a sync
+        // The truncation marks the file dirty; a process crash sees it without a
+        // sync. For PowerLoss it is synced so that an old bitfield cannot come
+        // back after a power loss. That is probably harmless, since it only
+        // claims data that was synced when it was written, but only if the
+        // claimed outboard bytes cannot change, e.g. when an unvalidated size
+        // turns out wrong. Until that is checked, keep the sync.
         file.set_len(0)?;
         if sync {
             file.sync_all()?;

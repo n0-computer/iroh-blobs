@@ -184,7 +184,12 @@ impl PartialFileStorage {
             self.bitfield,
             bitfield_path.display()
         );
-        write_checksummed(bitfield_path, &self.bitfield, sync)?;
+        // The bitfield itself is not synced, not even for PowerLoss. It is a cache
+        // of what valid_ranges computes from the files, so it only must never
+        // claim more than they hold, which the syncs above ensure. If it is lost
+        // or torn in a crash, it comes back empty or fails its checksum, and the
+        // next load rebuilds it from the files.
+        write_checksummed(bitfield_path, &self.bitfield)?;
         Ok(())
     }
 
