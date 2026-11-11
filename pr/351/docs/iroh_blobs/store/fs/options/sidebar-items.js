@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["BatchOptions","InlineOptions","Options","PathOptions"]};
+window.SIDEBAR_ITEMS = {"enum":["Durability"],"struct":["BatchOptions","InlineOptions","Options","PathOptions"]};
