@@ -148,7 +148,7 @@ pub mod options;
 pub(crate) mod util;
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
-use options::{Durability, Options};
+use options::{CrashConsistency, Options};
 use tracing::Instrument;
 
 use crate::{
@@ -1105,7 +1105,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         ..
     } = import_data;
     let options = ctx.options();
-    let sync = options.durability == Durability::PowerLoss;
+    let sync = options.crash_consistency == CrashConsistency::PowerLoss;
     match &source {
         ImportSource::Memory(data) => {
             debug_assert!(options.is_inlined_data(data.len() as u64));

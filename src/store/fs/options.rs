@@ -104,11 +104,11 @@ impl Default for BatchOptions {
 /// What kind of crash the file store stays consistent through.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Durability {
+pub enum CrashConsistency {
     /// Consistent after a process crash; an OS crash or power loss can corrupt recent entries.
     ///
-    /// No data files are synced, so after an OS crash or power loss a recently
-    /// completed entry can point to data that never reached the disk.
+    /// After an OS crash or power loss, a recently completed entry can point to
+    /// data that never reached the disk.
     #[default]
     ProcessCrash,
     /// Consistent after an OS crash or power loss too, at the cost of fsyncs.
@@ -134,7 +134,7 @@ pub struct Options {
     /// Gc configuration.
     pub gc: Option<GcConfig>,
     /// What kind of crash the store stays consistent through.
-    pub durability: Durability,
+    pub crash_consistency: CrashConsistency,
 }
 
 impl Options {
@@ -145,7 +145,7 @@ impl Options {
             inline: InlineOptions::default(),
             batch: BatchOptions::default(),
             gc: None,
-            durability: Durability::default(),
+            crash_consistency: CrashConsistency::default(),
         }
     }
 

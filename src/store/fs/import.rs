@@ -532,7 +532,7 @@ mod tests {
     use super::*;
     use crate::{
         api::proto::BoxedByteStream,
-        store::fs::options::{Durability, InlineOptions, PathOptions},
+        store::fs::options::{CrashConsistency, InlineOptions, PathOptions},
     };
 
     async fn drain<T: RpcMessage>(mut recv: mpsc::Receiver<T>) -> TestResult<Vec<T>> {
@@ -629,7 +629,7 @@ mod tests {
             batch: Default::default(),
             path: PathOptions::new(dir.path()),
             gc: None,
-            durability: Durability::PowerLoss,
+            crash_consistency: CrashConsistency::PowerLoss,
         });
         // test different sizes, below, at, and above the inline threshold
         let sizes = [
