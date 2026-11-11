@@ -49,11 +49,49 @@ mod platform {
     }
 }
 
+#[cfg(windows)]
+mod platform {
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD},
+    };
+
+    /// The prefetcher counts boots in the registry, once per boot.
+    pub(super) fn current() -> Option<String> {
+        let key = wide(
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters",
+        );
+        let name = wide("BootId");
+        let mut value = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        // SAFETY: key and name are nul terminated wide strings, and `value` is
+        // a writable DWORD whose size `size` carries in and out.
+        let res = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(value).cast(),
+                &mut size,
+            )
+        };
+        (res == ERROR_SUCCESS).then(|| value.to_string())
+    }
+
+    /// Encodes `s` as a nul terminated UTF-16 string.
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+}
+
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
     target_os = "macos",
-    target_os = "ios"
+    target_os = "ios",
+    windows
 )))]
 mod platform {
     /// No boot ID on this platform yet.
@@ -68,7 +106,8 @@ mod tests {
         target_os = "linux",
         target_os = "android",
         target_os = "macos",
-        target_os = "ios"
+        target_os = "ios",
+        windows
     ))]
     #[test]
     fn boot_id_is_known_and_stable() {
