@@ -49,6 +49,10 @@ nested_enum_utils = "0.2.3"
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 chrono = { version = "0.4.39" }
 
+# boot session id for crash detection in the fs store
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+libc = { version = "0.2.190", optional = true }
+
 # wasm-in-browser dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 chrono = {version = "0.4.39", default-features = false, features = ["js-sys", "wasmbind", "std"] }
@@ -88,7 +92,7 @@ pre-release-hook = ["git", "cliff", "--unreleased", "--tag", "{{version}}", "--p
 hide-proto-docs = []
 metrics = []
 default = ["hide-proto-docs", "fs-store", "rpc"]
-fs-store = ["dep:redb", "dep:reflink-copy", "bao-tree/fs", "tokio/rt-multi-thread"]
+fs-store = ["dep:redb", "dep:reflink-copy", "dep:libc", "bao-tree/fs", "tokio/rt-multi-thread"]
 rpc = ["dep:noq", "irpc/rpc", "irpc/noq_endpoint_setup"]
 # Unstable: utility APIs that are not covered by semver guarantees (may change without notice)
 unstable-util = []

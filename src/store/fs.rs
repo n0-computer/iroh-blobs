@@ -140,6 +140,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
+mod boot_id;
 mod delete_set;
 mod entry_state;
 mod import;
