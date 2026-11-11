@@ -117,8 +117,6 @@ pub enum CrashConsistency {
     /// before it is recorded as complete. That costs two or three fsyncs for
     /// every import above the inline threshold, which slows down imports of
     /// many small files considerably.
-    ///
-    /// Blobs that complete through a download are not covered yet.
     PowerLoss,
 }
 
