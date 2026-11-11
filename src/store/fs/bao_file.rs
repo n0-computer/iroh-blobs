@@ -33,7 +33,7 @@ use crate::{
     store::{
         fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
         util::{
-            read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
+            read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
         },
         IROH_BLOCK_SIZE,
@@ -298,8 +298,8 @@ impl PartialFileStorage {
                 }
                 BaoContentItem::Leaf(leaf) => {
                     let o0 = leaf.offset;
-                    // divide by chunk size, multiply by 8
-                    let index = (leaf.offset >> (tree.block_size().chunk_log() + 10)) << 3;
+                    // one size slot per chunk group
+                    let index = size_slot(leaf.offset);
                     trace!(
                         "write_batch f={:?} o={} l={}",
                         self.data,
