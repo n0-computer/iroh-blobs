@@ -114,12 +114,12 @@ pub enum ReadOnlyCommand {
 }
 
 impl ReadOnlyCommand {
-    pub fn parent_span(&self) -> tracing::Span {
+    pub fn parent_span(&self) -> &Span {
         match self {
-            Self::Get(x) => x.span.clone(),
-            Self::Dump(x) => x.span.clone(),
-            Self::ClearProtected(x) => x.span.clone(),
-            Self::GetBlobStatus(x) => x.span.clone(),
+            Self::Get(x) => &x.span,
+            Self::Dump(x) => &x.span,
+            Self::ClearProtected(x) => &x.span,
+            Self::GetBlobStatus(x) => &x.span,
         }
     }
 }
@@ -138,16 +138,16 @@ pub enum ReadWriteCommand {
 }
 
 impl ReadWriteCommand {
-    pub fn parent_span(&self) -> tracing::Span {
+    pub fn parent_span(&self) -> &Span {
         match self {
-            Self::Update(x) => x.span.clone(),
-            Self::Set(x) => x.span.clone(),
-            Self::DeleteBlobw(x) => x.span.clone(),
-            Self::SetTag(x) => x.span.clone(),
-            Self::DeleteTags(x) => x.span.clone(),
-            Self::RenameTag(x) => x.span.clone(),
-            Self::CreateTag(x) => x.span.clone(),
-            Self::ProcessExit(x) => x.span.clone(),
+            Self::Update(x) => &x.span,
+            Self::Set(x) => &x.span,
+            Self::DeleteBlobw(x) => &x.span,
+            Self::SetTag(x) => &x.span,
+            Self::DeleteTags(x) => &x.span,
+            Self::RenameTag(x) => &x.span,
+            Self::CreateTag(x) => &x.span,
+            Self::ProcessExit(x) => &x.span,
         }
     }
 }
@@ -161,11 +161,11 @@ pub enum TopLevelCommand {
 }
 
 impl TopLevelCommand {
-    pub fn parent_span(&self) -> tracing::Span {
+    pub fn parent_span(&self) -> &Span {
         match self {
-            Self::SyncDb(x) => x.span.clone(),
-            Self::Shutdown(x) => x.span.clone(),
-            Self::Snapshot(x) => x.span.clone(),
+            Self::SyncDb(x) => &x.span,
+            Self::Shutdown(x) => &x.span,
+            Self::Snapshot(x) => &x.span,
         }
     }
 }
