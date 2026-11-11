@@ -146,6 +146,7 @@ mod entry_state;
 mod import;
 mod meta;
 pub mod options;
+mod sync_fs;
 pub(crate) mod util;
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};

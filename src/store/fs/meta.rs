@@ -11,7 +11,7 @@ use std::{
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_error::{anyerr, e, stack_error, AnyError};
+use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -543,9 +543,27 @@ impl Actor {
     pub fn new(
         db_path: PathBuf,
         cmds: tokio::sync::mpsc::Receiver<Command>,
+        ds: DeleteHandle,
+        options: BatchOptions,
+        syncs_files: bool,
+    ) -> Result<Self, ActorError> {
+        Self::new_with_sync(
+            db_path,
+            cmds,
+            ds,
+            options,
+            syncs_files,
+            super::sync_fs::sync,
+        )
+    }
+
+    fn new_with_sync(
+        db_path: PathBuf,
+        cmds: tokio::sync::mpsc::Receiver<Command>,
         mut ds: DeleteHandle,
         options: BatchOptions,
         syncs_files: bool,
+        sync_filesystem: impl FnOnce(&std::path::Path) -> io::Result<()>,
     ) -> Result<Self, ActorError> {
         debug!("creating or opening meta database at {}", db_path.display());
         let db = match redb::Database::create(db_path) {
@@ -587,6 +605,12 @@ impl Actor {
                 );
                 report(&recovery::recover(&mut tables, &paths)?);
             }
+        }
+        // A PowerLoss run must also cover writes inherited from earlier runs.
+        // Sync after recovery so its writes and bitfield deletions are included,
+        // and before committing the new run so a failed sync leaves the old one.
+        if syncs_files {
+            sync_filesystem(&paths.data_path).std_context("syncing the data filesystem on open")?;
         }
         drop(meta);
         drop(tables);
@@ -1231,6 +1255,92 @@ mod tests {
         store.shutdown().await?;
         drop(store);
         assert_eq!(recorded_run(&dir.path().join("blobs.db"))?, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_sync_precedes_committing_the_new_run() -> testresult::TestResult<()> {
+        for same_boot in [true, false] {
+            let dir = tempfile::tempdir()?;
+            let paths = Arc::new(PathOptions::new(dir.path()));
+            let db_path = dir.path().join("blobs.db");
+            let data = vec![7u8; 100_000];
+            let store = open(dir.path(), CrashConsistency::ProcessCrash).await?;
+            let hash = store.add_bytes(data.clone()).await?.hash;
+            store.shutdown().await?;
+            drop(store);
+            let previous = Run {
+                boot_id: if same_boot {
+                    boot_id::current()
+                } else {
+                    Some("previous boot".into())
+                },
+                syncs_files: false,
+            };
+            let recovers = previous.boot_id.is_none() || !same_boot;
+            set_run(&db_path, &previous)?;
+            // Recovery must invalidate this cache before the startup flush.
+            std::fs::write(paths.bitfield_path(&hash), b"stale cache")?;
+            for fail_sync in [true, false] {
+                let (_protect, deletes) = delete_set::pair(paths.clone());
+                let (_tx, rx) = tokio::sync::mpsc::channel(1);
+                let mut called = false;
+                let actor = Actor::new_with_sync(
+                    db_path.clone(),
+                    rx,
+                    deletes,
+                    BatchOptions::default(),
+                    true,
+                    |path| {
+                        called = true;
+                        assert_eq!(path, paths.data_path);
+                        assert_eq!(std::fs::read(paths.data_path(&hash))?, data);
+                        if recovers {
+                            assert!(!paths.bitfield_path(&hash).exists());
+                            assert!(paths.outboard_path(&hash).exists());
+                            assert!(paths.sizes_path(&hash).exists());
+                        }
+                        if fail_sync {
+                            Err(io::Error::other("injected startup sync failure"))
+                        } else {
+                            super::super::sync_fs::sync(path)
+                        }
+                    },
+                );
+                assert!(called);
+                if fail_sync {
+                    assert!(actor.is_err());
+                    assert_eq!(recorded_run(&db_path)?, Some(previous.clone()));
+                } else {
+                    // An unclean exit after a successful sync records the actual mode.
+                    drop(actor?);
+                    assert_eq!(
+                        recorded_run(&db_path)?,
+                        Some(Run {
+                            boot_id: boot_id::current(),
+                            syncs_files: true,
+                        })
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn process_crash_startup_does_not_flush_the_filesystem() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Arc::new(PathOptions::new(dir.path()));
+        let (_protect, deletes) = delete_set::pair(paths);
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        drop(Actor::new_with_sync(
+            dir.path().join("blobs.db"),
+            rx,
+            deletes,
+            BatchOptions::default(),
+            false,
+            |_| panic!("ProcessCrash must not flush the filesystem on open"),
+        )?);
         Ok(())
     }
 
