@@ -576,7 +576,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<()> {
         let span = info_span!(
-            parent: &cmd.parent_span(),
+            parent: cmd.parent_span(),
             "tx",
             op = tracing::field::debug(op),
         );
@@ -735,7 +735,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<()> {
         let span = info_span!(
-            parent: &cmd.parent_span(),
+            parent: cmd.parent_span(),
             "tx",
             op = tracing::field::debug(op),
         );
@@ -748,9 +748,6 @@ impl Actor {
             ReadWriteCommand::CreateTag(cmd) => Self::create_tag(tables, cmd).await,
             ReadWriteCommand::DeleteTags(cmd) => Self::delete_tags(tables, cmd).await,
             ReadWriteCommand::RenameTag(cmd) => Self::rename_tag(tables, cmd).await,
-            ReadWriteCommand::ProcessExit(cmd) => {
-                std::process::exit(cmd.code);
-            }
         }
     }
 
@@ -784,7 +781,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<Option<ShutdownMsg>> {
         let span = info_span!(
-            parent: &cmd.parent_span(),
+            parent: cmd.parent_span(),
             "tx",
             op = tracing::field::debug(op),
         );
