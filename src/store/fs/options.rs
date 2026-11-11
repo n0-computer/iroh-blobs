@@ -130,7 +130,7 @@ pub enum CrashConsistency {
     /// depends on them is recorded, for imports as well as downloads. That
     /// costs a few fsyncs for every blob above the inline threshold, which
     /// slows down imports and downloads of many small blobs considerably.
-    /// On Linux, macOS and iOS, opening the store also flushes the data
+    /// On Linux, Android, macOS and iOS, opening the store also flushes the data
     /// filesystem after recovery, before recording the new run. This includes
     /// writes inherited from an earlier run, but may wait for unrelated writes
     /// on the same filesystem. Other platforms do not yet perform this startup

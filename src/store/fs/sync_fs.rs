@@ -2,7 +2,7 @@
 
 use std::{io, path::Path};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn sync(path: &Path) -> io::Result<()> {
     use std::os::fd::AsRawFd;
 
@@ -38,7 +38,12 @@ pub(super) fn sync(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+)))]
 pub(super) fn sync(_path: &Path) -> io::Result<()> {
     // Preserve existing behavior on other platforms. In particular, Windows'
     // volume-wide FlushFileBuffers requires administrator privileges.
