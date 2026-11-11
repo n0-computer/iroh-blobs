@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub use sparse_mem_file::SparseMemFile;
 pub mod observer;
 mod size_info;
+#[cfg(feature = "fs-store")]
+pub(crate) use size_info::size_slot;
 pub use size_info::SizeInfo;
 mod partial_mem_storage;
 pub use partial_mem_storage::PartialMemStorage;
