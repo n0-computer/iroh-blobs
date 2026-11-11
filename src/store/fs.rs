@@ -695,7 +695,7 @@ impl Actor {
             db_recv,
             ds,
             options.batch.clone(),
-            !options.syncs_files(),
+            options.syncs_files(),
         )?;
         // We hold the database lock now, so no other store is importing into the temp
         // directory. Anything in it is left over from imports that did not complete,
