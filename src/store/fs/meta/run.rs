@@ -70,6 +70,7 @@ pub(super) fn read(meta: &impl ReadableTable<&'static str, &'static [u8]>) -> Op
 }
 
 /// Records `run` without looking at what was recorded before.
+#[cfg(test)]
 pub(super) fn write(
     meta: &mut redb::Table<&str, &[u8]>,
     run: &Run,

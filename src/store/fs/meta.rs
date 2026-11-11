@@ -11,7 +11,7 @@ use std::{
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_error::{anyerr, e, stack_error, AnyError};
+use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -588,18 +588,12 @@ impl Actor {
                 report(&recovery::recover(&mut tables, &paths)?);
             }
         }
-        // A PowerLoss run must also cover writes inherited from earlier runs,
-        // including those of the recovery. Without that boundary, it cannot
-        // vouch for them, so it is recorded as not synced.
+        // A PowerLoss run must also cover writes inherited from earlier runs.
+        // Sync after recovery so its writes and bitfield deletions are included,
+        // and before committing the new run so a failed sync leaves the old one.
         if syncs_files {
-            if let Err(cause) = super::sync_fs::sync(&paths.data_path) {
-                error!("failed to sync the blob store on open: {cause}");
-                let run = Run {
-                    syncs_files: false,
-                    ..run
-                };
-                run::write(&mut meta, &run)?;
-            }
+            super::sync_fs::sync(&paths.data_path)
+                .std_context("syncing the data filesystem on open")?;
         }
         drop(meta);
         drop(tables);
