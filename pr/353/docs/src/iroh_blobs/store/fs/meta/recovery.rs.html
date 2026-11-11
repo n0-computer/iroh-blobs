@@ -24,7 +24,7 @@
 <a href=#24 id=24 data-nosnippet>24</a>            entry_state::{DataLocation, EntryState, OutboardLocation},
 <a href=#25 id=25 data-nosnippet>25</a>            options::PathOptions,
 <a href=#26 id=26 data-nosnippet>26</a>        },
-<a href=#27 id=27 data-nosnippet>27</a>        IROH_BLOCK_SIZE,
+<a href=#27 id=27 data-nosnippet>27</a>        util::size_slot,
 <a href=#28 id=28 data-nosnippet>28</a>    },
 <a href=#29 id=29 data-nosnippet>29</a>    Hash,
 <a href=#30 id=30 data-nosnippet>30</a>};
@@ -111,39 +111,38 @@
 <a href=#111 id=111 data-nosnippet>111</a>        <span class="kw">let </span>outboard = inline(<span class="kw-2">&amp;</span>tables.inline_outboard, hash)<span class="question-mark">?</span>;
 <a href=#112 id=112 data-nosnippet>112</a>        fs::write(paths.outboard_path(hash), outboard).std_context(<span class="string">"writing outboard"</span>)<span class="question-mark">?</span>;
 <a href=#113 id=113 data-nosnippet>113</a>    }
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// the size goes in the slot of the last chunk group, as the partial file storage writes it
-<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">let </span>last_group = size.saturating_sub(<span class="number">1</span>) &gt;&gt; (IROH_BLOCK_SIZE.chunk_log() + <span class="number">10</span>);
-<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">let </span><span class="kw-2">mut </span>sizes = fs::File::create(paths.sizes_path(hash)).std_context(<span class="string">"creating sizes"</span>)<span class="question-mark">?</span>;
-<a href=#117 id=117 data-nosnippet>117</a>    sizes
-<a href=#118 id=118 data-nosnippet>118</a>        .write_all_at(last_group &lt;&lt; <span class="number">3</span>, <span class="kw-2">&amp;</span>size.to_le_bytes())
-<a href=#119 id=119 data-nosnippet>119</a>        .std_context(<span class="string">"writing sizes"</span>)<span class="question-mark">?</span>;
-<a href=#120 id=120 data-nosnippet>120</a>    remove_if_exists(<span class="kw-2">&amp;</span>paths.bitfield_path(hash)).std_context(<span class="string">"removing a bitfield"</span>)<span class="question-mark">?</span>;
-<a href=#121 id=121 data-nosnippet>121</a>    tables.inline_data.remove(hash)<span class="question-mark">?</span>;
-<a href=#122 id=122 data-nosnippet>122</a>    tables.inline_outboard.remove(hash)<span class="question-mark">?</span>;
-<a href=#123 id=123 data-nosnippet>123</a>    tables
-<a href=#124 id=124 data-nosnippet>124</a>        .blobs
-<a href=#125 id=125 data-nosnippet>125</a>        .insert(hash, EntryState::Partial { size: <span class="prelude-val">Some</span>(size) })<span class="question-mark">?</span>;
-<a href=#126 id=126 data-nosnippet>126</a>    <span class="prelude-val">Ok</span>(())
-<a href=#127 id=127 data-nosnippet>127</a>}
-<a href=#128 id=128 data-nosnippet>128</a>
-<a href=#129 id=129 data-nosnippet>129</a><span class="doccomment">/// Reads the inline data or outboard of `hash` from `table`.
-<a href=#130 id=130 data-nosnippet>130</a></span><span class="kw">fn </span>inline(
-<a href=#131 id=131 data-nosnippet>131</a>    table: <span class="kw-2">&amp;</span><span class="kw">impl </span>ReadableTable&lt;Hash, <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[u8]&gt;,
-<a href=#132 id=132 data-nosnippet>132</a>    hash: <span class="kw-2">&amp;</span>Hash,
-<a href=#133 id=133 data-nosnippet>133</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes, ActorError&gt; {
-<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">match </span>table.get(hash)<span class="question-mark">? </span>{
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="prelude-val">Some</span>(data) =&gt; <span class="prelude-val">Ok</span>(Bytes::copy_from_slice(data.value())),
-<a href=#136 id=136 data-nosnippet>136</a>        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(ActorError::inconsistent(<span class="macro">format!</span>(
-<a href=#137 id=137 data-nosnippet>137</a>            <span class="string">"inline part missing for {}"</span>,
-<a href=#138 id=138 data-nosnippet>138</a>            hash.to_hex()
-<a href=#139 id=139 data-nosnippet>139</a>        ))),
-<a href=#140 id=140 data-nosnippet>140</a>    }
-<a href=#141 id=141 data-nosnippet>141</a>}
-<a href=#142 id=142 data-nosnippet>142</a>
-<a href=#143 id=143 data-nosnippet>143</a><span class="kw">fn </span>remove_if_exists(path: <span class="kw-2">&amp;</span>Path) -&gt; io::Result&lt;()&gt; {
-<a href=#144 id=144 data-nosnippet>144</a>    <span class="kw">match </span>fs::remove_file(path) {
-<a href=#145 id=145 data-nosnippet>145</a>        <span class="prelude-val">Err</span>(e) <span class="kw">if </span>e.kind() == io::ErrorKind::NotFound =&gt; <span class="prelude-val">Ok</span>(()),
-<a href=#146 id=146 data-nosnippet>146</a>        res =&gt; res,
-<a href=#147 id=147 data-nosnippet>147</a>    }
-<a href=#148 id=148 data-nosnippet>148</a>}
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="comment">// the size goes in the slot of the last chunk group
+<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>sizes = fs::File::create(paths.sizes_path(hash)).std_context(<span class="string">"creating sizes"</span>)<span class="question-mark">?</span>;
+<a href=#116 id=116 data-nosnippet>116</a>    sizes
+<a href=#117 id=117 data-nosnippet>117</a>        .write_all_at(size_slot(size.saturating_sub(<span class="number">1</span>)), <span class="kw-2">&amp;</span>size.to_le_bytes())
+<a href=#118 id=118 data-nosnippet>118</a>        .std_context(<span class="string">"writing sizes"</span>)<span class="question-mark">?</span>;
+<a href=#119 id=119 data-nosnippet>119</a>    remove_if_exists(<span class="kw-2">&amp;</span>paths.bitfield_path(hash)).std_context(<span class="string">"removing a bitfield"</span>)<span class="question-mark">?</span>;
+<a href=#120 id=120 data-nosnippet>120</a>    tables.inline_data.remove(hash)<span class="question-mark">?</span>;
+<a href=#121 id=121 data-nosnippet>121</a>    tables.inline_outboard.remove(hash)<span class="question-mark">?</span>;
+<a href=#122 id=122 data-nosnippet>122</a>    tables
+<a href=#123 id=123 data-nosnippet>123</a>        .blobs
+<a href=#124 id=124 data-nosnippet>124</a>        .insert(hash, EntryState::Partial { size: <span class="prelude-val">Some</span>(size) })<span class="question-mark">?</span>;
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="prelude-val">Ok</span>(())
+<a href=#126 id=126 data-nosnippet>126</a>}
+<a href=#127 id=127 data-nosnippet>127</a>
+<a href=#128 id=128 data-nosnippet>128</a><span class="doccomment">/// Reads the inline data or outboard of `hash` from `table`.
+<a href=#129 id=129 data-nosnippet>129</a></span><span class="kw">fn </span>inline(
+<a href=#130 id=130 data-nosnippet>130</a>    table: <span class="kw-2">&amp;</span><span class="kw">impl </span>ReadableTable&lt;Hash, <span class="kw-2">&amp;</span><span class="lifetime">'static </span>[u8]&gt;,
+<a href=#131 id=131 data-nosnippet>131</a>    hash: <span class="kw-2">&amp;</span>Hash,
+<a href=#132 id=132 data-nosnippet>132</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes, ActorError&gt; {
+<a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">match </span>table.get(hash)<span class="question-mark">? </span>{
+<a href=#134 id=134 data-nosnippet>134</a>        <span class="prelude-val">Some</span>(data) =&gt; <span class="prelude-val">Ok</span>(Bytes::copy_from_slice(data.value())),
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Err</span>(ActorError::inconsistent(<span class="macro">format!</span>(
+<a href=#136 id=136 data-nosnippet>136</a>            <span class="string">"inline part missing for {}"</span>,
+<a href=#137 id=137 data-nosnippet>137</a>            hash.to_hex()
+<a href=#138 id=138 data-nosnippet>138</a>        ))),
+<a href=#139 id=139 data-nosnippet>139</a>    }
+<a href=#140 id=140 data-nosnippet>140</a>}
+<a href=#141 id=141 data-nosnippet>141</a>
+<a href=#142 id=142 data-nosnippet>142</a><span class="kw">fn </span>remove_if_exists(path: <span class="kw-2">&amp;</span>Path) -&gt; io::Result&lt;()&gt; {
+<a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">match </span>fs::remove_file(path) {
+<a href=#144 id=144 data-nosnippet>144</a>        <span class="prelude-val">Err</span>(e) <span class="kw">if </span>e.kind() == io::ErrorKind::NotFound =&gt; <span class="prelude-val">Ok</span>(()),
+<a href=#145 id=145 data-nosnippet>145</a>        res =&gt; res,
+<a href=#146 id=146 data-nosnippet>146</a>    }
+<a href=#147 id=147 data-nosnippet>147</a>}
 </code></pre></div></section></main></body></html>
