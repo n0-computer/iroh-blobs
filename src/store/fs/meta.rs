@@ -32,10 +32,11 @@ use crate::{
     Hash,
 };
 mod proto;
+mod recovery;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables, BOOT_ID_KEY, META_TABLE};
-use tracing::{debug, error, info_span, trace, warn, Span};
+use tracing::{debug, error, info, info_span, trace, warn, Span};
 
 use super::{
     boot_id,
@@ -558,31 +559,41 @@ impl Actor {
             }
             Err(err) => return Err(err.into()),
         };
+        let paths = ds.paths().clone();
         let tx = db.begin_write()?;
         let ftx = ds.begin_write();
-        Tables::new(&tx, &ftx)?;
+        let mut tables = Tables::new(&tx, &ftx)?;
         let mut meta = tx.open_table(META_TABLE)?;
         if detect_os_crash {
+            // Recovery commits together with the new boot id, so if the
+            // process dies during it, the next open still finds the old one.
             match record_boot(&mut meta, boot_id::current().as_deref())? {
                 LastShutdown::Clean | LastShutdown::SameBoot => {}
-                LastShutdown::OtherBoot => error!(
-                    "the blob store was open when the machine went down; after an OS crash or \
-                     power loss, entries may claim data that never reached the disk"
-                ),
-                LastShutdown::Unknown => error!(
-                    "the blob store was not shut down cleanly, and without a boot id on this \
-                     platform an OS crash or power loss cannot be ruled out; entries may claim \
-                     data that never reached the disk"
-                ),
+                LastShutdown::OtherBoot => {
+                    warn!(
+                        "the blob store was open when the machine went down; an OS crash or \
+                         power loss may have lost data, so entries are checked again"
+                    );
+                    report(&recovery::recover(&mut tables, &paths)?);
+                }
+                LastShutdown::Unknown => {
+                    warn!(
+                        "the blob store was not shut down cleanly, and without a boot id on \
+                         this platform an OS crash cannot be ruled out, so entries are checked \
+                         again"
+                    );
+                    report(&recovery::recover(&mut tables, &paths)?);
+                }
             }
         } else {
             meta.remove(BOOT_ID_KEY)?;
         }
         drop(meta);
+        drop(tables);
         tx.commit()?;
         drop(ftx);
         let cmds = PeekableReceiver::new(cmds);
-        let sync_on_shutdown = detect_os_crash.then(|| ds.paths().data_path.clone());
+        let sync_on_shutdown = detect_os_crash.then_some(paths.data_path);
         Ok(Self {
             db,
             cmds,
@@ -943,6 +954,20 @@ impl Actor {
     }
 }
 
+/// Logs what recovery did.
+fn report(recovered: &recovery::Recovered) {
+    info!(
+        "{} complete and {} partial entries are checked against their files when next loaded",
+        recovered.complete, recovered.partial
+    );
+    if recovered.external > 0 {
+        warn!(
+            "{} entries with external data are not checked, since the data is not ours",
+            recovered.external
+        );
+    }
+}
+
 /// How the store was left the last time it was open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LastShutdown {
@@ -1144,6 +1169,68 @@ mod tests {
         )?);
         let expected = boot_id::current().unwrap_or_default().into_bytes();
         assert_eq!(recorded_boot(&db)?, Some(expected));
+        Ok(())
+    }
+
+    /// Records `boot` as the boot id of a closed store's database.
+    fn set_boot(db: &std::path::Path, boot: &str) -> testresult::TestResult<()> {
+        let db = Database::open(db)?;
+        let tx = db.begin_write()?;
+        tx.open_table(META_TABLE)?
+            .insert(BOOT_ID_KEY, boot.as_bytes())?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn after_an_os_crash_entries_only_claim_what_their_files_hold(
+    ) -> testresult::TestResult<()> {
+        use bao_tree::ChunkRanges;
+
+        use crate::{api::blobs::BlobStatus, store::fs::FsStore};
+
+        let dir = tempfile::tempdir()?;
+        let paths = PathOptions::new(dir.path());
+        let db = dir.path().join("blobs.db");
+        let data = |byte: u8, len: usize| (0..len).map(|i| byte ^ (i as u8)).collect::<Vec<_>>();
+        // owned data, inline outboard
+        let intact = data(1, 100_000);
+        let truncated = data(2, 100_000);
+        // owned data and outboard
+        let no_outboard = data(3, 5_000_000);
+        let store = FsStore::load(dir.path()).await?;
+        let intact_hash = store.add_bytes(intact.clone()).await?.hash;
+        let truncated_hash = store.add_bytes(truncated).await?.hash;
+        let no_outboard_hash = store.add_bytes(no_outboard).await?.hash;
+        store.shutdown().await?;
+        drop(store);
+
+        // the machine went down while the store was open, and lost writes
+        set_boot(&db, "another boot")?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(paths.data_path(&truncated_hash))?;
+        file.set_len(50_000)?;
+        std::fs::File::create(paths.outboard_path(&no_outboard_hash))?;
+
+        let store = FsStore::load(dir.path()).await?;
+        // loading an entry checks it, an intact one is complete again
+        assert_eq!(
+            store.get_bytes(intact_hash).await?.as_ref(),
+            intact.as_slice()
+        );
+        assert!(matches!(
+            store.status(intact_hash).await?,
+            BlobStatus::Complete { size: 100_000 }
+        ));
+        // a damaged one keeps what its files still hold, and nothing more
+        let bitfield = store.observe(truncated_hash).await?;
+        assert!(!bitfield.is_complete());
+        assert!(bitfield.ranges.contains(&bao_tree::ChunkNum(0)));
+        assert!(store.get_bytes(truncated_hash).await.is_err());
+        let bitfield = store.observe(no_outboard_hash).await?;
+        assert_eq!(bitfield.ranges, ChunkRanges::empty());
+        store.shutdown().await?;
         Ok(())
     }
 

@@ -111,10 +111,18 @@ impl Default for BatchOptions {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CrashConsistency {
-    /// Consistent after a process crash; an OS crash or power loss can corrupt recent entries.
+    /// Consistent after a process crash; recovers from an OS crash or power loss on the next open.
     ///
-    /// No data files are synced. After an OS crash or power loss, a recently
-    /// written entry can claim data that never reached the disk.
+    /// No data files are synced, so an OS crash or power loss can leave entries
+    /// that claim data that never reached the disk. The store records the boot
+    /// id while it is open, and if it finds one from another boot session on
+    /// open, every entry with files checks them again when it is next loaded.
+    /// Until then it may report less data than it has, never more.
+    ///
+    /// On Linux and Android, a clean shutdown syncs the filesystem before it
+    /// forgets the boot id. Elsewhere, an OS crash within seconds after a clean
+    /// shutdown, before the OS wrote out its cache, goes unnoticed. Where there
+    /// is no boot id, every unclean shutdown counts as a possible OS crash.
     #[default]
     ProcessCrash,
     /// Consistent after an OS crash or power loss too, at the cost of fsyncs.
