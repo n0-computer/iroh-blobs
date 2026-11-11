@@ -148,7 +148,7 @@
 <a href=#148 id=148 data-nosnippet>148</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>util;
 <a href=#149 id=149 data-nosnippet>149</a><span class="kw">use </span>entry_state::EntryState;
 <a href=#150 id=150 data-nosnippet>150</a><span class="kw">use </span>import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
-<a href=#151 id=151 data-nosnippet>151</a><span class="kw">use </span>options::{Durability, Options};
+<a href=#151 id=151 data-nosnippet>151</a><span class="kw">use </span>options::{CrashConsistency, Options};
 <a href=#152 id=152 data-nosnippet>152</a><span class="kw">use </span>tracing::Instrument;
 <a href=#153 id=153 data-nosnippet>153</a>
 <a href=#154 id=154 data-nosnippet>154</a><span class="kw">use </span>crate::{
@@ -1102,7 +1102,7 @@
 <a href=#1102 id=1102 data-nosnippet>1102</a>        ..
 <a href=#1103 id=1103 data-nosnippet>1103</a>    } = import_data;
 <a href=#1104 id=1104 data-nosnippet>1104</a>    <span class="kw">let </span>options = ctx.options();
-<a href=#1105 id=1105 data-nosnippet>1105</a>    <span class="kw">let </span>sync = options.durability == Durability::PowerLoss;
+<a href=#1105 id=1105 data-nosnippet>1105</a>    <span class="kw">let </span>sync = options.crash_consistency == CrashConsistency::PowerLoss;
 <a href=#1106 id=1106 data-nosnippet>1106</a>    <span class="kw">match </span><span class="kw-2">&amp;</span>source {
 <a href=#1107 id=1107 data-nosnippet>1107</a>        ImportSource::Memory(data) =&gt; {
 <a href=#1108 id=1108 data-nosnippet>1108</a>            <span class="macro">debug_assert!</span>(options.is_inlined_data(data.len() <span class="kw">as </span>u64));

@@ -104,11 +104,11 @@
 <a href=#104 id=104 data-nosnippet>104</a><span class="doccomment">/// What kind of crash the file store stays consistent through.
 <a href=#105 id=105 data-nosnippet>105</a></span><span class="attr">#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 <a href=#106 id=106 data-nosnippet>106</a>#[non_exhaustive]
-<a href=#107 id=107 data-nosnippet>107</a></span><span class="kw">pub enum </span>Durability {
+<a href=#107 id=107 data-nosnippet>107</a></span><span class="kw">pub enum </span>CrashConsistency {
 <a href=#108 id=108 data-nosnippet>108</a>    <span class="doccomment">/// Consistent after a process crash; an OS crash or power loss can corrupt recent entries.
 <a href=#109 id=109 data-nosnippet>109</a>    ///
-<a href=#110 id=110 data-nosnippet>110</a>    /// No data files are synced, so after an OS crash or power loss a recently
-<a href=#111 id=111 data-nosnippet>111</a>    /// completed entry can point to data that never reached the disk.
+<a href=#110 id=110 data-nosnippet>110</a>    /// After an OS crash or power loss, a recently completed entry can point to
+<a href=#111 id=111 data-nosnippet>111</a>    /// data that never reached the disk.
 <a href=#112 id=112 data-nosnippet>112</a>    </span><span class="attr">#[default]
 <a href=#113 id=113 data-nosnippet>113</a>    </span>ProcessCrash,
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="doccomment">/// Consistent after an OS crash or power loss too, at the cost of fsyncs.
@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a>    <span class="doccomment">/// Gc configuration.
 <a href=#135 id=135 data-nosnippet>135</a>    </span><span class="kw">pub </span>gc: <span class="prelude-ty">Option</span>&lt;GcConfig&gt;,
 <a href=#136 id=136 data-nosnippet>136</a>    <span class="doccomment">/// What kind of crash the store stays consistent through.
-<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>durability: Durability,
+<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>crash_consistency: CrashConsistency,
 <a href=#138 id=138 data-nosnippet>138</a>}
 <a href=#139 id=139 data-nosnippet>139</a>
 <a href=#140 id=140 data-nosnippet>140</a><span class="kw">impl </span>Options {
@@ -145,7 +145,7 @@
 <a href=#145 id=145 data-nosnippet>145</a>            inline: InlineOptions::default(),
 <a href=#146 id=146 data-nosnippet>146</a>            batch: BatchOptions::default(),
 <a href=#147 id=147 data-nosnippet>147</a>            gc: <span class="prelude-val">None</span>,
-<a href=#148 id=148 data-nosnippet>148</a>            durability: Durability::default(),
+<a href=#148 id=148 data-nosnippet>148</a>            crash_consistency: CrashConsistency::default(),
 <a href=#149 id=149 data-nosnippet>149</a>        }
 <a href=#150 id=150 data-nosnippet>150</a>    }
 <a href=#151 id=151 data-nosnippet>151</a>
