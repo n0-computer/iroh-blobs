@@ -112,11 +112,13 @@ pub struct Options {
     pub batch: BatchOptions,
     /// Gc configuration.
     pub gc: Option<GcConfig>,
-    /// Whether an import syncs the blob's files to disk before the store
-    /// records it as complete.
+    /// Whether an import syncs the blob's files to disk before recording it as complete.
     ///
-    /// Without it, a crash can leave a complete entry whose data never
-    /// reached the disk.
+    /// Off by default. Without it, an OS crash or power loss shortly after an
+    /// import can leave a complete entry whose data never reached the disk. A
+    /// process crash is not affected. Turning it on costs two or three fsyncs
+    /// for every import above the inline threshold, which slows down imports
+    /// of many small files considerably.
     pub sync_imports: bool,
 }
 
@@ -128,7 +130,7 @@ impl Options {
             inline: InlineOptions::default(),
             batch: BatchOptions::default(),
             gc: None,
-            sync_imports: true,
+            sync_imports: false,
         }
     }
 

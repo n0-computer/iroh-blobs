@@ -1069,6 +1069,25 @@ impl EntityApi for HashContext {
     }
 }
 
+/// Syncs the contents of a file the store owns to disk.
+fn sync_file(path: &Path) -> io::Result<()> {
+    #[cfg(not(windows))]
+    let file = fs::File::open(path)?;
+    // windows only syncs handles with write access, and a copied
+    // read-only source keeps its read-only attribute
+    #[cfg(windows)]
+    let file = {
+        let mut perms = fs::metadata(path)?.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            fs::set_permissions(path, perms)?;
+        }
+        fs::OpenOptions::new().write(true).open(path)?
+    };
+    file.sync_data()
+}
+
 /// Syncs the directory at `path`, where the platform allows it.
 fn sync_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
@@ -1108,9 +1127,9 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
-        ImportSource::TempFile(path, file, size) => {
+        ImportSource::TempFile(path, _file, size) => {
             if options.sync_imports {
-                file.sync_data()?;
+                sync_file(path.as_ref())?;
             }
             // this will always work on any unix, but on windows there might be an issue if the target file is open!
             // possibly open with FILE_SHARE_DELETE on windows?
@@ -1132,7 +1151,9 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
         MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
         MemOrFile::File(path) => {
-            // already synced in compute_outboard if sync_imports is set
+            if options.sync_imports {
+                sync_file(path.as_ref())?;
+            }
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(

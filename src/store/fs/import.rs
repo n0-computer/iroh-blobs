@@ -431,12 +431,7 @@ async fn compute_outboard(
             data: &mut outboard_file,
         };
         init_outboard(data, &mut outboard, send_progress).await??;
-        let root = outboard.root;
-        if options.sync_imports {
-            // sync through the write handle, windows refuses to sync a read-only one
-            outboard_file.sync_data()?;
-        }
-        (root, MemOrFile::File(outboard_path))
+        (outboard.root, MemOrFile::File(outboard_path))
     } else {
         // outboard will be stored in memory, so compute it to a memory buffer
         trace!("Creating outboard in memory");
