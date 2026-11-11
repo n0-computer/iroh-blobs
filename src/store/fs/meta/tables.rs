@@ -14,6 +14,12 @@ pub(super) const INLINE_DATA_TABLE: TableDefinition<Hash, &[u8]> =
 pub(super) const INLINE_OUTBOARD_TABLE: TableDefinition<Hash, &[u8]> =
     TableDefinition::new("inline-outboard-0");
 
+/// Scalar values for the whole store, by name.
+pub(super) const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("meta-0");
+
+/// The boot session the store was opened in, empty if unknown; absent after a clean shutdown.
+pub(super) const BOOT_ID_KEY: &str = "boot-id";
+
 /// A trait similar to [`redb::ReadableTable`] but for all tables that make up
 /// the blob store. This can be used in places where either a readonly or
 /// mutable table is needed.

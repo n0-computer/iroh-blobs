@@ -34,10 +34,11 @@ use crate::{
 mod proto;
 pub use proto::*;
 pub(crate) mod tables;
-use tables::{ReadOnlyTables, ReadableTables, Tables};
+use tables::{ReadOnlyTables, ReadableTables, Tables, BOOT_ID_KEY, META_TABLE};
 use tracing::{debug, error, info_span, trace, Span};
 
 use super::{
+    boot_id,
     delete_set::DeleteHandle,
     entry_state::{DataLocation, EntryState, OutboardLocation},
     options::BatchOptions,
@@ -541,6 +542,7 @@ impl Actor {
         cmds: tokio::sync::mpsc::Receiver<Command>,
         mut ds: DeleteHandle,
         options: BatchOptions,
+        detect_os_crash: bool,
     ) -> Result<Self, ActorError> {
         debug!("creating or opening meta database at {}", db_path.display());
         let db = match redb::Database::create(db_path) {
@@ -557,6 +559,24 @@ impl Actor {
         let tx = db.begin_write()?;
         let ftx = ds.begin_write();
         Tables::new(&tx, &ftx)?;
+        let mut meta = tx.open_table(META_TABLE)?;
+        if detect_os_crash {
+            match record_boot(&mut meta, boot_id::current().as_deref())? {
+                LastShutdown::Clean | LastShutdown::SameBoot => {}
+                LastShutdown::OtherBoot => error!(
+                    "the blob store was open when the machine went down; after an OS crash or \
+                     power loss, entries may claim data that never reached the disk"
+                ),
+                LastShutdown::Unknown => error!(
+                    "the blob store was not shut down cleanly, and without a boot id on this \
+                     platform an OS crash or power loss cannot be ruled out; entries may claim \
+                     data that never reached the disk"
+                ),
+            }
+        } else {
+            meta.remove(BOOT_ID_KEY)?;
+        }
+        drop(meta);
         tx.commit()?;
         drop(ftx);
         let cmds = PeekableReceiver::new(cmds);
@@ -793,7 +813,7 @@ impl Actor {
             }
             TopLevelCommand::Shutdown(cmd) => {
                 trace!("{cmd:?}");
-                // nothing to do here, since the database will be dropped
+                Self::clear_boot(db)?;
                 Some(cmd)
             }
             TopLevelCommand::Snapshot(cmd) => {
@@ -806,6 +826,21 @@ impl Actor {
                 None
             }
         })
+    }
+
+    /// Removes the boot id, so the next open knows the store was shut down cleanly.
+    fn clear_boot(db: &Database) -> ActorResult<()> {
+        let tx = db
+            .begin_write()
+            .map_err(|e| e!(ActorError::Transaction, e))?;
+        let mut meta = tx
+            .open_table(META_TABLE)
+            .map_err(|e| e!(ActorError::Table, e))?;
+        meta.remove(BOOT_ID_KEY)
+            .map_err(|e| e!(ActorError::Storage, e))?;
+        drop(meta);
+        tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
+        Ok(())
     }
 
     pub async fn run(self) {
@@ -886,6 +921,39 @@ impl Actor {
         }
         Ok(())
     }
+}
+
+/// How the store was left the last time it was open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastShutdown {
+    /// Shut down cleanly, or never opened before.
+    Clean,
+    /// Not shut down cleanly, but the machine kept running, so nothing unsynced was lost.
+    SameBoot,
+    /// Open when the machine went down, so an OS crash or power loss may have lost unsynced writes.
+    OtherBoot,
+    /// Not shut down cleanly, and without a boot id an OS crash cannot be ruled out.
+    Unknown,
+}
+
+/// Records the boot session `current`, and returns how the store was left before.
+///
+/// The boot id stays recorded until a clean shutdown removes it, so finding
+/// one means the last shutdown was not clean.
+fn record_boot(
+    meta: &mut redb::Table<&str, &[u8]>,
+    current: Option<&str>,
+) -> Result<LastShutdown, redb::StorageError> {
+    let previous = meta.get(BOOT_ID_KEY)?.map(|v| v.value().to_vec());
+    let last = match (previous, current) {
+        (None, _) => LastShutdown::Clean,
+        (Some(previous), _) if previous.is_empty() => LastShutdown::Unknown,
+        (Some(_), None) => LastShutdown::Unknown,
+        (Some(previous), Some(current)) if previous == current.as_bytes() => LastShutdown::SameBoot,
+        (Some(_), Some(_)) => LastShutdown::OtherBoot,
+    };
+    meta.insert(BOOT_ID_KEY, current.unwrap_or_default().as_bytes())?;
+    Ok(last)
 }
 
 /// Convert a redb StorageError into an api::Error
@@ -1015,6 +1083,59 @@ mod tests {
         super::{delete_set, options::PathOptions},
         *,
     };
+
+    #[test]
+    fn record_boot_tells_how_the_store_was_left() -> testresult::TestResult<()> {
+        let db = Database::builder().create_with_backend(redb::backends::InMemoryBackend::new())?;
+        let tx = db.begin_write()?;
+        let mut meta = tx.open_table(META_TABLE)?;
+        assert_eq!(record_boot(&mut meta, Some("a"))?, LastShutdown::Clean);
+        assert_eq!(record_boot(&mut meta, Some("a"))?, LastShutdown::SameBoot);
+        assert_eq!(record_boot(&mut meta, Some("b"))?, LastShutdown::OtherBoot);
+        assert_eq!(record_boot(&mut meta, None)?, LastShutdown::Unknown);
+        assert_eq!(record_boot(&mut meta, Some("b"))?, LastShutdown::Unknown);
+        meta.remove(BOOT_ID_KEY)?;
+        assert_eq!(record_boot(&mut meta, Some("b"))?, LastShutdown::Clean);
+        Ok(())
+    }
+
+    /// Reads the recorded boot id from a closed store's database.
+    fn recorded_boot(db: &std::path::Path) -> testresult::TestResult<Option<Vec<u8>>> {
+        let db = Database::open(db)?;
+        let tx = db.begin_read()?;
+        let meta = tx.open_table(META_TABLE)?;
+        Ok(meta.get(BOOT_ID_KEY)?.map(|v| v.value().to_vec()))
+    }
+
+    #[test]
+    fn opening_records_the_boot_until_a_clean_shutdown() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Arc::new(PathOptions::new(dir.path()));
+        let db = dir.path().join("db");
+        let (_protect, deletes) = delete_set::pair(paths);
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        // dropped without a shutdown, as in a crash
+        drop(Actor::new(
+            db.clone(),
+            rx,
+            deletes,
+            BatchOptions::default(),
+            true,
+        )?);
+        let expected = boot_id::current().unwrap_or_default().into_bytes();
+        assert_eq!(recorded_boot(&db)?, Some(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_clean_shutdown_clears_the_boot() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(dir.path()).await?;
+        store.shutdown().await?;
+        drop(store);
+        assert_eq!(recorded_boot(&dir.path().join("blobs.db"))?, None);
+        Ok(())
+    }
 
     #[test]
     fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {

@@ -690,7 +690,13 @@ impl Actor {
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
         let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
-        let db_actor = meta::Actor::new(db_path, db_recv, ds, options.batch.clone())?;
+        let db_actor = meta::Actor::new(
+            db_path,
+            db_recv,
+            ds,
+            options.batch.clone(),
+            !options.syncs_files(),
+        )?;
         // We hold the database lock now, so no other store is importing into the temp
         // directory. Anything in it is left over from imports that did not complete,
         // for example because the process was killed.
