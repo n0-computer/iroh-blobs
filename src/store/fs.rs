@@ -1101,6 +1101,25 @@ fn sync_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Syncs everything written to the filesystem that holds `path`, where the platform allows it.
+///
+/// Elsewhere this does nothing, so writes from just before can still be lost
+/// in an OS crash or power loss.
+fn sync_fs(path: &Path) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use std::os::fd::AsRawFd;
+        let dir = fs::File::open(path)?;
+        // SAFETY: the file descriptor stays open while `dir` is alive.
+        if unsafe { libc::syncfs(dir.as_raw_fd()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let _ = path;
+    Ok(())
+}
+
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
     let ImportEntry {
         source,

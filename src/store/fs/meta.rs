@@ -4,7 +4,7 @@ use std::{
     collections::HashSet,
     io,
     ops::{Bound, Deref, DerefMut},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::SystemTime,
 };
 
@@ -35,7 +35,7 @@ mod proto;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables, BOOT_ID_KEY, META_TABLE};
-use tracing::{debug, error, info_span, trace, Span};
+use tracing::{debug, error, info_span, trace, warn, Span};
 
 use super::{
     boot_id,
@@ -534,6 +534,8 @@ pub struct Actor {
     ds: DeleteHandle,
     options: BatchOptions,
     protected: HashSet<Hash>,
+    /// The data directory to sync before a clean shutdown forgets the boot, if it is recorded.
+    sync_on_shutdown: Option<PathBuf>,
 }
 
 impl Actor {
@@ -580,12 +582,14 @@ impl Actor {
         tx.commit()?;
         drop(ftx);
         let cmds = PeekableReceiver::new(cmds);
+        let sync_on_shutdown = detect_os_crash.then(|| ds.paths().data_path.clone());
         Ok(Self {
             db,
             cmds,
             ds,
             options,
             protected: Default::default(),
+            sync_on_shutdown,
         })
     }
 
@@ -799,6 +803,7 @@ impl Actor {
         db: &mut Database,
         cmd: TopLevelCommand,
         op: TxnNum,
+        sync_on_shutdown: Option<&Path>,
     ) -> ActorResult<Option<ShutdownMsg>> {
         let span = info_span!(
             parent: cmd.parent_span(),
@@ -813,7 +818,18 @@ impl Actor {
             }
             TopLevelCommand::Shutdown(cmd) => {
                 trace!("{cmd:?}");
-                Self::clear_boot(db)?;
+                // Only forget the boot once what was written reached the disk,
+                // so an OS crash right after a clean shutdown is not missed.
+                let synced = match sync_on_shutdown.map(super::sync_fs) {
+                    Some(Err(cause)) => {
+                        warn!("failed to sync the blob store on shutdown: {cause}");
+                        false
+                    }
+                    _ => true,
+                };
+                if synced {
+                    Self::clear_boot(db)?;
+                }
                 Some(cmd)
             }
             TopLevelCommand::Snapshot(cmd) => {
@@ -852,6 +868,8 @@ impl Actor {
 
     async fn run_inner(mut self) -> ActorResult<()> {
         let mut db = DbWrapper::from(self.db);
+        let sync_on_shutdown = self.sync_on_shutdown.clone();
+        let sync_on_shutdown = sync_on_shutdown.as_deref();
         let options = &self.options;
         let mut op = 0u64;
         let shutdown = loop {
@@ -862,7 +880,9 @@ impl Actor {
             match cmd {
                 Command::TopLevel(cmd) => {
                     let op = TxnNum::TopLevel(op);
-                    if let Some(shutdown) = Self::handle_toplevel(&mut db, cmd, op).await? {
+                    if let Some(shutdown) =
+                        Self::handle_toplevel(&mut db, cmd, op, sync_on_shutdown).await?
+                    {
                         break Some(shutdown);
                     }
                 }
