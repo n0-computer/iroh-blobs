@@ -148,7 +148,7 @@ pub mod options;
 pub(crate) mod util;
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
-use options::Options;
+use options::{Durability, Options};
 use tracing::Instrument;
 
 use crate::{
@@ -1105,6 +1105,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         ..
     } = import_data;
     let options = ctx.options();
+    let sync = options.durability == Durability::PowerLoss;
     match &source {
         ImportSource::Memory(data) => {
             debug_assert!(options.is_inlined_data(data.len() as u64));
@@ -1128,7 +1129,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
         ImportSource::TempFile(path, _file, size) => {
-            if options.sync_imports {
+            if sync {
                 sync_file(path.as_ref())?;
             }
             // this will always work on any unix, but on windows there might be an issue if the target file is open!
@@ -1151,7 +1152,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
         MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
         MemOrFile::File(path) => {
-            if options.sync_imports {
+            if sync {
                 sync_file(path.as_ref())?;
             }
             // the same caveat as above applies here
@@ -1171,7 +1172,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     };
     let moved = matches!(data_location, DataLocation::Owned(_))
         || matches!(outboard_location, OutboardLocation::Owned);
-    if options.sync_imports && moved {
+    if sync && moved {
         // A rename survives a crash only once its directory is synced.
         sync_dir(&options.path.data_path)?;
     }
