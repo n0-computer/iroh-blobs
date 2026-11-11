@@ -101,6 +101,25 @@ impl Default for BatchOptions {
     }
 }
 
+/// What kind of crash the file store stays consistent through.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CrashConsistency {
+    /// Consistent after a process crash; an OS crash or power loss can corrupt recent entries.
+    ///
+    /// After an OS crash or power loss, a recently completed entry can point to
+    /// data that never reached the disk.
+    #[default]
+    ProcessCrash,
+    /// Consistent after an OS crash or power loss too, at the cost of fsyncs.
+    ///
+    /// An import syncs its data and outboard files and the data directory
+    /// before it is recorded as complete. That costs two or three fsyncs for
+    /// every import above the inline threshold, which slows down imports of
+    /// many small files considerably.
+    PowerLoss,
+}
+
 /// Options for the file store.
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -112,6 +131,8 @@ pub struct Options {
     pub batch: BatchOptions,
     /// Gc configuration.
     pub gc: Option<GcConfig>,
+    /// What kind of crash the store stays consistent through.
+    pub crash_consistency: CrashConsistency,
 }
 
 impl Options {
@@ -122,6 +143,7 @@ impl Options {
             inline: InlineOptions::default(),
             batch: BatchOptions::default(),
             gc: None,
+            crash_consistency: CrashConsistency::default(),
         }
     }
 
