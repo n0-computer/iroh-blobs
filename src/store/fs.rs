@@ -1132,9 +1132,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
         MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
         MemOrFile::File(path) => {
-            if options.sync_imports {
-                fs::File::open(&path)?.sync_data()?;
-            }
+            // already synced in compute_outboard if sync_imports is set
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(
