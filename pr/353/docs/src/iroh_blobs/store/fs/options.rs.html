@@ -133,8 +133,8 @@
 <a href=#133 id=133 data-nosnippet>133</a>    /// On Linux, Android, macOS and iOS, opening the store also flushes the data
 <a href=#134 id=134 data-nosnippet>134</a>    /// filesystem after recovery, before recording the new run. This includes
 <a href=#135 id=135 data-nosnippet>135</a>    /// writes inherited from an earlier run, but may wait for unrelated writes
-<a href=#136 id=136 data-nosnippet>136</a>    /// on the same filesystem. If the flush fails, the run is recorded as not
-<a href=#137 id=137 data-nosnippet>137</a>    /// synced, so an OS crash during it is recovered from as in `ProcessCrash`.
+<a href=#136 id=136 data-nosnippet>136</a>    /// on the same filesystem. If the flush fails, opening the store returns an
+<a href=#137 id=137 data-nosnippet>137</a>    /// error and leaves the previous run record in place for the next attempt.
 <a href=#138 id=138 data-nosnippet>138</a>    /// Other platforms do not yet perform this startup flush, so switching from
 <a href=#139 id=139 data-nosnippet>139</a>    /// `ProcessCrash` can leave earlier writes unsynced.
 <a href=#140 id=140 data-nosnippet>140</a>    </span>PowerLoss,
