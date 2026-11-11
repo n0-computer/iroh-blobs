@@ -49,8 +49,8 @@ nested_enum_utils = "0.2.3"
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 chrono = { version = "0.4.39" }
 
-# boot session id and filesystem sync for crash detection in the fs store
-[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))'.dependencies]
+# boot session id for crash detection in the fs store
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 libc = { version = "0.2.190", optional = true }
 
 [target.'cfg(windows)'.dependencies]

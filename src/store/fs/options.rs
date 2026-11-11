@@ -119,10 +119,9 @@ pub enum CrashConsistency {
     /// open, every entry with files checks them again when it is next loaded.
     /// Until then it may report less data than it has, never more.
     ///
-    /// On Linux and Android, a clean shutdown syncs the filesystem before it
-    /// forgets the boot id. Elsewhere, an OS crash within seconds after a clean
-    /// shutdown, before the OS wrote out its cache, goes unnoticed. Where there
-    /// is no boot id, every unclean shutdown counts as a possible OS crash.
+    /// A clean shutdown does not sync, so an OS crash within seconds after it,
+    /// before the OS wrote out its cache, goes unnoticed. Where there is no boot
+    /// id, every unclean shutdown counts as a possible OS crash.
     #[default]
     ProcessCrash,
     /// Consistent after an OS crash or power loss too, at the cost of fsyncs.

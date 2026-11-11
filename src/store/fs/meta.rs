@@ -4,7 +4,7 @@ use std::{
     collections::HashSet,
     io,
     ops::{Bound, Deref, DerefMut},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::SystemTime,
 };
 
@@ -13,7 +13,6 @@ use bytes::Bytes;
 use irpc::channel::mpsc;
 use n0_error::{anyerr, e, stack_error, AnyError};
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
-use serde::{Deserialize, Serialize};
 use tokio::pin;
 
 use crate::{
@@ -34,9 +33,11 @@ use crate::{
 };
 mod proto;
 mod recovery;
+mod run;
 pub use proto::*;
 pub(crate) mod tables;
-use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE, RUN_KEY};
+use run::{LastShutdown, Run};
+use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
 use tracing::{debug, error, info, info_span, trace, warn, Span};
 
 use super::{
@@ -536,8 +537,6 @@ pub struct Actor {
     ds: DeleteHandle,
     options: BatchOptions,
     protected: HashSet<Hash>,
-    /// The data directory to sync before a clean shutdown forgets the boot, if it is recorded.
-    sync_on_shutdown: Option<PathBuf>,
 }
 
 impl Actor {
@@ -571,7 +570,7 @@ impl Actor {
         };
         // Recovery commits together with the new run, so if the process dies
         // during it, the next open still finds the old one.
-        match record_run(&mut meta, &run)? {
+        match run::record(&mut meta, &run)? {
             LastShutdown::Clean => {}
             LastShutdown::ProcessCrash => info!(
                 "the blob store was not shut down cleanly, but the machine kept running, so \
@@ -604,14 +603,12 @@ impl Actor {
         tx.commit()?;
         drop(ftx);
         let cmds = PeekableReceiver::new(cmds);
-        let sync_on_shutdown = (!syncs_files).then_some(paths.data_path);
         Ok(Self {
             db,
             cmds,
             ds,
             options,
             protected: Default::default(),
-            sync_on_shutdown,
         })
     }
 
@@ -825,7 +822,6 @@ impl Actor {
         db: &mut Database,
         cmd: TopLevelCommand,
         op: TxnNum,
-        sync_on_shutdown: Option<&Path>,
     ) -> ActorResult<Option<ShutdownMsg>> {
         let span = info_span!(
             parent: cmd.parent_span(),
@@ -840,18 +836,7 @@ impl Actor {
             }
             TopLevelCommand::Shutdown(cmd) => {
                 trace!("{cmd:?}");
-                // Only forget the boot once what was written reached the disk,
-                // so an OS crash right after a clean shutdown is not missed.
-                let synced = match sync_on_shutdown.map(super::sync_fs) {
-                    Some(Err(cause)) => {
-                        warn!("failed to sync the blob store on shutdown: {cause}");
-                        false
-                    }
-                    _ => true,
-                };
-                if synced {
-                    Self::clear_boot(db)?;
-                }
+                Self::clear_run(db)?;
                 Some(cmd)
             }
             TopLevelCommand::Snapshot(cmd) => {
@@ -866,16 +851,15 @@ impl Actor {
         })
     }
 
-    /// Removes the boot id, so the next open knows the store was shut down cleanly.
-    fn clear_boot(db: &Database) -> ActorResult<()> {
+    /// Removes the run record, so the next open knows the store was shut down cleanly.
+    fn clear_run(db: &Database) -> ActorResult<()> {
         let tx = db
             .begin_write()
             .map_err(|e| e!(ActorError::Transaction, e))?;
         let mut meta = tx
             .open_table(META_TABLE)
             .map_err(|e| e!(ActorError::Table, e))?;
-        meta.remove(RUN_KEY)
-            .map_err(|e| e!(ActorError::Storage, e))?;
+        run::clear(&mut meta).map_err(|e| e!(ActorError::Storage, e))?;
         drop(meta);
         tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
         Ok(())
@@ -890,8 +874,6 @@ impl Actor {
 
     async fn run_inner(mut self) -> ActorResult<()> {
         let mut db = DbWrapper::from(self.db);
-        let sync_on_shutdown = self.sync_on_shutdown.clone();
-        let sync_on_shutdown = sync_on_shutdown.as_deref();
         let options = &self.options;
         let mut op = 0u64;
         let shutdown = loop {
@@ -902,9 +884,7 @@ impl Actor {
             match cmd {
                 Command::TopLevel(cmd) => {
                     let op = TxnNum::TopLevel(op);
-                    if let Some(shutdown) =
-                        Self::handle_toplevel(&mut db, cmd, op, sync_on_shutdown).await?
-                    {
+                    if let Some(shutdown) = Self::handle_toplevel(&mut db, cmd, op).await? {
                         break Some(shutdown);
                     }
                 }
@@ -977,58 +957,6 @@ fn report(recovered: &recovery::Recovered) {
             recovered.external
         );
     }
-}
-
-/// A run of the store, recorded while it is open and removed by a clean shutdown.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct Run {
-    /// The boot session it runs in, if the platform has an id for it.
-    boot_id: Option<String>,
-    /// Whether it syncs data files, so an OS crash cannot leave entries that claim lost data.
-    syncs_files: bool,
-}
-
-/// How the store was left the last time it was open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LastShutdown {
-    /// Shut down cleanly, or never opened before.
-    Clean,
-    /// Not shut down cleanly, but the machine kept running, so nothing written was lost.
-    ProcessCrash,
-    /// Not shut down cleanly, and the machine may have gone down too.
-    MaybeOsCrash {
-        /// The last run synced its files, so entries cannot claim lost data.
-        synced: bool,
-        /// Both runs have a boot id, so the machine did go down.
-        boot_known: bool,
-    },
-}
-
-/// Records `current` as the open run, and returns how the store was left before.
-///
-/// A recorded run that cannot be read counts as an unsynced run on an unknown boot.
-fn record_run(
-    meta: &mut redb::Table<&str, &[u8]>,
-    current: &Run,
-) -> Result<LastShutdown, redb::StorageError> {
-    let previous = meta
-        .get(RUN_KEY)?
-        .map(|v| postcard::from_bytes::<Run>(v.value()).ok());
-    let last = match previous {
-        None => LastShutdown::Clean,
-        Some(Some(previous))
-            if previous.boot_id.is_some() && previous.boot_id == current.boot_id =>
-        {
-            LastShutdown::ProcessCrash
-        }
-        Some(previous) => LastShutdown::MaybeOsCrash {
-            synced: previous.as_ref().is_some_and(|p| p.syncs_files),
-            boot_known: previous.is_some_and(|p| p.boot_id.is_some()) && current.boot_id.is_some(),
-        },
-    };
-    let bytes = postcard::to_stdvec(current).expect("a run always serializes");
-    meta.insert(RUN_KEY, bytes.as_slice())?;
-    Ok(last)
 }
 
 /// Convert a redb StorageError into an api::Error
@@ -1162,59 +1090,25 @@ mod tests {
         *,
     };
 
-    fn run(boot_id: Option<&str>, syncs_files: bool) -> Run {
+    fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
         Run {
             boot_id: boot_id.map(str::to_owned),
             syncs_files,
         }
     }
 
-    #[test]
-    fn record_run_tells_how_the_store_was_left() -> testresult::TestResult<()> {
-        let db = Database::builder().create_with_backend(redb::backends::InMemoryBackend::new())?;
-        let tx = db.begin_write()?;
-        let mut meta = tx.open_table(META_TABLE)?;
-        let os_crash = |synced, boot_known| LastShutdown::MaybeOsCrash { synced, boot_known };
-        let a = run(Some("a"), false);
-        assert_eq!(record_run(&mut meta, &a)?, LastShutdown::Clean);
-        assert_eq!(record_run(&mut meta, &a)?, LastShutdown::ProcessCrash);
-        let b = run(Some("b"), false);
-        assert_eq!(record_run(&mut meta, &b)?, os_crash(false, true));
-        let unknown = run(None, false);
-        assert_eq!(record_run(&mut meta, &unknown)?, os_crash(false, false));
-        assert_eq!(record_run(&mut meta, &unknown)?, os_crash(false, false));
-        let synced = run(Some("b"), true);
-        assert_eq!(record_run(&mut meta, &synced)?, os_crash(false, false));
-        // the mode of the last run counts, not the one of this run
-        assert_eq!(
-            record_run(&mut meta, &run(Some("c"), false))?,
-            os_crash(true, true)
-        );
-        meta.insert(RUN_KEY, b"garbage".as_slice())?;
-        assert_eq!(record_run(&mut meta, &a)?, os_crash(false, false));
-        meta.remove(RUN_KEY)?;
-        assert_eq!(record_run(&mut meta, &a)?, LastShutdown::Clean);
-        Ok(())
-    }
-
     /// Reads the recorded run from a closed store's database.
     fn recorded_run(db: &std::path::Path) -> testresult::TestResult<Option<Run>> {
         let db = Database::open(db)?;
         let tx = db.begin_read()?;
-        let meta = tx.open_table(META_TABLE)?;
-        let Some(bytes) = meta.get(RUN_KEY)? else {
-            return Ok(None);
-        };
-        Ok(Some(postcard::from_bytes(bytes.value())?))
+        Ok(run::read(&tx.open_table(META_TABLE)?))
     }
 
     /// Records `run` as the open run of a closed store's database.
     fn set_run(db: &std::path::Path, run: &Run) -> testresult::TestResult<()> {
         let db = Database::open(db)?;
         let tx = db.begin_write()?;
-        let bytes = postcard::to_stdvec(run)?;
-        tx.open_table(META_TABLE)?
-            .insert(RUN_KEY, bytes.as_slice())?;
+        run::write(&mut tx.open_table(META_TABLE)?, run)?;
         tx.commit()?;
         Ok(())
     }
@@ -1276,7 +1170,7 @@ mod tests {
         // the machine went down while the store was open, and lost writes
         set_run(
             &dir.path().join("blobs.db"),
-            &run(Some("another boot"), false),
+            &a_run(Some("another boot"), false),
         )?;
         let file = std::fs::OpenOptions::new()
             .write(true)
@@ -1328,7 +1222,7 @@ mod tests {
         drop(store);
         set_run(
             &dir.path().join("blobs.db"),
-            &run(Some("another boot"), true),
+            &a_run(Some("another boot"), true),
         )?;
         let store = open(dir.path(), CrashConsistency::ProcessCrash).await?;
         // recovery would have made it partial until it is loaded
