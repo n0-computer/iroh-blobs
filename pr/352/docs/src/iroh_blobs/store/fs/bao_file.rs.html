@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>    store::{
 <a href=#34 id=34 data-nosnippet>34</a>        fs::{meta::raw_outboard_size, util::entity_manager, HashContext},
 <a href=#35 id=35 data-nosnippet>35</a>        util::{
-<a href=#36 id=36 data-nosnippet>36</a>            read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
+<a href=#36 id=36 data-nosnippet>36</a>            read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
 <a href=#37 id=37 data-nosnippet>37</a>            PartialMemStorage, DD,
 <a href=#38 id=38 data-nosnippet>38</a>        },
 <a href=#39 id=39 data-nosnippet>39</a>        IROH_BLOCK_SIZE,
@@ -298,8 +298,8 @@
 <a href=#298 id=298 data-nosnippet>298</a>                }
 <a href=#299 id=299 data-nosnippet>299</a>                BaoContentItem::Leaf(leaf) =&gt; {
 <a href=#300 id=300 data-nosnippet>300</a>                    <span class="kw">let </span>o0 = leaf.offset;
-<a href=#301 id=301 data-nosnippet>301</a>                    <span class="comment">// divide by chunk size, multiply by 8
-<a href=#302 id=302 data-nosnippet>302</a>                    </span><span class="kw">let </span>index = (leaf.offset &gt;&gt; (tree.block_size().chunk_log() + <span class="number">10</span>)) &lt;&lt; <span class="number">3</span>;
+<a href=#301 id=301 data-nosnippet>301</a>                    <span class="comment">// one size slot per chunk group
+<a href=#302 id=302 data-nosnippet>302</a>                    </span><span class="kw">let </span>index = size_slot(leaf.offset);
 <a href=#303 id=303 data-nosnippet>303</a>                    <span class="macro">trace!</span>(
 <a href=#304 id=304 data-nosnippet>304</a>                        <span class="string">"write_batch f={:?} o={} l={}"</span>,
 <a href=#305 id=305 data-nosnippet>305</a>                        <span class="self">self</span>.data,
