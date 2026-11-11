@@ -35,7 +35,7 @@ mod proto;
 pub use proto::*;
 pub(crate) mod tables;
 use tables::{ReadOnlyTables, ReadableTables, Tables};
-use tracing::{debug, error, info_span, trace, warn, Span};
+use tracing::{debug, error, info_span, trace, Span};
 
 use super::{
     delete_set::DeleteHandle,
@@ -748,10 +748,6 @@ impl Actor {
             ReadWriteCommand::CreateTag(cmd) => Self::create_tag(tables, cmd).await,
             ReadWriteCommand::DeleteTags(cmd) => Self::delete_tags(tables, cmd).await,
             ReadWriteCommand::RenameTag(cmd) => Self::rename_tag(tables, cmd).await,
-            ReadWriteCommand::ProcessExit(cmd) => {
-                warn!(code = cmd.code, "exiting process on request");
-                std::process::exit(cmd.code);
-            }
         }
     }
 

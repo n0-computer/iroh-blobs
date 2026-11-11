@@ -86,15 +86,6 @@ impl fmt::Debug for Set {
     }
 }
 
-/// Exit the process from inside a write transaction.
-///
-/// Meant for crash tests. Nothing sends it yet.
-#[derive(Debug)]
-pub struct ProcessExit {
-    pub code: i32,
-    pub span: Span,
-}
-
 /// Modification method: create a new unique tag and set it to a value.
 pub use crate::api::proto::CreateTagMsg;
 /// Modification method: remove a range of tags.
@@ -134,7 +125,6 @@ pub enum ReadWriteCommand {
     DeleteTags(DeleteTagsMsg),
     RenameTag(RenameTagMsg),
     CreateTag(CreateTagMsg),
-    ProcessExit(ProcessExit),
 }
 
 impl ReadWriteCommand {
@@ -147,7 +137,6 @@ impl ReadWriteCommand {
             Self::DeleteTags(x) => &x.span,
             Self::RenameTag(x) => &x.span,
             Self::CreateTag(x) => &x.span,
-            Self::ProcessExit(x) => &x.span,
         }
     }
 }
