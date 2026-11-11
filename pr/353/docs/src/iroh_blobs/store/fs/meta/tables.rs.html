@@ -17,8 +17,8 @@
 <a href=#17 id=17 data-nosnippet>17</a><span class="doccomment">/// Scalar values for the whole store, by name.
 <a href=#18 id=18 data-nosnippet>18</a></span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">const </span>META_TABLE: TableDefinition&lt;<span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>[u8]&gt; = TableDefinition::new(<span class="string">"meta-0"</span>);
 <a href=#19 id=19 data-nosnippet>19</a>
-<a href=#20 id=20 data-nosnippet>20</a><span class="doccomment">/// The boot session the store was opened in, empty if unknown; absent after a clean shutdown.
-<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">const </span>BOOT_ID_KEY: <span class="kw-2">&amp;</span>str = <span class="string">"boot-id"</span>;
+<a href=#20 id=20 data-nosnippet>20</a><span class="doccomment">/// The run the store is open in, absent after a clean shutdown.
+<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">const </span>RUN_KEY: <span class="kw-2">&amp;</span>str = <span class="string">"run"</span>;
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a><span class="doccomment">/// A trait similar to [`redb::ReadableTable`] but for all tables that make up
 <a href=#24 id=24 data-nosnippet>24</a>/// the blob store. This can be used in places where either a readonly or
