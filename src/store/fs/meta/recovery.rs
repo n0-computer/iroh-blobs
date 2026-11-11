@@ -72,7 +72,7 @@ pub(super) fn recover(
                 outboard_location,
             } => {
                 let size = match &data_location {
-                    DataLocation::Inline(()) => inline_data(tables, &hash)?.len() as u64,
+                    DataLocation::Inline(()) => inline(&tables.inline_data, &hash)?.len() as u64,
                     DataLocation::Owned(size) | DataLocation::External(_, size) => *size,
                 };
                 make_partial(
@@ -93,8 +93,8 @@ pub(super) fn recover(
 /// Turns a complete entry into a partial one with the same files.
 ///
 /// Inline parts are written to files, since a partial entry lives in files
-/// only. The bitfield file is removed, so the next load rebuilds it from what
-/// the files really hold.
+/// only; missing files are created when it is loaded. The bitfield file is
+/// removed, so the load rebuilds it from what the files really hold.
 fn make_partial(
     tables: &mut Tables<'_>,
     paths: &PathOptions,
@@ -103,25 +103,13 @@ fn make_partial(
     data_location: &DataLocation<(), u64>,
     outboard_location: &OutboardLocation,
 ) -> Result<(), ActorError> {
-    let data_path = paths.data_path(hash);
-    match data_location {
-        DataLocation::Inline(()) => {
-            let data = inline_data(tables, hash)?;
-            fs::write(&data_path, &data).std_context("writing data")?;
-        }
-        DataLocation::Owned(_) | DataLocation::External(..) => {
-            create_if_missing(&data_path).std_context("creating data")?;
-        }
+    if let DataLocation::Inline(()) = data_location {
+        let data = inline(&tables.inline_data, hash)?;
+        fs::write(paths.data_path(hash), data).std_context("writing data")?;
     }
-    let outboard_path = paths.outboard_path(hash);
-    match outboard_location {
-        OutboardLocation::Inline(()) => {
-            let outboard = inline_outboard(tables, hash)?;
-            fs::write(&outboard_path, &outboard).std_context("writing outboard")?;
-        }
-        OutboardLocation::NotNeeded | OutboardLocation::Owned => {
-            create_if_missing(&outboard_path).std_context("creating outboard")?;
-        }
+    if let OutboardLocation::Inline(()) = outboard_location {
+        let outboard = inline(&tables.inline_outboard, hash)?;
+        fs::write(paths.outboard_path(hash), outboard).std_context("writing outboard")?;
     }
     // the size goes in the slot of the last chunk group, as the partial file storage writes it
     let last_group = size.saturating_sub(1) >> (IROH_BLOCK_SIZE.chunk_log() + 10);
@@ -138,33 +126,18 @@ fn make_partial(
     Ok(())
 }
 
-fn inline_data(tables: &Tables<'_>, hash: &Hash) -> Result<Bytes, ActorError> {
-    match tables.inline_data.get(hash)? {
+/// Reads the inline data or outboard of `hash` from `table`.
+fn inline(
+    table: &impl ReadableTable<Hash, &'static [u8]>,
+    hash: &Hash,
+) -> Result<Bytes, ActorError> {
+    match table.get(hash)? {
         Some(data) => Ok(Bytes::copy_from_slice(data.value())),
         None => Err(ActorError::inconsistent(format!(
-            "inline data missing for {}",
+            "inline part missing for {}",
             hash.to_hex()
         ))),
     }
-}
-
-fn inline_outboard(tables: &Tables<'_>, hash: &Hash) -> Result<Bytes, ActorError> {
-    match tables.inline_outboard.get(hash)? {
-        Some(data) => Ok(Bytes::copy_from_slice(data.value())),
-        None => Err(ActorError::inconsistent(format!(
-            "inline outboard missing for {}",
-            hash.to_hex()
-        ))),
-    }
-}
-
-fn create_if_missing(path: &Path) -> io::Result<()> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map(drop)
 }
 
 fn remove_if_exists(path: &Path) -> io::Result<()> {
