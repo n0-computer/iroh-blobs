@@ -580,21 +580,11 @@ impl Actor {
                 "the blob store was not shut down cleanly, but its last run synced its files, \
                  so an OS crash cannot have damaged entries"
             ),
-            LastShutdown::MaybeOsCrash {
-                synced: false,
-                boot_known,
-            } => {
-                if boot_known {
-                    warn!(
-                        "the blob store was open when the machine went down; an OS crash or \
-                         power loss may have lost data, so entries are checked again"
-                    );
-                } else {
-                    warn!(
-                        "the blob store was not shut down cleanly, and without a boot id an OS \
-                         crash cannot be ruled out, so entries are checked again"
-                    );
-                }
+            LastShutdown::MaybeOsCrash { synced: false } => {
+                warn!(
+                    "the blob store was not shut down cleanly, and the machine may have gone \
+                     down too, so entries are checked again in case an OS crash lost data"
+                );
                 report(&recovery::recover(&mut tables, &paths)?);
             }
         }

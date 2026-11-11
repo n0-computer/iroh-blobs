@@ -29,8 +29,6 @@ pub(super) enum LastShutdown {
     MaybeOsCrash {
         /// The last run synced its files, so entries cannot claim lost data.
         synced: bool,
-        /// Both runs have a boot id, so the machine did go down.
-        boot_known: bool,
     },
 }
 
@@ -51,8 +49,7 @@ pub(super) fn record(
             LastShutdown::ProcessCrash
         }
         Some(previous) => LastShutdown::MaybeOsCrash {
-            synced: previous.as_ref().is_some_and(|p| p.syncs_files),
-            boot_known: previous.is_some_and(|p| p.boot_id.is_some()) && current.boot_id.is_some(),
+            synced: previous.is_some_and(|p| p.syncs_files),
         },
     };
     meta.insert(RUN_KEY, current.to_bytes().as_slice())?;
@@ -134,24 +131,21 @@ mod tests {
         let db = Database::builder().create_with_backend(redb::backends::InMemoryBackend::new())?;
         let tx = db.begin_write()?;
         let mut meta = tx.open_table(META_TABLE)?;
-        let os_crash = |synced, boot_known| LastShutdown::MaybeOsCrash { synced, boot_known };
+        let os_crash = |synced| LastShutdown::MaybeOsCrash { synced };
         let a = run(Some("a"), false);
         assert_eq!(record(&mut meta, &a)?, LastShutdown::Clean);
         assert_eq!(record(&mut meta, &a)?, LastShutdown::ProcessCrash);
         let b = run(Some("b"), false);
-        assert_eq!(record(&mut meta, &b)?, os_crash(false, true));
+        assert_eq!(record(&mut meta, &b)?, os_crash(false));
         let unknown = run(None, false);
-        assert_eq!(record(&mut meta, &unknown)?, os_crash(false, false));
-        assert_eq!(record(&mut meta, &unknown)?, os_crash(false, false));
+        assert_eq!(record(&mut meta, &unknown)?, os_crash(false));
+        assert_eq!(record(&mut meta, &unknown)?, os_crash(false));
         let synced = run(Some("b"), true);
-        assert_eq!(record(&mut meta, &synced)?, os_crash(false, false));
+        assert_eq!(record(&mut meta, &synced)?, os_crash(false));
         // the mode of the last run counts, not the one of this run
-        assert_eq!(
-            record(&mut meta, &run(Some("c"), false))?,
-            os_crash(true, true)
-        );
+        assert_eq!(record(&mut meta, &run(Some("c"), false))?, os_crash(true));
         meta.insert(RUN_KEY, b"garbage".as_slice())?;
-        assert_eq!(record(&mut meta, &a)?, os_crash(false, false));
+        assert_eq!(record(&mut meta, &a)?, os_crash(false));
         clear(&mut meta)?;
         assert_eq!(record(&mut meta, &a)?, LastShutdown::Clean);
         Ok(())
