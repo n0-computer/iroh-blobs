@@ -14,19 +14,13 @@ pub struct SizeInfo {
     pub size: u64,
 }
 
+/// Returns where in a sizes file the size for the chunk group at byte `offset` goes.
+pub(crate) fn size_slot(offset: u64) -> u64 {
+    offset / IROH_BLOCK_SIZE.bytes() as u64 * 8
+}
+
 #[allow(dead_code)]
 impl SizeInfo {
-    /// Create a new size info for a complete file of size `size`.
-    pub(crate) fn complete(size: u64) -> Self {
-        let mask = (1 << IROH_BLOCK_SIZE.chunk_log()) - 1;
-        // offset of the last bao chunk in a file of size `size`
-        let last_chunk_offset = size & mask;
-        Self {
-            offset: last_chunk_offset,
-            size,
-        }
-    }
-
     /// Write a size at the given offset. The size at the highest offset is going to be kept.
     pub fn write(&mut self, offset: u64, size: u64) {
         // >= instead of > because we want to be able to update size 0, the initial value.
@@ -41,10 +35,9 @@ impl SizeInfo {
         self.size
     }
 
-    /// Persist into a file where each chunk has its own slot.
+    /// Persist into a file where each chunk group has its own slot.
     pub fn persist(&self, mut target: impl WriteAt) -> io::Result<()> {
-        let size_offset = (self.offset >> IROH_BLOCK_SIZE.chunk_log()) << 3;
-        target.write_all_at(size_offset, self.size.to_le_bytes().as_slice())?;
+        target.write_all_at(size_slot(self.offset), self.size.to_le_bytes().as_slice())?;
         Ok(())
     }
 
@@ -54,5 +47,20 @@ impl SizeInfo {
         let mut res = Vec::new();
         self.persist(&mut res).expect("io error writing to vec");
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SizeInfo;
+
+    #[test]
+    fn persist_uses_one_slot_per_chunk_group() {
+        let mut info = SizeInfo::default();
+        // a leaf of the third chunk group
+        info.write(2 * 16 * 1024, 100_000);
+        let slots = info.to_vec();
+        assert_eq!(slots.len(), 3 * 8);
+        assert_eq!(slots[2 * 8..], 100_000u64.to_le_bytes());
     }
 }
