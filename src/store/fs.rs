@@ -148,7 +148,7 @@ pub mod options;
 pub(crate) mod util;
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
-use options::{CrashConsistency, Options};
+use options::Options;
 use tracing::Instrument;
 
 use crate::{
@@ -1053,7 +1053,7 @@ impl EntityApi for HashContext {
             };
             let path = self.global.options.path.bitfield_path(hash);
             trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
+            if let Err(cause) = fs.write_bitfield(&path, self.global.options.syncs_files()) {
                 error!(
                     "failed to write bitfield for {} at {}: {:?}",
                     hash,
@@ -1102,7 +1102,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         ..
     } = import_data;
     let options = ctx.options();
-    let sync = options.crash_consistency == CrashConsistency::PowerLoss;
+    let sync = options.syncs_files();
     match &source {
         ImportSource::Memory(data) => {
             debug_assert!(options.is_inlined_data(data.len() as u64));

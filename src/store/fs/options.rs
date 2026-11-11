@@ -102,21 +102,27 @@ impl Default for BatchOptions {
 }
 
 /// What kind of crash the file store stays consistent through.
+///
+/// This is about consistency, not durability. After a crash the store holds
+/// no entry that claims data it does not have, but recent writes can be lost
+/// in every mode, even acknowledged ones. A write is only durable after
+/// [`Store::sync_db`](crate::api::Store::sync_db) or a clean shutdown, and
+/// only against the kind of crash the chosen level covers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CrashConsistency {
     /// Consistent after a process crash; an OS crash or power loss can corrupt recent entries.
     ///
-    /// After an OS crash or power loss, a recently completed entry can point to
-    /// data that never reached the disk.
+    /// No data files are synced. After an OS crash or power loss, a recently
+    /// written entry can claim data that never reached the disk.
     #[default]
     ProcessCrash,
     /// Consistent after an OS crash or power loss too, at the cost of fsyncs.
     ///
-    /// An import syncs its data and outboard files and the data directory
-    /// before it is recorded as complete. That costs two or three fsyncs for
-    /// every import above the inline threshold, which slows down imports of
-    /// many small files considerably.
+    /// Data files and the data directory are synced before the metadata that
+    /// depends on them is recorded, for imports as well as downloads. That
+    /// costs a few fsyncs for every blob above the inline threshold, which
+    /// slows down imports and downloads of many small blobs considerably.
     PowerLoss,
 }
 
@@ -145,6 +151,11 @@ impl Options {
             gc: None,
             crash_consistency: CrashConsistency::default(),
         }
+    }
+
+    /// True if files must reach the disk before metadata that depends on them is recorded.
+    pub(crate) fn syncs_files(&self) -> bool {
+        self.crash_consistency == CrashConsistency::PowerLoss
     }
 
     // check if the data will be inlined, based on the size of the data

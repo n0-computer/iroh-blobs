@@ -246,7 +246,11 @@ mod fs {
         }
     }
 
-    pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> io::Result<()> {
+    pub fn write_checksummed<P: AsRef<Path>, T: Serialize>(
+        path: P,
+        data: &T,
+        sync: bool,
+    ) -> io::Result<()> {
         // Build Vec with space for hash
         let mut buffer = Vec::with_capacity(32 + 128);
         buffer.extend_from_slice(&[0u8; 32]);
@@ -262,13 +266,16 @@ mod fs {
         // Write all at once
         let mut file = File::create(&path)?;
         file.write_all(&buffer)?;
-        file.sync_all()?;
+        if sync {
+            file.sync_all()?;
+        }
 
         Ok(())
     }
 
     pub fn read_checksummed_and_truncate<T: DeserializeOwned>(
         path: impl AsRef<Path>,
+        sync: bool,
     ) -> io::Result<T> {
         let path = path.as_ref();
         let mut file = OpenOptions::new()
@@ -278,8 +285,11 @@ mod fs {
             .open(path)?;
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)?;
+        // the truncation marks the file dirty; a process crash sees it without a sync
         file.set_len(0)?;
-        file.sync_all()?;
+        if sync {
+            file.sync_all()?;
+        }
 
         if buffer.is_empty() {
             return Err(io::Error::new(
