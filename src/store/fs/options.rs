@@ -133,8 +133,10 @@ pub enum CrashConsistency {
     /// On Linux, Android, macOS and iOS, opening the store also flushes the data
     /// filesystem after recovery, before recording the new run. This includes
     /// writes inherited from an earlier run, but may wait for unrelated writes
-    /// on the same filesystem. Other platforms do not yet perform this startup
-    /// flush, so switching from `ProcessCrash` can leave earlier writes unsynced.
+    /// on the same filesystem. If the flush fails, the run is recorded as not
+    /// synced, so an OS crash during it is recovered from as in `ProcessCrash`.
+    /// Other platforms do not yet perform this startup flush, so switching from
+    /// `ProcessCrash` can leave earlier writes unsynced.
     PowerLoss,
 }
 
