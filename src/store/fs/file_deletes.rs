@@ -48,8 +48,11 @@ pub(super) fn unreferenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFil
 
 /// Which hashes have a live entity, as reported by the entities themselves.
 ///
-/// An entity reports itself live with its load, and not live at the end of its
-/// shutdown. Both go through the metadata FIFO, so:
+/// An entity is marked live by the load that precedes its first file access,
+/// and reports itself not live at the end of its shutdown. An entity that only
+/// reads a complete entry never touches its files' contents in a way that
+/// matters here, so it is never marked live. Both go through the metadata
+/// FIFO, so:
 ///
 /// - an entity only touches files of its hash after the metadata actor has
 ///   answered its load, so after it was marked live, and

@@ -98,12 +98,11 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use delete_set::BaoFilePart;
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
-use meta::{list_blobs, list_tags};
+use meta::{list_blobs, list_tags, GetMode};
 use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
@@ -140,8 +139,8 @@ use crate::{
 mod bao_file;
 use bao_file::BaoFileHandle;
 mod boot_id;
-mod delete_set;
 mod entry_state;
+mod file_deletes;
 mod import;
 mod meta;
 pub mod options;
@@ -237,8 +236,94 @@ impl entity_manager::Params for EmParams {
     ) {
         trace!("persist {:?} due to {cause:?}", state.id);
         state.persist().await;
-        // Must come after all file and metadata writes of this entity.
-        state.meta().inactive().await.ok();
+        // Must come after all file and metadata writes of this entity. An
+        // entity that was never marked live has nothing to report.
+        if *state.state.1.lock().await {
+            state.meta().inactive().await.ok();
+        }
+    }
+}
+
+/// Marks an entity that only a read loaded live, and takes the current state.
+///
+/// Such an entity may hold a state from before the entry was deleted, so if
+/// the current state differs, it is opened again.
+async fn ensure_live(ctx: &HashContext) -> io::Result<()> {
+    let mut live = ctx.state.1.lock().await;
+    if *live {
+        return Ok(());
+    }
+    if matches!(ctx.state.borrow().deref(), BaoFileStorage::Poisoned) {
+        return Ok(());
+    }
+    let (state, marked) = ctx.meta().load(GetMode::Write).await?;
+    *live = marked;
+    let unchanged = matches!(
+        (ctx.state.borrow().deref(), &state),
+        (
+            BaoFileStorage::Complete(_),
+            Some(EntryState::Complete { .. })
+        ) | (BaoFileStorage::NonExisting, None)
+    );
+    if !unchanged {
+        let storage = BaoFileStorage::open(state, ctx).await?;
+        ctx.state.send_replace(storage);
+    }
+    Ok(())
+}
+
+/// Loads the entity's state, marking it live as `mode` asks.
+async fn load_entity(ctx: &HashContext, mode: GetMode) {
+    enum Action {
+        Load,
+        Wait,
+        None,
+    }
+    let mut action = Action::None;
+    ctx.state.send_if_modified(|guard| match guard.deref() {
+        BaoFileStorage::Initial => {
+            *guard = BaoFileStorage::Loading;
+            action = Action::Load;
+            true
+        }
+        BaoFileStorage::Loading => {
+            action = Action::Wait;
+            false
+        }
+        _ => false,
+    });
+    match action {
+        Action::Load => {
+            // we must assign a new state even in the error case, otherwise
+            // tasks waiting for loading would stall!
+            let state = match ctx.meta().load(mode).await {
+                Ok((state, live)) => {
+                    if live {
+                        *ctx.state.1.lock().await = true;
+                    }
+                    match BaoFileStorage::open(state, ctx).await {
+                        Ok(handle) => handle,
+                        Err(cause) => {
+                            error!("failed to open {}, poisoning: {cause}", ctx.id);
+                            BaoFileStorage::Poisoned
+                        }
+                    }
+                }
+                Err(cause) => {
+                    error!("failed to get {} from db, poisoning: {cause}", ctx.id);
+                    BaoFileStorage::Poisoned
+                }
+            };
+            ctx.state.send_replace(state);
+        }
+        Action::Wait => {
+            // we are in state loading already, so we just need to wait for the
+            // other task to complete loading.
+            while matches!(ctx.state.borrow().deref(), BaoFileStorage::Loading) {
+                ctx.state.0.subscribe().changed().await.ok();
+            }
+        }
+        Action::None => {}
     }
 }
 
@@ -265,57 +350,25 @@ struct Actor {
 type HashContext = ActiveEntityState<EmParams>;
 
 impl SyncEntityApi for HashContext {
-    /// Load the state from the database.
+    /// Load the state from the database, for reading.
     ///
     /// If the state is Initial, this will start the load.
     /// If it is Loading, it will wait until loading is done.
     /// If it is any other state, it will be a noop.
     async fn load(&self) {
-        enum Action {
-            Load,
-            Wait,
-            None,
-        }
-        let mut action = Action::None;
-        self.state.send_if_modified(|guard| match guard.deref() {
-            BaoFileStorage::Initial => {
-                *guard = BaoFileStorage::Loading;
-                action = Action::Load;
-                true
-            }
-            BaoFileStorage::Loading => {
-                action = Action::Wait;
-                false
-            }
-            _ => false,
-        });
-        match action {
-            Action::Load => {
-                // we must assign a new state even in the error case, otherwise
-                // tasks waiting for loading would stall!
-                let state = match self.meta().load().await {
-                    Ok(state) => match BaoFileStorage::open(state, self).await {
-                        Ok(handle) => handle,
-                        Err(cause) => {
-                            error!("failed to open {}, poisoning: {cause}", self.id);
-                            BaoFileStorage::Poisoned
-                        }
-                    },
-                    Err(cause) => {
-                        error!("failed to get {} from db, poisoning: {cause}", self.id);
-                        BaoFileStorage::Poisoned
-                    }
-                };
-                self.state.send_replace(state);
-            }
-            Action::Wait => {
-                // we are in state loading already, so we just need to wait for the
-                // other task to complete loading.
-                while matches!(self.state.borrow().deref(), BaoFileStorage::Loading) {
-                    self.state.0.subscribe().changed().await.ok();
-                }
-            }
-            Action::None => {}
+        load_entity(self, GetMode::Read).await
+    }
+
+    /// Load the state from the database, for writing.
+    ///
+    /// Every operation that may write files or metadata of the entry must start
+    /// with this, so the metadata actor knows the entity is live before it
+    /// touches anything.
+    async fn load_for_write(&self) {
+        load_entity(self, GetMode::Write).await;
+        if let Err(cause) = ensure_live(self).await {
+            error!("failed to mark {} live, poisoning: {cause}", self.id);
+            self.state.send_replace(BaoFileStorage::Poisoned);
         }
     }
 
@@ -919,6 +972,9 @@ trait SyncEntityApi: EntityApi {
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
     async fn load(&self);
 
+    /// Like [`Self::load`], but for an operation that writes the entry.
+    async fn load_for_write(&self);
+
     /// Get a synchronous reader for the data file.
     fn data_reader(&self) -> impl ReadBytesAt;
 
@@ -959,7 +1015,7 @@ impl EntityApi for HashContext {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
-        self.load().await;
+        self.load_for_write().await;
         let ImportBaoMsg {
             inner: ImportBaoRequest { size, .. },
             mut rx,
@@ -1109,7 +1165,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             debug_assert!(!options.is_inlined_data(*size));
         }
     }
-    ctx.load().await;
+    ctx.load_for_write().await;
     let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
@@ -1644,6 +1700,54 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
+
+    /// A write to an entity that a read loaded sees a delete that happened in between.
+    ///
+    /// The observer keeps the entity loaded for reading while the blob is
+    /// deleted. If the write took the entity's old state, the import would find
+    /// the blob complete and do nothing, and the blob would be gone.
+    #[tokio::test]
+    #[traced_test]
+    async fn write_after_read_sees_a_delete() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let store = FsStore::load(testdir.path().join("db")).await?;
+        let data = test_data(100_000);
+        let hash = store.add_bytes(data.clone()).await?.hash;
+        let bao = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await?;
+        let mut observer = std::pin::pin!(store.observe(hash).stream().await?);
+        let first = observer.next().await.expect("a first bitfield");
+        assert!(first.is_complete());
+
+        store
+            .blobs()
+            .delete_with_opts(api::blobs::DeleteOptions {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        assert!(matches!(
+            store.status(hash).await?,
+            api::blobs::BlobStatus::NotFound
+        ));
+
+        store
+            .import_bao_bytes(hash, ChunkRanges::all(), bao)
+            .await?;
+        assert!(matches!(
+            store.status(hash).await?,
+            api::blobs::BlobStatus::Complete { size: 100_000 }
+        ));
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_ref());
+        // The observer never sees the blob shrink, its stream ends instead.
+        let rest =
+            tokio::time::timeout(Duration::from_secs(5), observer.collect::<Vec<_>>()).await?;
+        assert!(rest.iter().all(|bitfield| bitfield.is_complete()));
+        store.shutdown().await?;
+        Ok(())
+    }
 
     /// A last task can finish after its follow-up queue was polled empty.
     #[tokio::test]

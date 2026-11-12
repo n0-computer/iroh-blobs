@@ -19,8 +19,8 @@ use crate::{
 /// of the inline data and inline outboard tables if necessary.
 pub struct Get {
     pub hash: Hash,
-    /// Whether this is the load of a newly live entity, which marks the hash live.
-    pub load: bool,
+    /// Whether this get marks the hash live, see [`GetMode`].
+    pub mode: GetMode,
     pub tx: oneshot::Sender<GetResult>,
     pub span: Span,
 }
@@ -31,6 +31,23 @@ impl fmt::Debug for Get {
             .field("hash", &DD(self.hash.to_hex()))
             .finish_non_exhaustive()
     }
+}
+
+/// What a [`Get`] is for, which decides whether it marks the hash live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GetMode {
+    /// Just look at the entry state.
+    Lookup,
+    /// The load of an entity for reading.
+    ///
+    /// Marks the hash live only if the entry is partial, since opening a
+    /// partial entry creates and changes its files, while a complete one is
+    /// only read.
+    Read,
+    /// The load of an entity for writing, or its first write after a read.
+    ///
+    /// Always marks the hash live.
+    Write,
 }
 
 /// The entity for a hash is no longer live.
@@ -45,6 +62,8 @@ pub struct Inactive {
 #[derive(Debug)]
 pub struct GetResult {
     pub state: ActorResult<Option<EntryState<Bytes>>>,
+    /// Whether this get marked the hash live, so the entity must send [`Inactive`].
+    pub live: bool,
 }
 
 /// Get the entry state for a hash.

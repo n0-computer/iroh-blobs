@@ -29,14 +29,14 @@ Send side, as seen by an entity (`EntryMeta`, scoped to its hash):
 
 | Method | Waits | Meaning |
 |---|---|---|
-| `load()` | for reply | get the entry state, mark the hash live |
+| `load(mode)` | for reply | get the entry state, mark the hash live as `mode` asks, say if it did |
 | `get()` | for reply | get the entry state |
 | `set(state)` | until applied | replace the entry state |
 | `update(state)` | no | merge into the entry state |
 | `update_await(state)` | until applied | merge into the entry state |
 | `inactive()` | no (awaited send) | the hash is no longer live |
 
-Receive side, the metadata store: entity messages (`Get` with a load flag,
+Receive side, the metadata store: entity messages (`Get` with a mode,
 `Set`, `Update`, `Inactive`) plus main actor commands (tags, blob status,
 `DeleteBlobs`, listing, `ClearProtected`, `SyncDb`, `Shutdown`), all in one
 FIFO.
@@ -46,11 +46,28 @@ the commit of the batch.
 
 ## Live entities
 
-- An entity sends `load` exactly once per activation: `load()` in the entity
-  runs the `Initial -> Loading` transition, and every handler calls it before
-  touching files. A revived or recycled actor starts in `Initial` again.
-- An entity sends `inactive` at the end of `on_shutdown`, after `persist`, so
-  after all its file writes and metadata writes.
+Reads are the vast majority of accesses, so only an entity that may touch
+files is marked live. A `Get` has a mode:
+
+- `Lookup` never marks.
+- `Read` is the load of an entity for reading. It marks the hash only if the
+  entry is partial, since opening a partial entry creates and changes its
+  files. Reading a complete entry costs exactly one `Get`, as before.
+- `Write` always marks. It is the load of an entity for writing, or, if a read
+  loaded the entity, the first write after it. In that case the reply also
+  carries the current state: the entity may hold a state from before the
+  entry was deleted, and opens it again if it differs.
+
+Marking happens only when the `Get` succeeds, and the reply says whether it
+did. A lock in the entity makes sure only one of two concurrent first writes
+sends it.
+
+- The load runs the `Initial -> Loading` transition, and every handler calls
+  it before touching files. A revived or recycled actor starts in `Initial`
+  again, not live.
+- An entity that was marked live sends `inactive` at the end of `on_shutdown`,
+  after `persist`, so after all its file writes and metadata writes. One that
+  was never marked sends nothing.
 - The entity manager runs at most one actor per hash. A revive only happens
   after `on_shutdown` has returned, so per hash the messages strictly
   alternate: `load`, ..., `inactive`, `load`, ... No refcount needed.
@@ -58,14 +75,17 @@ the commit of the batch.
 Two facts follow from the FIFO:
 
 1. An entity touches files of its hash only after the metadata actor has
-   answered its load, so only after it processed the load and marked the hash
-   live.
+   answered a `Get` that marked the hash live.
 2. When the metadata actor processes `inactive`, it has already processed all
    metadata writes of that entity, and the entity touches no more files.
 
 So at the end of a batch, for a hash that is not live, the entry state
 reflects every file of that hash. Lag is harmless: a stale "live" only delays
-deletes, a stale "not live" means the entity is still blocked on its load.
+deletes, a stale "not live" means the entity is still blocked on its `Get`.
+
+An entity that only reads a complete entry is never live, so its entry can be
+deleted while it reads. A read of a blob nothing protects can then fail
+partway, as before. Observers see the stream end, never a smaller bitfield.
 
 ## File deletes
 

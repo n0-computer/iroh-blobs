@@ -43,11 +43,10 @@ use tracing::{debug, error, info, info_span, trace, warn, Span};
 
 use super::{
     boot_id,
-    delete_set::{delete_files, unreferenced_parts, LiveEntities},
     entry_state::{DataLocation, EntryState, OutboardLocation},
+    file_deletes::{delete_files, unreferenced_parts, BaoFilePart, LiveEntities},
     options::{BatchOptions, PathOptions},
     util::PeekableReceiver,
-    BaoFilePart,
 };
 use crate::store::IROH_BLOCK_SIZE;
 
@@ -179,12 +178,16 @@ impl Db {
 
     /// Get the entry state for a hash, if any.
     pub async fn get(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
-        self.get_impl(hash, false).await
+        Ok(self.get_impl(hash, GetMode::Lookup).await?.0)
     }
 
-    /// Get the entry state for a hash, and mark the hash live.
-    pub async fn load(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
-        self.get_impl(hash, true).await
+    /// Get the entry state for a hash, and whether this marked the hash live.
+    pub async fn load(
+        &self,
+        hash: Hash,
+        mode: GetMode,
+    ) -> io::Result<(Option<EntryState<Bytes>>, bool)> {
+        self.get_impl(hash, mode).await
     }
 
     /// Mark the hash as no longer live. This does not wait for the db to process it.
@@ -196,13 +199,17 @@ impl Db {
             .map_err(|_| io::Error::other("send inactive"))
     }
 
-    async fn get_impl(&self, hash: Hash, load: bool) -> io::Result<Option<EntryState<Bytes>>> {
+    async fn get_impl(
+        &self,
+        hash: Hash,
+        mode: GetMode,
+    ) -> io::Result<(Option<EntryState<Bytes>>, bool)> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(
                 Get {
                     hash,
-                    load,
+                    mode,
                     tx,
                     span: tracing::Span::current(),
                 }
@@ -211,7 +218,7 @@ impl Db {
             .await
             .map_err(|_| io::Error::other("send get"))?;
         let res = rx.await.map_err(|_| io::Error::other("receive get"))?;
-        Ok(res.state?)
+        Ok((res.state?, res.live))
     }
 
     /// A view of this database scoped to a single entry.
@@ -242,16 +249,18 @@ pub struct EntryMeta<'a> {
 }
 
 impl EntryMeta<'_> {
-    /// Get the entry state when the entity becomes live, marking it live.
+    /// Get the entry state for the entity, and whether this marked it live.
     ///
-    /// The entity must not touch any files of the entry before this returns.
-    pub async fn load(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        self.db.load(self.hash).await
+    /// The entity must not touch any files of the entry before a load marked
+    /// it live: a [`GetMode::Read`] load only does that for a partial entry.
+    pub async fn load(&self, mode: GetMode) -> io::Result<(Option<EntryState<Bytes>>, bool)> {
+        self.db.load(self.hash, mode).await
     }
 
     /// Mark the entity as no longer live.
     ///
-    /// The entity must not touch any files of the entry after calling this.
+    /// Only an entity that a load marked live sends this, and it must not
+    /// touch any files of the entry after calling this.
     pub async fn inactive(&self) -> io::Result<()> {
         self.db.inactive(self.hash).await
     }
@@ -277,11 +286,18 @@ impl EntryMeta<'_> {
     }
 }
 
-fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
+fn handle_get(cmd: Get, tables: &impl ReadableTables, live: &mut LiveEntities) -> ActorResult<()> {
     trace!("{cmd:?}");
-    let Get { hash, tx, .. } = cmd;
+    let Get { hash, mode, tx, .. } = cmd;
     let Some(entry) = tables.blobs().get(hash)? else {
-        tx.send(GetResult { state: Ok(None) });
+        let marked = mode == GetMode::Write;
+        if marked {
+            live.load(hash);
+        }
+        tx.send(GetResult {
+            state: Ok(None),
+            live: marked,
+        });
         return Ok(());
     };
     let entry = entry.value();
@@ -299,8 +315,19 @@ fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
         }
         EntryState::Partial { size } => EntryState::Partial { size },
     };
+    // Marked only once the get succeeded, so an entity that sees an error
+    // never leaves its hash live without knowing it has to send Inactive.
+    let marked = match mode {
+        GetMode::Lookup => false,
+        GetMode::Read => matches!(entry, EntryState::Partial { .. }),
+        GetMode::Write => true,
+    };
+    if marked {
+        live.load(hash);
+    }
     tx.send(GetResult {
         state: Ok(Some(entry)),
+        live: marked,
     });
     Ok(())
 }
@@ -702,12 +729,7 @@ impl Actor {
         );
         let _guard = span.enter();
         match cmd {
-            ReadOnlyCommand::Get(cmd) => {
-                if cmd.load {
-                    state.live.load(cmd.hash);
-                }
-                handle_get(cmd, tables)
-            }
+            ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables, &mut state.live),
             ReadOnlyCommand::Inactive(cmd) => {
                 trace!("{cmd:?}");
                 state.live.inactive(cmd.hash);
@@ -1320,6 +1342,63 @@ mod tests {
         std::fs::create_dir_all(&paths.data_path)?;
         let db = Database::create(dir.path().join("db"))?;
         Ok((dir, paths, db))
+    }
+
+    /// A get marks a hash live only if the entity may touch its files.
+    #[test]
+    fn get_marks_live_by_mode() -> testresult::TestResult<()> {
+        let (_dir, paths, db) = setup()?;
+        let partial = Hash::new(b"partial");
+        let complete = Hash::new(b"complete");
+        let missing = Hash::new(b"missing");
+        let mut state = Bookkeeping::default();
+        write_batch(&db, &mut state, &paths, |tables, _| {
+            tables
+                .blobs
+                .insert(partial, EntryState::Partial { size: None })?;
+            tables.blobs.insert(
+                complete,
+                EntryState::Complete {
+                    data_location: DataLocation::Owned(100_000),
+                    outboard_location: OutboardLocation::Owned,
+                },
+            )?;
+            Ok(())
+        })?;
+        let cases = [
+            (partial, GetMode::Lookup, false),
+            (partial, GetMode::Read, true),
+            (partial, GetMode::Write, true),
+            (complete, GetMode::Lookup, false),
+            (complete, GetMode::Read, false),
+            (complete, GetMode::Write, true),
+            (missing, GetMode::Lookup, false),
+            (missing, GetMode::Read, false),
+            (missing, GetMode::Write, true),
+        ];
+        for (hash, mode, expected) in cases {
+            let mut state = Bookkeeping::default();
+            write_batch(&db, &mut state, &paths, |tables, state| {
+                let (tx, rx) = oneshot::channel();
+                let span = Span::current();
+                handle_get(
+                    Get {
+                        hash,
+                        mode,
+                        tx,
+                        span,
+                    },
+                    tables,
+                    &mut state.live,
+                )?;
+                let oneshot::Receiver::Tokio(mut rx) = rx;
+                let res = rx.try_recv()?;
+                assert_eq!(res.live, expected, "{hash} {mode:?}");
+                assert_eq!(state.live.is_live(&hash), expected, "{hash} {mode:?}");
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     /// Run one write batch the way the actor does, including the file deletes.

@@ -4,6 +4,7 @@ use std::{
     io,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use bao_tree::{
@@ -558,12 +559,20 @@ impl BaoFileStorage {
 /// You must call [Self::persist] to write the bitfield to disk, if you want to persist
 /// the file handle, otherwise the bitfield will not be written to disk and will have
 /// to be reconstructed on next use.
+///
+/// The second field says whether the metadata actor marked this entity live. It
+/// is a lock so that of two concurrent first writes, only one marks it live.
 #[derive(Debug, Clone, Default, derive_more::Deref)]
-pub(crate) struct BaoFileHandle(pub(super) watch::Sender<BaoFileStorage>);
+pub(crate) struct BaoFileHandle(
+    #[deref] pub(super) watch::Sender<BaoFileStorage>,
+    pub(super) Arc<tokio::sync::Mutex<bool>>,
+);
 
 impl entity_manager::Reset for BaoFileHandle {
     fn reset(&mut self) {
         self.send_replace(BaoFileStorage::Initial);
+        // Readers may still hold clones, so start over with a fresh flag.
+        self.1 = Arc::default();
     }
 }
 
@@ -733,16 +742,24 @@ impl BaoFileStorageSubscriber {
     /// Forward observed *values* to the given sender
     ///
     /// Returns an error if sending fails, or if the last sender is dropped
+    ///
+    /// Ends the stream if the ranges shrink, for example when the entry was
+    /// deleted while observed, since observers only ever see them grow.
     pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
         let Some(value) = self.bitfield() else {
             return Ok(());
         };
+        let mut last = value.ranges.clone();
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
             let Some(value) = self.bitfield() else {
                 return Ok(());
             };
+            if !value.ranges.is_superset(&last) {
+                return Ok(());
+            }
+            last = value.ranges.clone();
             tx.send(value).await?;
         }
     }
