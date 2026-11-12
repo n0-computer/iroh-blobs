@@ -36,6 +36,8 @@ use crate::{
 const LAZYFS: &str = "IROH_BLOBS_LAZYFS";
 /// Set in the child, to the store directory it writes to.
 const CHILD: &str = "IROH_BLOBS_LAZYFS_CHILD";
+/// What the canary file holds until LazyFS drops its cache.
+const CANARY: &[u8] = b"never synced";
 /// How long LazyFS is given to mount or to answer a command.
 const ANSWERING: Duration = Duration::from_secs(30);
 
@@ -161,7 +163,11 @@ async fn process_crash_keeps_every_recorded_blob() -> TestResult<()> {
     let root = tempfile::tempdir()?;
     run_child("process_crash_keeps_every_recorded_blob", root.path())?;
     let store = open(root.path(), CrashConsistency::ProcessCrash).await?;
-    assert_eq!(check_claims(&store).await?, 3, "every complete blob survives");
+    assert_eq!(
+        check_claims(&store).await?,
+        3,
+        "every complete blob survives"
+    );
     let partial = blobs().pop().expect("a partial blob");
     let bitfield = store.observe(partial.hash()).await?;
     assert_eq!(bitfield.ranges, partial.ranges, "the partial blob survives");
@@ -284,14 +290,23 @@ impl LazyFs {
     }
 
     /// Drops every write not yet synced, as a power cut would.
+    ///
+    /// Checks that it really did with an unsynced canary file, so a test
+    /// cannot pass because nothing was lost.
     fn clear_cache(&self) -> TestResult<()> {
+        let canary = self.mount.join("canary");
+        fs::write(&canary, CANARY)?;
         let before = self.logged.0.lock().expect("not poisoned").cleared;
         // LazyFS reads the fifo from the start, so opening it does not block.
         OpenOptions::new()
             .write(true)
             .open(self.dir.join("sock.fifo"))?
             .write_all(b"lazyfs::clear-cache\n")?;
-        self.until(|logged| logged.cleared > before, "cache is cleared")
+        self.until(|logged| logged.cleared > before, "cache is cleared")?;
+        let survived = fs::read(&canary).is_ok_and(|data| data == CANARY);
+        assert!(!survived, "LazyFS kept a write that was never synced");
+        fs::remove_file(&canary).ok();
+        Ok(())
     }
 
     /// Waits until what LazyFS logged meets `done`.
