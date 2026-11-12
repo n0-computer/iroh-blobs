@@ -201,10 +201,12 @@ pub enum BatchResponse {
     Ping,
 }
 
-/// Options for force deletion of blobs.
+/// Options for deleting blobs.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobDeleteRequest {
     pub hashes: Vec<Hash>,
+    /// Bypass current and retained temp-tag protection. In the fs store,
+    /// deletion still runs through the entity to coordinate state and files.
     pub force: bool,
 }
 

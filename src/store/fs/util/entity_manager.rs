@@ -77,7 +77,7 @@ pub enum SpawnArg<P: Params> {
 /// Sent from the entity actor to the main actor to notify that it is shutting down.
 ///
 /// With this message the entity actor gives back the receiver for its command channel,
-/// so it can be reusd either immediately if commands come in during shutdown, or later
+/// so it can be reused either immediately if commands come in during shutdown, or later
 /// if the entity actor is reused for a different entity.
 struct Shutdown<P: Params> {
     id: P::EntityId,
@@ -88,7 +88,7 @@ struct ShutdownAll {
     tx: oneshot::Sender<()>,
 }
 
-/// Sent from the main actor to the entity actor to notify that it has completed shutdown.
+/// Sent from the entity actor to the main actor after completing idle shutdown.
 ///
 /// With this message the entity actor sends back the remaining state. The tasks set
 /// at this point must be empty, as the entity actor has already completed all tasks.

@@ -39,15 +39,16 @@ Send side, as seen by an entity (`EntryMeta`, scoped to its hash):
 | `set(state)` | until applied | replace the entry state |
 | `update(state)` | no | merge into the entry state |
 | `update_await(state)` | until applied | merge into the entry state |
-| `delete(force)` | until applied | delete the entry, say whether there was one |
+| `delete()` | until applied | delete the entry, say whether there was one |
 
 "Applied" means visible to later commands, not durable. Durability comes with
 the commit of the batch. Commits are durable: redb's default
 `Durability::Immediate`, never overridden.
 
 From the metadata actor to the main actor, over an unbounded channel: a
-`FileNotice` per hash after each commit, saying whether the entry was deleted
-and which files it referenced in the batch (before it, or in any state the
+`FileNotice` for each deleted hash or hash with obsolete files after each
+commit, saying whether the entry was deleted and which files it referenced
+in the batch (before it, or in any state the
 batch gave it) and no longer does. Unbounded, so the metadata actor never
 waits on the main actor, which waits on it.
 
@@ -78,7 +79,10 @@ notices are handled directly.
 ## Deletes
 
 `DeleteBlobs` is fanned out by the main actor to the entity of each hash,
-creating it if needed (without loading). The entity:
+creating it if needed (without loading), including inline entries. This
+serializes deletion with concurrent requests even when no entity existed
+when the delete arrived. The `force` flag only bypasses current and retained
+temp-tag protection; it does not bypass the entity. The entity:
 
 1. Switches to `Deleting(old)`. Changes wait from here on, readers and
    observers look through to the old state.
@@ -96,9 +100,10 @@ creating it if needed (without loading). The entity:
    writes continue on an empty entry: a running download keeps going with
    only the ranges that arrive from now on.
 
-The main actor answers `DeleteBlobs` once every entity is done, so the files
-are gone when it returns. Shutdown waits for running deletes before shutting
-down the entities, since an entity in shutdown takes no new tasks.
+The main actor answers `DeleteBlobs` once every entity is done, after its file
+cleanup attempts. Unlink failures are logged. Shutdown waits for running
+deletes before shutting down the entities, since an entity in shutdown takes
+no new tasks.
 
 ## What this replaces
 
@@ -138,6 +143,5 @@ the blob stayed gone. `write_after_read_sees_a_delete` and
   references. A sweep at open after an unclean shutdown is planned.
 - After `export_path` with `TryReference` copies across file systems, the
   entity still uses the owned data file, so the notice keeps it and it leaks.
-- Every delete starts an entity, also for inline entries that have no files.
 - The extension point itself (a trait or protocol type for the metadata
   store) is not designed yet.

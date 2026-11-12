@@ -120,8 +120,10 @@ async fn gc_sweep_task(
         store.blobs().delete(batch).await?;
     }
     store.sync_db().await?;
-    co.yield_(GcSweepEvent::CustomDebug(format!("deleted {count} blobs")))
-        .await;
+    co.yield_(GcSweepEvent::CustomDebug(format!(
+        "requested deletion of {count} blobs"
+    )))
+    .await;
     Ok(())
 }
 
@@ -597,7 +599,11 @@ mod tests {
         let inner = (*store).clone();
         let proxy = store_with_handover(&store, move || {
             Box::pin(async move {
-                inner.tags().set("named", tt.hash_and_format()).await.ok();
+                inner
+                    .tags()
+                    .set("named", tt.hash_and_format())
+                    .await
+                    .unwrap();
                 drop(tt);
             })
         });
@@ -622,9 +628,9 @@ mod tests {
         let hold = held.clone();
         let proxy = store_with_handover(&store, move || {
             Box::pin(async move {
-                let tt = inner.tags().temp_tag(content).await.ok();
-                inner.tags().delete("named").await.ok();
-                *hold.lock().unwrap() = tt;
+                let tt = inner.tags().temp_tag(content).await.unwrap();
+                assert_eq!(inner.tags().delete("named").await.unwrap(), 1);
+                *hold.lock().unwrap() = Some(tt);
             })
         });
         gc_run_once(&proxy, &mut HashSet::new(), None).await?;
@@ -883,8 +889,8 @@ mod tests {
     /// Models an iroh-docs-style consumer: committed references are reported via the
     /// `add_protected` callback, and an import temp tag is held across each commit. The callback
     /// imports a blob and drops its temp tag without reporting it, modeling a reference committed
-    /// just after the protect snapshot. The blob must survive: `gc_run_once` runs the callback
-    /// after `clear_protected`, so the import is covered by the store's protected set.
+    /// just after the protect snapshot. The blob must survive: the gc run tracks its
+    /// dropped temp tag until the sweep finishes.
     async fn gc_protect_race(store: &Store) -> TestResult {
         use tokio::sync::{mpsc, oneshot};
 
@@ -939,7 +945,7 @@ mod tests {
         );
         assert!(
             store.has(racy).await?,
-            "blob imported during the GC run must survive (protected set must be honored)"
+            "blob imported during the GC run must survive through its retained temp tag"
         );
         drop(writer);
         Ok(())
