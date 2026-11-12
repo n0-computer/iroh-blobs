@@ -151,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
         }),
         inline: InlineOptions::default(),
         batch: BatchOptions::default(),
+        crash_consistency: Default::default(),
     };
     let store =
         iroh_blobs::store::fs::FsStore::load_with_opts(path.join("blobs.db"), options).await?;

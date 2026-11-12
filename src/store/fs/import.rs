@@ -210,12 +210,8 @@ pub async fn import_bytes(cmd: ImportBytesMsg, ctx: Arc<TaskContext>) {
 async fn import_bytes_tiny_outer(mut cmd: ImportBytesMsg, ctx: Arc<TaskContext>) {
     match import_bytes_tiny_impl(cmd.inner, &mut cmd.tx).await {
         Ok(entry) => {
-            let entry = ImportEntryMsg {
-                inner: entry,
-                tx: cmd.tx,
-                rx: cmd.rx,
-                span: cmd.span,
-            };
+            let mut entry: ImportEntryMsg = (entry, cmd.tx, cmd.rx).into();
+            entry.span = cmd.span;
             ctx.internal_cmd_tx.send(entry.into()).await.ok();
         }
         Err(cause) => {
@@ -295,12 +291,8 @@ async fn import_byte_stream_mid(
 ) {
     match import_byte_stream_impl(request, &mut tx, stream, ctx.options.clone()).await {
         Ok(entry) => {
-            let entry = ImportEntryMsg {
-                inner: entry,
-                tx,
-                rx: NoReceiver,
-                span,
-            };
+            let mut entry: ImportEntryMsg = (entry, tx).into();
+            entry.span = span;
             ctx.internal_cmd_tx.send(entry.into()).await.ok();
         }
         Err(cause) => {
@@ -457,12 +449,8 @@ async fn compute_outboard(
 pub async fn import_path(mut cmd: ImportPathMsg, context: Arc<TaskContext>) {
     match import_path_impl(cmd.inner, &mut cmd.tx, context.options.clone()).await {
         Ok(inner) => {
-            let res = ImportEntryMsg {
-                inner,
-                tx: cmd.tx,
-                rx: cmd.rx,
-                span: cmd.span,
-            };
+            let mut res: ImportEntryMsg = (inner, cmd.tx, cmd.rx).into();
+            res.span = cmd.span;
             context.internal_cmd_tx.send(res.into()).await.ok();
         }
         Err(cause) => {
@@ -532,7 +520,7 @@ mod tests {
     use super::*;
     use crate::{
         api::proto::BoxedByteStream,
-        store::fs::options::{InlineOptions, PathOptions},
+        store::fs::options::{CrashConsistency, InlineOptions, PathOptions},
     };
 
     async fn drain<T: RpcMessage>(mut recv: mpsc::Receiver<T>) -> TestResult<Vec<T>> {
@@ -629,6 +617,7 @@ mod tests {
             batch: Default::default(),
             path: PathOptions::new(dir.path()),
             gc: None,
+            crash_consistency: CrashConsistency::PowerLoss,
         });
         // test different sizes, below, at, and above the inline threshold
         let sizes = [

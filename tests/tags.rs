@@ -200,8 +200,8 @@ async fn tags_smoke_fs() -> TestResult<()> {
 #[cfg(feature = "rpc")]
 async fn tags_smoke_fs_rpc() -> TestResult<()> {
     let unspecified = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-    let (server, cert) = irpc::util::make_server_endpoint(unspecified)?;
-    let client = irpc::util::make_client_endpoint(unspecified, &[cert.as_ref()])?;
+    let (server, cert) = irpc::noq::make_server_endpoint(unspecified)?;
+    let client = irpc::noq::make_client_endpoint(unspecified, &[cert.as_ref()])?;
     let td = tempfile::tempdir()?;
     let store = FsStore::load(td.path().join("a")).await?;
     n0_future::task::spawn(store.deref().clone().listen(server.clone()));

@@ -12,7 +12,7 @@ use std::{
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use irpc::channel::mpsc;
-use n0_error::{anyerr, e, stack_error, AnyError};
+use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -33,12 +33,16 @@ use crate::{
     Hash,
 };
 mod proto;
+mod recovery;
+mod run;
 pub use proto::*;
 pub(crate) mod tables;
-use tables::{ReadOnlyTables, ReadableTables, Tables};
-use tracing::{debug, error, info_span, trace, Span};
+use run::{LastShutdown, Run};
+use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
+use tracing::{debug, error, info, info_span, trace, warn, Span};
 
 use super::{
+    boot_id,
     delete_set::{delete_files, unreferenced_parts, LiveEntities},
     entry_state::{DataLocation, EntryState, OutboardLocation},
     options::{BatchOptions, PathOptions},
@@ -624,6 +628,7 @@ impl Actor {
         cmds: tokio::sync::mpsc::Receiver<Command>,
         paths: Arc<PathOptions>,
         options: BatchOptions,
+        syncs_files: bool,
     ) -> Result<Self, ActorError> {
         debug!("creating or opening meta database at {}", db_path.display());
         let db = match redb::Database::create(db_path) {
@@ -638,7 +643,41 @@ impl Actor {
             Err(err) => return Err(err.into()),
         };
         let tx = db.begin_write()?;
-        Tables::new(&tx)?;
+        let mut tables = Tables::new(&tx)?;
+        let mut meta = tx.open_table(META_TABLE)?;
+        let run = Run {
+            boot_id: boot_id::current(),
+            syncs_files,
+        };
+        // Recovery commits together with the new run, so if the process dies
+        // during it, the next open still finds the old one.
+        match run::record(&mut meta, &run)? {
+            LastShutdown::Clean => {}
+            LastShutdown::ProcessCrash => info!(
+                "the blob store was not shut down cleanly, but the machine kept running, so \
+                 nothing that was written got lost"
+            ),
+            LastShutdown::MaybeOsCrash { synced: true, .. } => info!(
+                "the blob store was not shut down cleanly, but its last run synced its files, \
+                 so an OS crash cannot have damaged entries"
+            ),
+            LastShutdown::MaybeOsCrash { synced: false } => {
+                warn!(
+                    "the blob store was not shut down cleanly, and the machine may have gone \
+                     down too, so entries are checked again in case an OS crash lost data"
+                );
+                report(&recovery::recover(&mut tables, &paths)?);
+            }
+        }
+        // A PowerLoss run must also cover writes inherited from earlier runs.
+        // Sync after recovery so its writes and bitfield deletions are included,
+        // and before committing the new run so a failed sync leaves the old one.
+        if syncs_files {
+            super::sync_fs::sync(&paths.data_path)
+                .std_context("syncing the data filesystem on open")?;
+        }
+        drop(meta);
+        drop(tables);
         tx.commit()?;
         let cmds = PeekableReceiver::new(cmds);
         Ok(Self {
@@ -657,7 +696,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<()> {
         let span = info_span!(
-            parent: &cmd.parent_span(),
+            parent: cmd.parent_span(),
             "tx",
             op = tracing::field::debug(op),
         );
@@ -803,7 +842,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<()> {
         let span = info_span!(
-            parent: &cmd.parent_span(),
+            parent: cmd.parent_span(),
             "tx",
             op = tracing::field::debug(op),
         );
@@ -816,9 +855,6 @@ impl Actor {
             ReadWriteCommand::CreateTag(cmd) => Self::create_tag(tables, cmd).await,
             ReadWriteCommand::DeleteTags(cmd) => Self::delete_tags(tables, cmd).await,
             ReadWriteCommand::RenameTag(cmd) => Self::rename_tag(tables, cmd).await,
-            ReadWriteCommand::ProcessExit(cmd) => {
-                std::process::exit(cmd.code);
-            }
         }
     }
 
@@ -852,7 +888,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<Option<ShutdownMsg>> {
         let span = info_span!(
-            parent: &cmd.parent_span(),
+            parent: cmd.parent_span(),
             "tx",
             op = tracing::field::debug(op),
         );
@@ -864,7 +900,7 @@ impl Actor {
             }
             TopLevelCommand::Shutdown(cmd) => {
                 trace!("{cmd:?}");
-                // nothing to do here, since the database will be dropped
+                Self::clear_run(db)?;
                 Some(cmd)
             }
             TopLevelCommand::Snapshot(cmd) => {
@@ -877,6 +913,20 @@ impl Actor {
                 None
             }
         })
+    }
+
+    /// Removes the run record, so the next open knows the store was shut down cleanly.
+    fn clear_run(db: &Database) -> ActorResult<()> {
+        let tx = db
+            .begin_write()
+            .map_err(|e| e!(ActorError::Transaction, e))?;
+        let mut meta = tx
+            .open_table(META_TABLE)
+            .map_err(|e| e!(ActorError::Table, e))?;
+        run::clear(&mut meta).map_err(|e| e!(ActorError::Storage, e))?;
+        drop(meta);
+        tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
+        Ok(())
     }
 
     pub async fn run(self) {
@@ -966,6 +1016,20 @@ impl Actor {
             shutdown.tx.send(()).await.ok();
         }
         Ok(())
+    }
+}
+
+/// Logs what recovery did.
+fn report(recovered: &recovery::Recovered) {
+    info!(
+        "{} complete and {} partial entries are checked against their files when next loaded",
+        recovered.complete, recovered.partial
+    );
+    if recovered.external > 0 {
+        warn!(
+            "{} entries with external data are not checked, since the data is not ours",
+            recovered.external
+        );
     }
 }
 
@@ -1092,7 +1156,163 @@ async fn list_blobs_impl(
 mod tests {
     use std::sync::Arc;
 
-    use super::{super::options::PathOptions, *};
+    use super::{
+        super::options::{CrashConsistency, Options, PathOptions},
+        *,
+    };
+
+    fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
+        Run {
+            boot_id: boot_id.map(str::to_owned),
+            syncs_files,
+        }
+    }
+
+    /// Reads the recorded run from a closed store's database.
+    fn recorded_run(db: &std::path::Path) -> testresult::TestResult<Option<Run>> {
+        let db = Database::open(db)?;
+        let tx = db.begin_read()?;
+        Ok(run::read(&tx.open_table(META_TABLE)?))
+    }
+
+    /// Records `run` as the open run of a closed store's database.
+    fn set_run(db: &std::path::Path, run: &Run) -> testresult::TestResult<()> {
+        let db = Database::open(db)?;
+        let tx = db.begin_write()?;
+        run::write(&mut tx.open_table(META_TABLE)?, run)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[test]
+    fn opening_records_the_run_until_a_clean_shutdown() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Arc::new(PathOptions::new(dir.path()));
+        let db = dir.path().join("db");
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        // dropped without a shutdown, as in a crash
+        drop(Actor::new(
+            db.clone(),
+            rx,
+            paths,
+            BatchOptions::default(),
+            false,
+        )?);
+        let expected = Run {
+            boot_id: boot_id::current(),
+            syncs_files: false,
+        };
+        assert_eq!(recorded_run(&db)?, Some(expected));
+        Ok(())
+    }
+
+    /// Opens a store at `dir` with `crash_consistency`.
+    async fn open(
+        dir: &std::path::Path,
+        crash_consistency: CrashConsistency,
+    ) -> testresult::TestResult<crate::store::fs::FsStore> {
+        let mut options = Options::new(dir);
+        options.crash_consistency = crash_consistency;
+        Ok(crate::store::fs::FsStore::load_with_opts(dir.join("blobs.db"), options).await?)
+    }
+
+    /// Simulates an OS crash during an unsynced run, and checks entries after reopening with `reopen`.
+    async fn os_crash_recovery(reopen: CrashConsistency) -> testresult::TestResult<()> {
+        use bao_tree::ChunkRanges;
+
+        use crate::api::blobs::BlobStatus;
+
+        let dir = tempfile::tempdir()?;
+        let paths = PathOptions::new(dir.path());
+        let data = |byte: u8, len: usize| (0..len).map(|i| byte ^ (i as u8)).collect::<Vec<_>>();
+        // owned data, inline outboard
+        let intact = data(1, 100_000);
+        let truncated = data(2, 100_000);
+        // owned data and outboard
+        let no_outboard = data(3, 5_000_000);
+        let store = open(dir.path(), CrashConsistency::ProcessCrash).await?;
+        let intact_hash = store.add_bytes(intact.clone()).await?.hash;
+        let truncated_hash = store.add_bytes(truncated).await?.hash;
+        let no_outboard_hash = store.add_bytes(no_outboard).await?.hash;
+        store.shutdown().await?;
+        drop(store);
+
+        // the machine went down while the store was open, and lost writes
+        set_run(
+            &dir.path().join("blobs.db"),
+            &a_run(Some("another boot"), false),
+        )?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(paths.data_path(&truncated_hash))?;
+        file.set_len(50_000)?;
+        std::fs::File::create(paths.outboard_path(&no_outboard_hash))?;
+
+        let store = open(dir.path(), reopen).await?;
+        // loading an entry checks it, an intact one is complete again
+        assert_eq!(
+            store.get_bytes(intact_hash).await?.as_ref(),
+            intact.as_slice()
+        );
+        assert!(matches!(
+            store.status(intact_hash).await?,
+            BlobStatus::Complete { size: 100_000 }
+        ));
+        // a damaged one keeps what its files still hold, and nothing more
+        let bitfield = store.observe(truncated_hash).await?;
+        assert!(!bitfield.is_complete());
+        assert!(bitfield.ranges.contains(&bao_tree::ChunkNum(0)));
+        assert!(store.get_bytes(truncated_hash).await.is_err());
+        let bitfield = store.observe(no_outboard_hash).await?;
+        assert_eq!(bitfield.ranges, ChunkRanges::empty());
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn after_an_os_crash_entries_only_claim_what_their_files_hold(
+    ) -> testresult::TestResult<()> {
+        os_crash_recovery(CrashConsistency::ProcessCrash).await
+    }
+
+    #[tokio::test]
+    async fn recovery_depends_on_the_last_run_not_this_one() -> testresult::TestResult<()> {
+        os_crash_recovery(CrashConsistency::PowerLoss).await
+    }
+
+    #[tokio::test]
+    async fn after_an_os_crash_a_synced_run_needs_no_recovery() -> testresult::TestResult<()> {
+        use crate::api::blobs::BlobStatus;
+
+        let dir = tempfile::tempdir()?;
+        let data = vec![7u8; 100_000];
+        let store = open(dir.path(), CrashConsistency::PowerLoss).await?;
+        let hash = store.add_bytes(data).await?.hash;
+        store.shutdown().await?;
+        drop(store);
+        set_run(
+            &dir.path().join("blobs.db"),
+            &a_run(Some("another boot"), true),
+        )?;
+        let store = open(dir.path(), CrashConsistency::ProcessCrash).await?;
+        // recovery would have made it partial until it is loaded
+        assert!(matches!(
+            store.status(hash).await?,
+            BlobStatus::Complete { size: 100_000 }
+        ));
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_clean_shutdown_clears_the_run() -> testresult::TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(dir.path()).await?;
+        store.shutdown().await?;
+        drop(store);
+        assert_eq!(recorded_run(&dir.path().join("blobs.db"))?, None);
+        Ok(())
+    }
 
     fn setup() -> testresult::TestResult<(tempfile::TempDir, Arc<PathOptions>, Database)> {
         let dir = tempfile::tempdir()?;

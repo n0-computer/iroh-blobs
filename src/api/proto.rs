@@ -576,12 +576,6 @@ pub struct CreateTagRequest {
     pub value: HashAndFormat,
 }
 
-/// Debug tool to exit the process in the middle of a write transaction, for testing.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProcessExitRequest {
-    pub code: i32,
-}
-
 /// Progress events for importing from any local source.
 ///
 /// An import first copies the data. The [`Self::Size`] comes once, before the

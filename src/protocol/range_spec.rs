@@ -115,7 +115,7 @@ impl ChunkRangesSeq {
         }
         let (o1, v1) = self.0.iter().next().unwrap();
         let (o2, v2) = self.0.iter().next_back().unwrap();
-        if *o1 == (o2 - 1) && v2.is_empty() {
+        if o1.checked_add(1) == Some(*o2) && v2.is_empty() {
             Some((*o1, v1))
         } else {
             None
@@ -562,6 +562,27 @@ mod tests {
 
     use super::*;
     use crate::protocol::ChunkRangesExt;
+
+    /// A seq the decoder rejects, with a repeated offset of zero, is not a single blob.
+    #[test]
+    fn as_single_repeated_zero_offset() {
+        let seq = ChunkRangesSeq(smallvec![
+            (0, ChunkRanges::all()),
+            (0, ChunkRanges::empty())
+        ]);
+        assert_eq!(seq.as_single(), None);
+        assert!(!seq.is_blob());
+    }
+
+    /// A seq whose single item sits at the last offset is not a single blob.
+    #[test]
+    fn as_single_max_offset() {
+        let seq = ChunkRangesSeq(smallvec![
+            (u64::MAX, ChunkRanges::all()),
+            (u64::MAX, ChunkRanges::empty())
+        ]);
+        assert_eq!(seq.as_single(), None);
+    }
 
     fn ranges(value_range: Range<u64>) -> impl Strategy<Value = ChunkRanges> {
         prop::collection::vec((value_range.clone(), value_range), 0..16).prop_map(|v| {

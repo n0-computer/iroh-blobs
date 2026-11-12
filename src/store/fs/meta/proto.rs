@@ -7,10 +7,7 @@ use tracing::Span;
 
 use super::{ActorResult, ReadOnlyTables};
 use crate::{
-    api::proto::{
-        BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ProcessExitRequest, ShutdownMsg,
-        SyncDbMsg,
-    },
+    api::proto::{BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ShutdownMsg, SyncDbMsg},
     store::{fs::entry_state::EntryState, util::DD},
     util::channel::oneshot,
     Hash,
@@ -120,19 +117,13 @@ pub enum ReadOnlyCommand {
 }
 
 impl ReadOnlyCommand {
-    pub fn parent_span(&self) -> tracing::Span {
-        self.parent_span_opt()
-            .cloned()
-            .unwrap_or_else(tracing::Span::current)
-    }
-
-    pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
+    pub fn parent_span(&self) -> &Span {
         match self {
-            Self::Get(x) => Some(&x.span),
-            Self::Inactive(x) => Some(&x.span),
-            Self::Dump(x) => Some(&x.span),
-            Self::ClearProtected(x) => x.parent_span_opt(),
-            Self::GetBlobStatus(x) => x.parent_span_opt(),
+            Self::Get(x) => &x.span,
+            Self::Inactive(x) => &x.span,
+            Self::Dump(x) => &x.span,
+            Self::ClearProtected(x) => &x.span,
+            Self::GetBlobStatus(x) => &x.span,
         }
     }
 }
@@ -147,26 +138,18 @@ pub enum ReadWriteCommand {
     DeleteTags(DeleteTagsMsg),
     RenameTag(RenameTagMsg),
     CreateTag(CreateTagMsg),
-    ProcessExit(ProcessExitRequest),
 }
 
 impl ReadWriteCommand {
-    pub fn parent_span(&self) -> tracing::Span {
-        self.parent_span_opt()
-            .cloned()
-            .unwrap_or_else(tracing::Span::current)
-    }
-
-    pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
+    pub fn parent_span(&self) -> &Span {
         match self {
-            Self::Update(x) => Some(&x.span),
-            Self::Set(x) => Some(&x.span),
-            Self::DeleteBlobw(x) => Some(&x.span),
-            Self::SetTag(x) => x.parent_span_opt(),
-            Self::DeleteTags(x) => x.parent_span_opt(),
-            Self::RenameTag(x) => x.parent_span_opt(),
-            Self::CreateTag(x) => x.parent_span_opt(),
-            Self::ProcessExit(_) => None,
+            Self::Update(x) => &x.span,
+            Self::Set(x) => &x.span,
+            Self::DeleteBlobw(x) => &x.span,
+            Self::SetTag(x) => &x.span,
+            Self::DeleteTags(x) => &x.span,
+            Self::RenameTag(x) => &x.span,
+            Self::CreateTag(x) => &x.span,
         }
     }
 }
@@ -180,17 +163,11 @@ pub enum TopLevelCommand {
 }
 
 impl TopLevelCommand {
-    pub fn parent_span(&self) -> tracing::Span {
-        self.parent_span_opt()
-            .cloned()
-            .unwrap_or_else(tracing::Span::current)
-    }
-
-    pub fn parent_span_opt(&self) -> Option<&tracing::Span> {
+    pub fn parent_span(&self) -> &Span {
         match self {
-            Self::SyncDb(x) => x.parent_span_opt(),
-            Self::Shutdown(x) => x.parent_span_opt(),
-            Self::Snapshot(x) => Some(&x.span),
+            Self::SyncDb(x) => &x.span,
+            Self::Shutdown(x) => &x.span,
+            Self::Snapshot(x) => &x.span,
         }
     }
 }

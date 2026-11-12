@@ -101,6 +101,45 @@ impl Default for BatchOptions {
     }
 }
 
+/// What kind of crash the file store stays consistent through.
+///
+/// This is about consistency, not durability. After a crash the store holds
+/// no entry that claims data it does not have, but recent writes can be lost
+/// in every mode, even acknowledged ones. A write is only durable after
+/// [`Store::sync_db`](crate::api::Store::sync_db) or a clean shutdown, and
+/// only against the kind of crash the chosen level covers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CrashConsistency {
+    /// Consistent after a process crash; recovers from an OS crash or power loss on the next open.
+    ///
+    /// No data files are synced, so an OS crash or power loss can leave entries
+    /// that claim data that never reached the disk. The store records the boot
+    /// id while it is open, and if it finds one from another boot session on
+    /// open, every entry with files checks them again when it is next loaded.
+    /// Until then it may report less data than it has, never more.
+    ///
+    /// A clean shutdown does not sync, so an OS crash within seconds after it,
+    /// before the OS wrote out its cache, goes unnoticed. Where there is no boot
+    /// id, every unclean shutdown counts as a possible OS crash.
+    #[default]
+    ProcessCrash,
+    /// Consistent after an OS crash or power loss too, at the cost of fsyncs.
+    ///
+    /// Data files and the data directory are synced before the metadata that
+    /// depends on them is recorded, for imports as well as downloads. That
+    /// costs a few fsyncs for every blob above the inline threshold, which
+    /// slows down imports and downloads of many small blobs considerably.
+    /// On Linux, Android, macOS and iOS, opening the store also flushes the data
+    /// filesystem after recovery, before recording the new run. This includes
+    /// writes inherited from an earlier run, but may wait for unrelated writes
+    /// on the same filesystem. If the flush fails, opening the store returns an
+    /// error and leaves the previous run record in place for the next attempt.
+    /// Other platforms do not yet perform this startup flush, so switching from
+    /// `ProcessCrash` can leave earlier writes unsynced.
+    PowerLoss,
+}
+
 /// Options for the file store.
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -112,6 +151,8 @@ pub struct Options {
     pub batch: BatchOptions,
     /// Gc configuration.
     pub gc: Option<GcConfig>,
+    /// What kind of crash the store stays consistent through.
+    pub crash_consistency: CrashConsistency,
 }
 
 impl Options {
@@ -122,7 +163,13 @@ impl Options {
             inline: InlineOptions::default(),
             batch: BatchOptions::default(),
             gc: None,
+            crash_consistency: CrashConsistency::default(),
         }
+    }
+
+    /// True if files must reach the disk before metadata that depends on them is recorded.
+    pub(crate) fn syncs_files(&self) -> bool {
+        self.crash_consistency == CrashConsistency::PowerLoss
     }
 
     // check if the data will be inlined, based on the size of the data

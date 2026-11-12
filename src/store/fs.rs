@@ -139,11 +139,13 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
+mod boot_id;
 mod delete_set;
 mod entry_state;
 mod import;
 mod meta;
 pub mod options;
+mod sync_fs;
 pub(crate) mod util;
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
@@ -194,10 +196,7 @@ impl InternalCommand {
         match self {
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
-            Self::FinishImport(cmd) => cmd
-                .parent_span_opt()
-                .cloned()
-                .unwrap_or_else(tracing::Span::current),
+            Self::FinishImport(cmd) => cmd.span.clone(),
         }
     }
 }
@@ -428,7 +427,7 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) {
-        let span = cmd.parent_span();
+        let span = cmd.span().clone();
         let _entered = span.enter();
         debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
@@ -657,7 +656,13 @@ impl Actor {
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
         let paths = Arc::new(options.path.clone());
-        let db_actor = meta::Actor::new(db_path, db_recv, paths, options.batch.clone())?;
+        let db_actor = meta::Actor::new(
+            db_path,
+            db_recv,
+            paths,
+            options.batch.clone(),
+            options.syncs_files(),
+        )?;
         // We hold the database lock now, so no other store is importing into the temp
         // directory. Anything in it is left over from imports that did not complete,
         // for example because the process was killed.
@@ -1043,7 +1048,7 @@ impl EntityApi for HashContext {
             };
             let path = self.global.options.path.bitfield_path(hash);
             trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.sync_all(&path) {
+            if let Err(cause) = fs.write_bitfield(&path, self.global.options.syncs_files()) {
                 error!(
                     "failed to write bitfield for {} at {}: {:?}",
                     hash,
@@ -1056,6 +1061,34 @@ impl EntityApi for HashContext {
     }
 }
 
+/// Syncs the contents of a file the store owns to disk.
+fn sync_file(path: &Path) -> io::Result<()> {
+    #[cfg(not(windows))]
+    let file = fs::File::open(path)?;
+    // windows only syncs handles with write access, and a copied
+    // read-only source keeps its read-only attribute
+    #[cfg(windows)]
+    let file = {
+        let mut perms = fs::metadata(path)?.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            fs::set_permissions(path, perms)?;
+        }
+        fs::OpenOptions::new().write(true).open(path)?
+    };
+    file.sync_data()
+}
+
+/// Syncs the directory at `path`, where the platform allows it.
+fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
     let ImportEntry {
         source,
@@ -1064,6 +1097,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         ..
     } = import_data;
     let options = ctx.options();
+    let sync = options.syncs_files();
     match &source {
         ImportSource::Memory(data) => {
             debug_assert!(options.is_inlined_data(data.len() as u64));
@@ -1086,6 +1120,9 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
         ImportSource::TempFile(path, _file, size) => {
+            if sync {
+                sync_file(path.as_ref())?;
+            }
             // this will always work on any unix, but on windows there might be an issue if the target file is open!
             // possibly open with FILE_SHARE_DELETE on windows?
             let target = ctx.options().path.data_path(&hash);
@@ -1106,6 +1143,9 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
         MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
         MemOrFile::File(path) => {
+            if sync {
+                sync_file(path.as_ref())?;
+            }
             // the same caveat as above applies here
             let target = ctx.options().path.outboard_path(&hash);
             trace!(
@@ -1121,6 +1161,12 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             OutboardLocation::Owned
         }
     };
+    let moved = matches!(data_location, DataLocation::Owned(_))
+        || matches!(outboard_location, OutboardLocation::Owned);
+    if sync && moved {
+        // A rename survives a crash only once its directory is synced.
+        sync_dir(&options.path.data_path)?;
+    }
     let data = match &data_location {
         DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
         DataLocation::Owned(size) => {

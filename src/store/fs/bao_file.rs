@@ -25,14 +25,14 @@ use tracing::{debug, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
-    options::{Options, PathOptions},
+    options::Options,
 };
 use crate::{
     api::blobs::Bitfield,
     store::{
         fs::{meta::raw_outboard_size, util::entity_manager, EntityApi, HashContext},
         util::{
-            read_checksummed_and_truncate, write_checksummed, FixedSize, MemOrFile,
+            read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
         },
         IROH_BLOCK_SIZE,
@@ -170,26 +170,35 @@ impl PartialFileStorage {
         &self.bitfield
     }
 
-    pub(super) fn sync_all(&self, bitfield_path: &Path) -> io::Result<()> {
-        self.data.sync_all()?;
-        self.outboard.sync_all()?;
-        self.sizes.sync_all()?;
+    /// Writes the bitfield, after the files it describes, syncing them first if `sync` is set.
+    pub(super) fn write_bitfield(&self, bitfield_path: &Path, sync: bool) -> io::Result<()> {
+        if sync {
+            self.data.sync_all()?;
+            self.outboard.sync_all()?;
+            self.sizes.sync_all()?;
+        }
         // only write the bitfield if the syncs were successful
         trace!(
             "writing bitfield {:?} to {}",
             self.bitfield,
             bitfield_path.display()
         );
+        // The bitfield itself is not synced, not even for PowerLoss. It is a cache
+        // of what valid_ranges computes from the files, so it only must never
+        // claim more than they hold, which the syncs above ensure. If it is lost
+        // or torn in a crash, it comes back empty or fails its checksum, and the
+        // next load rebuilds it from the files.
         write_checksummed(bitfield_path, &self.bitfield)?;
         Ok(())
     }
 
-    fn load(hash: &Hash, options: &PathOptions) -> io::Result<Self> {
-        let bitfield_path = options.bitfield_path(hash);
-        let data = create_read_write(options.data_path(hash))?;
-        let outboard = create_read_write(options.outboard_path(hash))?;
-        let sizes = create_read_write(options.sizes_path(hash))?;
-        let bitfield = match read_checksummed_and_truncate(&bitfield_path) {
+    fn load(hash: &Hash, options: &Options) -> io::Result<Self> {
+        let paths = &options.path;
+        let bitfield_path = paths.bitfield_path(hash);
+        let data = create_read_write(paths.data_path(hash))?;
+        let outboard = create_read_write(paths.outboard_path(hash))?;
+        let sizes = create_read_write(paths.sizes_path(hash))?;
+        let bitfield = match read_checksummed_and_truncate(&bitfield_path, options.syncs_files()) {
             Ok(bitfield) => bitfield,
             Err(cause) => {
                 trace!(
@@ -234,6 +243,9 @@ impl PartialFileStorage {
             let data = read_to_end(&self.data, 0, size as usize)?;
             (MemOrFile::Mem(data.clone()), DataLocation::Inline(data))
         } else {
+            if options.syncs_files() {
+                self.data.sync_all()?;
+            }
             (
                 MemOrFile::File(FixedSize::new(self.data, size)),
                 DataLocation::Owned(size),
@@ -251,6 +263,9 @@ impl PartialFileStorage {
                 )
             }
         } else {
+            if options.syncs_files() {
+                self.outboard.sync_all()?;
+            }
             (MemOrFile::File(self.outboard), OutboardLocation::Owned)
         };
         // todo: notify the store that the state has changed to complete
@@ -282,8 +297,8 @@ impl PartialFileStorage {
                 }
                 BaoContentItem::Leaf(leaf) => {
                     let o0 = leaf.offset;
-                    // divide by chunk size, multiply by 8
-                    let index = (leaf.offset >> (tree.block_size().chunk_log() + 10)) << 3;
+                    // one size slot per chunk group
+                    let index = size_slot(leaf.offset);
                     trace!(
                         "write_batch f={:?} o={} l={}",
                         self.data,
@@ -382,6 +397,9 @@ impl PartialMemStorage {
             let data_path = options.path.data_path(hash);
             let mut data_file = create_read_write(&data_path)?;
             self.data.persist(&mut data_file)?;
+            if options.syncs_files() {
+                data_file.sync_all()?;
+            }
             (
                 MemOrFile::File(FixedSize::new(data_file, size)),
                 DataLocation::Owned(size),
@@ -402,6 +420,9 @@ impl PartialMemStorage {
             let outboard_path = ctx.global.options.path.outboard_path(hash);
             let mut outboard_file = create_read_write(&outboard_path)?;
             self.outboard.persist(&mut outboard_file)?;
+            if options.syncs_files() {
+                outboard_file.sync_all()?;
+            }
             let outboard_location = if outboard_size == 0 {
                 OutboardLocation::NotNeeded
             } else {
@@ -409,6 +430,10 @@ impl PartialMemStorage {
             };
             (MemOrFile::File(outboard_file), outboard_location)
         };
+        let created = matches!(data, MemOrFile::File(_)) || matches!(outboard, MemOrFile::File(_));
+        if options.syncs_files() && created {
+            super::sync_dir(&options.path.data_path)?;
+        }
         Ok((
             CompleteStorage { data, outboard },
             EntryState::Complete {
@@ -523,26 +548,6 @@ impl BaoFileStorage {
         Self::PartialMem(Default::default())
     }
 
-    /// Call sync_all on all the files.
-    #[allow(dead_code)]
-    fn sync_all(&self) -> io::Result<()> {
-        match self {
-            Self::Complete(_) => Ok(()),
-            Self::PartialMem(_) => Ok(()),
-            Self::NonExisting => Ok(()),
-            Self::Partial(file) => {
-                file.data.sync_all()?;
-                file.outboard.sync_all()?;
-                file.sizes.sync_all()?;
-                Ok(())
-            }
-            Self::Poisoned | Self::Initial | Self::Loading => {
-                // we are poisoned, so just ignore the sync
-                Ok(())
-            }
-        }
-    }
-
     pub fn take(&mut self) -> Self {
         std::mem::replace(self, BaoFileStorage::Poisoned)
     }
@@ -641,7 +646,7 @@ impl BaoFileStorage {
     pub(super) async fn new_partial_file(ctx: &HashContext) -> io::Result<Self> {
         let hash = &ctx.id;
         let options = ctx.global.options.clone();
-        let storage = PartialFileStorage::load(hash, &options.path)?;
+        let storage = PartialFileStorage::load(hash, &options)?;
         Ok(if storage.bitfield.is_complete() {
             let size = storage.bitfield.size;
             let (storage, entry_state) = storage.into_complete(size, &options)?;
@@ -693,6 +698,7 @@ impl PartialMemStorage {
     /// Persist the batch to disk.
     fn persist(self, ctx: &HashContext) -> io::Result<PartialFileStorage> {
         let options = &ctx.global.options.path;
+        let sync = ctx.global.options.syncs_files();
         let hash = &ctx.id;
         let mut data = create_read_write(options.data_path(hash))?;
         let mut outboard = create_read_write(options.outboard_path(hash))?;
@@ -700,9 +706,12 @@ impl PartialMemStorage {
         self.data.persist(&mut data)?;
         self.outboard.persist(&mut outboard)?;
         self.size.persist(&mut sizes)?;
-        data.sync_all()?;
-        outboard.sync_all()?;
-        sizes.sync_all()?;
+        if sync {
+            data.sync_all()?;
+            outboard.sync_all()?;
+            sizes.sync_all()?;
+            super::sync_dir(&options.data_path)?;
+        }
         Ok(PartialFileStorage {
             data,
             outboard,

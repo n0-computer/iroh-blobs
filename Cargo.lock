@@ -1785,6 +1785,7 @@ dependencies = [
  "iroh-tickets",
  "iroh-util",
  "irpc",
+ "libc",
  "n0-error",
  "n0-future",
  "n0-tracing-test",
@@ -1809,6 +1810,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2002,10 +2004,11 @@ dependencies = [
 
 [[package]]
 name = "irpc"
-version = "0.17.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3623d6ff582b415904b29bbe6ebcb4a4f9a262ccdee05a45fdd003ef0950c386"
+checksum = "fecfcc2a6db86a2a0c1d8138fd58cd83e882e9923cb9e4faf5962ffa2b5a6f7e"
 dependencies = [
+ "derive_more",
  "futures-buffered",
  "futures-util",
  "irpc-derive",
@@ -2024,13 +2027,13 @@ dependencies = [
 
 [[package]]
 name = "irpc-derive"
-version = "0.17.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35c254013736de16472140d26904e6ac98e8f3887284dcf4af40f88c77411b56"
+checksum = "9c29e19b1a86c662125cdaa33860723dc966c4f50cad207d21ea64b4a14b51aa"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -2299,9 +2302,9 @@ dependencies = [
 
 [[package]]
 name = "n0-error"
-version = "1.0.1"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26c59ea174675ce6bc196878851e5049e11b8b1f9af3ba87e4d6df8d828bb001"
+checksum = "96c2215d16de3a55894583a539e6b151fb45236c3a6da45a18a40af73dc00636"
 dependencies = [
  "n0-error-macros",
  "spez",
@@ -2309,9 +2312,9 @@ dependencies = [
 
 [[package]]
 name = "n0-error-macros"
-version = "1.0.1"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4412346410d6616f3668c40e53c298e5320c7b856f7a960e5914e442601be79f"
+checksum = "6217fd5f567ce1e53f324744c14fab04899861e397539c5f3cc08bd7c1dcd2de"
 dependencies = [
  "proc-macro2",
  "quote",

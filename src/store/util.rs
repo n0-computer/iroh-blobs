@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub use sparse_mem_file::SparseMemFile;
 pub mod observer;
 mod size_info;
+#[cfg(feature = "fs-store")]
+pub(crate) use size_info::size_slot;
 pub use size_info::SizeInfo;
 mod partial_mem_storage;
 pub use partial_mem_storage::PartialMemStorage;
@@ -262,13 +264,13 @@ mod fs {
         // Write all at once
         let mut file = File::create(&path)?;
         file.write_all(&buffer)?;
-        file.sync_all()?;
 
         Ok(())
     }
 
     pub fn read_checksummed_and_truncate<T: DeserializeOwned>(
         path: impl AsRef<Path>,
+        sync: bool,
     ) -> io::Result<T> {
         let path = path.as_ref();
         let mut file = OpenOptions::new()
@@ -278,8 +280,16 @@ mod fs {
             .open(path)?;
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)?;
+        // The truncation marks the file dirty; a process crash sees it without a
+        // sync. For PowerLoss it is synced so that an old bitfield cannot come
+        // back after a power loss. That is probably harmless, since it only
+        // claims data that was synced when it was written, but only if the
+        // claimed outboard bytes cannot change, e.g. when an unvalidated size
+        // turns out wrong. Until that is checked, keep the sync.
         file.set_len(0)?;
-        file.sync_all()?;
+        if sync {
+            file.sync_all()?;
+        }
 
         if buffer.is_empty() {
             return Err(io::Error::new(

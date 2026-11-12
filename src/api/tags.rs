@@ -386,8 +386,8 @@ mod tests {
                     #[cfg(feature = "rpc")]
                     let (store, listener) = if remote {
                         let addr = "127.0.0.1:0".parse()?;
-                        let (server, cert) = irpc::util::make_server_endpoint(addr)?;
-                        let client = irpc::util::make_client_endpoint(addr, &[cert.as_ref()])?;
+                        let (server, cert) = irpc::noq::make_server_endpoint(addr)?;
+                        let client = irpc::noq::make_client_endpoint(addr, &[cert.as_ref()])?;
                         let address = server.local_addr()?;
                         let listener = tokio::spawn(store.listen(server));
                         (Store::connect(client, address), Some(listener))
