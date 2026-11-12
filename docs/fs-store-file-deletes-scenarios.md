@@ -16,6 +16,27 @@ down. Each lane is one actor:
 Indigo arrows are messages (dashed: reply), slate arrows are file IO,
 rose arrows are file deletes. Amber text is entity state or bookkeeping.
 
+## Entity state machine
+
+![Entity state (BaoFileStorage)](img/fs-entity-states.svg)
+
+The state of an entity is `BaoFileStorage`, held in a `watch`. A new or
+recycled entity starts in `Initial`, and the first task loads it. A
+`Partial` entry whose files hold all ranges loads as `Complete`.
+`write_batch` builds a `PartialMem` from `NonExisting` but always leaves
+`Partial` or `Complete`, so `PartialMem` is never seen between tasks.
+`finish_import` completes any state, `Poisoned` included, since a finished
+import does not depend on the old content. `persist` at shutdown retires the
+state as `Poisoned`, and recycling resets it to `Initial`.
+
+![Entity state during a delete](img/fs-entity-delete.svg)
+
+A delete wraps the current state. `Loading` and `Deleting` are not settled:
+tasks that load or change the state wait for them in `wait_settled`, with no
+`.await` between the check and the change. A skipped delete restores the
+wrapped state, so nothing waiting is lost. A confirmed delete swaps in
+`NonExisting` at once, and the notice of the commit ends `Deleting`.
+
 ## Writing
 
 ![Writing: the entity unlinks what its entry dropped](img/fs-write.svg)
@@ -40,8 +61,8 @@ appear in between, and no writes are in flight.
 Every delete goes through the hash's entity, which the main actor creates
 without loading. The entity holds `Deleting` until the notice of the commit
 has unlinked the files, which also keeps it alive so it cannot unload and come
-back with files the unlink would take. `DeleteBlobs` returns once the files
-are gone.
+back with files the unlink would take. `DeleteBlobs` returns after the
+unlink attempts. Unlink failures are only logged.
 
 ## Deleting during a download
 

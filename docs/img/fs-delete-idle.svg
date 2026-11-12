@@ -76,5 +76,5 @@
   <!-- Ok -->
   <line x1="723" y1="808" x2="896" y2="816" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-idle-reply)"/>
   <text x="810" y="802" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
-  <text x="810" y="831" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">the files are gone</text>
+  <text x="810" y="831" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">after the unlink attempts</text>
 </svg>
