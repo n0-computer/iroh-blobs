@@ -640,6 +640,34 @@ impl std::fmt::Debug for TxnNum {
     }
 }
 
+/// Makes the run recorded in a closed store's database look like it was from another boot.
+///
+/// This is what an OS crash changes as far as the store can tell, so tests
+/// that lose unsynced writes (LazyFS) use it to stand in for the reboot.
+/// Returns false if no run was recorded, which means the store was shut down
+/// cleanly, or the record itself was lost.
+#[cfg(test)]
+pub(super) fn move_run_to_another_boot(db: &std::path::Path) -> n0_error::Result<bool> {
+    let db = redb::Database::open(db).anyerr()?;
+    let tx = db.begin_write().anyerr()?;
+    let moved = {
+        let mut meta = tx.open_table(META_TABLE).anyerr()?;
+        match run::read(&meta) {
+            Some(run) => {
+                let run = Run {
+                    boot_id: Some("another boot".to_owned()),
+                    ..run
+                };
+                run::write(&mut meta, &run).anyerr()?;
+                true
+            }
+            None => false,
+        }
+    };
+    tx.commit().anyerr()?;
+    Ok(moved)
+}
+
 #[derive(Debug)]
 pub struct Actor {
     db: redb::Database,
