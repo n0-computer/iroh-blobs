@@ -144,6 +144,8 @@ mod boot_id;
 mod delete_set;
 mod entry_state;
 mod import;
+#[cfg(test)]
+mod lazyfs_tests;
 mod meta;
 pub mod options;
 mod sync_fs;

@@ -167,6 +167,58 @@ jobs:
     - name: doctests
       run: cargo test --locked --workspace --doc --target ${{ matrix.target }}
 
+  lazyfs:
+    name: LazyFS crash tests
+    if: "github.event_name != 'pull_request' || ! contains(github.event.pull_request.labels.*.name, 'flaky-test')"
+    timeout-minutes: 30
+    runs-on: [self-hosted, linux, X64]
+    env:
+      # The LazyFS release etcd's robustness suite runs on.
+      LAZYFS_VERSION: "0.2.0"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Install rust stable
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+      with:
+        toolchain: stable
+
+    - name: Install what building and mounting LazyFS needs
+      run: |
+        if ! dpkg -s cmake g++ libfuse3-dev fuse3 > /dev/null 2>&1; then
+          sudo -n apt-get update && sudo -n apt-get install -y cmake g++ libfuse3-dev fuse3
+        fi
+
+    - name: Restore LazyFS
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: lazyfs
+      with:
+        path: target/lazyfs
+        key: lazyfs-${{ runner.os }}-${{ env.LAZYFS_VERSION }}
+
+    - name: Build LazyFS
+      if: steps.lazyfs.outputs.cache-hit != 'true'
+      run: |
+        rm -rf target/lazyfs
+        git clone --quiet --depth 1 --branch "$LAZYFS_VERSION" https://github.com/dsrhaslab/lazyfs target/lazyfs
+        (cd target/lazyfs/libs/libpcache && ./build.sh)
+        (cd target/lazyfs/lazyfs && ./build.sh)
+
+    - name: Save LazyFS
+      if: steps.lazyfs.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: target/lazyfs
+        key: ${{ steps.lazyfs.outputs.cache-primary-key }}
+
+    - name: Crash tests under LazyFS
+      run: cargo test --locked --lib store::fs::lazyfs_tests -- --include-ignored
+      env:
+        IROH_BLOBS_LAZYFS: ${{ github.workspace }}/target/lazyfs/lazyfs/build/lazyfs
+
   check_semver:
     runs-on: ubuntu-latest
     env:
