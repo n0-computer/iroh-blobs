@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 1053" width="1010" height="1053" style="max-width: 100%; height: auto" role="img" aria-label="Deleting during a download">
+  <!--
+    Sequence diagram for docs/fs-store-file-deletes-scenarios.md.
+    Time runs down. Lanes are lifelines, slanted arrows are messages:
+    indigo = message to or from the metadata actor (dashed = reply),
+    slate = file IO of the entity, rose = file delete, amber = live/parked state.
+    Boxes are steps an actor takes, metadata boxes are one batch.
+  -->
+  <defs>
+    <marker id="fs-delete-live-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-delete-live-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-delete-live-file" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="fs-delete-live-rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1010" height="1053" rx="12" fill="#f3f4f6"/>
+  <text x="505" y="28" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">Deleting during a download</text>
+  <line x1="22" y1="60" x2="22" y2="1033" stroke="#9ca3af" stroke-width="1" marker-end="url(#fs-delete-live-axis)"/>
+  <defs><marker id="fs-delete-live-axis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker></defs>
+  <text x="22" y="54" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#888">t</text>
+  <line x1="100" y1="74" x2="100" y2="1037" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="51" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="100" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">files of h</text>
+  <line x1="300" y1="74" x2="300" y2="1037" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="258" y="46" width="84" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="300" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">entity h</text>
+  <line x1="510" y1="74" x2="510" y2="1037" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="446" y="46" width="128" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="510" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">metadata actor</text>
+  <line x1="720" y1="74" x2="720" y2="1037" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="671" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="720" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">main actor</text>
+  <line x1="900" y1="74" x2="900" y2="1037" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="866" y="46" width="69" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="900" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">client</text>
+  <rect x="237" y="96" width="126" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="300" y="116" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">download running</text>
+  <text x="300" y="131" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">observer open</text>
+  <text x="300" y="146" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">state Partial</text>
+  <!-- DeleteBlobs(h, force) -->
+  <line x1="897" y1="189" x2="724" y2="197" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-live-msg)"/>
+  <text x="810" y="183" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">DeleteBlobs(h, force)</text>
+  <!-- delete_entry -->
+  <line x1="717" y1="231" x2="304" y2="239" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-live-msg)"/>
+  <text x="405" y="225" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">delete_entry</text>
+  <rect x="188" y="259" width="224" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="300" y="279" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">Deleting(Partial)</text>
+  <text x="300" y="294" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">readers, observers look through</text>
+  <rect x="208" y="323" width="185" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="300" y="343" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">next chunk arrives</text>
+  <text x="300" y="358" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">write_batch: wait_settled</text>
+  <text x="300" y="373" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">waits</text>
+  <!-- Delete(h) -->
+  <line x1="303" y1="416" x2="506" y2="424" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-live-msg)"/>
+  <text x="405" y="410" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Delete(h)</text>
+  <rect x="418" y="444" width="185" height="27" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="510" y="464" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">write batch: remove entry</text>
+  <!-- deleted: true -->
+  <line x1="507" y1="507" x2="304" y2="515" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-live-reply)"/>
+  <text x="405" y="501" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">deleted: true</text>
+  <rect x="188" y="535" width="224" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="300" y="555" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">delete count + 1: observer ends</text>
+  <text x="300" y="570" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">Deleting(NonExisting)</text>
+  <rect x="479" y="599" width="61" height="27" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="510" y="619" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">commit</text>
+  <!-- FileNotice(h, deleted) -->
+  <line x1="513" y1="662" x2="716" y2="670" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-live-msg)"/>
+  <text x="615" y="656" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">FileNotice(h, deleted)</text>
+  <!-- notice into its inbox -->
+  <line x1="717" y1="704" x2="304" y2="712" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-live-msg)"/>
+  <text x="405" y="698" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">notice into its inbox</text>
+  <!-- rm all four files -->
+  <line x1="297" y1="746" x2="104" y2="754" stroke="#e11d48" stroke-width="1.5" marker-end="url(#fs-delete-live-rm)"/>
+  <text x="200" y="740" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#e11d48">rm all four files</text>
+  <rect x="201" y="774" width="198" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="300" y="794" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">NonExisting</text>
+  <text x="300" y="809" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">the waiting write continues</text>
+  <text x="300" y="824" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">on an empty entry</text>
+  <!-- write into new files -->
+  <line x1="297" y1="867" x2="104" y2="875" stroke="#475569" stroke-width="1.5" marker-end="url(#fs-delete-live-file)"/>
+  <text x="200" y="861" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#475569">write into new files</text>
+  <!-- Update(h, Partial) -->
+  <line x1="303" y1="909" x2="506" y2="917" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-live-msg)"/>
+  <text x="405" y="903" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Update(h, Partial)</text>
+  <text x="405" y="932" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">only the ranges from now on</text>
+  <!-- Ok(true) -->
+  <line x1="303" y1="959" x2="716" y2="967" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-live-reply)"/>
+  <text x="615" y="953" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok(true)</text>
+  <!-- Ok -->
+  <line x1="723" y1="1001" x2="896" y2="1009" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-live-reply)"/>
+  <text x="810" y="995" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
+</svg>
