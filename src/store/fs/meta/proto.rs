@@ -7,7 +7,7 @@ use tracing::Span;
 
 use super::{ActorResult, ReadOnlyTables};
 use crate::{
-    api::proto::{BlobStatusMsg, ClearProtectedMsg, DeleteBlobsMsg, ShutdownMsg, SyncDbMsg},
+    api::proto::{BlobStatusMsg, ClearProtectedMsg, ShutdownMsg, SyncDbMsg},
     store::{fs::entry_state::EntryState, util::DD},
     util::channel::oneshot,
     Hash,
@@ -19,8 +19,6 @@ use crate::{
 /// of the inline data and inline outboard tables if necessary.
 pub struct Get {
     pub hash: Hash,
-    /// Whether this get marks the hash live, see [`GetMode`].
-    pub mode: GetMode,
     pub tx: oneshot::Sender<GetResult>,
     pub span: Span,
 }
@@ -33,37 +31,23 @@ impl fmt::Debug for Get {
     }
 }
 
-/// What a [`Get`] is for, which decides whether it marks the hash live.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GetMode {
-    /// Just look at the entry state.
-    Lookup,
-    /// The load of an entity for reading.
-    ///
-    /// Marks the hash live only if the entry is partial, since opening a
-    /// partial entry creates and changes its files, while a complete one is
-    /// only read.
-    Read,
-    /// The load of an entity for writing, or its first write after a read.
-    ///
-    /// Always marks the hash live.
-    Write,
-}
-
-/// The entity for a hash is no longer live.
+/// Delete the entry of one hash, sent by the hash's entity.
 ///
-/// Sent at the end of the entity's shutdown, after all its other metadata writes.
+/// The entity sends this from its `Deleting` state, so none of its writes can
+/// follow. The reply says whether the entry was deleted: it is kept if gc must
+/// not delete it, or if there is none. The files go after the commit.
 #[derive(Debug)]
-pub struct Inactive {
+pub struct Delete {
     pub hash: Hash,
+    /// Delete even if gc must not.
+    pub force: bool,
+    pub tx: oneshot::Sender<ActorResult<bool>>,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct GetResult {
     pub state: ActorResult<Option<EntryState<Bytes>>>,
-    /// Whether this get marked the hash live, so the entity must send [`Inactive`].
-    pub live: bool,
 }
 
 /// Get the entry state for a hash.
@@ -129,7 +113,6 @@ pub use crate::api::proto::SetTagMsg;
 #[enum_conversions(Command)]
 pub enum ReadOnlyCommand {
     Get(Get),
-    Inactive(Inactive),
     Dump(Dump),
     ClearProtected(ClearProtectedMsg),
     GetBlobStatus(BlobStatusMsg),
@@ -139,7 +122,6 @@ impl ReadOnlyCommand {
     pub fn parent_span(&self) -> &Span {
         match self {
             Self::Get(x) => &x.span,
-            Self::Inactive(x) => &x.span,
             Self::Dump(x) => &x.span,
             Self::ClearProtected(x) => &x.span,
             Self::GetBlobStatus(x) => &x.span,
@@ -152,7 +134,7 @@ impl ReadOnlyCommand {
 pub enum ReadWriteCommand {
     Update(Update),
     Set(Set),
-    DeleteBlobw(DeleteBlobsMsg),
+    Delete(Delete),
     SetTag(SetTagMsg),
     DeleteTags(DeleteTagsMsg),
     RenameTag(RenameTagMsg),
@@ -164,7 +146,7 @@ impl ReadWriteCommand {
         match self {
             Self::Update(x) => &x.span,
             Self::Set(x) => &x.span,
-            Self::DeleteBlobw(x) => &x.span,
+            Self::Delete(x) => &x.span,
             Self::SetTag(x) => &x.span,
             Self::DeleteTags(x) => &x.span,
             Self::RenameTag(x) => &x.span,

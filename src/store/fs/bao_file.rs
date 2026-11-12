@@ -4,7 +4,10 @@ use std::{
     io,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use bao_tree::{
@@ -26,6 +29,7 @@ use tracing::{debug, info, trace};
 
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
+    file_deletes::BaoFilePart,
     options::Options,
 };
 use crate::{
@@ -367,6 +371,14 @@ pub(crate) enum BaoFileStorage {
     /// We will get into that state if there is an io error in the middle of an operation,
     /// or after the handle is persisted and no longer usable.
     Poisoned,
+    /// A delete of the entry is in progress, with the state from before it.
+    ///
+    /// Tasks that would change the state or files wait until it ends, like
+    /// they wait for `Loading`. Readers and observers look through it to the
+    /// old state, since the delete may still be skipped. Once the delete is
+    /// confirmed, the old state is `NonExisting`, and after the commit the
+    /// files are unlinked and this becomes `NonExisting` itself.
+    Deleting(Box<BaoFileStorage>),
 }
 
 impl fmt::Debug for BaoFileStorage {
@@ -379,6 +391,7 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::Initial => f.debug_struct("Initial").finish(),
             BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
             BaoFileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
+            BaoFileStorage::Deleting(old) => f.debug_tuple("Deleting").field(old).finish(),
         }
     }
 }
@@ -455,6 +468,11 @@ impl BaoFileStorage {
                 panic!("loading storage should not be used")
             }
             BaoFileStorage::NonExisting => Bitfield::empty(),
+            // an entity that was never loaded has no bitfield to show yet
+            BaoFileStorage::Deleting(old) => match old.as_ref() {
+                BaoFileStorage::Initial | BaoFileStorage::Loading => Bitfield::empty(),
+                old => old.bitfield(),
+            },
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
             BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
@@ -544,6 +562,39 @@ impl BaoFileStorage {
         })
     }
 
+    /// Whether this state uses the given file of its entry.
+    ///
+    /// Says yes when it cannot tell, since a file kept too long only leaks,
+    /// while a file deleted too early loses data.
+    pub(super) fn references(&self, part: BaoFilePart) -> bool {
+        match self {
+            // Not loaded: the committed entry decides, and it no longer
+            // references the file.
+            BaoFileStorage::Initial => false,
+            BaoFileStorage::NonExisting | BaoFileStorage::PartialMem(_) => false,
+            BaoFileStorage::Partial(_) => true,
+            BaoFileStorage::Complete(x) => match part {
+                BaoFilePart::Data => matches!(x.data, MemOrFile::File(_)),
+                BaoFilePart::Outboard => matches!(x.outboard, MemOrFile::File(_)),
+                BaoFilePart::Sizes | BaoFilePart::Bitfield => false,
+            },
+            BaoFileStorage::Loading | BaoFileStorage::Poisoned | BaoFileStorage::Deleting(_) => {
+                true
+            }
+        }
+    }
+
+    /// The state a delete in progress keeps, or this one.
+    ///
+    /// Readers look through `Deleting`, so a delete that is skipped in the
+    /// end does not disturb them.
+    pub(super) fn settled(&self) -> &BaoFileStorage {
+        match self {
+            BaoFileStorage::Deleting(old) => old,
+            state => state,
+        }
+    }
+
     /// Create a new mutable mem storage.
     pub fn new_partial_mem() -> Self {
         Self::PartialMem(Default::default())
@@ -560,19 +611,17 @@ impl BaoFileStorage {
 /// the file handle, otherwise the bitfield will not be written to disk and will have
 /// to be reconstructed on next use.
 ///
-/// The second field says whether the metadata actor marked this entity live. It
-/// is a lock so that of two concurrent first writes, only one marks it live.
+/// The second field counts the deletes of the entry, so observers can end
+/// even if they wake only after the entry was filled again.
 #[derive(Debug, Clone, Default, derive_more::Deref)]
 pub(crate) struct BaoFileHandle(
     #[deref] pub(super) watch::Sender<BaoFileStorage>,
-    pub(super) Arc<tokio::sync::Mutex<bool>>,
+    pub(super) Arc<AtomicU64>,
 );
 
 impl entity_manager::Reset for BaoFileHandle {
     fn reset(&mut self) {
         self.send_replace(BaoFileStorage::Initial);
-        // Readers may still hold clones, so start over with a fresh flag.
-        self.1 = Arc::default();
     }
 }
 
@@ -583,14 +632,16 @@ pub struct DataReader(pub(super) BaoFileHandle);
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
         let guard = self.0.borrow();
-        match guard.deref() {
+        match guard.deref().settled() {
             BaoFileStorage::PartialMem(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Partial(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Complete(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting(_) => {
+                io::Result::Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 }
@@ -602,14 +653,16 @@ pub struct OutboardReader(pub(super) BaoFileHandle);
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         let guard = self.0.borrow();
-        match guard.deref() {
+        match guard.deref().settled() {
             BaoFileStorage::Complete(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::PartialMem(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Partial(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => io::Result::Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting(_) => {
+                io::Result::Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 }
@@ -732,11 +785,21 @@ impl PartialMemStorage {
 
 pub struct BaoFileStorageSubscriber {
     receiver: watch::Receiver<BaoFileStorage>,
+    /// The handle's delete count, and its value when the subscription started.
+    deletes: Arc<AtomicU64>,
+    start: u64,
 }
 
 impl BaoFileStorageSubscriber {
-    pub fn new(receiver: watch::Receiver<BaoFileStorage>) -> Self {
-        Self { receiver }
+    pub fn new(handle: &BaoFileHandle) -> Self {
+        // Read the count before the first value, so a delete in between ends
+        // the subscription early rather than never.
+        let start = handle.1.load(Ordering::SeqCst);
+        Self {
+            receiver: handle.subscribe(),
+            deletes: handle.1.clone(),
+            start,
+        }
     }
 
     /// Forward observed *values* to the given sender
@@ -749,17 +812,21 @@ impl BaoFileStorageSubscriber {
         let Some(value) = self.bitfield() else {
             return Ok(());
         };
-        let mut last = value.ranges.clone();
+        let mut last = value.clone();
         tx.send(value).await?;
         loop {
             self.update_or_closed(&mut tx).await?;
             let Some(value) = self.bitfield() else {
                 return Ok(());
             };
-            if !value.ranges.is_superset(&last) {
+            if !value.ranges.is_superset(&last.ranges) {
                 return Ok(());
             }
-            last = value.ranges.clone();
+            // Nothing new, e.g. a delete started that may still be skipped.
+            if value == last {
+                continue;
+            }
+            last = value.clone();
             tx.send(value).await?;
         }
     }
@@ -788,10 +855,14 @@ impl BaoFileStorageSubscriber {
         }
     }
 
-    /// The current bitfield, or `None` if the storage is poisoned.
+    /// The current bitfield, or `None` if the storage is poisoned or the entry was deleted.
     ///
-    /// Observers end the stream on `None`, since there is no error channel.
+    /// Observers end the stream on `None`, since there is no error channel,
+    /// and since observed ranges must only ever grow.
     fn bitfield(&self) -> Option<Bitfield> {
+        if self.deletes.load(Ordering::SeqCst) != self.start {
+            return None;
+        }
         let state = self.receiver.borrow();
         match state.deref() {
             BaoFileStorage::Poisoned => None,

@@ -102,7 +102,7 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
-use meta::{list_blobs, list_tags, GetMode};
+use meta::{list_blobs, list_tags};
 use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io};
 use nested_enum_utils::enum_conversions;
@@ -138,6 +138,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
+use file_deletes::{delete_files, FileNotice, ALL_PARTS};
 mod boot_id;
 mod entry_state;
 mod file_deletes;
@@ -236,95 +237,126 @@ impl entity_manager::Params for EmParams {
     ) {
         trace!("persist {:?} due to {cause:?}", state.id);
         state.persist().await;
-        // Must come after all file and metadata writes of this entity. An
-        // entity that was never marked live has nothing to report.
-        if *state.state.1.lock().await {
-            state.meta().inactive().await.ok();
-        }
     }
 }
 
-/// Marks an entity that only a read loaded live, and takes the current state.
+/// Waits until the entity is neither loading nor deleting.
 ///
-/// Such an entity may hold a state from before the entry was deleted, so if
-/// the current state differs, it is opened again.
-async fn ensure_live(ctx: &HashContext) -> io::Result<()> {
-    let mut live = ctx.state.1.lock().await;
-    if *live {
-        return Ok(());
+/// Loading may create files, and deleting resets the state, so both must be
+/// done before a task may look at the state or touch files.
+async fn wait_settled(ctx: &HashContext) {
+    // Checking and subscribing is one synchronous step, so no change can slip
+    // in between: tasks of an entity only interleave at awaits.
+    while matches!(
+        ctx.state.borrow().deref(),
+        BaoFileStorage::Loading | BaoFileStorage::Deleting(_)
+    ) {
+        ctx.state.0.subscribe().changed().await.ok();
     }
-    if matches!(ctx.state.borrow().deref(), BaoFileStorage::Poisoned) {
-        return Ok(());
-    }
-    let (state, marked) = ctx.meta().load(GetMode::Write).await?;
-    *live = marked;
-    let unchanged = matches!(
-        (ctx.state.borrow().deref(), &state),
-        (
-            BaoFileStorage::Complete(_),
-            Some(EntryState::Complete { .. })
-        ) | (BaoFileStorage::NonExisting, None)
-    );
-    if !unchanged {
-        let storage = BaoFileStorage::open(state, ctx).await?;
-        ctx.state.send_replace(storage);
-    }
-    Ok(())
 }
 
-/// Loads the entity's state, marking it live as `mode` asks.
-async fn load_entity(ctx: &HashContext, mode: GetMode) {
-    enum Action {
-        Load,
-        Wait,
-        None,
-    }
-    let mut action = Action::None;
-    ctx.state.send_if_modified(|guard| match guard.deref() {
-        BaoFileStorage::Initial => {
+/// Loads the entity's state from the metadata, unless it is loaded already.
+async fn load_entity(ctx: &HashContext) {
+    wait_settled(ctx).await;
+    let mut load = false;
+    ctx.state.send_if_modified(|guard| {
+        if matches!(guard.deref(), BaoFileStorage::Initial) {
             *guard = BaoFileStorage::Loading;
-            action = Action::Load;
-            true
+            load = true;
         }
-        BaoFileStorage::Loading => {
-            action = Action::Wait;
-            false
-        }
-        _ => false,
+        load
     });
-    match action {
-        Action::Load => {
-            // we must assign a new state even in the error case, otherwise
-            // tasks waiting for loading would stall!
-            let state = match ctx.meta().load(mode).await {
-                Ok((state, live)) => {
-                    if live {
-                        *ctx.state.1.lock().await = true;
-                    }
-                    match BaoFileStorage::open(state, ctx).await {
-                        Ok(handle) => handle,
-                        Err(cause) => {
-                            error!("failed to open {}, poisoning: {cause}", ctx.id);
-                            BaoFileStorage::Poisoned
-                        }
-                    }
-                }
-                Err(cause) => {
-                    error!("failed to get {} from db, poisoning: {cause}", ctx.id);
-                    BaoFileStorage::Poisoned
-                }
-            };
-            ctx.state.send_replace(state);
-        }
-        Action::Wait => {
-            // we are in state loading already, so we just need to wait for the
-            // other task to complete loading.
-            while matches!(ctx.state.borrow().deref(), BaoFileStorage::Loading) {
-                ctx.state.0.subscribe().changed().await.ok();
-            }
-        }
-        Action::None => {}
+    if !load {
+        return;
     }
+    // we must assign a new state even in the error case, otherwise
+    // tasks waiting for loading would stall!
+    let state = match ctx.meta().get().await {
+        Ok(state) => match BaoFileStorage::open(state, ctx).await {
+            Ok(handle) => handle,
+            Err(cause) => {
+                error!("failed to open {}, poisoning: {cause}", ctx.id);
+                BaoFileStorage::Poisoned
+            }
+        },
+        Err(cause) => {
+            error!("failed to get {} from db, poisoning: {cause}", ctx.id);
+            BaoFileStorage::Poisoned
+        }
+    };
+    ctx.state.send_replace(state);
+}
+
+/// Deletes the entity's entry, and returns whether there was one to delete.
+///
+/// Holds `Deleting` from before the metadata actor applies the delete until
+/// the files are gone. Tasks that would change the state or files wait for it
+/// to end, so none of their changes is lost on a skipped delete, or lands on
+/// the old state after a confirmed one. The task keeps the entity alive until
+/// then, so it cannot unload and come back with files the unlink would take.
+async fn delete_entry(ctx: &HashContext, force: bool) -> io::Result<bool> {
+    wait_settled(ctx).await;
+    ctx.state.send_modify(|state| {
+        let old = state.take();
+        *state = BaoFileStorage::Deleting(Box::new(old));
+    });
+    let restore = || {
+        ctx.state.send_modify(|state| {
+            if let BaoFileStorage::Deleting(old) = state.take() {
+                *state = *old;
+            }
+        })
+    };
+    match ctx.meta().delete(force).await {
+        Ok(true) => {}
+        Ok(false) => {
+            restore();
+            return Ok(false);
+        }
+        Err(cause) => {
+            restore();
+            return Err(cause);
+        }
+    }
+    // Readers now see the entry gone. Observers end: those that wake only
+    // after the entry was filled again see the count change.
+    ctx.state
+        .1
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    ctx.state.send_replace(BaoFileStorage::Deleting(Box::new(
+        BaoFileStorage::NonExisting,
+    )));
+    // The notice after the commit unlinks the files and ends Deleting.
+    wait_settled(ctx).await;
+    Ok(true)
+}
+
+/// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
+async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
+    let paths = &ctx.global.options.path;
+    if notice.deleted {
+        // delete_entry holds Deleting until this. Unlink every file, since the
+        // entity may have written files its entry did not reference yet.
+        debug_assert!(matches!(
+            ctx.state.borrow().deref(),
+            BaoFileStorage::Deleting(_)
+        ));
+        delete_files(paths, &ctx.id, &ALL_PARTS);
+        ctx.state.send_replace(BaoFileStorage::NonExisting);
+        return;
+    }
+    wait_settled(ctx).await;
+    // Files the committed state no longer references, unless this entity's
+    // state, which is never behind its entry, uses them again.
+    let parts: Vec<_> = {
+        let state = ctx.state.borrow();
+        notice
+            .parts
+            .into_iter()
+            .filter(|part| !state.references(*part))
+            .collect()
+    };
+    delete_files(paths, &ctx.id, &parts);
 }
 
 #[derive(Debug)]
@@ -335,6 +367,10 @@ struct Actor {
     cmd_rx: tokio::sync::mpsc::Receiver<Command>,
     // Receiver for incoming file store specific commands.
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
+    // What committed metadata batches mean for files, from the database actor.
+    notices: tokio::sync::mpsc::UnboundedReceiver<FileNotice>,
+    // How many deletes are running, so shutdown can let them finish.
+    deletes: Arc<tokio::sync::watch::Sender<usize>>,
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
     // Entity manager that handles concurrency for entities.
@@ -350,31 +386,21 @@ struct Actor {
 type HashContext = ActiveEntityState<EmParams>;
 
 impl SyncEntityApi for HashContext {
-    /// Load the state from the database, for reading.
+    /// Load the state from the database.
     ///
     /// If the state is Initial, this will start the load.
     /// If it is Loading, it will wait until loading is done.
     /// If it is any other state, it will be a noop.
     async fn load(&self) {
-        load_entity(self, GetMode::Read).await
-    }
-
-    /// Load the state from the database, for writing.
-    ///
-    /// Every operation that may write files or metadata of the entry must start
-    /// with this, so the metadata actor knows the entity is live before it
-    /// touches anything.
-    async fn load_for_write(&self) {
-        load_entity(self, GetMode::Write).await;
-        if let Err(cause) = ensure_live(self).await {
-            error!("failed to mark {} live, poisoning: {cause}", self.id);
-            self.state.send_replace(BaoFileStorage::Poisoned);
-        }
+        load_entity(self).await
     }
 
     /// Write a batch and notify the db
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
+        // No await between this and the closure, so the closure never sees a
+        // delete in progress.
+        wait_settled(self).await;
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
             let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
@@ -416,27 +442,31 @@ impl SyncEntityApi for HashContext {
 
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
-        match self.state.borrow().deref() {
+        match self.state.borrow().deref().settled() {
             BaoFileStorage::Complete(mem) => Ok(mem.size()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
             BaoFileStorage::Partial(file) => file.current_size(),
             BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting(_) => {
+                Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.state.borrow().deref() {
+        match self.state.borrow().deref().settled() {
             BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
             BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
             BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting(_) => {
+                Err(io::ErrorKind::NotFound.into())
+            }
         }
     }
 }
@@ -536,7 +566,7 @@ impl Actor {
             }
             Command::DeleteBlobs(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                self.delete_blobs(cmd).await;
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
@@ -652,6 +682,9 @@ impl Actor {
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
+                Some(notice) = self.notices.recv() => {
+                    self.handle_notice(notice).await;
+                }
                 cmd = self.cmd_rx.recv() => {
                     let Some(cmd) = cmd else {
                         break;
@@ -668,6 +701,7 @@ impl Actor {
             if !self.idle_waiters.is_empty()
                 && self.tasks.is_empty()
                 && self.fs_cmd_rx.is_empty()
+                && self.notices.is_empty()
                 && !self.handles.has_pending()
             {
                 for tx in self.idle_waiters.drain(..) {
@@ -675,10 +709,104 @@ impl Actor {
                 }
             }
         }
+        // A delete waits for the notice of its commit, and an entity in
+        // shutdown takes no new tasks, so let running deletes finish first.
+        let mut deletes = self.deletes.subscribe();
+        while *deletes.borrow_and_update() > 0 {
+            tokio::select! {
+                Some(notice) = self.notices.recv() => {
+                    self.handle_notice(notice).await;
+                }
+                _ = deletes.changed() => {}
+                task = self.handles.tick() => {
+                    if let Some(task) = task {
+                        self.spawn(task);
+                    }
+                }
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    Self::log_task_result(res);
+                }
+            }
+        }
         self.handles.shutdown().await;
         while let Some(res) = self.tasks.join_next().await {
             Self::log_task_result(res);
         }
+        // No entity exists anymore, so what the last batches left to do is
+        // done here directly. No acknowledgement, the database is closed.
+        while let Ok(notice) = self.notices.try_recv() {
+            delete_files(&self.context.options.path, &notice.hash, &notice.parts);
+        }
+    }
+
+    /// Hands a notice to the hash's entity, or acts on it directly if there is none.
+    async fn handle_notice(&mut self, notice: FileNotice) {
+        trace!("{notice:?}");
+        if self.handles.contains(&notice.hash) {
+            // Waits for room in the entity's inbox: a notice must not be dropped.
+            let task = self
+                .handles
+                .spawn_wait(notice.hash, move |arg| async move {
+                    match arg {
+                        SpawnArg::Active(ctx) => apply_notice(&ctx, notice).await,
+                        SpawnArg::Busy | SpawnArg::Dead => {
+                            warn!("no entity for {}, its files stay", notice.hash);
+                        }
+                    }
+                })
+                .await;
+            if let Some(task) = task {
+                self.spawn(task);
+            }
+        } else {
+            // No entity exists for the hash, and none can be created before
+            // this is done, since only this actor creates them. So nothing
+            // else touches these files, and no writes from before are in
+            // flight.
+            delete_files(&self.context.options.path, &notice.hash, &notice.parts);
+        }
+    }
+
+    /// Deletes through each hash's entity, and answers once all are done.
+    async fn delete_blobs(&mut self, cmd: proto::DeleteBlobsMsg) {
+        let proto::DeleteBlobsMsg {
+            inner: proto::BlobDeleteRequest { hashes, force },
+            tx,
+            ..
+        } = cmd;
+        let mut results = Vec::with_capacity(hashes.len());
+        for hash in hashes {
+            let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+            results.push(res_rx);
+            let running = RunningDelete::new(&self.deletes);
+            let task = self
+                .handles
+                .spawn_wait(hash, move |arg| async move {
+                    let _running = running;
+                    let res = match arg {
+                        SpawnArg::Active(ctx) => delete_entry(&ctx, force).await,
+                        SpawnArg::Busy | SpawnArg::Dead => {
+                            Err(io::Error::other("no entity to delete through"))
+                        }
+                    };
+                    res_tx.send(res).ok();
+                })
+                .await;
+            if let Some(task) = task {
+                self.spawn(task);
+            }
+        }
+        self.spawn(async move {
+            let mut res = Ok(());
+            for rx in results {
+                match rx.await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(cause)) => res = Err(api::Error::from(cause)),
+                    Err(_) => res = Err(api::Error::other("delete task dropped")),
+                }
+            }
+            tx.send(res).await.ok();
+        });
     }
 
     /// Creates the actor and spawns the database actor.
@@ -708,10 +836,12 @@ impl Actor {
         );
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
+        let (notices_send, notices) = tokio::sync::mpsc::unbounded_channel();
         let paths = Arc::new(options.path.clone());
         let db_actor = meta::Actor::new(
             db_path,
             db_recv,
+            notices_send,
             paths,
             options.batch.clone(),
             options.syncs_files(),
@@ -730,12 +860,32 @@ impl Actor {
             context: slot_context.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
+            notices,
+            deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
             handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
             temp_tags: Default::default(),
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
         })
+    }
+}
+
+/// Counts a running delete for as long as it lives, see `Actor::deletes`.
+///
+/// Counted by drop, so a delete whose entity never ran it is not waited for.
+struct RunningDelete(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl RunningDelete {
+    fn new(deletes: &Arc<tokio::sync::watch::Sender<usize>>) -> Self {
+        deletes.send_modify(|n| *n += 1);
+        Self(deletes.clone())
+    }
+}
+
+impl Drop for RunningDelete {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n -= 1);
     }
 }
 
@@ -972,9 +1122,6 @@ trait SyncEntityApi: EntityApi {
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
     async fn load(&self);
 
-    /// Like [`Self::load`], but for an operation that writes the entry.
-    async fn load_for_write(&self);
-
     /// Get a synchronous reader for the data file.
     fn data_reader(&self) -> impl ReadBytesAt;
 
@@ -1015,7 +1162,7 @@ impl EntityApi for HashContext {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
-        self.load_for_write().await;
+        self.load().await;
         let ImportBaoMsg {
             inner: ImportBaoRequest { size, .. },
             mut rx,
@@ -1034,7 +1181,7 @@ impl EntityApi for HashContext {
     async fn observe(&self, cmd: ObserveMsg) {
         trace!("{cmd:?}");
         self.load().await;
-        BaoFileStorageSubscriber::new(self.state.subscribe())
+        BaoFileStorageSubscriber::new(&self.state)
             .forward(cmd.tx)
             .await
             .ok();
@@ -1165,7 +1312,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             debug_assert!(!options.is_inlined_data(*size));
         }
     }
-    ctx.load_for_write().await;
+    ctx.load().await;
     let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
@@ -1456,13 +1603,22 @@ async fn export_path_impl(
                     }
                     external.push(target);
                 };
-                // setting the new entry state will also take care of deleting the owned data file!
-                ctx.meta()
-                    .set(EntryState::Complete {
-                        data_location: DataLocation::External(external, size),
-                        outboard_location,
-                    })
-                    .await?;
+                // The copy took a while, so the entry may have been deleted
+                // meanwhile. Then it stays deleted, and this was just a copy.
+                // No await between the check and sending the set.
+                wait_settled(ctx).await;
+                if matches!(ctx.state.borrow().deref(), BaoFileStorage::Complete(_)) {
+                    // The notice after the commit deletes the owned data file,
+                    // unless this entity's state still uses it.
+                    // TODO: after a copy across file systems it does, so the
+                    // owned file leaks.
+                    ctx.meta()
+                        .set(EntryState::Complete {
+                            data_location: DataLocation::External(external, size),
+                            outboard_location,
+                        })
+                        .await?;
+                }
             }
         },
     }
@@ -2598,8 +2754,9 @@ pub mod tests {
                 let (_, bao) = create_n0_bao(&data, &rest)?;
                 store.import_bao_bytes(hash, rest, bao).await?;
             }
-            store.wait_idle().await?;
+            // The files go after the commit, through a notice to the entity.
             store.sync_db().await?;
+            store.wait_idle().await?;
             let inlined = size <= options.inline.max_data_inlined as usize;
             assert_eq!(path.data_path(&hash).exists(), !inlined, "size={size}");
             assert!(!path.outboard_path(&hash).exists(), "by_import={by_import}");
@@ -2611,12 +2768,10 @@ pub mod tests {
         Ok(())
     }
 
-    /// Deleting an entry must not delete the files of an entity that is still live.
-    ///
-    /// The files go once the entity is no longer live.
+    /// Deleting an observed entry ends the observer, and its files are gone once the delete returns.
     #[tokio::test]
     #[traced_test]
-    async fn test_delete_waits_for_live_entity() -> TestResult<()> {
+    async fn test_delete_ends_observers_and_removes_files() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -2633,7 +2788,6 @@ pub mod tests {
             path.sizes_path(&hash),
         ];
         assert!(files.iter().all(|f| f.exists()));
-        // An open observe stream keeps the entity live.
         let mut obs = Box::pin(store.observe(hash).stream().await?);
         obs.next().await.expect("initial bitfield");
         store
@@ -2643,19 +2797,13 @@ pub mod tests {
                 force: true,
             })
             .await?;
-        store.sync_db().await?;
-        assert!(
-            files.iter().all(|f| f.exists()),
-            "the entity is live and may still use its files"
-        );
-        drop(obs);
-        store.wait_idle().await?;
-        store.sync_db().await?;
         assert!(
             files.iter().all(|f| !f.exists()),
-            "no entry and no live entity, so the files must go"
+            "the delete returns after the files are gone"
         );
         assert!(!path.bitfield_path(&hash).exists());
+        let rest = tokio::time::timeout(Duration::from_secs(5), obs.collect::<Vec<_>>()).await?;
+        assert!(rest.is_empty(), "the observer ends instead of seeing less");
         store.shutdown().await?;
         Ok(())
     }

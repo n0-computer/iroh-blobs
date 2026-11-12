@@ -427,6 +427,49 @@ mod main_actor {
             task
         }
 
+        /// Whether an actor exists for `id`, running or still shutting down.
+        ///
+        /// An actor that is shutting down may still do IO in its shutdown
+        /// handler, so it counts until its shutdown is complete.
+        pub fn contains(&self, id: &P::EntityId) -> bool {
+            self.live.contains_key(id)
+        }
+
+        /// Like [`Self::spawn`], but waits for room in the entity's inbox
+        /// instead of calling `f` with [`SpawnArg::Busy`].
+        ///
+        /// For work that must not be dropped. The entity drains its inbox into
+        /// tasks without waiting on them, so the wait is short.
+        #[must_use = "this function may return a future that must be spawned by the caller"]
+        pub async fn spawn_wait<F, Fut>(
+            &mut self,
+            id: P::EntityId,
+            f: F,
+        ) -> Option<impl Future<Output = ()> + Send + 'static>
+        where
+            F: FnOnce(SpawnArg<P>) -> Fut + Send + 'static,
+            Fut: Future<Output = ()> + Send + 'static,
+        {
+            let f: Box<dyn FnOnce(SpawnArg<P>) -> future::Boxed<()> + Send> =
+                Box::new(|x| Box::pin(async move { f(x).await }));
+            let (entity_handle, task) = self.get_or_create(id.clone());
+            let sender = entity_handle.send().clone();
+            if let Err(mpsc::error::SendError(cmd)) = sender
+                .send(entity_actor::Command::Spawn(Spawn { id: id.clone(), f }))
+                .await
+            {
+                let entity_actor::Command::Spawn(spawn) = cmd else {
+                    unreachable!()
+                };
+                error!(
+                    "Entity actor inbox is closed, cannot send command to entity actor {:?}.",
+                    id
+                );
+                (spawn.f)(SpawnArg::Dead).await;
+            }
+            task
+        }
+
         /// Whether an entity actor has queued a follow-up for the manager.
         pub fn has_pending(&self) -> bool {
             !self.internal_recv.is_empty()
