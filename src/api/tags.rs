@@ -40,7 +40,21 @@ impl Tags {
     pub async fn list_temp_tags(
         &self,
     ) -> irpc::Result<impl Stream<Item = super::Result<HashAndFormat>>> {
-        let options = ListTempTagsRequest;
+        self.list_temp_tags_impl(false).await
+    }
+
+    /// Lists current roots and those retained since the oldest active gc run.
+    pub(crate) async fn list_temp_tags_for_gc(
+        &self,
+    ) -> irpc::Result<impl Stream<Item = super::Result<HashAndFormat>>> {
+        self.list_temp_tags_impl(true).await
+    }
+
+    async fn list_temp_tags_impl(
+        &self,
+        include_dropped: bool,
+    ) -> irpc::Result<impl Stream<Item = super::Result<HashAndFormat>>> {
+        let options = ListTempTagsRequest { include_dropped };
         trace!("{:?}", options);
         let mut rx = self.client.server_streaming(options, 32).await?;
         Ok(Gen::new(|co| async move {

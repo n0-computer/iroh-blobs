@@ -11,7 +11,7 @@
 mod import_outboard;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     future::Future,
     io::{self, Write},
     num::NonZeroU64,
@@ -112,6 +112,7 @@ enum TaskResult {
     Unit(()),
     Import(Result<ImportEntry>),
     Scope(Scope),
+    GcRunEnded,
 }
 
 impl MemStore {
@@ -132,7 +133,6 @@ impl MemStore {
                 },
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
-                protected: Default::default(),
                 idle_waiters: Default::default(),
             }
             .run(),
@@ -159,7 +159,6 @@ struct Actor {
     temp_tags: TempTags,
     // idle waiters
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
-    protected: HashSet<Hash>,
 }
 
 impl Actor {
@@ -182,8 +181,6 @@ impl Actor {
                 tx,
                 ..
             }) => {
-                // protect from a gc run that is already past the mark phase, like the fs store
-                self.protected.insert(hash);
                 let entry = self.get_or_create_entry(hash);
                 self.spawn(import_bao(entry, size, data, tx));
             }
@@ -356,7 +353,11 @@ impl Actor {
             }
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
-                let tts = self.temp_tags.list();
+                let tts = if cmd.inner.include_dropped {
+                    self.temp_tags.list_for_gc()
+                } else {
+                    self.temp_tags.list()
+                };
                 self.spawn(async move {
                     for tt in tts {
                         if cmd.tx.send(ListTempTagsItem::Tag(tt)).await.is_err() {
@@ -410,7 +411,7 @@ impl Actor {
                     ..
                 } = cmd;
                 for hash in hashes {
-                    if !force && self.protected.contains(&hash) {
+                    if !force && self.temp_tags.protects(hash) {
                         continue;
                     }
                     self.state.data.remove(&hash);
@@ -422,9 +423,18 @@ impl Actor {
                 let (id, scope) = self.temp_tags.create_scope();
                 self.spawn(handle_batch(cmd, id, scope));
             }
-            Command::ClearProtected(cmd) => {
-                self.protected.clear();
-                cmd.tx.send(Ok(())).await.ok();
+            Command::GcRun(cmd) => {
+                self.temp_tags.start_gc_run();
+                self.spawn(async move {
+                    let crate::api::proto::GcRunMsg { tx, mut rx, .. } = cmd;
+                    tx.send(()).await.ok();
+                    // The run lasts until the client closes its channel. Nothing
+                    // is ever sent on it, so this returns once it is closed.
+                    if let Ok(Some(update)) = rx.recv().await {
+                        match update {}
+                    }
+                    TaskResult::GcRunEnded
+                });
             }
             Command::ExportRanges(cmd) => {
                 let entry = self.get(&cmd.hash);
@@ -482,8 +492,6 @@ impl Actor {
             import_data.tx.send(AddProgressItem::Done(tt)).await.ok();
             return;
         }
-        // protect from a gc run that is already past the mark phase, like the fs store
-        self.protected.insert(hash);
         let entry = self.get_or_create_entry(hash);
         entry
             .0
@@ -543,6 +551,9 @@ impl Actor {
                         }
                         TaskResult::Scope(scope) => {
                             self.temp_tags.end_scope(scope);
+                        }
+                        TaskResult::GcRunEnded => {
+                            self.temp_tags.end_gc_run();
                         }
                         TaskResult::Unit(_) => {}
                     }

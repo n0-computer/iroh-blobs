@@ -60,27 +60,25 @@ pub(super) async fn gc_mark_task(
             seqs.insert(hash);
         }
     };
-    // Temp tags are read before named tags, so that a blob whose temp tag is
-    // replaced by a named tag between the two reads, as `with_named_tag` does,
-    // is seen in at least one of them (#247).
-    //
-    // TODO: this is a stopgap. The opposite handover, from a named tag to a
-    // temp tag, can still be missed. The planned fix is to also list every
-    // temp tag that existed since the start of the run, which works for any
-    // read order.
-    trace!("traversing temp roots");
-    let mut tts = store.tags().list_temp_tags().await?;
-    while let Some(tt) = tts.next().await {
-        let tt = tt?;
-        trace!("adding temp root {:?}", tt);
-        add_root(tt);
-    }
+    // Read named roots first, then current AND retained temp roots. A root
+    // continuously protected during a handover is either in the named
+    // snapshot or had a temp tag before that snapshot, which the second
+    // listing retains even if it has since been dropped. Repeated handovers
+    // are safe too. These roots must be traversed: protecting only a HashSeq
+    // root at delete time would still allow its children to be swept.
     trace!("traversing tags");
     let mut tags = store.tags().list().await?;
     while let Some(tag) = tags.next().await {
         let info = tag?;
         trace!("adding root {:?} {:?}", info.name, info.hash_and_format());
         add_root(info.hash_and_format());
+    }
+    trace!("traversing temp roots");
+    let mut tts = store.tags().list_temp_tags_for_gc().await?;
+    while let Some(tt) = tts.next().await {
+        let tt = tt?;
+        trace!("adding temp root {:?}", tt);
+        add_root(tt);
     }
     for hash in seqs {
         let mut stream = store.export_bao(hash, ChunkRanges::all()).hashes();
@@ -207,8 +205,10 @@ pub async fn gc_run_once(
     protect: Option<&ProtectCb>,
 ) -> crate::api::Result<()> {
     debug!(externally_protected = live.len(), "gc: start");
+    // Until this is dropped at the end of the sweep, the store keeps content
+    // that has or had a temp tag during the run, see `GcRunRequest`.
+    let _run = store.gc_run().await?;
     {
-        store.clear_protected().await?;
         let mut stream = gc_mark(store, live);
         while let Some(ev) = stream.next().await {
             match ev {
@@ -448,33 +448,45 @@ mod tests {
         Ok(())
     }
 
-    /// Blobs written after the mark phase of a gc run, so not in `live`,
-    /// must survive the sweep of that run.
+    /// Blobs that have or had a temp tag during a gc run survive its sweep,
+    /// although they are not in `live`, since they came after the mark.
+    /// Blobs that never had a tag do not, even if they were written during
+    /// the run: no tag, no protection.
     async fn gc_import_after_mark_survives(store: &Store) -> TestResult<()> {
         use bao_tree::ChunkNum;
 
         use crate::{api::blobs::BlobStatus, store::util::tests::create_n0_bao};
-        // the mark phase of a run that sees nothing live
-        store.clear_protected().await?;
+        let run = store.gc_run().await?;
+        // the mark of the run saw nothing live
         let live = HashSet::new();
-        // a complete import and a partial import between mark and sweep
-        let a = store.add_slice(vec![0u8; 100000]).temp_tag().await?;
-        let ah = a.hash();
+        // imported after the mark, with a temp tag that is kept
+        let kept = store.add_slice(vec![0u8; 100000]).temp_tag().await?;
+        // imported after the mark, with a temp tag dropped before the sweep
+        let dropped = store.add_slice(vec![2u8; 100000]).temp_tag().await?;
+        let dropped_hash = dropped.hash();
+        drop(dropped);
+        // written after the mark, without any tag
         let data = vec![1u8; 100000];
         let ranges = ChunkRanges::from(..ChunkNum(16));
-        let (bh, b_bao) = create_n0_bao(&data, &ranges)?;
-        store.import_bao_bytes(bh, ranges, b_bao).await?;
+        let (untagged, bao) = create_n0_bao(&data, &ranges)?;
+        store.import_bao_bytes(untagged, ranges, bao).await?;
         let mut stream = gc_sweep(store, &live);
         while let Some(ev) = stream.next().await {
             if let GcSweepEvent::Error(err) = ev {
                 return Err(err.into());
             }
         }
-        assert!(store.has(ah).await?, "complete import was swept");
+        assert!(store.has(kept.hash()).await?, "a temp tag protects");
         assert!(
-            store.status(bh).await? != BlobStatus::NotFound,
-            "partial import was swept"
+            store.has(dropped_hash).await?,
+            "a temp tag protects for the rest of the run"
         );
+        assert_eq!(
+            store.status(untagged).await?,
+            BlobStatus::NotFound,
+            "no tag, no protection"
+        );
+        drop(run);
         Ok(())
     }
 
@@ -591,6 +603,123 @@ mod tests {
         });
         gc_run_once(&proxy, &mut HashSet::new(), None).await?;
         assert!(store.has(hash).await?, "the handed over blob was swept");
+        Ok(())
+    }
+
+    /// A blob whose named tag is replaced by a temp tag during the mark
+    /// survives the run.
+    #[tokio::test]
+    #[traced_test]
+    async fn gc_named_to_temp_handover() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        let tt = store.add_slice("handover").temp_tag().await?;
+        let content = tt.hash_and_format();
+        store.tags().set("named", content).await?;
+        drop(tt);
+        // The handover lands between the two root listings.
+        let inner = (*store).clone();
+        let held = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let hold = held.clone();
+        let proxy = store_with_handover(&store, move || {
+            Box::pin(async move {
+                let tt = inner.tags().temp_tag(content).await.ok();
+                inner.tags().delete("named").await.ok();
+                *hold.lock().unwrap() = tt;
+            })
+        });
+        gc_run_once(&proxy, &mut HashSet::new(), None).await?;
+        assert!(held.lock().unwrap().is_some(), "the handover ran");
+        assert!(
+            store.has(content.hash).await?,
+            "the handed over blob was swept"
+        );
+        Ok(())
+    }
+
+    /// Exercise both directions, including repeated moves between snapshots.
+    async fn gc_hashseq_handover(store: &Store, initially_named: bool) -> TestResult {
+        let child = store.add_slice("handover child").temp_tag().await?;
+        let child_hash = child.hash();
+        let root = store
+            .add_bytes_with_opts(AddBytesOptions {
+                data: [child_hash].into_iter().collect::<HashSeq>().into(),
+                format: BlobFormat::HashSeq,
+            })
+            .temp_tag()
+            .await?;
+        let content = root.hash_and_format();
+        let mut root = Some(root);
+        if initially_named {
+            store.tags().set("handover", content).await?;
+            drop(root.take());
+        }
+        drop(child);
+        let garbage = store.add_slice("unrelated garbage").temp_tag().await?;
+        let garbage_hash = garbage.hash();
+        drop(garbage);
+
+        let inner = store.clone();
+        let held = Arc::new(std::sync::Mutex::new(None));
+        let hold = held.clone();
+        let proxy = store_with_handover(store, move || {
+            Box::pin(async move {
+                for _ in 0..3 {
+                    if initially_named {
+                        let tt = inner.tags().temp_tag(content).await.unwrap();
+                        inner.tags().delete("handover").await.unwrap();
+                        inner.tags().set("handover", content).await.unwrap();
+                        drop(tt);
+                    } else {
+                        inner.tags().set("handover", content).await.unwrap();
+                        drop(root.take());
+                        root = Some(inner.tags().temp_tag(content).await.unwrap());
+                        inner.tags().delete("handover").await.unwrap();
+                    }
+                }
+                if initially_named {
+                    let tt = inner.tags().temp_tag(content).await.unwrap();
+                    inner.tags().delete("handover").await.unwrap();
+                    *hold.lock().unwrap() = Some(tt);
+                } else {
+                    inner.tags().set("handover", content).await.unwrap();
+                    drop(root);
+                }
+            })
+        });
+        gc_run_once(&proxy, &mut HashSet::new(), None).await?;
+        assert!(store.has(content.hash).await?, "root was swept");
+        assert!(store.has(child_hash).await?, "HashSeq child was swept");
+        assert!(
+            !store.has(garbage_hash).await?,
+            "unrelated garbage must be collected"
+        );
+        if !initially_named {
+            assert!(
+                store.tags().list_temp_tags().await?.next().await.is_none(),
+                "ordinary listings must not expose retained roots"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gc_hashseq_handover_mem() -> TestResult {
+        for initially_named in [false, true] {
+            let store = crate::store::mem::MemStore::new();
+            gc_hashseq_handover(&store, initially_named).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_hashseq_handover_fs() -> TestResult {
+        for initially_named in [false, true] {
+            let dir = tempfile::tempdir()?;
+            let store = crate::store::fs::FsStore::load(dir.path()).await?;
+            gc_hashseq_handover(&store, initially_named).await?;
+            store.shutdown().await?;
+        }
         Ok(())
     }
 

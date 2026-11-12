@@ -50,9 +50,9 @@ use super::{
             AddProgressRules, DebugOnly, ExportBaoRules, ExportPathRules, ExportRangesRules,
             ListBlobsRules, ObserveRules, Step, StreamRules,
         },
-        BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
-        ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
-        ImportBytesRequest, ImportPathRequest, ListBlobsItem, ListRequest, Scope,
+        BatchResponse, BlobStatusRequest, CreateTempTagRequest, ExportBaoRequest, ExportRangesItem,
+        GcRunRequest, GcRunUpdate, ImportBaoRequest, ImportByteStreamRequest, ImportBytesRequest,
+        ImportPathRequest, ListBlobsItem, ListRequest, Scope,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -554,12 +554,20 @@ impl Blobs {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn clear_protected(&self) -> RequestResult<()> {
-        let msg = ClearProtectedRequest;
-        self.client.rpc(msg).await??;
-        Ok(())
+    /// Starts a gc run, which lasts until the returned guard is dropped.
+    ///
+    /// See [`GcRunRequest`].
+    pub(crate) async fn gc_run(&self) -> irpc::Result<GcRun> {
+        let (tx, rx) = self.client.client_streaming(GcRunRequest, 1).await?;
+        rx.await?;
+        Ok(GcRun { _tx: tx })
     }
+}
+
+/// A running gc run, see [`Blobs::gc_run`]. Dropping it ends the run.
+#[derive(Debug)]
+pub(crate) struct GcRun {
+    _tx: irpc::channel::mpsc::Sender<GcRunUpdate>,
 }
 
 /// A progress handle for a batch scoped add operation.

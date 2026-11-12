@@ -4,79 +4,85 @@ Sequence diagrams for the protocol in [fs-store-file-deletes.md]. Time runs
 down. Each lane is one actor:
 
 - **files of h**: the data, outboard, sizes and bitfield files of one hash.
-- **entity h**: the entity actor for the hash, which does file IO directly.
-- **metadata actor**: owns redb, handles commands in one FIFO, groups them into
-  read or write batches, and deletes files after a batch.
-- **gc**: stands for anything that sends `DeleteBlobs` through the main actor.
+- **entity h**: the entity actor for the hash. It is the only one that writes
+  and deletes these files while it exists.
+- **metadata actor**: owns redb, handles commands in one FIFO, and groups them
+  into read or write batches. It never touches data files, and after each
+  commit it sends a `FileNotice` per hash to the main actor.
+- **main actor**: creates entities, routes notices, fans deletes out to
+  entities, and holds the temp tags.
+- **gc** / **client**: whoever sends `DeleteBlobs` or imports.
 
-Indigo arrows are messages to and from the metadata actor (dashed: reply),
-slate arrows are file IO by the entity, rose arrows are file deletes. Amber
-text is the metadata actor's `live` and `parked` bookkeeping.
-
-## Reading a complete entry
-
-![Reading a complete entry](img/fs-read.svg)
-
-A read costs one `Get(Read)`, and a complete entry is not marked live, so
-the entity never sends `Inactive`. Nothing protects the reader: if gc deletes
-the entry, its files go right after the commit. Only blobs that nothing
-protects are affected, as before.
+Indigo arrows are messages (dashed: reply), slate arrows are file IO,
+rose arrows are file deletes. Amber text is entity state or bookkeeping.
 
 ## Writing
 
-![Writing: an entity downloads a blob](img/fs-write.svg)
+![Writing: the entity unlinks what its entry dropped](img/fs-write.svg)
 
-`Get(Write)` marks the hash live before the entity touches any file. Every
-batch that writes `h` parks it while it is live. The files that the final
-`Complete` state no longer needs (sizes, bitfield) are deleted only after
-`Inactive`, in the first batch after it. That batch can be a read batch,
-since everything is committed by then.
+Once the entry is `Complete`, the commit no longer references sizes and
+bitfield. The notice goes through the main actor to the entity, which
+unlinks only files its own state does not use. The entity's state is never
+behind its entry.
 
-## Delete while the entity is live
+## A notice when no entity exists
 
-![Delete while the entity is live](img/fs-delete-live.svg)
+![A notice when no entity exists](img/fs-notice-no-entity.svg)
 
-This is `test_delete_waits_for_live_entity`. An observe stream on a partial
-entry keeps the entity live. A forced delete removes the entry at once, but
-the files stay until the entity sends `Inactive`. Then the entry is gone,
-so all four files are deleted.
+`update` does not wait, so the entity can be gone before the commit. The main
+actor then unlinks the files itself. Only it creates entities, so none can
+appear in between, and no writes are in flight.
 
-## Delete while live, then the entity writes again
+## Deleting an idle entry
 
-![Delete while live, then the entity writes again](img/fs-delete-rewrite.svg)
+![Deleting an idle entry](img/fs-delete-idle.svg)
 
-Same start, but the entity keeps writing after the delete. Its `Update`
-recreates the entry, which references the files the entity kept writing to.
-When the entity is done, the final state is `Partial`, so nothing is
-deleted.
+Every delete goes through the hash's entity, which the main actor creates
+without loading. The entity holds `Deleting` until the notice of the commit
+has unlinked the files, which also keeps it alive so it cannot unload and come
+back with files the unlink would take. `DeleteBlobs` returns once the files
+are gone.
 
-## A read-loaded entity writes after a delete
+## Deleting during a download
 
-![A read-loaded entity writes after a delete](img/fs-read-then-write.svg)
+![Deleting during a download](img/fs-delete-live.svg)
 
-An entity loaded for reading a complete entry is not live, so gc can delete
-the entry and its files while the entity still holds the old `Complete`
-state. The first write then calls `ensure_live`, which sends `Get(Write)`.
-The reply carries the current state, so the entity sees that the entry is gone
-and opens it again as `NonExisting` before writing.
+While the entity is `Deleting`, readers and observers look through to the old
+state, and writes wait. Once the delete is applied, the delete count ends the
+observer. After the unlink, the waiting write continues on an empty entry, so
+the download keeps only the ranges that arrive from then on.
 
-## Why a live complete entry is parked too
+## Skipped deletes
 
-![Why a live complete entry is parked too](img/fs-park-complete.svg)
+![Skipped deletes](img/fs-delete-skip.svg)
 
-`finish_import` moves the temp file into place before it sends its update,
-even if the entry is already complete. Here import A (reference mode) updates
-the entry between import B's rename and B's update. At that point the state
-is `Complete` with external data, so `data/h` is unreferenced. A rule that
-deletes unreferenced files of a complete entry right away, live or not, would
-remove the file B just moved into place, and B's update would then make the
-entry point at it. Parking every live hash avoids this.
+A delete that is not forced skips content a temp tag protects. The main actor
+checks this before fanning out, so the entity never sees it. A delete of a
+hash without an entry restores the entity's old state, and the writes that
+waited go on as if nothing happened.
+
+## A gc run protects what had a temp tag
+
+![A gc run protects what had a temp tag](img/fs-gc-run.svg)
+
+A gc run is a `GcRun` request that lasts until gc drops it. Content that had a
+temp tag at any time during the run is kept by deletes that are not forced,
+even if the tag was dropped. That covers imports after the mark, and
+handovers between temp tags and named tags. Untagged content has no
+protection.
+
+## Re-import after a delete
+
+![Re-import after a delete](img/fs-reimport.svg)
+
+The bug this design fixes: before, an entity that had loaded `Complete` kept
+that state after a delete, so a later import of the same blob was a no-op and
+the blob stayed gone. Now the delete goes through the entity, so it is
+`NonExisting` and the import writes.
 
 ## Not shown: crashes
 
-Parked deletes live only in memory. After a crash, the files of hashes that
-were parked stay on disk until something writes the hash again. The planned
-fix is a sweep at open after an unclean shutdown: list the data directory and
-delete the files that no entry references. No entity is live at that point.
+A crash between a commit and the unlink of its notice leaves files that
+nothing references. A sweep at open after an unclean shutdown is planned.
 
 [fs-store-file-deletes.md]: fs-store-file-deletes.md

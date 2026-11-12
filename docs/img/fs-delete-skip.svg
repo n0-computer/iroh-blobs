@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 651" width="1010" height="651" style="max-width: 100%; height: auto" role="img" aria-label="Skipped deletes">
+  <!--
+    Sequence diagram for docs/fs-store-file-deletes-scenarios.md.
+    Time runs down. Lanes are lifelines, slanted arrows are messages:
+    indigo = message to or from the metadata actor (dashed = reply),
+    slate = file IO of the entity, rose = file delete, amber = live/parked state.
+    Boxes are steps an actor takes, metadata boxes are one batch.
+  -->
+  <defs>
+    <marker id="fs-delete-skip-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-delete-skip-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-delete-skip-file" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="fs-delete-skip-rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1010" height="651" rx="12" fill="#f3f4f6"/>
+  <text x="505" y="28" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">Skipped deletes</text>
+  <line x1="22" y1="60" x2="22" y2="631" stroke="#9ca3af" stroke-width="1" marker-end="url(#fs-delete-skip-axis)"/>
+  <defs><marker id="fs-delete-skip-axis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker></defs>
+  <text x="22" y="54" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#888">t</text>
+  <line x1="200" y1="74" x2="200" y2="635" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="158" y="46" width="84" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="200" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">entity b</text>
+  <line x1="430" y1="74" x2="430" y2="635" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="366" y="46" width="128" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="430" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">metadata actor</text>
+  <line x1="680" y1="74" x2="680" y2="635" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="631" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="680" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">main actor</text>
+  <line x1="900" y1="74" x2="900" y2="635" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="881" y="46" width="39" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="900" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">gc</text>
+  <!-- DeleteBlobs([a, b]) -->
+  <line x1="897" y1="110" x2="684" y2="118" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="790" y="104" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">DeleteBlobs([a, b])</text>
+  <text x="790" y="133" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">not forced</text>
+  <rect x="581" y="146" width="198" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="680" y="166" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">a: a temp tag protects it</text>
+  <text x="680" y="181" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">skip, false</text>
+  <text x="680" y="196" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">b: spawn delete on entity b</text>
+  <!-- delete_entry -->
+  <line x1="677" y1="239" x2="204" y2="247" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="315" y="233" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">delete_entry</text>
+  <rect x="147" y="267" width="107" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="200" y="287" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">Deleting(old)</text>
+  <text x="200" y="302" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">writes wait</text>
+  <!-- Delete(b) -->
+  <line x1="203" y1="345" x2="426" y2="353" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="315" y="339" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Delete(b)</text>
+  <rect x="373" y="373" width="113" height="27" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="430" y="393" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">no entry for b</text>
+  <!-- deleted: false -->
+  <line x1="427" y1="436" x2="204" y2="444" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-skip-reply)"/>
+  <text x="315" y="430" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">deleted: false</text>
+  <rect x="121" y="464" width="159" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="200" y="484" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">restore old state</text>
+  <text x="200" y="499" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">waiting writes go on,</text>
+  <text x="200" y="514" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">nothing was lost</text>
+  <!-- Ok(false) -->
+  <line x1="203" y1="557" x2="676" y2="565" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-skip-reply)"/>
+  <text x="555" y="551" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok(false)</text>
+  <!-- Ok -->
+  <line x1="683" y1="599" x2="896" y2="607" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-skip-reply)"/>
+  <text x="790" y="593" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
+</svg>

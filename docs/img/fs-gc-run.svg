@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 890 770" width="890" height="770" style="max-width: 100%; height: auto" role="img" aria-label="A gc run protects what had a temp tag">
+  <!--
+    Sequence diagram for docs/fs-store-file-deletes-scenarios.md.
+    Time runs down. Lanes are lifelines, slanted arrows are messages:
+    indigo = message to or from the metadata actor (dashed = reply),
+    slate = file IO of the entity, rose = file delete, amber = live/parked state.
+    Boxes are steps an actor takes, metadata boxes are one batch.
+  -->
+  <defs>
+    <marker id="fs-gc-run-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-gc-run-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-gc-run-file" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="fs-gc-run-rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/></marker>
+  </defs>
+  <rect x="0" y="0" width="890" height="770" rx="12" fill="#f3f4f6"/>
+  <text x="445" y="28" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">A gc run protects what had a temp tag</text>
+  <line x1="22" y1="60" x2="22" y2="750" stroke="#9ca3af" stroke-width="1" marker-end="url(#fs-gc-run-axis)"/>
+  <defs><marker id="fs-gc-run-axis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker></defs>
+  <text x="22" y="54" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#888">t</text>
+  <line x1="120" y1="74" x2="120" y2="754" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="78" y="46" width="84" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="120" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">importer</text>
+  <line x1="450" y1="74" x2="450" y2="754" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="401" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="450" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">main actor</text>
+  <line x1="780" y1="74" x2="780" y2="754" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="761" y="46" width="39" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="780" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">gc</text>
+  <!-- GcRun -->
+  <line x1="777" y1="110" x2="454" y2="118" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-gc-run-msg)"/>
+  <text x="615" y="104" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">GcRun</text>
+  <rect x="400" y="138" width="100" height="27" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="450" y="158" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">start_gc_run</text>
+  <!-- started -->
+  <line x1="453" y1="201" x2="776" y2="209" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-gc-run-reply)"/>
+  <text x="615" y="195" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">started</text>
+  <!-- list named tags, then temp tags -->
+  <line x1="777" y1="243" x2="454" y2="251" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-gc-run-msg)"/>
+  <text x="615" y="237" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">list named tags, then temp tags</text>
+  <text x="615" y="266" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">mark: h is in neither</text>
+  <!-- import h -->
+  <line x1="123" y1="293" x2="446" y2="301" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-gc-run-msg)"/>
+  <text x="285" y="287" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">import h</text>
+  <rect x="387" y="321" width="126" height="27" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="450" y="341" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">temp tag t for h</text>
+  <!-- drop t -->
+  <line x1="123" y1="384" x2="446" y2="392" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-gc-run-msg)"/>
+  <text x="285" y="378" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">drop t</text>
+  <text x="285" y="407" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">e.g. handed to a named tag</text>
+  <rect x="380" y="420" width="139" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="450" y="440" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">t gone, h retained</text>
+  <text x="450" y="455" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">until the run ends</text>
+  <!-- DeleteBlobs(h) -->
+  <line x1="777" y1="498" x2="454" y2="506" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-gc-run-msg)"/>
+  <text x="615" y="492" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">DeleteBlobs(h)</text>
+  <text x="615" y="521" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">sweep, not forced</text>
+  <rect x="348" y="534" width="204" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="450" y="554" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">h had a temp tag in this run</text>
+  <text x="450" y="569" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">skip, false</text>
+  <!-- Ok -->
+  <line x1="453" y1="612" x2="776" y2="620" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-gc-run-reply)"/>
+  <text x="615" y="606" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
+  <!-- drop the GcRun channel -->
+  <line x1="777" y1="654" x2="454" y2="662" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-gc-run-msg)"/>
+  <text x="615" y="648" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">drop the GcRun channel</text>
+  <rect x="367" y="682" width="165" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="450" y="702" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">end_gc_run</text>
+  <text x="450" y="717" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">forget retained hashes</text>
+</svg>

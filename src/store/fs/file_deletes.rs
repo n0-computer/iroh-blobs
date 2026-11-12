@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use tracing::warn;
 
 use super::{
@@ -9,14 +7,14 @@ use super::{
 use crate::Hash;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum BaoFilePart {
+pub(crate) enum BaoFilePart {
     Outboard,
     Data,
     Sizes,
     Bitfield,
 }
 
-const ALL_PARTS: [BaoFilePart; 4] = [
+pub(super) const ALL_PARTS: [BaoFilePart; 4] = [
     BaoFilePart::Outboard,
     BaoFilePart::Data,
     BaoFilePart::Sizes,
@@ -46,36 +44,27 @@ pub(super) fn unreferenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFil
     }
 }
 
-/// Which hashes have a live entity, as reported by the entities themselves.
-///
-/// An entity is marked live by the load that precedes its first file access,
-/// and reports itself not live at the end of its shutdown. An entity that only
-/// reads a complete entry never touches its files' contents in a way that
-/// matters here, so it is never marked live. Both go through the metadata
-/// FIFO, so:
-///
-/// - an entity only touches files of its hash after the metadata actor has
-///   answered its load, so after it was marked live, and
-/// - when its inactive is processed, all its metadata writes have been
-///   processed before, and it touches no more files.
-///
-/// So at the end of a batch, the entry state of a hash that is not live
-/// reflects all files of that hash.
-#[derive(Debug, Default)]
-pub(super) struct LiveEntities(HashSet<Hash>);
+/// The owned files of an entry that the given state references.
+pub(super) fn referenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFilePart> {
+    let unreferenced = unreferenced_parts(state);
+    ALL_PARTS
+        .into_iter()
+        .filter(|part| !unreferenced.contains(part))
+        .collect()
+}
 
-impl LiveEntities {
-    pub fn load(&mut self, hash: Hash) {
-        self.0.insert(hash);
-    }
-
-    pub fn inactive(&mut self, hash: Hash) {
-        self.0.remove(&hash);
-    }
-
-    pub fn is_live(&self, hash: &Hash) -> bool {
-        self.0.contains(hash)
-    }
+/// What a committed write batch means for the files of one hash.
+///
+/// The metadata actor sends this after the commit, so the files it names are
+/// no longer referenced by any durable state. Files are only touched by the
+/// hash's entity, or by the main actor while no entity exists for the hash.
+#[derive(Debug)]
+pub(crate) struct FileNotice {
+    pub hash: Hash,
+    /// The entry was deleted, so an entity must reset and acknowledge it.
+    pub deleted: bool,
+    /// Files the entry referenced before or during the batch, and no longer does.
+    pub parts: Vec<BaoFilePart>,
 }
 
 /// Delete the given files of an entry, ignoring files that do not exist.
