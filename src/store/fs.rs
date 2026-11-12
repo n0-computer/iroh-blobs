@@ -255,7 +255,7 @@ async fn wait_settled(ctx: &HashContext) {
     // in between: tasks of an entity only interleave at awaits.
     while matches!(
         ctx.state.borrow().deref(),
-        BaoFileStorage::Loading | BaoFileStorage::Deleting(_)
+        BaoFileStorage::Loading | BaoFileStorage::Deleting
     ) {
         ctx.state.0.subscribe().changed().await.ok();
     }
@@ -293,48 +293,25 @@ async fn load_entity(ctx: &HashContext) {
     ctx.state.send_replace(state);
 }
 
-/// Deletes the entity's entry, and returns whether there was one to delete.
-///
-/// Holds `Deleting` from before the metadata actor applies the delete until
-/// the files are gone. Tasks that would change the state or files wait for it
-/// to end, so none of their changes is lost on a skipped delete, or lands on
-/// the old state after a confirmed one. The task keeps the entity alive until
-/// then, so it cannot unload and come back with files the unlink would take.
-async fn delete_entry(ctx: &HashContext) -> io::Result<bool> {
+/// Delete unconditionally, keeping writes suspended until committed cleanup.
+/// Metadata failure aborts the store, so there is no rollback state to retain.
+async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     wait_settled(ctx).await;
-    ctx.state.send_modify(|state| {
-        let old = state.take();
-        *state = BaoFileStorage::Deleting(Box::new(old));
-    });
-    let restore = || {
-        ctx.state.send_modify(|state| {
-            if let BaoFileStorage::Deleting(old) = state.take() {
-                *state = *old;
-            }
-        })
-    };
-    match ctx.meta().delete().await {
-        Ok(true) => {}
-        Ok(false) => {
-            restore();
-            return Ok(false);
-        }
-        Err(cause) => {
-            restore();
-            return Err(cause);
-        }
-    }
-    // Readers now see the entry gone. Observers end: those that wake only
-    // after the entry was filled again see the count change.
+    // End observers even if they next wake after this hash was re-imported.
     ctx.state
         .1
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    ctx.state.send_replace(BaoFileStorage::Deleting(Box::new(
-        BaoFileStorage::NonExisting,
-    )));
+    ctx.state.send_replace(BaoFileStorage::Deleting);
+    if let Err(cause) = ctx.meta().delete().await {
+        // Metadata failure aborts the store. A command racing a graceful
+        // shutdown can also be rejected, without a failure to trigger abort.
+        // Release waiters with an error instead of restoring the old state.
+        ctx.state.send_replace(BaoFileStorage::Poisoned);
+        return Err(cause);
+    }
     // The notice after the commit unlinks the files and ends Deleting.
     wait_settled(ctx).await;
-    Ok(true)
+    Ok(())
 }
 
 /// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
@@ -345,7 +322,7 @@ async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
         // entity may have written files its entry did not reference yet.
         debug_assert!(matches!(
             ctx.state.borrow().deref(),
-            BaoFileStorage::Deleting(_)
+            BaoFileStorage::Deleting
         ));
         delete_files(paths, &ctx.id, &ALL_PARTS);
         ctx.state.send_replace(BaoFileStorage::NonExisting);
@@ -375,6 +352,8 @@ struct Actor {
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
     // What committed metadata batches mean for files, from the database actor.
     notices: tokio::sync::mpsc::UnboundedReceiver<FileNotice>,
+    // A failed metadata task must abort the workers, including notice waiters.
+    metadata_task: Option<tokio::task::JoinHandle<Result<(), meta::Failure>>>,
     // How many deletes are running, so shutdown can let them finish.
     deletes: Arc<tokio::sync::watch::Sender<usize>>,
     // Tasks for import and export operations.
@@ -448,14 +427,14 @@ impl SyncEntityApi for HashContext {
 
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
-        match self.state.borrow().deref().settled() {
+        match self.state.borrow().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.size()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
             BaoFileStorage::Partial(file) => file.current_size(),
             BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting | BaoFileStorage::Deleting(_) => {
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting => {
                 Err(io::ErrorKind::NotFound.into())
             }
         }
@@ -463,14 +442,14 @@ impl SyncEntityApi for HashContext {
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.state.borrow().deref().settled() {
+        match self.state.borrow().deref() {
             BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
             BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
             BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
             BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => Err(io::Error::other("initial")),
             BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting | BaoFileStorage::Deleting(_) => {
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting => {
                 Err(io::ErrorKind::NotFound.into())
             }
         }
@@ -504,6 +483,23 @@ impl Actor {
                 error!("task failed: {e}");
             }
         }
+    }
+
+    /// Abort workers without persisting their cached state or unlinking files.
+    /// On a transaction error, `result` retains the database lock until all
+    /// workers have stopped, preventing a reopened store from racing them.
+    async fn abort_on_metadata_failure(
+        result: Result<Result<(), meta::Failure>, JoinError>,
+        tasks: &mut JoinSet<()>,
+    ) -> bool {
+        match &result {
+            Ok(Ok(())) => return false,
+            Ok(Err(failure)) => error!("metadata failed; aborting store: {:#}", failure.error),
+            Err(cause) => error!("metadata task stopped; aborting store: {cause}"),
+        }
+        tasks.shutdown().await;
+        drop(result);
+        true
     }
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
@@ -699,6 +695,13 @@ impl Actor {
     async fn run(mut self) {
         loop {
             tokio::select! {
+                result = async { self.metadata_task.as_mut().unwrap().await },
+                    if self.metadata_task.is_some() => {
+                    self.metadata_task.take();
+                    if Self::abort_on_metadata_failure(result, &mut self.tasks).await {
+                        return;
+                    }
+                }
                 task = self.handles.tick() => {
                     if let Some(task) = task {
                         self.spawn(task);
@@ -739,6 +742,13 @@ impl Actor {
         let mut deletes = self.deletes.subscribe();
         while *deletes.borrow_and_update() > 0 {
             tokio::select! {
+                result = async { self.metadata_task.as_mut().unwrap().await },
+                    if self.metadata_task.is_some() => {
+                    self.metadata_task.take();
+                    if Self::abort_on_metadata_failure(result, &mut self.tasks).await {
+                        return;
+                    }
+                }
                 Some(notice) = self.notices.recv() => {
                     self.handle_notice(notice).await;
                 }
@@ -754,8 +764,17 @@ impl Actor {
             }
         }
         self.handles.shutdown().await;
-        while let Some(res) = self.tasks.join_next().await {
-            Self::log_task_result(res);
+        while !self.tasks.is_empty() {
+            tokio::select! {
+                result = async { self.metadata_task.as_mut().unwrap().await },
+                    if self.metadata_task.is_some() => {
+                    self.metadata_task.take();
+                    if Self::abort_on_metadata_failure(result, &mut self.tasks).await {
+                        return;
+                    }
+                }
+                Some(res) = self.tasks.join_next() => Self::log_task_result(res),
+            }
         }
         // No entity exists anymore, so what the last batches left to do is
         // done here directly. No acknowledgement, the database is closed.
@@ -807,7 +826,7 @@ impl Actor {
             // this check and the delete reaching the entity.
             if !force && self.temp_tags.protects(hash) {
                 trace!("delete {hash}: skip, protected by a temp tag");
-                res_tx.send(Ok(false)).ok();
+                res_tx.send(Ok(())).ok();
                 continue;
             }
             let running = RunningDelete::new(&self.deletes);
@@ -830,7 +849,7 @@ impl Actor {
             let mut res = Ok(());
             for rx in results {
                 match rx.await {
-                    Ok(Ok(_)) => {}
+                    Ok(Ok(())) => {}
                     Ok(Err(cause)) => res = Err(api::Error::from(cause)),
                     Err(_) => res = Err(api::Error::other("delete task dropped")),
                 }
@@ -885,12 +904,13 @@ impl Actor {
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
         });
-        tokio::spawn(db_actor.run());
+        let metadata_task = Some(tokio::spawn(db_actor.run()));
         Ok(Self {
             context: slot_context.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
             notices,
+            metadata_task,
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
             handles: EntityManagerState::new(slot_context, 1024, 32, 2),
@@ -2814,6 +2834,35 @@ pub mod tests {
         Ok(())
     }
 
+    /// No metadata row is still a completed delete, including observer teardown.
+    #[tokio::test]
+    async fn test_delete_absent_entry_completes_and_can_be_reimported() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let options = Options::new(dir.path());
+        let store = FsStore::load_with_opts(dir.path().join("blobs.db"), options.clone()).await?;
+        let data = test_data(100_000);
+        let hash = Hash::new(&data);
+        let mut observer = Box::pin(store.observe(hash).stream().await?);
+        assert!(observer.next().await.is_some());
+        // A file left by an interrupted import need not have a metadata row.
+        std::fs::write(options.path.data_path(&hash), b"orphan")?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            store.blobs().delete(vec![hash, hash]),
+        )
+        .await??;
+        assert!(!options.path.data_path(&hash).exists());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), observer.next())
+                .await?
+                .is_none()
+        );
+        assert_eq!(store.add_bytes(data.clone()).await?.hash, hash);
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
     /// Requests that reach the store after its shutdown must not panic its tasks,
     /// e.g. on an entry that the shutdown poisoned.
     #[tokio::test]
@@ -2836,6 +2885,17 @@ pub mod tests {
         store.shutdown().await?;
         for hash in [complete, unknown] {
             let timeout = Duration::from_secs(5);
+            for _ in 0..2 {
+                assert!(tokio::time::timeout(
+                    timeout,
+                    store.blobs().delete_with_opts(api::blobs::DeleteOptions {
+                        hashes: vec![hash],
+                        force: true,
+                    })
+                )
+                .await?
+                .is_err());
+            }
             tokio::time::timeout(timeout, store.observe(hash))
                 .await
                 .ok();
