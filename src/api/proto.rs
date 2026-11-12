@@ -522,9 +522,12 @@ pub struct CreateTempTagRequest {
     pub value: HashAndFormat,
 }
 
-/// List all temp tags
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListTempTagsRequest;
+/// List temp tags, optionally including roots retained for an active gc run.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ListTempTagsRequest {
+    /// Include temp tags dropped since the oldest active gc run started.
+    pub include_dropped: bool,
+}
 
 /// Rename a tag atomically
 #[derive(Debug, Serialize, Deserialize)]

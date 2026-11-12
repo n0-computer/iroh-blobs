@@ -226,6 +226,15 @@ impl TempTags {
             .collect()
     }
 
+    /// Snapshots current and retained roots without losing a concurrent drop.
+    pub fn list_for_gc(&self) -> Vec<HashAndFormat> {
+        // Like on_drop and end_scope, lock gc before the scope counters.
+        let gc = self.gc.lock().unwrap();
+        let mut roots = gc.dropped.clone();
+        roots.extend(self.list());
+        roots.into_iter().collect()
+    }
+
     pub fn create(&mut self, scope: Scope, content: HashAndFormat) -> TempTag {
         self.scope(scope).temp_tag(content)
     }
@@ -292,8 +301,11 @@ impl TempTagScope {
 impl TagDrop for TempTagScope {
     fn on_drop(&self, inner: &HashAndFormat) {
         trace!("Dropping temp tag {:?}", inner);
+        // Keep the transition atomic with GC snapshots and run boundaries.
+        // A protects() that sees the counter gone waits for note_dropped.
+        let mut gc = self.gc.lock().unwrap();
         self.counters.lock().unwrap().dec(inner);
-        self.gc.lock().unwrap().note_dropped([*inner]);
+        gc.note_dropped([*inner]);
     }
 }
 
@@ -342,5 +354,57 @@ impl TempCounterMap {
             }
         }
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gc_retains_roots_of_closed_scopes_until_all_runs_end() {
+        let mut tags = TempTags::default();
+        let (scope, _) = tags.create_scope();
+        let content = HashAndFormat::hash_seq(Hash::new(b"collection"));
+        let _tag = tags.create(scope, content);
+        tags.start_gc_run();
+        tags.start_gc_run();
+        tags.end_scope(scope);
+        assert!(tags.list().is_empty());
+        assert_eq!(tags.list_for_gc(), vec![content]);
+        tags.end_gc_run();
+        assert_eq!(tags.list_for_gc(), vec![content]);
+        tags.end_gc_run();
+        assert!(tags.list_for_gc().is_empty());
+        assert!(!tags.protects(content.hash));
+    }
+
+    #[test]
+    fn gc_protection_is_continuous_during_drop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut tags = TempTags::default();
+        let (scope, _) = tags.create_scope();
+        tags.start_gc_run();
+        let done = AtomicUsize::new(0);
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, TempTag)>();
+        std::thread::scope(|threads| {
+            threads.spawn(|| {
+                for (index, tag) in rx {
+                    drop(tag);
+                    done.store(index, Ordering::Release);
+                }
+            });
+            for index in 1usize..=10_000 {
+                let hash = Hash::new(index.to_le_bytes());
+                let tag = tags.create(scope, HashAndFormat::raw(hash));
+                tx.send((index, tag)).unwrap();
+                while done.load(Ordering::Acquire) != index {
+                    assert!(tags.protects(hash), "GC protection disappeared during drop");
+                }
+                assert!(tags.protects(hash));
+            }
+            drop(tx);
+        });
     }
 }

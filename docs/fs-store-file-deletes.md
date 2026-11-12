@@ -64,8 +64,9 @@ An entity's tasks are futures polled by one actor, so they only interleave at
 After each commit, the main actor routes each notice:
 
 - **An entity exists** for the hash (running, or still shutting down, since
-  its shutdown may write the bitfield): the notice goes to it, waiting for
-  room in its inbox rather than dropping it. The entity unlinks the files
+  its shutdown may write the bitfield): the notice goes into its unbounded
+  inbox. The main actor must keep processing shutdown completion so queued
+  work can restart an idle entity. The entity unlinks the files
   its own state does not use. Its state is never behind its entry.
 - **No entity exists**: the main actor unlinks the files itself. Only it
   creates entities, so none can appear in between, and none has writes in
@@ -113,6 +114,13 @@ forced keeps content that has a temp tag, or had one at any time since the
 run started. The main actor checks this before fanning a delete out, and it
 is also where temp tags are created. So no tag, no protection: a download
 without a temp tag can be cut in half by gc, and continues from scratch.
+
+Marking reads named roots first, then the union of current temp roots and
+temp roots retained since the oldest active gc run started. A continuously
+tagged root missed by the named snapshot must have had a temp tag before
+that snapshot, so it appears in the second listing even after repeated
+handovers. HashSeq roots in that union are traversed to protect their
+children too. Ordinary temp-tag listings still show only current tags.
 
 ## The bug this fixes
 

@@ -610,7 +610,11 @@ impl Actor {
             }
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
-                let tts = self.temp_tags.list();
+                let tts = if cmd.inner.include_dropped {
+                    self.temp_tags.list_for_gc()
+                } else {
+                    self.temp_tags.list()
+                };
                 self.spawn(async move {
                     for tt in tts {
                         if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
@@ -764,13 +768,13 @@ impl Actor {
     async fn handle_notice(&mut self, notice: FileNotice) {
         trace!("{notice:?}");
         if self.handles.contains(&notice.hash) {
-            // Waits for room in the entity's inbox: a notice must not be dropped.
+            // Queue the notice even while the entity is shutting down.
             let task = self
                 .handles
-                .spawn_wait(notice.hash, move |arg| async move {
+                .spawn(notice.hash, move |arg| async move {
                     match arg {
                         SpawnArg::Active(ctx) => apply_notice(&ctx, notice).await,
-                        SpawnArg::Busy | SpawnArg::Dead => {
+                        SpawnArg::Dead => {
                             warn!("no entity for {}, its files stay", notice.hash);
                         }
                     }
@@ -809,13 +813,11 @@ impl Actor {
             let running = RunningDelete::new(&self.deletes);
             let task = self
                 .handles
-                .spawn_wait(hash, move |arg| async move {
+                .spawn(hash, move |arg| async move {
                     let _running = running;
                     let res = match arg {
                         SpawnArg::Active(ctx) => delete_entry(&ctx).await,
-                        SpawnArg::Busy | SpawnArg::Dead => {
-                            Err(io::Error::other("no entity to delete through"))
-                        }
+                        SpawnArg::Dead => Err(io::Error::other("no entity to delete through")),
                     };
                     res_tx.send(res).ok();
                 })
@@ -891,7 +893,7 @@ impl Actor {
             notices,
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
-            handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
+            handles: EntityManagerState::new(slot_context, 1024, 32, 2),
             temp_tags: Default::default(),
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
@@ -942,9 +944,8 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
     /// Handle the command on success by spawning a task into the per-hash context.
     fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
 
-    /// Opportunity to send an error if spawning fails due to the task being busy (inbox full)
-    /// or dead (e.g. panic in one of the running tasks).
-    fn on_error(self, arg: SpawnArg<EmParams>) -> impl Future<Output = ()> + Send + 'static;
+    /// Opportunity to send an error if the entity is dead (e.g. after a panic).
+    fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
 
     async fn spawn(
         self,
@@ -961,11 +962,8 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
                         SpawnArg::Active(state) => {
                             self.handle(state).await;
                         }
-                        SpawnArg::Busy => {
-                            self.on_error(arg).await;
-                        }
                         SpawnArg::Dead => {
-                            self.on_error(arg).await;
+                            self.on_error().await;
                         }
                     }
                 }
@@ -982,18 +980,14 @@ impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.observe(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_path(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx
             .send(ExportProgressItem::Error(api::Error::from(err)))
             .await
@@ -1004,12 +998,8 @@ impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_bao(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx
             .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(err)))
             .await
@@ -1020,12 +1010,8 @@ impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_ranges(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx
             .send(ExportRangesItem::Error(api::Error::from(err)))
             .await
@@ -1036,12 +1022,8 @@ impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.import_bao(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx.send(Err(api::Error::from(err))).await.ok();
     }
 }
@@ -1055,12 +1037,8 @@ impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
         let (tt, cmd) = self;
         ctx.finish_import(cmd, tt).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.1.tx.send(AddProgressItem::Error(err)).await.ok();
     }
 }

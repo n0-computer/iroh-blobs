@@ -70,8 +70,6 @@ pub(crate) struct EntityShutdown;
 pub enum SpawnArg<P: Params> {
     /// The entity is active, and we were able to spawn a task.
     Active(ActiveEntityState<P>),
-    /// The entity is busy and cannot spawn a new task.
-    Busy,
     /// The entity is dead.
     Dead,
 }
@@ -83,7 +81,7 @@ pub enum SpawnArg<P: Params> {
 /// if the entity actor is reused for a different entity.
 struct Shutdown<P: Params> {
     id: P::EntityId,
-    receiver: mpsc::Receiver<entity_actor::Command<P>>,
+    receiver: mpsc::UnboundedReceiver<entity_actor::Command<P>>,
 }
 
 struct ShutdownAll {
@@ -142,7 +140,7 @@ mod entity_actor {
 
     #[derive(Debug)]
     pub struct Actor<P: Params> {
-        pub recv: mpsc::Receiver<Command<P>>,
+        pub recv: mpsc::UnboundedReceiver<Command<P>>,
         pub main: mpsc::Sender<super::main_actor::InternalCommand<P>>,
         pub state: State<P>,
         pub tasks: FuturesUnordered<future::Boxed<()>>,
@@ -262,7 +260,7 @@ mod main_actor {
 
     use n0_future::{future, FuturesUnordered};
     use tokio::{sync::mpsc, task::JoinSet};
-    use tracing::{error, warn};
+    use tracing::error;
 
     use super::{
         entity_actor, EntityShutdown, Params, Reset, Shutdown, ShutdownAll, ShutdownComplete,
@@ -301,16 +299,16 @@ mod main_actor {
     pub enum EntityHandle<P: Params> {
         /// A running entity actor.
         Live {
-            send: mpsc::Sender<entity_actor::Command<P>>,
+            send: mpsc::UnboundedSender<entity_actor::Command<P>>,
         },
         ShuttingDown {
-            send: mpsc::Sender<entity_actor::Command<P>>,
-            recv: mpsc::Receiver<entity_actor::Command<P>>,
+            send: mpsc::UnboundedSender<entity_actor::Command<P>>,
+            recv: mpsc::UnboundedReceiver<entity_actor::Command<P>>,
         },
     }
 
     impl<P: Params> EntityHandle<P> {
-        pub fn send(&self) -> &mpsc::Sender<entity_actor::Command<P>> {
+        pub fn send(&self) -> &mpsc::UnboundedSender<entity_actor::Command<P>> {
             match self {
                 EntityHandle::Live { send } => send,
                 EntityHandle::ShuttingDown { send, .. } => send,
@@ -335,11 +333,9 @@ mod main_actor {
         state: P::GlobalState,
         /// Pool of inactive entity actors to reuse.
         pool: Vec<(
-            mpsc::Sender<entity_actor::Command<P>>,
+            mpsc::UnboundedSender<entity_actor::Command<P>>,
             entity_actor::Actor<P>,
         )>,
-        /// Maximum size of the inbox of an entity actor.
-        entity_inbox_size: usize,
         /// Initial capacity of the futures set for entity actors.
         entity_futures_initial_capacity: usize,
     }
@@ -348,7 +344,6 @@ mod main_actor {
         pub fn new(
             state: P::GlobalState,
             pool_capacity: usize,
-            entity_inbox_size: usize,
             entity_response_inbox_size: usize,
             entity_futures_initial_capacity: usize,
         ) -> Self {
@@ -359,7 +354,6 @@ mod main_actor {
                 live: HashMap::new(),
                 state,
                 pool: Vec::with_capacity(pool_capacity),
-                entity_inbox_size,
                 entity_futures_initial_capacity,
             }
         }
@@ -394,35 +388,17 @@ mod main_actor {
         ) -> Option<impl Future<Output = ()> + Send + 'static> {
             let (entity_handle, task) = self.get_or_create(id.clone());
             let sender = entity_handle.send();
-            if let Err(e) =
-                sender.try_send(entity_actor::Command::Spawn(Spawn { id: id.clone(), f }))
+            if let Err(mpsc::error::SendError(cmd)) =
+                sender.send(entity_actor::Command::Spawn(Spawn { id: id.clone(), f }))
             {
-                match e {
-                    mpsc::error::TrySendError::Full(cmd) => {
-                        let entity_actor::Command::Spawn(spawn) = cmd else {
-                            unreachable!()
-                        };
-                        warn!(
-                            "Entity actor inbox is full, cannot send command to entity actor {:?}.",
-                            id
-                        );
-                        // we await in the select here, but I think this is fine, since the actor is busy.
-                        // maybe slowing things down a bit is helpful.
-                        (spawn.f)(SpawnArg::Busy).await;
-                    }
-                    mpsc::error::TrySendError::Closed(cmd) => {
-                        let entity_actor::Command::Spawn(spawn) = cmd else {
-                            unreachable!()
-                        };
-                        error!(
-                            "Entity actor inbox is closed, cannot send command to entity actor {:?}.",
-                            id
-                        );
-                        // give the caller a chance to react to this bad news.
-                        // at this point we are in trouble anyway, so awaiting is going to be the least of our problems.
-                        (spawn.f)(SpawnArg::Dead).await;
-                    }
-                }
+                let entity_actor::Command::Spawn(spawn) = cmd else {
+                    unreachable!()
+                };
+                error!(
+                    "Entity actor inbox is closed, cannot send command to entity actor {:?}.",
+                    id
+                );
+                (spawn.f)(SpawnArg::Dead).await;
             };
             task
         }
@@ -433,41 +409,6 @@ mod main_actor {
         /// handler, so it counts until its shutdown is complete.
         pub fn contains(&self, id: &P::EntityId) -> bool {
             self.live.contains_key(id)
-        }
-
-        /// Like [`Self::spawn`], but waits for room in the entity's inbox
-        /// instead of calling `f` with [`SpawnArg::Busy`].
-        ///
-        /// For work that must not be dropped. The entity drains its inbox into
-        /// tasks without waiting on them, so the wait is short.
-        #[must_use = "this function may return a future that must be spawned by the caller"]
-        pub async fn spawn_wait<F, Fut>(
-            &mut self,
-            id: P::EntityId,
-            f: F,
-        ) -> Option<impl Future<Output = ()> + Send + 'static>
-        where
-            F: FnOnce(SpawnArg<P>) -> Fut + Send + 'static,
-            Fut: Future<Output = ()> + Send + 'static,
-        {
-            let f: Box<dyn FnOnce(SpawnArg<P>) -> future::Boxed<()> + Send> =
-                Box::new(|x| Box::pin(async move { f(x).await }));
-            let (entity_handle, task) = self.get_or_create(id.clone());
-            let sender = entity_handle.send().clone();
-            if let Err(mpsc::error::SendError(cmd)) = sender
-                .send(entity_actor::Command::Spawn(Spawn { id: id.clone(), f }))
-                .await
-            {
-                let entity_actor::Command::Spawn(spawn) = cmd else {
-                    unreachable!()
-                };
-                error!(
-                    "Entity actor inbox is closed, cannot send command to entity actor {:?}.",
-                    id
-                );
-                (spawn.f)(SpawnArg::Dead).await;
-            }
-            task
         }
 
         /// Whether an entity actor has queued a follow-up for the manager.
@@ -539,7 +480,7 @@ mod main_actor {
         /// Send a shutdown command to all live entity actors.
         pub async fn shutdown(self) {
             for handle in self.live.values() {
-                handle.send().send(EntityShutdown {}.into()).await.ok();
+                handle.send().send(EntityShutdown {}.into()).ok();
             }
         }
 
@@ -565,7 +506,10 @@ mod main_actor {
                     EntityHandle::Live { send }
                 } else {
                     // Create a new entity actor and inbox.
-                    let (send, recv) = mpsc::channel(self.entity_inbox_size);
+                    // The manager must keep polling shutdown completion while
+                    // an entity's receiver is parked here during recycling.
+                    // A bounded send could wait for that same manager forever.
+                    let (send, recv) = mpsc::unbounded_channel();
                     let state: entity_actor::State<P> = entity_actor::State {
                         id: id.clone(),
                         global: self.state.clone(),
@@ -588,7 +532,7 @@ mod main_actor {
 
         fn recycle(
             &mut self,
-            sender: mpsc::Sender<entity_actor::Command<P>>,
+            sender: mpsc::UnboundedSender<entity_actor::Command<P>>,
             mut actor: entity_actor::Actor<P>,
         ) {
             assert!(sender.strong_count() == 1);
@@ -617,7 +561,6 @@ mod main_actor {
             state: P::GlobalState,
             recv: tokio::sync::mpsc::Receiver<Command<P>>,
             pool_capacity: usize,
-            entity_inbox_size: usize,
             entity_response_inbox_size: usize,
             entity_futures_initial_capacity: usize,
         ) -> Self {
@@ -627,7 +570,6 @@ mod main_actor {
                 state: ActorState::new(
                     state,
                     pool_capacity,
-                    entity_inbox_size,
                     entity_response_inbox_size,
                     entity_futures_initial_capacity,
                 ),
@@ -720,9 +662,12 @@ mod main_actor {
 ///
 /// The entity manager internally uses a main actor and per-entity actors. Per entity actors
 /// and their inbox queues are recycled when they become idle, to save allocations.
+/// Entity inboxes are unbounded: the manager must not wait for room while it also
+/// drives idle shutdown and restart. Entities drain commands into concurrent tasks,
+/// so bounding their inboxes would not bound the amount of outstanding work anyway.
 ///
 /// You can mostly ignore these implementation details, except when you want to customize the
-/// queue sizes in the [`Options`] struct.
+/// manager queue sizes in the [`Options`] struct.
 ///
 /// The main entry point is the [`EntityManager::spawn`] function.
 ///
@@ -738,8 +683,6 @@ pub struct Options {
     pub pool_capacity: usize,
     /// Size of the inbox for the manager actor.
     pub inbox_size: usize,
-    /// Size of the inbox for entity actors.
-    pub entity_inbox_size: usize,
     /// Size of the inbox for entity actor responses to the manager actor.
     pub entity_response_inbox_size: usize,
     /// Initial capacity of the futures set for entity actors.
@@ -753,7 +696,6 @@ impl Default for Options {
         Self {
             pool_capacity: 10,
             inbox_size: 10,
-            entity_inbox_size: 10,
             entity_response_inbox_size: 100,
             entity_futures_initial_capacity: 16,
         }
@@ -767,7 +709,6 @@ impl<P: Params> EntityManager<P> {
             state,
             recv,
             options.pool_capacity,
-            options.entity_inbox_size,
             options.entity_response_inbox_size,
             options.entity_futures_initial_capacity,
         );
@@ -863,10 +804,7 @@ mod tests {
         //! global state from the entity state.
         use std::{
             collections::{HashMap, HashSet},
-            sync::{
-                atomic::{AtomicUsize, Ordering},
-                Arc, Mutex,
-            },
+            sync::{Arc, Mutex},
         };
 
         use atomic_refcell::AtomicRefCell;
@@ -969,7 +907,6 @@ mod tests {
                                     .await
                                     .unwrap();
                             }
-                            SpawnArg::Busy => println!("Entity actor is busy"),
                             SpawnArg::Dead => println!("Entity actor is dead"),
                         }
                     })
@@ -990,7 +927,6 @@ mod tests {
                                     .await
                                     .unwrap();
                             }
-                            SpawnArg::Busy => println!("Entity actor is busy"),
                             SpawnArg::Dead => println!("Entity actor is dead"),
                         }
                     })
@@ -1027,55 +963,54 @@ mod tests {
             }
         }
 
-        /// If a task is so busy that it can't drain it's inbox in time, we will
-        /// get a SpawnArg::Busy instead of access to the actual state.
-        ///
-        /// This will only happen if the system is seriously overloaded, since
-        /// the entity actor just spawns tasks for each message. So here we
-        /// simulate it by just not spawning the task as we are supposed to.
+        /// Commands queued before startup or during idle shutdown must all
+        /// reach the entity, in order, without blocking the manager.
         #[tokio::test]
-        async fn test_busy() -> TestResult<()> {
-            let mut state = EntityManagerState::<Counters>::new(
+        async fn queued_work_survives_idle_shutdown() -> TestResult<()> {
+            let mut manager = EntityManagerState::<Counters>::new(
                 Arc::new(Mutex::new(Global::default())),
-                1024,
-                8,
+                1,
                 8,
                 2,
             );
-            let active = Arc::new(AtomicUsize::new(0));
-            let busy = Arc::new(AtomicUsize::new(0));
-            let inc = || {
-                let active = active.clone();
-                let busy = busy.clone();
-                |arg: SpawnArg<Counters>| async move {
-                    match arg {
-                        SpawnArg::Active(_) => {
-                            active.fetch_add(1, Ordering::SeqCst);
-                        }
-                        SpawnArg::Busy => {
-                            busy.fetch_add(1, Ordering::SeqCst);
-                        }
-                        SpawnArg::Dead => {
-                            println!("Entity actor is dead");
-                        }
-                    }
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let command = |index| {
+                let delivered = delivered.clone();
+                move |arg: SpawnArg<Counters>| {
+                    let SpawnArg::Active(state) = arg else {
+                        panic!("queued command must reach a live entity");
+                    };
+                    delivered.lock().unwrap().push(index);
+                    async move { state.with_value(|value| *value += 1).await.unwrap() }
                 }
             };
-            let fut1 = state.spawn(1, inc()).await;
-            assert!(fut1.is_some(), "First spawn should give us a task to spawn");
-            for _ in 0..9 {
-                let fut = state.spawn(1, inc()).await;
-                assert!(
-                    fut.is_none(),
-                    "Subsequent spawns should assume first task has been spawned"
-                );
+            let actor = manager.spawn(1, command(0)).await.unwrap();
+            for index in 1..128 {
+                assert!(manager.spawn(1, command(index)).await.is_none());
             }
-            assert_eq!(
-                active.load(Ordering::SeqCst),
-                0,
-                "Active should have never been called, since we did not spawn the task!"
-            );
-            assert_eq!(busy.load(Ordering::SeqCst), 2, "Busy should have been called two times, since we sent 10 msgs to a queue with capacity 8, and nobody is draining it");
+            tokio::spawn(actor).await?;
+            // Shutdown parks the receiver. ShutdownComplete is queued, but
+            // the manager has not processed it yet. The old bounded inbox
+            // blocked here and prevented that processing.
+            assert!(manager.tick().await.is_none());
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                for index in 128..256 {
+                    assert!(manager.spawn(1, command(index)).await.is_none());
+                }
+            })
+            .await?;
+            let restarted = manager
+                .tick()
+                .await
+                .expect("queued work restarts the entity");
+            tokio::spawn(restarted).await?;
+            assert_eq!(*delivered.lock().unwrap(), (0..256).collect::<Vec<_>>());
+            assert!(manager.tick().await.is_none()); // Shutdown
+            assert!(manager.tick().await.is_none()); // ShutdownComplete: pool the entity.
+            assert!(!manager.contains(&1));
+            // Reuse the pooled actor and its now-empty inbox for a different hash.
+            tokio::spawn(manager.spawn(2, command(256)).await.unwrap()).await?;
+            assert_eq!(*delivered.lock().unwrap(), (0..257).collect::<Vec<_>>());
             Ok(())
         }
 
@@ -1239,7 +1174,6 @@ mod tests {
                                     .await
                                     .unwrap();
                             }
-                            SpawnArg::Busy => println!("Entity actor is busy"),
                             SpawnArg::Dead => println!("Entity actor is dead"),
                         }
                     })
@@ -1260,7 +1194,6 @@ mod tests {
                                     .await
                                     .unwrap();
                             }
-                            SpawnArg::Busy => println!("Entity actor is busy"),
                             SpawnArg::Dead => println!("Entity actor is dead"),
                         }
                     })
