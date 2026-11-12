@@ -160,8 +160,9 @@ impl Actor {
                 self.tasks.spawn(export_path(entry, target, tx));
             }
             Command::Batch(_cmd) => {}
-            Command::ClearProtected(cmd) => {
-                cmd.tx.send(Ok(())).await.ok();
+            Command::GcRun(cmd) => {
+                // nothing to protect, since nothing is ever deleted
+                cmd.tx.send(()).await.ok();
             }
             Command::CreateTag(cmd) => {
                 cmd.tx

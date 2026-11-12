@@ -7,7 +7,7 @@ use tracing::Span;
 
 use super::{ActorResult, ReadOnlyTables};
 use crate::{
-    api::proto::{BlobStatusMsg, ClearProtectedMsg, ShutdownMsg, SyncDbMsg},
+    api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
     store::{fs::entry_state::EntryState, util::DD},
     util::channel::oneshot,
     Hash,
@@ -34,13 +34,12 @@ impl fmt::Debug for Get {
 /// Delete the entry of one hash, sent by the hash's entity.
 ///
 /// The entity sends this from its `Deleting` state, so none of its writes can
-/// follow. The reply says whether the entry was deleted: it is kept if gc must
-/// not delete it, or if there is none. The files go after the commit.
+/// follow. The reply says whether there was an entry to delete. The files go
+/// after the commit. Whether the entry may be deleted is decided before, see
+/// the main actor's temp tag check.
 #[derive(Debug)]
 pub struct Delete {
     pub hash: Hash,
-    /// Delete even if gc must not.
-    pub force: bool,
     pub tx: oneshot::Sender<ActorResult<bool>>,
     pub span: Span,
 }
@@ -114,7 +113,6 @@ pub use crate::api::proto::SetTagMsg;
 pub enum ReadOnlyCommand {
     Get(Get),
     Dump(Dump),
-    ClearProtected(ClearProtectedMsg),
     GetBlobStatus(BlobStatusMsg),
 }
 
@@ -123,7 +121,6 @@ impl ReadOnlyCommand {
         match self {
             Self::Get(x) => &x.span,
             Self::Dump(x) => &x.span,
-            Self::ClearProtected(x) => &x.span,
             Self::GetBlobStatus(x) => &x.span,
         }
     }

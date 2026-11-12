@@ -184,7 +184,12 @@ pub(crate) enum InternalCommand {
     Dump(meta::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
+    EndGcRun(EndGcRun),
 }
+
+/// A gc run ended, see [`proto::GcRunRequest`].
+#[derive(Debug)]
+pub(crate) struct EndGcRun;
 
 #[derive(Debug)]
 pub(crate) struct ClearScope {
@@ -196,6 +201,7 @@ impl InternalCommand {
         match self {
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
+            Self::EndGcRun(_) => tracing::Span::current(),
             Self::FinishImport(cmd) => cmd.span.clone(),
         }
     }
@@ -294,7 +300,7 @@ async fn load_entity(ctx: &HashContext) {
 /// to end, so none of their changes is lost on a skipped delete, or lands on
 /// the old state after a confirmed one. The task keeps the entity alive until
 /// then, so it cannot unload and come back with files the unlink would take.
-async fn delete_entry(ctx: &HashContext, force: bool) -> io::Result<bool> {
+async fn delete_entry(ctx: &HashContext) -> io::Result<bool> {
     wait_settled(ctx).await;
     ctx.state.send_modify(|state| {
         let old = state.take();
@@ -307,7 +313,7 @@ async fn delete_entry(ctx: &HashContext, force: bool) -> io::Result<bool> {
             }
         })
     };
-    match ctx.meta().delete(force).await {
+    match ctx.meta().delete().await {
         Ok(true) => {}
         Ok(false) => {
             restore();
@@ -556,9 +562,20 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
-            Command::ClearProtected(cmd) => {
+            Command::GcRun(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                self.temp_tags.start_gc_run();
+                let internal = self.context.internal_cmd_tx.clone();
+                self.spawn(async move {
+                    let proto::GcRunMsg { tx, mut rx, .. } = cmd;
+                    tx.send(()).await.ok();
+                    // The run lasts until the client closes its channel. Nothing
+                    // is ever sent on it, so this returns once it is closed.
+                    if let Ok(Some(update)) = rx.recv().await {
+                        match update {}
+                    }
+                    internal.send(EndGcRun.into()).await.ok();
+                });
             }
             Command::BlobStatus(cmd) => {
                 trace!("{cmd:?}");
@@ -648,6 +665,10 @@ impl Actor {
             InternalCommand::Dump(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
+            }
+            InternalCommand::EndGcRun(_) => {
+                trace!("gc run ended");
+                self.temp_tags.end_gc_run();
             }
             InternalCommand::ClearScope(cmd) => {
                 trace!("{cmd:?}");
@@ -778,13 +799,20 @@ impl Actor {
         for hash in hashes {
             let (res_tx, res_rx) = tokio::sync::oneshot::channel();
             results.push(res_rx);
+            // Only this actor creates temp tags, so none can appear between
+            // this check and the delete reaching the entity.
+            if !force && self.temp_tags.protects(hash) {
+                trace!("delete {hash}: skip, protected by a temp tag");
+                res_tx.send(Ok(false)).ok();
+                continue;
+            }
             let running = RunningDelete::new(&self.deletes);
             let task = self
                 .handles
                 .spawn_wait(hash, move |arg| async move {
                     let _running = running;
                     let res = match arg {
-                        SpawnArg::Active(ctx) => delete_entry(&ctx, force).await,
+                        SpawnArg::Active(ctx) => delete_entry(&ctx).await,
                         SpawnArg::Busy | SpawnArg::Dead => {
                             Err(io::Error::other("no entity to delete through"))
                         }

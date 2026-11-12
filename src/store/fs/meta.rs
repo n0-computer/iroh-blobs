@@ -21,9 +21,9 @@ use crate::{
         self,
         blobs::BlobStatus,
         proto::{
-            BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg, CreateTagRequest,
-            DeleteTagsRequest, ListBlobsItem, ListBlobsMsg, ListRequest, ListTagsItem, ListTagsMsg,
-            ListTagsRequest, RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            BlobStatusMsg, BlobStatusRequest, CreateTagRequest, DeleteTagsRequest, ListBlobsItem,
+            ListBlobsMsg, ListRequest, ListTagsItem, ListTagsMsg, ListTagsRequest,
+            RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -196,19 +196,11 @@ impl Db {
     /// Delete the entry of `hash`, and return whether there was one to delete.
     ///
     /// Only the hash's entity sends this, see [`Delete`].
-    pub async fn delete(&self, hash: Hash, force: bool) -> io::Result<bool> {
+    pub async fn delete(&self, hash: Hash) -> io::Result<bool> {
         let (tx, rx) = oneshot::channel();
         let span = Span::current();
         self.sender
-            .send(
-                Delete {
-                    hash,
-                    force,
-                    tx,
-                    span,
-                }
-                .into(),
-            )
+            .send(Delete { hash, tx, span }.into())
             .await
             .map_err(|_| io::Error::other("send delete"))?;
         let res = rx.await.map_err(|_| io::Error::other("receive delete"))?;
@@ -244,8 +236,8 @@ pub struct EntryMeta<'a> {
 
 impl EntryMeta<'_> {
     /// Delete the entry, and return whether there was one to delete.
-    pub async fn delete(&self, force: bool) -> io::Result<bool> {
-        self.db.delete(self.hash, force).await
+    pub async fn delete(&self) -> io::Result<bool> {
+        self.db.delete(self.hash).await
     }
 
     /// Get the entry state.
@@ -341,16 +333,6 @@ fn handle_dump(cmd: Dump, tables: &impl ReadableTables) -> ActorResult<()> {
         println!("inline_outboard: {} -> {:?}", k.to_hex(), v.len());
     }
     cmd.tx.send(Ok(()));
-    Ok(())
-}
-
-async fn handle_clear_protected(
-    cmd: ClearProtectedMsg,
-    protected: &mut HashSet<Hash>,
-) -> ActorResult<()> {
-    trace!("{cmd:?}");
-    protected.clear();
-    cmd.tx.send(Ok(())).await.ok();
     Ok(())
 }
 
@@ -546,8 +528,6 @@ fn handle_set(cmd: Set, bookkeeping: &mut Bookkeeping, tables: &mut Tables) -> A
 /// In-memory bookkeeping of the metadata actor, next to the database.
 #[derive(Debug, Default)]
 struct Bookkeeping {
-    /// Hashes written since the last `ClearProtected`, which gc must not delete.
-    protected: HashSet<Hash>,
     /// Hashes whose entry was written or removed in the current write batch,
     /// with every file their entry referenced in it: before the batch, or in
     /// any state the batch gave it. Files may exist for each of those.
@@ -559,7 +539,6 @@ struct Bookkeeping {
 impl Bookkeeping {
     /// Note a write to the entry of a hash, whose state before the write was `before`.
     fn written<I>(&mut self, hash: Hash, before: Option<&EntryState<I>>) {
-        self.protected.insert(hash);
         self.written
             .entry(hash)
             .or_insert_with(|| referenced_parts(before));
@@ -704,7 +683,6 @@ impl Actor {
     }
 
     async fn handle_readonly(
-        state: &mut Bookkeeping,
         tables: &impl ReadableTables,
         cmd: ReadOnlyCommand,
         op: TxnNum,
@@ -718,23 +696,13 @@ impl Actor {
         match cmd {
             ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables),
             ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
-            ReadOnlyCommand::ClearProtected(cmd) => {
-                handle_clear_protected(cmd, &mut state.protected).await
-            }
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }
     }
 
     fn delete(state: &mut Bookkeeping, tables: &mut Tables<'_>, cmd: Delete) -> ActorResult<()> {
         trace!("{cmd:?}");
-        let Delete {
-            hash, force, tx, ..
-        } = cmd;
-        if !force && state.protected.contains(&hash) {
-            trace!("delete {hash}: skip (protected)");
-            tx.send(Ok(false));
-            return Ok(());
-        }
+        let Delete { hash, tx, .. } = cmd;
         let Some(entry) = tables.blobs.remove(hash)? else {
             tx.send(Ok(false));
             return Ok(());
@@ -866,9 +834,7 @@ impl Actor {
         op: TxnNum,
     ) -> ActorResult<()> {
         match cmd {
-            NonTopLevelCommand::ReadOnly(cmd) => {
-                Self::handle_readonly(state, tables, cmd, op).await
-            }
+            NonTopLevelCommand::ReadOnly(cmd) => Self::handle_readonly(tables, cmd, op).await,
             NonTopLevelCommand::ReadWrite(cmd) => {
                 Self::handle_readwrite(state, tables, cmd, op).await
             }
@@ -965,7 +931,7 @@ impl Actor {
                     let mut n = 0;
                     while let Some(cmd) = self.cmds.extract(Command::read_only, &mut timeout).await
                     {
-                        Self::handle_readonly(&mut self.state, &tables, cmd, op).await?;
+                        Self::handle_readonly(&tables, cmd, op).await?;
                         n += 1;
                         if n >= options.max_read_batch {
                             break;

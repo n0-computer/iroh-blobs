@@ -83,8 +83,9 @@ creating it if needed (without loading). The entity:
    observers look through to the old state.
 2. Sends `delete` to the metadata actor. Deletes arriving together still land
    in one transaction.
-3. **Skipped** (gc must not delete it, or there is no entry): restores the old
-   state. Nothing was lost, since writes waited.
+3. **Skipped** (there is no entry): restores the old state. Nothing was lost,
+   since writes waited. A gc delete of content protected by a temp tag never
+   gets here, the main actor skips it before.
 4. **Deleted**: bumps the entity's delete count, which ends observers even if
    they only wake after the entry was filled again, and switches to
    `Deleting(NonExisting)`. The task waits for the notice of the commit,
@@ -106,7 +107,12 @@ down the entities, since an entity in shutdown takes no new tasks.
   marking in `DeleteBlobs`.
 - The `protect` calls in `finish_import_impl` and `PartialMemStorage::persist`.
 
-The GC `protected` set and `ClearProtected` are unchanged for now.
+Also the GC `protected` set and `ClearProtected`. A gc run is now a request
+(`GcRun`) that lasts until gc drops it. While it lasts, a delete that is not
+forced keeps content that has a temp tag, or had one at any time since the
+run started. The main actor checks this before fanning a delete out, and it
+is also where temp tags are created. So no tag, no protection: a download
+without a temp tag can be cut in half by gc, and continues from scratch.
 
 ## The bug this fixes
 

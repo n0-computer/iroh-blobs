@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, Weak},
 };
 
@@ -170,22 +170,53 @@ impl TempCounters {
     }
 }
 
+/// What a gc run needs to know about temp tags, shared by all scopes.
+#[derive(Debug, Default)]
+struct GcTracking {
+    /// Number of gc runs going on.
+    runs: usize,
+    /// Content whose temp tag went away since the oldest running gc run started.
+    dropped: HashSet<HashAndFormat>,
+}
+
+impl GcTracking {
+    fn note_dropped(&mut self, content: impl IntoIterator<Item = HashAndFormat>) {
+        if self.runs > 0 {
+            self.dropped.extend(content);
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TempTags {
     scopes: HashMap<Scope, Arc<TempTagScope>>,
     next_scope: u64,
+    gc: Arc<Mutex<GcTracking>>,
 }
 
 impl TempTags {
     pub fn create_scope(&mut self) -> (Scope, Arc<TempTagScope>) {
         self.next_scope += 1;
         let id = Scope(self.next_scope);
-        let scope = self.scopes.entry(id).or_default();
-        (id, scope.clone())
+        let scope = self.scope(id).clone();
+        (id, scope)
+    }
+
+    fn scope(&mut self, id: Scope) -> &Arc<TempTagScope> {
+        let gc = &self.gc;
+        self.scopes.entry(id).or_insert_with(|| {
+            Arc::new(TempTagScope {
+                counters: Default::default(),
+                gc: gc.clone(),
+            })
+        })
     }
 
     pub fn end_scope(&mut self, scope: Scope) {
-        self.scopes.remove(&scope);
+        if let Some(scope) = self.scopes.remove(&scope) {
+            // the scope's temp tags go away with it, without dropping each
+            self.gc.lock().unwrap().note_dropped(scope.list());
+        }
     }
 
     pub fn list(&self) -> Vec<HashAndFormat> {
@@ -196,24 +227,62 @@ impl TempTags {
     }
 
     pub fn create(&mut self, scope: Scope, content: HashAndFormat) -> TempTag {
-        let scope = self.scopes.entry(scope).or_default();
-
-        scope.temp_tag(content)
+        self.scope(scope).temp_tag(content)
     }
 
     pub fn contains(&self, hash: Hash) -> bool {
-        self.scopes
-            .values()
-            .any(|scope| scope.0.lock().unwrap().contains(&HashAndFormat::raw(hash)))
+        self.scopes.values().any(|scope| {
+            scope
+                .counters
+                .lock()
+                .unwrap()
+                .contains(&HashAndFormat::raw(hash))
+        })
+    }
+
+    /// Starts tracking for a gc run, see [`Self::protects`].
+    pub fn start_gc_run(&mut self) {
+        self.gc.lock().unwrap().runs += 1;
+    }
+
+    /// Ends tracking for a gc run.
+    pub fn end_gc_run(&mut self) {
+        let mut gc = self.gc.lock().unwrap();
+        gc.runs = gc.runs.saturating_sub(1);
+        if gc.runs == 0 {
+            gc.dropped.clear();
+        }
+    }
+
+    /// Whether a temp tag protects `hash` from a gc delete.
+    ///
+    /// True if it has a temp tag in any format, or had one at any time since
+    /// the oldest running gc run started. A gc run decides what is live from
+    /// a mark that is done at some point in the run, so content that gets or
+    /// loses a temp tag during the run, e.g. an import after the mark or a
+    /// handover between a temp tag and a named tag, must not be deleted by it.
+    pub fn protects(&self, hash: Hash) -> bool {
+        let formats = [HashAndFormat::raw(hash), HashAndFormat::hash_seq(hash)];
+        let current = self.scopes.values().any(|scope| {
+            let counters = scope.counters.lock().unwrap();
+            formats.iter().any(|haf| counters.contains(haf))
+        });
+        current || {
+            let gc = self.gc.lock().unwrap();
+            formats.iter().any(|haf| gc.dropped.contains(haf))
+        }
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct TempTagScope(Mutex<TempCounterMap>);
+#[derive(Debug)]
+pub(crate) struct TempTagScope {
+    counters: Mutex<TempCounterMap>,
+    gc: Arc<Mutex<GcTracking>>,
+}
 
 impl TempTagScope {
     pub fn list(&self) -> impl Iterator<Item = HashAndFormat> + 'static {
-        let guard = self.0.lock().unwrap();
+        let guard = self.counters.lock().unwrap();
         let res = guard.keys();
         drop(guard);
         res.into_iter()
@@ -223,14 +292,15 @@ impl TempTagScope {
 impl TagDrop for TempTagScope {
     fn on_drop(&self, inner: &HashAndFormat) {
         trace!("Dropping temp tag {:?}", inner);
-        self.0.lock().unwrap().dec(inner);
+        self.counters.lock().unwrap().dec(inner);
+        self.gc.lock().unwrap().note_dropped([*inner]);
     }
 }
 
 impl TagCounter for TempTagScope {
     fn on_create(&self, inner: &HashAndFormat) {
         trace!("Creating temp tag {:?}", inner);
-        self.0.lock().unwrap().inc(*inner);
+        self.counters.lock().unwrap().inc(*inner);
     }
 }
 

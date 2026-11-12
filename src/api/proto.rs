@@ -156,8 +156,8 @@ pub enum Request {
     WaitIdle(WaitIdleRequest),
     #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
-    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
-    ClearProtected(ClearProtectedRequest),
+    #[rpc(tx = oneshot::Sender<()>, rx = mpsc::Receiver<GcRunUpdate>)]
+    GcRun(GcRunRequest),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,8 +169,20 @@ pub struct SyncDbRequest;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShutdownRequest;
 
+/// Start a gc run, which lasts until the client closes the update channel.
+///
+/// While a gc run is going on, a delete that is not forced keeps content that
+/// has a temp tag, or had one at any time since the run started. A gc run
+/// decides what is live in a mark at some point of the run, so this keeps
+/// content that gets or loses a temp tag during the run: an import after the
+/// mark, or a handover between a temp tag and a named tag or the protect
+/// callback. The reply comes once the store tracks this.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ClearProtectedRequest;
+pub struct GcRunRequest;
+
+/// Nothing is sent on a gc run's channel. Closing it ends the run.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum GcRunUpdate {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobStatusRequest {
