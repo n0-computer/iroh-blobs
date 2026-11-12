@@ -61,7 +61,7 @@
 <a href=#61 id=61 data-nosnippet>61</a></span><span class="attr">#[derive(Debug)]
 <a href=#62 id=62 data-nosnippet>62</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>FileNotice {
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub </span>hash: Hash,
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// The entry was deleted, so an entity must reset and acknowledge it.
+<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// A delete committed, even if no entry existed. The entity must finish cleanup.
 <a href=#65 id=65 data-nosnippet>65</a>    </span><span class="kw">pub </span>deleted: bool,
 <a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// Files the entry referenced before or during the batch, and no longer does.
 <a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">pub </span>parts: Vec&lt;BaoFilePart&gt;,
