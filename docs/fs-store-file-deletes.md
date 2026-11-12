@@ -10,6 +10,8 @@ only thing in the way is file deletion, which uses shared mutable state
 (`ProtectHandle`, an `Arc<Mutex<DeleteSet>>`) between the entities and the
 metadata actor.
 
+Sequence diagrams of the main scenarios: [fs-store-file-deletes-scenarios.md](fs-store-file-deletes-scenarios.md).
+
 ## Actors
 
 - **Main actor**: dispatches commands, runs the entity manager, forwards

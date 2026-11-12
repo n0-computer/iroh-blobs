@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 698" width="910" height="698" style="max-width: 100%; height: auto" role="img" aria-label="Why a live complete entry is parked too">
+  <!--
+    Sequence diagram for docs/fs-store-file-deletes-scenarios.md.
+    Time runs down. Lanes are lifelines, slanted arrows are messages:
+    indigo = message to or from the metadata actor (dashed = reply),
+    slate = file IO of the entity, rose = file delete, amber = live/parked state.
+    Boxes are steps an actor takes, metadata boxes are one batch.
+  -->
+  <defs>
+    <marker id="fs-park-complete-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-park-complete-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-park-complete-file" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="fs-park-complete-rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/></marker>
+  </defs>
+  <rect x="0" y="0" width="910" height="698" rx="12" fill="#f3f4f6"/>
+  <text x="455" y="28" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">Why a live complete entry is parked too</text>
+  <line x1="22" y1="60" x2="22" y2="678" stroke="#9ca3af" stroke-width="1" marker-end="url(#fs-park-complete-axis)"/>
+  <defs><marker id="fs-park-complete-axis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker></defs>
+  <text x="22" y="54" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#888">t</text>
+  <line x1="100" y1="74" x2="100" y2="682" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="51" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="100" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">files of h</text>
+  <line x1="320" y1="74" x2="320" y2="682" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="241" y="46" width="158" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="320" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">entity h: import B</text>
+  <line x1="560" y1="74" x2="560" y2="682" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="481" y="46" width="158" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="560" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">entity h: import A</text>
+  <line x1="800" y1="74" x2="800" y2="682" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="736" y="46" width="128" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="800" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">metadata actor</text>
+  <rect x="737" y="96" width="126" height="57" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="800" y="116" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">entry: Complete,</text>
+  <text x="800" y="131" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">data External</text>
+  <text x="800" y="146" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">live {h}</text>
+  <rect x="247" y="175" width="146" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="320" y="195" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">import B, copy mode</text>
+  <text x="320" y="210" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">data in a temp file</text>
+  <!-- rename temp file to data/h -->
+  <line x1="317" y1="253" x2="104" y2="261" stroke="#475569" stroke-width="1.5" marker-end="url(#fs-park-complete-file)"/>
+  <text x="210" y="247" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#475569">rename temp file to data/h</text>
+  <!-- Update(h, Complete External) -->
+  <line x1="563" y1="295" x2="796" y2="303" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-park-complete-msg)"/>
+  <text x="680" y="289" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Update(h, Complete External)</text>
+  <text x="680" y="318" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">import A, reference mode</text>
+  <rect x="711" y="331" width="178" height="72" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="800" y="351" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">write batch, commit</text>
+  <text x="800" y="366" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">state: Complete External</text>
+  <text x="800" y="381" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">data/h unreferenced</text>
+  <text x="800" y="396" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">h live: park h</text>
+  <rect x="455" y="425" width="211" height="57" rx="6" fill="#fff" stroke="#e11d48" stroke-width="1.2"/>
+  <text x="560" y="445" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#e11d48">a rule &quot;complete: delete now&quot;</text>
+  <text x="560" y="460" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#e11d48">would rm data/h here,</text>
+  <text x="560" y="475" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#e11d48">under import B</text>
+  <!-- Update(h, Complete Owned) -->
+  <line x1="323" y1="518" x2="796" y2="526" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-park-complete-msg)"/>
+  <text x="680" y="512" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Update(h, Complete Owned)</text>
+  <rect x="724" y="546" width="152" height="57" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="800" y="566" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">write batch, commit</text>
+  <text x="800" y="581" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">owned wins the merge</text>
+  <text x="800" y="596" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">h live: stays parked</text>
+  <rect x="241" y="625" width="159" height="27" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="320" y="645" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">data/h is still there</text>
+</svg>
