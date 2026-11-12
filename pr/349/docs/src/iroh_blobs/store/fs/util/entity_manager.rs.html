@@ -77,7 +77,7 @@
 <a href=#77 id=77 data-nosnippet>77</a><span class="doccomment">/// Sent from the entity actor to the main actor to notify that it is shutting down.
 <a href=#78 id=78 data-nosnippet>78</a>///
 <a href=#79 id=79 data-nosnippet>79</a>/// With this message the entity actor gives back the receiver for its command channel,
-<a href=#80 id=80 data-nosnippet>80</a>/// so it can be reusd either immediately if commands come in during shutdown, or later
+<a href=#80 id=80 data-nosnippet>80</a>/// so it can be reused either immediately if commands come in during shutdown, or later
 <a href=#81 id=81 data-nosnippet>81</a>/// if the entity actor is reused for a different entity.
 <a href=#82 id=82 data-nosnippet>82</a></span><span class="kw">struct </span>Shutdown&lt;P: Params&gt; {
 <a href=#83 id=83 data-nosnippet>83</a>    id: P::EntityId,
@@ -88,7 +88,7 @@
 <a href=#88 id=88 data-nosnippet>88</a>    tx: oneshot::Sender&lt;()&gt;,
 <a href=#89 id=89 data-nosnippet>89</a>}
 <a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a><span class="doccomment">/// Sent from the main actor to the entity actor to notify that it has completed shutdown.
+<a href=#91 id=91 data-nosnippet>91</a><span class="doccomment">/// Sent from the entity actor to the main actor after completing idle shutdown.
 <a href=#92 id=92 data-nosnippet>92</a>///
 <a href=#93 id=93 data-nosnippet>93</a>/// With this message the entity actor sends back the remaining state. The tasks set
 <a href=#94 id=94 data-nosnippet>94</a>/// at this point must be empty, as the entity actor has already completed all tasks.
