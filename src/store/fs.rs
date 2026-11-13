@@ -2,27 +2,167 @@
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
-//! General design:
+//! # Design
 //!
-//! The file store consists of two actors.
+//! The metadata actor owns the metadata, and each entity owns the files of its
+//! hash. They talk only by messages. An entity's in-memory state is a cache of
+//! its entry, valid as long as the entity is the only writer of that entry.
+//! Entries only grow, which is why a write to a complete entry can be a no-op.
+//! A delete is the one change that does not grow an entry, so it goes through
+//! the entity too.
 //!
-//! # The main actor
+//! # Actors
 //!
-//! The purpose of the main actor is to handle user commands and own a map of
-//! handles for hashes that are currently being worked on.
+//! - **Main actor**: handles user commands, runs the entity manager, holds the
+//!   temp tags, forwards tag, status, listing and lifecycle commands to the
+//!   metadata actor, fans deletes out to the entities, and routes file notices.
+//! - **Entity actors**, one per hash that is currently being worked on: run the
+//!   per-hash tasks (import, export, observe, persist, delete). While an entity
+//!   exists, it is the only one that writes and deletes the files of its hash.
+//! - **Metadata actor**: owns the redb database with the entry of each hash,
+//!   inlined data and outboards of small blobs, and the tags. It groups queued
+//!   commands into read or write transactions. It never touches data files,
+//!   except for recovery when the store opens, before any entity exists.
 //!
-//! It also owns tasks for ongoing import and export operations, as well as the
-//! database actor.
+//! All senders to the metadata actor share one channel, so it sees commands in
+//! the order the sends completed.
 //!
-//! Handling a command almost always involves either forwarding it to the
-//! database actor or creating a hash context and spawning a task.
+//! # Metadata protocol
 //!
-//! # The database actor
+//! An entity talks to the metadata actor through `EntryMeta`, scoped to its
+//! hash:
 //!
-//! The database actor is responsible for storing metadata about each hash,
-//! as well as inlined data and outboard data for small files.
+//! | Method | Waits | Meaning |
+//! |---|---|---|
+//! | `get()` | for the reply | get the entry state |
+//! | `set(state)` | until applied | replace the entry state |
+//! | `update(state)` | no | merge into the entry state |
+//! | `update_await(state)` | until applied | merge into the entry state |
+//! | `delete()` | until applied | ensure the entry is absent; a notice confirms the commit |
 //!
-//! In addition to the metadata, the database actor also stores tags.
+//! "Applied" means visible to later commands, not durable. Durability comes with
+//! the commit of the batch, and commits are durable (redb's default
+//! `Durability::Immediate`).
+//!
+//! After each commit, the metadata actor sends a `FileNotice` to the main actor
+//! for each hash that was deleted, or no longer references some of its files:
+//! whether the entry was deleted, and which files it referenced before or during
+//! the batch and no longer does. The channel is unbounded, so the metadata actor
+//! never waits on the main actor, which waits on it.
+//!
+//! # Entities
+//!
+//! An entity's tasks are futures polled by one actor, so they only interleave at
+//! `.await` points. Every change of an entity's state or files runs after
+//! `wait_writable`, which waits while the state is `Loading`, `Deleting` or
+//! `Frozen`, with no `.await` between the check and the change. Readers use
+//! `wait_settled`, which permits `Frozen` and reads its retained state. Both
+//! wait on the entity's state `watch`.
+//!
+//! # File notices
+//!
+//! The main actor routes each notice:
+//!
+//! - **An entity exists** for the hash, running or still shutting down, since
+//!   its shutdown may write the bitfield: the notice goes into its unbounded
+//!   inbox. The entity unlinks the files its own state does not use. Its state
+//!   is never behind its entry.
+//! - **No entity exists**: the main actor unlinks the files itself. Only it
+//!   creates entities, so none can appear in between, and none has writes in
+//!   flight. This also covers notices that arrive after the entities shut down.
+//!
+//! # Deletes
+//!
+//! The main actor fans `DeleteBlobs` out to the entity of each hash, creating it
+//! without loading if needed, also for inline entries. That orders a delete with
+//! concurrent requests even if no entity existed when it arrived. A delete that
+//! is not forced skips content with a current or retained temp tag; that check
+//! happens in the main actor, before the fan-out. The entity:
+//!
+//! 1. Bumps its delete counter, which ends observers, and switches to
+//!    `Deleting`. The cached state is dropped: readers see no entry, and changes
+//!    wait from here on.
+//! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
+//!    land in one transaction.
+//! 3. Waits for the notice of the commit, which comes even if there was no
+//!    entry. Waiting keeps the entity alive, so it cannot unload and come back
+//!    with new files that the unlink would take.
+//! 4. The notice unlinks every file and switches to `NonExisting`. Waiting
+//!    writes continue on an empty entry: a running download keeps going with
+//!    the ranges that arrive from then on.
+//!
+//! The main actor answers `DeleteBlobs` once every entity is done, after its
+//! unlink attempts. Unlink failures are logged. Shutdown waits for running
+//! deletes before it shuts down the entities, since an entity in shutdown takes
+//! no new tasks.
+//!
+//! A metadata error aborts the whole store. The main actor cancels the workers
+//! and releases pending callers instead of leaving entities waiting for notices
+//! that will never come. There is no per-entity rollback, and the abort does not
+//! persist entity state or clear the unclean-run marker.
+//!
+//! # GC sessions
+//!
+//! `GcRun` is a bidi streaming request that enters an exclusive gc session. The
+//! store first sends a snapshot of candidates and roots. GC then sends its sweep
+//! deletes on the session's update channel, and gets one reply per delete, in
+//! order. Closing the update channel ends the session. A second `GcRun` waits
+//! until the current session ends.
+//!
+//! While a session lasts, the main actor holds back all tag changes: setting,
+//! creating, deleting and renaming tags, creating temp tags, and import
+//! completion, which creates a temp tag. It queues them with their reply
+//! channels and keeps handling reads and other blob writes. Temp tag drops and
+//! scope ends cannot wait; `TempTags` keeps their protection until the session
+//! ends. A batch scope that ended meanwhile is not recreated: its queued tag and
+//! import requests are rejected.
+//!
+//! To build the snapshot, the main actor sends `Snapshot` to the metadata actor,
+//! a top-level command, so tag changes queued before it are committed. It takes
+//! all blobs as candidates, and the named tags plus current and retained temp
+//! tags as roots. Then it freezes each HashSeq root through its entity, and
+//! sends the snapshot only once every freeze is acknowledged. It keeps running
+//! meanwhile, handling entity restarts and notices. The mem store takes the same
+//! view and freezes its handles in place.
+//!
+//! `Frozen(old)` keeps the entry readable with its state and bitfield, while
+//! writes, replacing imports and deletes wait. Complete and poisoned entries are
+//! frozen too, since a delete would turn them into an entry that can grow again.
+//! A freeze task keeps the entity alive. All freezes of a session wait on one
+//! release channel; ending the session drops it, and each freeze task restores
+//! `old` itself. A freeze waits for an earlier one to end, so freezes never
+//! overlap. If a freeze task is dropped at shutdown instead, `persist` looks
+//! through the freeze.
+//!
+//! GC traverses exactly the snapshot's roots, calls the protect callback, and
+//! sweeps only the snapshot's candidates. Incomplete HashSeqs contribute the
+//! children in their available chunks, and missing chunks never hold up a run.
+//! Their writes stay frozen until the sweep ends, so no new reference can appear
+//! between traversal and deletion. Blobs added after the snapshot are not
+//! candidates, so a run never sweeps them.
+//!
+//! Sweep deletes travel on the session's own channel, so none can arrive after
+//! its session ended. The session task finishes each delete before it reads the
+//! next update, and the session ends only after that, even if the GC client or
+//! its connection disappears. So a held-back tag change can never overtake a
+//! sweep delete. Sweeping a frozen root is rejected, since it would wait on the
+//! sweep's own freeze. A plain `DeleteBlobs` is independent of the session: it
+//! can be sent at any time, and during a session it skips protected content and
+//! waits on frozen roots.
+//!
+//! Shutdown stops accepting work, rejects held-back tag changes, and cancels a
+//! running session without waiting for its client. It lets deletes that were
+//! already sent to entities finish before it closes the metadata actor.
+//!
+//! The protect callback runs in the GC task while the session is held. It must
+//! only add protected hashes. It must not await, directly or through another
+//! task, anything the session holds back: tag changes, temp tag creation, import
+//! completion, and writes to or deletes of frozen HashSeq roots. Those wait for
+//! the session to end, which waits for the callback, so the GC run and
+//! everything queued behind it would deadlock. External systems must protect
+//! content in the store before they publish references to it. If they protect
+//! content that was unprotected before, they must check it is still there
+//! afterwards: a tag does not bring back data that GC already deleted.
 //!
 //! # Tasks
 //!
@@ -74,6 +214,17 @@
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
 //! safely shut down as well. Any store refs you are holding will be inoperable
 //! after this.
+//!
+//! # Limitations
+//!
+//! - A crash between a commit and the unlink of its notice leaves files that
+//!   nothing references.
+//! - After `export_path` with `TryReference` copies across file systems, the
+//!   entity still uses the owned data file, so the notice keeps it and it
+//!   leaks.
+//! - A same-file-system `TryReference` export renames the file before it
+//!   commits the external location. If that commit fails, the metadata can
+//!   still refer to the old path.
 use std::{
     collections::{HashSet, VecDeque},
     fmt::{self, Debug},
