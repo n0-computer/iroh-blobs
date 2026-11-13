@@ -534,8 +534,9 @@ mod tests {
     /// A partial root remains readable but cannot gain references; a complete
     /// root cannot be deleted/recreated. Unrelated writes/deletes still proceed.
     async fn gc_freezes_hashseqs(store: &Store) -> TestResult {
-        use crate::{api::blobs::DeleteOptions, store::util::tests::create_n0_bao};
         use bao_tree::ChunkNum;
+
+        use crate::{api::blobs::DeleteOptions, store::util::tests::create_n0_bao};
         let child = store.add_slice("known child").temp_tag().await?;
         let hash = child.hash();
         let late = store.add_slice("unpublished child").temp_tag().await?;
