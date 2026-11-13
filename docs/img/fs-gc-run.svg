@@ -56,7 +56,7 @@
   <text x="615" y="521" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">sweep, not forced</text>
   <rect x="348" y="534" width="204" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
   <text x="450" y="554" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">h had a temp tag in this run</text>
-  <text x="450" y="569" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">skip, false</text>
+  <text x="450" y="569" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">skip</text>
   <!-- Ok -->
   <line x1="453" y1="612" x2="776" y2="620" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-gc-run-reply)"/>
   <text x="615" y="606" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>

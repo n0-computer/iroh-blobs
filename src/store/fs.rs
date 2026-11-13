@@ -2,27 +2,25 @@
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
-//! General design:
+//! # Actors
 //!
-//! The file store consists of two actors.
+//! - **Main actor**: handles user commands, runs the entity manager, holds the
+//!   temp tags, forwards tag, status, listing and lifecycle commands to the
+//!   metadata actor, fans deletes out to the entities, and routes file
+//!   notices.
+//! - **Entity actors**, one per hash that is currently being worked on: run
+//!   the per-hash tasks (import, export, observe, persist, delete). While an
+//!   entity exists, it is the only one that writes and deletes the files of
+//!   its hash.
+//! - **Metadata actor**: owns the redb database with the entry of each hash,
+//!   inlined data and outboards of small blobs, and the tags. It handles
+//!   commands in one FIFO and groups them into read or write transactions. It
+//!   never touches data files, except for recovery when the store opens. After
+//!   each commit it sends a `FileNotice` for each hash that was deleted or no
+//!   longer references some of its files.
 //!
-//! # The main actor
-//!
-//! The purpose of the main actor is to handle user commands and own a map of
-//! handles for hashes that are currently being worked on.
-//!
-//! It also owns tasks for ongoing import and export operations, as well as the
-//! database actor.
-//!
-//! Handling a command almost always involves either forwarding it to the
-//! database actor or creating a hash context and spawning a task.
-//!
-//! # The database actor
-//!
-//! The database actor is responsible for storing metadata about each hash,
-//! as well as inlined data and outboard data for small files.
-//!
-//! In addition to the metadata, the database actor also stores tags.
+//! See `docs/fs-store-file-deletes.md` for the protocol between them, and the
+//! [scenarios](#scenarios) below.
 //!
 //! # Tasks
 //!
@@ -74,6 +72,108 @@
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
 //! safely shut down as well. Any store refs you are holding will be inoperable
 //! after this.
+//!
+//! # Entity state
+//!
+//! The state of an entity is `BaoFileStorage`, held in a `watch`. A new or
+//! recycled entity starts in `Initial`, and the first task loads it. A
+//! `Partial` entry whose files hold all ranges loads as `Complete`.
+//! `write_batch` builds a `PartialMem` from `NonExisting` but always leaves
+//! `Partial` or `Complete`, so `PartialMem` is never seen between tasks.
+//! `finish_import` completes any state, `Poisoned` included, since a finished
+//! import does not depend on the old content. `persist` at shutdown retires the
+//! state as `Poisoned`, and recycling resets it to `Initial`.
+//!
+#![doc = include_str!("../../docs/img/fs-entity-states.svg")]
+//!
+//! A delete drops the cached state and switches to `Deleting`. `Loading` and
+//! `Deleting` are not settled: tasks that load or change the state wait for them
+//! in `wait_settled`, with no `.await` between the check and the change. The
+//! notice of the commit ends `Deleting`. There is no rollback: a metadata error
+//! poisons the entity and aborts the whole store.
+//!
+#![doc = include_str!("../../docs/img/fs-entity-delete.svg")]
+//!
+//! # Scenarios
+//!
+//! Sequence diagrams, time runs down. Each lane is one actor:
+//!
+//! - **files of h**: the data, outboard, sizes and bitfield files of one hash.
+//! - **entity h**: the entity actor for the hash.
+//! - **metadata actor**: one box is one batch.
+//! - **main actor**: creates entities, routes notices, fans deletes out.
+//! - **gc** / **client**: whoever sends `DeleteBlobs` or imports.
+//!
+//! Indigo arrows are messages (dashed: reply), slate arrows are file IO, rose
+//! arrows are file deletes. Amber text is entity state or bookkeeping.
+//!
+//! ## Writing
+//!
+#![doc = include_str!("../../docs/img/fs-write.svg")]
+//!
+//! Once the entry is `Complete`, the commit no longer references sizes and
+//! bitfield. The notice goes through the main actor to the entity, which
+//! unlinks only files its own state does not use. The entity's state is never
+//! behind its entry.
+//!
+//! ## A notice when no entity exists
+//!
+#![doc = include_str!("../../docs/img/fs-notice-no-entity.svg")]
+//!
+//! `update` does not wait, so the entity can be gone before the commit. The main
+//! actor then unlinks the files itself. Only it creates entities, so none can
+//! appear in between, and no writes are in flight.
+//!
+//! ## Deleting an idle entry
+//!
+#![doc = include_str!("../../docs/img/fs-delete-idle.svg")]
+//!
+//! Every delete goes through the hash's entity, which the main actor creates
+//! without loading. The entity holds `Deleting` until the notice of the commit
+//! has unlinked the files, which also keeps it alive so it cannot unload and
+//! come back with files the unlink would take. `DeleteBlobs` returns after the
+//! unlink attempts. Unlink failures are only logged.
+//!
+//! ## Deleting during a download
+//!
+#![doc = include_str!("../../docs/img/fs-delete-live.svg")]
+//!
+//! The delete starts by bumping the delete count, which ends the observer.
+//! While the entity is `Deleting`, readers see no entry and writes wait. After
+//! the unlink, the waiting write continues on an empty entry, so the download
+//! keeps only the ranges that arrive from then on.
+//!
+//! ## Skipped deletes
+//!
+#![doc = include_str!("../../docs/img/fs-delete-skip.svg")]
+//!
+//! A delete that is not forced skips content a temp tag protects. The main actor
+//! checks this before fanning out, so the entity never sees it. That is the only
+//! way a delete is skipped. A hash without an entry goes through the same steps
+//! as any other: the metadata actor sends the notice even if it removed nothing,
+//! and the writes that waited go on with an empty entry.
+//!
+//! ## A gc run protects what had a temp tag
+//!
+#![doc = include_str!("../../docs/img/fs-gc-run.svg")]
+//!
+//! A gc run is a `GcRun` request that lasts until gc drops it. Content that had
+//! a temp tag at any time during the run is kept by deletes that are not
+//! forced, even if the tag was dropped. That covers imports after the mark, and
+//! handovers between temp tags and named tags. Untagged content has no
+//! protection.
+//!
+//! ## Re-import after a delete
+//!
+#![doc = include_str!("../../docs/img/fs-reimport.svg")]
+//!
+//! An entity that had loaded `Complete` must not keep that state after a
+//! delete, or a later import of the same blob would be a no-op and the blob
+//! would stay gone. The delete goes through the entity, so it is `NonExisting`
+//! and the import writes.
+//!
+//! A crash between a commit and the unlink of its notice leaves files that
+//! nothing references. A sweep at open after an unclean shutdown is planned.
 use std::{
     fmt::{self, Debug},
     fs,

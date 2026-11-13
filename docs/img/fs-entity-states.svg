@@ -75,6 +75,6 @@
     <text x="80" y="498">IO error in write_batch: any state to Poisoned.</text>
     <text x="80" y="514">on_shutdown: persist writes a Partial's bitfield and leaves Poisoned.</text>
     <text x="80" y="530">PartialMem only exists inside one write_batch call.</text>
-    <text x="80" y="546">Deleting(S) can wrap any settled state S, see the delete diagram.</text>
+    <text x="80" y="546">Any settled state can go to Deleting, see the delete diagram.</text>
   </g>
 </svg>

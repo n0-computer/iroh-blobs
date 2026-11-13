@@ -48,9 +48,9 @@
   <!-- Delete(h) -->
   <line x1="303" y1="286" x2="506" y2="294" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-reimport-msg)"/>
   <text x="405" y="280" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Delete(h)</text>
-  <!-- deleted: true -->
+  <!-- Ok -->
   <line x1="507" y1="328" x2="304" y2="336" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-reimport-reply)"/>
-  <text x="405" y="322" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">deleted: true</text>
+  <text x="405" y="322" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
   <!-- FileNotice(h, deleted) -->
   <line x1="513" y1="370" x2="716" y2="378" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-reimport-msg)"/>
   <text x="615" y="364" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">FileNotice(h, deleted)</text>

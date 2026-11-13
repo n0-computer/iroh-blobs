@@ -13,7 +13,8 @@ entity is the only writer of that entry. Entries only grow, which is why a
 write to a complete entry can be a no-op. A delete is the one change that does
 not grow an entry, so it has to go through the entity too.
 
-Sequence diagrams of the main scenarios: [fs-store-file-deletes-scenarios.md](fs-store-file-deletes-scenarios.md).
+Entity state machines and sequence diagrams of the main scenarios are in the
+module docs of `store::fs` (`src/store/fs.rs`).
 
 ## Actors
 

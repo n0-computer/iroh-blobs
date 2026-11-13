@@ -1,57 +1,53 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 410" width="860" height="410" style="max-width: 100%; height: auto" role="img" aria-label="State machine of a delete through an fs store entity">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 360" width="860" height="360" style="max-width: 100%; height: auto" role="img" aria-label="State machine of a delete through an fs store entity">
   <!--
     The Deleting part of the entity state machine, for
     docs/fs-store-file-deletes-scenarios.md. See delete_entry and apply_notice
     in src/store/fs.rs, update together.
-    Layout: states are 170 x 56 boxes, top row at y = 140 (shifted up by 60) (x = 60, 345, 630),
-    NonExisting below Deleting(NonExisting) at y = 330.
+    Layout: states are 170 x 56 boxes, top row at y = 80 (x = 60, 345, 630),
+    Poisoned below Deleting at y = 200.
   -->
   <defs>
     <marker id="fs-delete-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
   </defs>
-  <rect x="0" y="0" width="860" height="410" rx="12" fill="#f3f4f6"/>
+  <rect x="0" y="0" width="860" height="360" rx="12" fill="#f3f4f6"/>
   <text x="430" y="32" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">Entity state during a delete</text>
-  <g transform="translate(0 -60)">
   <!-- states -->
   <g font-family="'Space Mono', monospace" text-anchor="middle">
-    <rect x="60" y="140" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
-    <text x="145" y="163" font-size="12" fill="#374151">S</text>
-    <text x="145" y="181" font-size="10" fill="#888">any settled state</text>
-    <rect x="345" y="140" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
-    <text x="430" y="163" font-size="12" fill="#374151">Deleting(S)</text>
-    <text x="430" y="181" font-size="10" fill="#888">reads see S, writes wait</text>
-    <rect x="630" y="140" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
-    <text x="715" y="163" font-size="12" fill="#374151">Deleting(NonExisting)</text>
-    <text x="715" y="181" font-size="10" fill="#888">reads see no entry</text>
-    <rect x="630" y="330" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
-    <text x="715" y="353" font-size="12" fill="#374151">NonExisting</text>
-    <text x="715" y="371" font-size="10" fill="#888">files unlinked</text>
+    <rect x="60" y="80" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+    <text x="145" y="103" font-size="12" fill="#374151">S</text>
+    <text x="145" y="121" font-size="10" fill="#888">any settled state</text>
+    <rect x="345" y="80" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+    <text x="430" y="103" font-size="12" fill="#374151">Deleting</text>
+    <text x="430" y="121" font-size="10" fill="#888">no entry, writes wait</text>
+    <rect x="630" y="80" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+    <text x="715" y="103" font-size="12" fill="#374151">NonExisting</text>
+    <text x="715" y="121" font-size="10" fill="#888">files unlinked</text>
+    <rect x="345" y="200" width="170" height="56" rx="8" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+    <text x="430" y="223" font-size="12" fill="#374151">Poisoned</text>
+    <text x="430" y="241" font-size="10" fill="#888">the store aborts</text>
   </g>
   <!-- transitions -->
   <g fill="none" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-arrow)">
-    <!-- S to Deleting(S): delete_entry -->
-    <path d="M230,168 H343"/>
-    <!-- Deleting(S) back to S: skipped or failed -->
-    <path d="M430,196 C430,270 145,270 145,198"/>
-    <!-- Deleting(S) to Deleting(NonExisting): deleted -->
-    <path d="M515,168 H628"/>
-    <!-- Deleting(NonExisting) to NonExisting: the notice -->
-    <path d="M715,196 V328"/>
+    <!-- S to Deleting: delete_entry -->
+    <path d="M230,108 H343"/>
+    <!-- Deleting to NonExisting: the notice -->
+    <path d="M515,108 H628"/>
+    <!-- Deleting to Poisoned: metadata error -->
+    <path d="M430,136 V198"/>
   </g>
   <g font-family="'Space Mono', monospace" font-size="11" fill="#6366f1" text-anchor="middle">
-    <text x="287" y="160">delete_entry</text>
-    <text x="287" y="273">Delete: false, or error</text>
-    <text x="287" y="288" fill="#888" font-size="10">restore S</text>
-    <text x="571" y="160">Delete: true</text>
-    <text x="571" y="186" fill="#888" font-size="10">delete count + 1</text>
-    <text x="705" y="258" text-anchor="end">FileNotice(deleted)</text>
-    <text x="705" y="273" text-anchor="end" fill="#888" font-size="10">unlink all four files</text>
+    <text x="287" y="100">delete_entry</text>
+    <text x="287" y="126" fill="#888" font-size="10">delete count + 1</text>
+    <text x="571" y="100">FileNotice</text>
+    <text x="571" y="126" fill="#888" font-size="10">unlink all four</text>
+    <text x="440" y="166" text-anchor="start">Delete: error</text>
+    <text x="440" y="181" text-anchor="start" fill="#888" font-size="10">no rollback</text>
   </g>
   <!-- notes -->
   <g font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">
-    <text x="60" y="420">S is any state but Loading and Deleting: delete_entry waits for those.</text>
-    <text x="60" y="436">While Deleting, loads and writes wait (wait_settled), readers and</text>
-    <text x="60" y="452">observers look through to the inner state. A delete count change ends observers.</text>
-  </g>
+    <text x="60" y="296">S is any state but Loading and Deleting: delete_entry waits for those.</text>
+    <text x="60" y="312">The cached state is dropped: readers see no entry, loads and writes wait</text>
+    <text x="60" y="328">(wait_settled). The delete count change ends observers. The notice of the</text>
+    <text x="60" y="344">commit comes even if there was no entry, so every delete ends in NonExisting.</text>
   </g>
 </svg>
