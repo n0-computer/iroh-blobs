@@ -169,7 +169,7 @@
 <a href=#169 id=169 data-nosnippet>169</a>    }
 <a href=#170 id=170 data-nosnippet>170</a>
 <a href=#171 id=171 data-nosnippet>171</a>    <span class="doccomment">/// See [`Self::delete_with_opts`].
-<a href=#172 id=172 data-nosnippet>172</a>    </span><span class="attr">#[cfg(test)]
+<a href=#172 id=172 data-nosnippet>172</a>    </span><span class="attr">#[cfg(all(test, feature = <span class="string">"fs-store"</span>))]
 <a href=#173 id=173 data-nosnippet>173</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>delete(
 <a href=#174 id=174 data-nosnippet>174</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#175 id=175 data-nosnippet>175</a>        hashes: <span class="kw">impl </span>IntoIterator&lt;Item = <span class="kw">impl </span>Into&lt;Hash&gt;&gt;,
