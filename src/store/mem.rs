@@ -11,7 +11,7 @@
 mod import_outboard;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     future::Future,
     io::{self, Write},
     num::NonZeroU64,
@@ -112,7 +112,7 @@ enum TaskResult {
     Unit(()),
     Import(Result<ImportEntry>),
     Scope(Scope),
-    GcRunEnded,
+    GcRunEnded(u64),
 }
 
 impl MemStore {
@@ -134,6 +134,9 @@ impl MemStore {
                 options: Arc::new(Options::default()),
                 temp_tags: Default::default(),
                 idle_waiters: Default::default(),
+                gc: None,
+                next_gc_id: 0,
+                deferred: VecDeque::new(),
             }
             .run(),
         );
@@ -149,6 +152,17 @@ impl MemStore {
     }
 }
 
+struct GcSession {
+    id: u64,
+    frozen: HashMap<Hash, BaoFileHandle>,
+    cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+enum Deferred {
+    Command(Command),
+    Import(Result<ImportEntry>),
+}
+
 struct Actor {
     commands: tokio::sync::mpsc::Receiver<Command>,
     tasks: JoinSet<TaskResult>,
@@ -157,6 +171,9 @@ struct Actor {
     options: Arc<Options>,
     // temp tags
     temp_tags: TempTags,
+    gc: Option<GcSession>,
+    next_gc_id: u64,
+    deferred: VecDeque<Deferred>,
     // idle waiters
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
 }
@@ -173,6 +190,19 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) -> Option<ShutdownMsg> {
+        if let Some(gc) = &self.gc {
+            let frozen_delete = match &cmd {
+                Command::DeleteBlobs(cmd) if cmd.gc_id.is_none() => {
+                    cmd.hashes.iter().any(|hash| gc.frozen.contains_key(hash))
+                }
+                _ => false,
+            };
+            if cmd.mutates_tags() || matches!(cmd, Command::GcRun(_)) || frozen_delete {
+                self.deferred.push_back(Deferred::Command(cmd));
+                return None;
+            }
+        }
+
         debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
         match cmd {
             Command::ImportBao(ImportBaoMsg {
@@ -406,10 +436,29 @@ impl Actor {
             Command::DeleteBlobs(cmd) => {
                 trace!("{cmd:?}");
                 let DeleteBlobsMsg {
-                    inner: BlobDeleteRequest { hashes, force },
+                    inner:
+                        BlobDeleteRequest {
+                            hashes,
+                            force,
+                            gc_id,
+                        },
                     tx,
                     ..
                 } = cmd;
+                if let Some(id) = gc_id {
+                    let Some(gc) = self.gc.as_ref().filter(|gc| gc.id == id) else {
+                        tx.send(Err(api::Error::other("GC session ended")))
+                            .await
+                            .ok();
+                        return None;
+                    };
+                    if hashes.iter().any(|hash| gc.frozen.contains_key(hash)) {
+                        tx.send(Err(api::Error::other("cannot sweep a frozen GC root")))
+                            .await
+                            .ok();
+                        return None;
+                    }
+                }
                 for hash in hashes {
                     if !force && self.temp_tags.protects(hash) {
                         continue;
@@ -425,15 +474,41 @@ impl Actor {
             }
             Command::GcRun(cmd) => {
                 self.temp_tags.start_gc_run();
+                let mut roots = self
+                    .temp_tags
+                    .list_for_gc()
+                    .into_iter()
+                    .collect::<HashSet<_>>();
+                roots.extend(self.state.tags.values().copied());
+                self.next_gc_id += 1;
+                let id = self.next_gc_id;
+                let snapshot = crate::api::proto::GcSnapshot {
+                    id,
+                    candidates: self.state.data.keys().copied().collect(),
+                    roots: roots.into_iter().collect(),
+                };
+                let frozen = snapshot
+                    .hashseqs()
+                    .into_iter()
+                    .map(|hash| {
+                        let entry = self.get_or_create_entry(hash);
+                        entry.0.state.send_modify(|state| {
+                            *state = BaoFileStorage::Frozen(Box::new(std::mem::take(state)));
+                        });
+                        (hash, entry)
+                    })
+                    .collect();
+                let (cancel, cancelled) = tokio::sync::oneshot::channel();
+                self.gc = Some(GcSession { id, frozen, cancel });
                 self.spawn(async move {
                     let crate::api::proto::GcRunMsg { tx, mut rx, .. } = cmd;
-                    tx.send(()).await.ok();
-                    // The run lasts until the client closes its channel. Nothing
-                    // is ever sent on it, so this returns once it is closed.
-                    if let Ok(Some(update)) = rx.recv().await {
-                        match update {}
+                    if tx.send(Ok(snapshot)).await.is_ok() {
+                        tokio::select! {
+                            _ = rx.recv() => {}
+                            _ = cancelled => {}
+                        }
                     }
-                    TaskResult::GcRunEnded
+                    TaskResult::GcRunEnded(id)
                 });
             }
             Command::ExportRanges(cmd) => {
@@ -472,6 +547,11 @@ impl Actor {
     }
 
     async fn finish_import(&mut self, res: Result<ImportEntry>) {
+        if self.gc.is_some() {
+            self.deferred.push_back(Deferred::Import(res));
+            return;
+        }
+
         let import_data = match res {
             Ok(entry) => entry,
             Err(e) => {
@@ -528,8 +608,42 @@ impl Actor {
         }
     }
 
+    fn exit_gc(&mut self, id: u64) {
+        if self.gc.as_ref().map(|gc| gc.id) != Some(id) {
+            return;
+        }
+        let gc = self.gc.take().unwrap();
+        gc.cancel.send(()).ok();
+        for entry in gc.frozen.into_values() {
+            entry.0.state.send_if_modified(|state| {
+                if !matches!(state, BaoFileStorage::Frozen(_)) {
+                    return false;
+                }
+                let BaoFileStorage::Frozen(old) = std::mem::take(state) else {
+                    unreachable!()
+                };
+                *state = *old;
+                true
+            });
+        }
+        self.temp_tags.end_gc_run();
+    }
+
     pub async fn run(mut self) {
         let shutdown = loop {
+            if self.gc.is_none() {
+                if let Some(cmd) = self.deferred.pop_front() {
+                    match cmd {
+                        Deferred::Command(cmd) => {
+                            if let Some(shutdown) = self.handle_command(cmd).await {
+                                break Some(shutdown);
+                            }
+                        }
+                        Deferred::Import(res) => self.finish_import(res).await,
+                    }
+                    continue;
+                }
+            }
             tokio::select! {
                 cmd = self.commands.recv() => {
                     let Some(cmd) = cmd else {
@@ -552,9 +666,7 @@ impl Actor {
                         TaskResult::Scope(scope) => {
                             self.temp_tags.end_scope(scope);
                         }
-                        TaskResult::GcRunEnded => {
-                            self.temp_tags.end_gc_run();
-                        }
+                        TaskResult::GcRunEnded(id) => self.exit_gc(id),
                         TaskResult::Unit(_) => {}
                     }
                     if self.tasks.is_empty() {
@@ -566,6 +678,9 @@ impl Actor {
                 }
             }
         };
+        if let Some(gc) = &self.gc {
+            self.exit_gc(gc.id);
+        }
         if let Some(shutdown) = shutdown {
             shutdown.tx.send(()).await.ok();
         }
@@ -669,55 +784,57 @@ async fn import_bao(
 ) {
     let size = size.get();
     entry
-        .0
-        .state
-        .send_if_modified(|state: &mut BaoFileStorage| {
+        .update_unfrozen(|state: &mut BaoFileStorage| {
             let BaoFileStorage::Partial(entry) = state else {
                 // entry was already completed, no need to write
                 return false;
             };
             entry.size.write(0, size);
             false
-        });
+        })
+        .await;
     let tree = BaoTree::new(size, IROH_BLOCK_SIZE);
     while let Some(item) = stream.recv().await.unwrap() {
-        entry.0.state.send_if_modified(|state| {
-            let BaoFileStorage::Partial(partial) = state else {
-                // entry was already completed, no need to write
-                return false;
-            };
-            match item {
-                BaoContentItem::Parent(parent) => {
-                    if let Some(offset) = tree.pre_order_offset(parent.node) {
-                        let mut pair = [0u8; 64];
-                        pair[..32].copy_from_slice(parent.pair.0.as_bytes());
-                        pair[32..].copy_from_slice(parent.pair.1.as_bytes());
+        let mut item = Some(item);
+        entry
+            .update_unfrozen(|state| {
+                let BaoFileStorage::Partial(partial) = state else {
+                    // entry was already completed, no need to write
+                    return false;
+                };
+                match item.take().unwrap() {
+                    BaoContentItem::Parent(parent) => {
+                        if let Some(offset) = tree.pre_order_offset(parent.node) {
+                            let mut pair = [0u8; 64];
+                            pair[..32].copy_from_slice(parent.pair.0.as_bytes());
+                            pair[32..].copy_from_slice(parent.pair.1.as_bytes());
+                            partial
+                                .outboard
+                                .write_at(offset * 64, &pair)
+                                .expect("writing to mem can never fail");
+                        }
+                        false
+                    }
+                    BaoContentItem::Leaf(leaf) => {
+                        let start = leaf.offset;
                         partial
-                            .outboard
-                            .write_at(offset * 64, &pair)
+                            .data
+                            .write_at(start, &leaf.data)
                             .expect("writing to mem can never fail");
+                        let added = chunk_range(&leaf);
+                        let update = partial.bitfield.update(&Bitfield::new(added.clone(), size));
+                        if update.new_state().complete {
+                            let data = std::mem::take(&mut partial.data);
+                            let outboard = std::mem::take(&mut partial.outboard);
+                            let data: Bytes = <Vec<u8>>::try_from(data).unwrap().into();
+                            let outboard: Bytes = <Vec<u8>>::try_from(outboard).unwrap().into();
+                            *state = CompleteStorage::new(data, outboard).into();
+                        }
+                        update.changed()
                     }
-                    false
                 }
-                BaoContentItem::Leaf(leaf) => {
-                    let start = leaf.offset;
-                    partial
-                        .data
-                        .write_at(start, &leaf.data)
-                        .expect("writing to mem can never fail");
-                    let added = chunk_range(&leaf);
-                    let update = partial.bitfield.update(&Bitfield::new(added.clone(), size));
-                    if update.new_state().complete {
-                        let data = std::mem::take(&mut partial.data);
-                        let outboard = std::mem::take(&mut partial.outboard);
-                        let data: Bytes = <Vec<u8>>::try_from(data).unwrap().into();
-                        let outboard: Bytes = <Vec<u8>>::try_from(outboard).unwrap().into();
-                        *state = CompleteStorage::new(data, outboard).into();
-                    }
-                    update.changed()
-                }
-            }
-        });
+            })
+            .await;
     }
     tx.send(Ok(())).await.ok();
 }
@@ -954,6 +1071,7 @@ struct State {
 pub enum BaoFileStorage {
     Partial(PartialMemStorage),
     Complete(CompleteStorage),
+    Frozen(Box<BaoFileStorage>),
 }
 
 impl BaoFileStorage {
@@ -962,6 +1080,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.bitfield.clone(),
             Self::Complete(entry) => Bitfield::complete(entry.size()),
+            Self::Frozen(old) => old.bitfield(),
         }
     }
 }
@@ -977,6 +1096,26 @@ pub struct BaoFileHandleInner {
 pub struct BaoFileHandle(Arc<BaoFileHandleInner>);
 
 impl BaoFileHandle {
+    async fn update_unfrozen(&self, mut update: impl FnMut(&mut BaoFileStorage) -> bool) {
+        loop {
+            let mut changes = self.0.state.subscribe();
+            let mut done = false;
+            // Check and mutation share the write lock: unlike fs entities,
+            // mem-store tasks can run on different executor threads.
+            self.0.state.send_if_modified(|state| {
+                if matches!(state, BaoFileStorage::Frozen(..)) {
+                    return false;
+                }
+                done = true;
+                update(state)
+            });
+            if done {
+                return;
+            }
+            changes.changed().await.ok();
+        }
+    }
+
     pub fn new_partial(hash: Hash) -> Self {
         let (state, _) = watch::channel(BaoFileStorage::Partial(PartialMemStorage {
             data: SparseMemFile::new(),
@@ -1026,6 +1165,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.data.as_ref(),
             Self::Complete(entry) => &entry.data,
+            Self::Frozen(old) => old.data(),
         }
     }
 
@@ -1033,6 +1173,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.outboard.as_ref(),
             Self::Complete(entry) => &entry.outboard,
+            Self::Frozen(old) => old.outboard(),
         }
     }
 
@@ -1040,6 +1181,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.current_size(),
             Self::Complete(entry) => entry.size(),
+            Self::Frozen(old) => old.size(),
         }
     }
 }

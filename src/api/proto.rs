@@ -156,8 +156,23 @@ pub enum Request {
     WaitIdle(WaitIdleRequest),
     #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
-    #[rpc(tx = oneshot::Sender<()>, rx = mpsc::Receiver<GcRunUpdate>)]
+    #[rpc(tx = oneshot::Sender<super::Result<GcSnapshot>>, rx = mpsc::Receiver<GcRunUpdate>)]
     GcRun(GcRunRequest),
+}
+
+impl Command {
+    /// These operations can change the root set. Temp-tag drops are instead
+    /// retained by TempTags for the lifetime of the GC session.
+    pub(crate) fn mutates_tags(&self) -> bool {
+        matches!(
+            self,
+            Self::SetTag(_)
+                | Self::CreateTag(_)
+                | Self::DeleteTags(_)
+                | Self::RenameTag(_)
+                | Self::CreateTempTag(_)
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,16 +184,31 @@ pub struct SyncDbRequest;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShutdownRequest;
 
-/// Start a gc run, which lasts until the client closes the update channel.
-///
-/// While a gc run is going on, a delete that is not forced keeps content that
-/// has a temp tag, or had one at any time since the run started. A gc run
-/// decides what is live in a mark at some point of the run, so this keeps
-/// content that gets or loses a temp tag during the run: an import after the
-/// mark, or a handover between a temp tag and a named tag or the protect
-/// callback. The reply comes once the store tracks this.
+/// Enter an exclusive GC session. The reply contains a fixed candidate/root
+/// snapshot, with HashSeq roots frozen and tag mutations suspended. Closing
+/// the update channel exits the session, including on client cancellation.
+/// Reads and ordinary blob writes remain available. Callbacks must not await
+/// tag mutations or writes to frozen roots while holding the session.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GcRunRequest;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct GcSnapshot {
+    /// Identifies the session for sweep deletes.
+    pub id: u64,
+    pub candidates: Vec<Hash>,
+    pub roots: Vec<HashAndFormat>,
+}
+
+impl GcSnapshot {
+    pub(crate) fn hashseqs(&self) -> std::collections::HashSet<Hash> {
+        self.roots
+            .iter()
+            .filter(|root| !root.format.is_raw())
+            .map(|root| root.hash)
+            .collect()
+    }
+}
 
 /// Nothing is sent on a gc run's channel. Closing it ends the run.
 #[derive(Debug, Serialize, Deserialize)]
@@ -208,6 +238,9 @@ pub struct BlobDeleteRequest {
     /// Bypass current and retained temp-tag protection. In the fs store,
     /// deletion still runs through the entity to coordinate state and files.
     pub force: bool,
+    /// Sweep deletes are accepted only within this GC session. Manual deletes
+    /// use `None`; they do not participate in GC's root/candidate contract.
+    pub gc_id: Option<u64>,
 }
 
 /// Import the given bytes.

@@ -155,9 +155,9 @@ impl Blobs {
 
     /// Delete a blob.
     ///
-    /// This function is not public, because it does not work as expected when called manually,
-    /// because blobs are protected from deletion. This is only called from the gc task, which
-    /// clears the protections before.
+    /// GC uses this after excluding live roots and their children from its
+    /// candidate snapshot. Unless forced, deletion also respects current and
+    /// GC-retained temp tags. Named tags are accounted for by GC's mark phase.
     ///
     /// Users should rely only on garbage collection for blob deletion.
     pub(crate) async fn delete_with_opts(&self, mut options: DeleteOptions) -> RequestResult<()> {
@@ -169,6 +169,7 @@ impl Blobs {
     }
 
     /// See [`Self::delete_with_opts`].
+    #[cfg(test)]
     pub(crate) async fn delete(
         &self,
         hashes: impl IntoIterator<Item = impl Into<Hash>>,
@@ -176,6 +177,7 @@ impl Blobs {
         self.delete_with_opts(DeleteOptions {
             hashes: hashes.into_iter().map(Into::into).collect(),
             force: false,
+            gc_id: None,
         })
         .await
     }
@@ -557,17 +559,38 @@ impl Blobs {
     /// Starts a gc run, which lasts until the returned guard is dropped.
     ///
     /// See [`GcRunRequest`].
-    pub(crate) async fn gc_run(&self) -> irpc::Result<GcRun> {
+    pub(crate) async fn gc_run(&self) -> super::Result<GcRun> {
         let (tx, rx) = self.client.client_streaming(GcRunRequest, 1).await?;
-        rx.await?;
-        Ok(GcRun { _tx: tx })
+        let snapshot = rx.await.map_err(irpc::Error::from)??;
+        Ok(GcRun { snapshot, _tx: tx })
     }
 }
 
 /// A running gc run, see [`Blobs::gc_run`]. Dropping it ends the run.
 #[derive(Debug)]
 pub(crate) struct GcRun {
+    pub snapshot: super::proto::GcSnapshot,
     _tx: irpc::channel::mpsc::Sender<GcRunUpdate>,
+}
+
+impl GcRun {
+    /// The store rejects late requests and retains the freeze until accepted
+    /// sweep deletes finish, including when the caller or transport disappears.
+    pub(crate) async fn delete(
+        &self,
+        store: &super::Store,
+        hashes: Vec<Hash>,
+    ) -> super::Result<()> {
+        store
+            .blobs()
+            .delete_with_opts(DeleteOptions {
+                hashes,
+                force: false,
+                gc_id: Some(self.snapshot.id),
+            })
+            .await
+            .map_err(super::Error::other)
+    }
 }
 
 /// A progress handle for a batch scoped add operation.
