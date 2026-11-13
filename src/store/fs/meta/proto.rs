@@ -34,13 +34,14 @@ impl fmt::Debug for Get {
 /// Delete the entry of one hash, sent by the hash's entity.
 ///
 /// The entity sends this from its `Deleting` state, so none of its writes can
-/// follow. The reply says whether there was an entry to delete. The files go
-/// after the commit. Whether the entry may be deleted is decided before, see
-/// the main actor's temp tag check.
+/// follow. The reply confirms application; a file notice confirms the commit,
+/// even if no entry existed. The reply also detects commands dropped during shutdown.
+/// Whether the entry may be deleted is decided before, by the main actor's
+/// temp tag check. A metadata error fails the store instead of undoing a delete.
 #[derive(Debug)]
 pub struct Delete {
     pub hash: Hash,
-    pub tx: oneshot::Sender<ActorResult<bool>>,
+    pub tx: oneshot::Sender<ActorResult<()>>,
     pub span: Span,
 }
 

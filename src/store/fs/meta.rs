@@ -193,18 +193,19 @@ impl Db {
         Ok(res.state?)
     }
 
-    /// Delete the entry of `hash`, and return whether there was one to delete.
+    /// Apply an unconditional delete. A file notice confirms the commit,
+    /// even if there was no metadata entry.
     ///
     /// Only the hash's entity sends this, see [`Delete`].
-    pub async fn delete(&self, hash: Hash) -> io::Result<bool> {
+    pub async fn delete(&self, hash: Hash) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         let span = Span::current();
         self.sender
             .send(Delete { hash, tx, span }.into())
             .await
             .map_err(|_| io::Error::other("send delete"))?;
-        let res = rx.await.map_err(|_| io::Error::other("receive delete"))?;
-        Ok(res?)
+        rx.await.map_err(|_| io::Error::other("receive delete"))??;
+        Ok(())
     }
 
     /// A view of this database scoped to a single entry.
@@ -235,8 +236,8 @@ pub struct EntryMeta<'a> {
 }
 
 impl EntryMeta<'_> {
-    /// Delete the entry, and return whether there was one to delete.
-    pub async fn delete(&self) -> io::Result<bool> {
+    /// Apply an unconditional delete; a file notice confirms its commit.
+    pub async fn delete(&self) -> io::Result<()> {
         self.db.delete(self.hash).await
     }
 
@@ -556,8 +557,8 @@ impl Bookkeeping {
     }
 
     /// Note that the entry of a hash was deleted.
-    fn deleted<I>(&mut self, hash: Hash, before: &EntryState<I>) {
-        self.written(hash, Some(before));
+    fn deleted<I>(&mut self, hash: Hash, before: Option<&EntryState<I>>) {
+        self.written(hash, before);
         self.deleted.insert(hash);
     }
 
@@ -606,7 +607,7 @@ impl std::fmt::Debug for TxnNum {
 
 #[derive(Debug)]
 pub struct Actor {
-    db: redb::Database,
+    db: DbWrapper,
     cmds: PeekableReceiver<Command>,
     /// Where the file consequences of each committed batch go, see [`FileNotice`].
     notices: tokio::sync::mpsc::UnboundedSender<FileNotice>,
@@ -674,7 +675,7 @@ impl Actor {
         tx.commit()?;
         let cmds = PeekableReceiver::new(cmds);
         Ok(Self {
-            db,
+            db: db.into(),
             cmds,
             notices,
             options,
@@ -703,17 +704,13 @@ impl Actor {
     fn delete(state: &mut Bookkeeping, tables: &mut Tables<'_>, cmd: Delete) -> ActorResult<()> {
         trace!("{cmd:?}");
         let Delete { hash, tx, .. } = cmd;
-        let Some(entry) = tables.blobs.remove(hash)? else {
-            tx.send(Ok(false));
-            return Ok(());
-        };
-        let entry = entry.value();
+        let entry = tables.blobs.remove(hash)?.map(|entry| entry.value());
         // files are deleted after the commit, see Bookkeeping::file_notices
-        state.deleted(hash, &entry);
-        if let EntryState::Complete {
+        state.deleted(hash, entry.as_ref());
+        if let Some(EntryState::Complete {
             data_location,
             outboard_location,
-        } = entry
+        }) = entry
         {
             if let DataLocation::Inline(_) = data_location {
                 tables.inline_data.remove(hash)?;
@@ -722,7 +719,7 @@ impl Actor {
                 tables.inline_outboard.remove(hash)?;
             }
         }
-        tx.send(Ok(true));
+        tx.send(Ok(()));
         Ok(())
     }
 
@@ -841,7 +838,7 @@ impl Actor {
         }
     }
 
-    async fn sync_db(_db: &mut Database, cmd: SyncDbMsg) -> ActorResult<()> {
+    async fn sync_db(_db: &Database, cmd: SyncDbMsg) -> ActorResult<()> {
         trace!("{cmd:?}");
         let SyncDbMsg { tx, .. } = cmd;
         // nothing to do here, since for a toplevel cmd we are outside a write transaction
@@ -850,7 +847,7 @@ impl Actor {
     }
 
     async fn handle_toplevel(
-        db: &mut Database,
+        db: &Database,
         cmd: TopLevelCommand,
         op: TxnNum,
     ) -> ActorResult<Option<ShutdownMsg>> {
@@ -896,15 +893,24 @@ impl Actor {
         Ok(())
     }
 
-    pub async fn run(self) {
-        if let Err(error) = self.run_inner().await {
-            // Without this actor every store operation fails, so keep the cause.
-            error!("metadata db actor stopped: {error:#}");
+    pub(super) async fn run(mut self) -> Result<(), Failure> {
+        match self.run_inner().await {
+            Ok(shutdown) => {
+                drop(self);
+                if let Some(shutdown) = shutdown {
+                    shutdown.tx.send(()).await.ok();
+                }
+                Ok(())
+            }
+            Err(error) => Err(Failure {
+                error,
+                _db: self.db,
+            }),
         }
     }
 
-    async fn run_inner(mut self) -> ActorResult<()> {
-        let mut db = DbWrapper::from(self.db);
+    async fn run_inner(&mut self) -> ActorResult<Option<ShutdownMsg>> {
+        let db = &self.db;
         let options = &self.options;
         let mut op = 0u64;
         let shutdown = loop {
@@ -915,7 +921,7 @@ impl Actor {
             match cmd {
                 Command::TopLevel(cmd) => {
                     let op = TxnNum::TopLevel(op);
-                    if let Some(shutdown) = Self::handle_toplevel(&mut db, cmd, op).await? {
+                    if let Some(shutdown) = Self::handle_toplevel(db, cmd, op).await? {
                         break Some(shutdown);
                     }
                 }
@@ -973,12 +979,15 @@ impl Actor {
                 }
             }
         };
-        if let Some(shutdown) = shutdown {
-            drop(db);
-            shutdown.tx.send(()).await.ok();
-        }
-        Ok(())
+        Ok(shutdown)
     }
+}
+
+/// Keeps the database locked until the main actor has cancelled all workers.
+#[derive(Debug)]
+pub(super) struct Failure {
+    pub error: ActorError,
+    _db: DbWrapper,
 }
 
 /// Logs what recovery did.
@@ -1397,12 +1406,233 @@ mod tests {
         assert!(notices.is_empty(), "a new entry leaves no files behind");
         let notices = write_batch(&db, &mut state, |tables, state| {
             let entry = tables.blobs.remove(hash)?.expect("an entry").value();
-            state.deleted(hash, &entry);
+            state.deleted(hash, Some(&entry));
             Ok(())
         })?;
         assert_eq!(notices.len(), 1);
         assert!(notices[0].deleted);
         assert_eq!(notices[0].parts.len(), 4, "a partial entry uses every file");
+        Ok(())
+    }
+
+    /// An absent entry still needs a commit notice to release its entity.
+    #[test]
+    fn deleting_an_absent_entry_is_confirmed() -> testresult::TestResult<()> {
+        let (_dir, _paths, db) = setup()?;
+        let hash = Hash::new(b"absent");
+        let mut state = Bookkeeping::default();
+        for _ in 0..2 {
+            let notices = write_batch(&db, &mut state, |tables, state| {
+                let (tx, _rx) = oneshot::channel();
+                Actor::delete(
+                    state,
+                    tables,
+                    Delete {
+                        hash,
+                        tx,
+                        span: Span::none(),
+                    },
+                )?;
+                Ok(())
+            })?;
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].hash, hash);
+            assert!(notices[0].deleted);
+        }
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct FailSync {
+        inner: redb::backends::FileBackend,
+        fail: Arc<std::sync::atomic::AtomicBool>,
+        closed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl redb::StorageBackend for FailSync {
+        fn len(&self) -> io::Result<u64> {
+            self.inner.len()
+        }
+        fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+            self.inner.read(offset, out)
+        }
+        fn set_len(&self, len: u64) -> io::Result<()> {
+            self.inner.set_len(len)
+        }
+        fn write(&self, offset: u64, data: &[u8]) -> io::Result<()> {
+            self.inner.write(offset, data)
+        }
+        fn sync_data(&self) -> io::Result<()> {
+            if self.fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(io::Error::other("injected commit sync failure"));
+            }
+            self.inner.sync_data()
+        }
+        fn close(&self) -> io::Result<()> {
+            self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.inner.close()
+        }
+    }
+
+    /// Exercise a real redb commit failure while a delete waits for its notice.
+    /// Cached observers and idle waiters must also stop, and old files must survive.
+    #[tokio::test]
+    async fn failed_commit_aborts_store_without_unlinking() -> testresult::TestResult<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        use crate::store::fs::{self, entity_manager::EntityManagerState};
+        use n0_future::StreamExt;
+
+        let dir = tempfile::tempdir()?;
+        let options = Arc::new(Options::new(dir.path()));
+        std::fs::create_dir_all(&options.path.data_path)?;
+        std::fs::create_dir_all(&options.path.temp_path)?;
+        let db_path = dir.path().join("blobs.db");
+        let fail = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicBool::new(false));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&db_path)?;
+        let db = Database::builder().create_with_backend(FailSync {
+            inner: redb::backends::FileBackend::new(file)?,
+            fail: fail.clone(),
+            closed: closed.clone(),
+        })?;
+        // Initialize the same tables and unclean-run marker as normal startup.
+        let tx = db.begin_write()?;
+        drop(Tables::new(&tx)?);
+        run::record(
+            &mut tx.open_table(META_TABLE)?,
+            &a_run(boot_id::current().as_deref(), false),
+        )?;
+        tx.commit()?;
+
+        let (db_tx, db_rx) = tokio::sync::mpsc::channel(100);
+        let (notice_tx, notices) = tokio::sync::mpsc::unbounded_channel();
+        let metadata = Actor {
+            db: db.into(),
+            cmds: PeekableReceiver::new(db_rx),
+            notices: notice_tx,
+            options: options.batch.clone(),
+            state: Bookkeeping::default(),
+        };
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
+        let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
+        let context = Arc::new(fs::TaskContext {
+            options: options.clone(),
+            db: Db::new(db_tx),
+            internal_cmd_tx: fs_tx.clone(),
+        });
+        let mut actor = fs::Actor {
+            context: context.clone(),
+            cmd_rx,
+            fs_cmd_rx,
+            notices,
+            metadata_task: Some(tokio::spawn(metadata.run())),
+            deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
+            tasks: tokio::task::JoinSet::new(),
+            handles: EntityManagerState::new(context, 16, 32, 2),
+            temp_tags: Default::default(),
+            idle_waiters: Vec::new(),
+            _rt: fs::RtWrapper(None),
+        };
+        struct Worker {
+            closed: Arc<AtomicBool>,
+            stopped: Arc<AtomicBool>,
+        }
+        impl Drop for Worker {
+            fn drop(&mut self) {
+                assert!(
+                    !self.closed.load(Ordering::SeqCst),
+                    "database released before worker cancellation"
+                );
+                self.stopped.store(true, Ordering::SeqCst);
+            }
+        }
+        let stopped = Arc::new(AtomicBool::new(false));
+        let worker = Worker {
+            closed: closed.clone(),
+            stopped: stopped.clone(),
+        };
+        actor.spawn(async move {
+            let _worker = worker;
+            std::future::pending::<()>().await;
+        });
+        let task = tokio::spawn(actor.run());
+        let store = fs::FsStore::new(cmd_tx.into(), fs_tx);
+        let data = fs::tests::test_data(100_000);
+        let hash = store.add_bytes(data.clone()).await?.hash;
+        let other = store.add_slice("cached observer").await?.hash;
+        store.sync_db().await?;
+        let mut observer = Box::pin(store.observe(other).stream().await?);
+        assert!(observer.next().await.unwrap().is_complete());
+        // This waiter cannot complete while the observer keeps its entity busy.
+        let idle_store = store.clone();
+        let idle = tokio::spawn(async move { idle_store.wait_idle().await });
+
+        fail.store(true, Ordering::SeqCst);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            store
+                .blobs()
+                .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                    hashes: vec![hash],
+                    force: true,
+                }),
+        )
+        .await?;
+        assert!(
+            result.is_err(),
+            "failed commit must fail the pending delete"
+        );
+        tokio::time::timeout(Duration::from_secs(5), task).await??;
+        assert!(tokio::time::timeout(Duration::from_secs(5), idle)
+            .await??
+            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), observer.next())
+                .await?
+                .is_none()
+        );
+        assert!(
+            store.get_bytes(other).await.is_err(),
+            "cached reads must stop too"
+        );
+        assert!(
+            store.shutdown().await.is_err(),
+            "failure cannot become a clean shutdown"
+        );
+        assert!(!fail.load(Ordering::SeqCst), "the failure was injected");
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "database was eventually released"
+        );
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "worker must be cancelled before releasing the database"
+        );
+        assert!(
+            options.path.data_path(&hash).exists(),
+            "uncommitted cleanup must not run"
+        );
+        assert!(
+            recorded_run(&db_path)?.is_some(),
+            "unclean marker must survive"
+        );
+        let reopened = fs::FsStore::load(dir.path()).await?;
+        // A failed commit may have committed or rolled back. Any retained
+        // metadata must still refer to readable, intact files.
+        if reopened.has(hash).await? {
+            assert_eq!(reopened.get_bytes(hash).await?, data);
+        }
+        assert_eq!(
+            reopened.get_bytes(other).await?.as_ref(),
+            b"cached observer"
+        );
+        reopened.shutdown().await?;
         Ok(())
     }
 

@@ -41,7 +41,7 @@ Send side, as seen by an entity (`EntryMeta`, scoped to its hash):
 | `set(state)` | until applied | replace the entry state |
 | `update(state)` | no | merge into the entry state |
 | `update_await(state)` | until applied | merge into the entry state |
-| `delete()` | until applied | delete the entry, say whether there was one |
+| `delete()` | until applied | ensure the entry is absent; a notice confirms commit |
 
 "Applied" means visible to later commands, not durable. Durability comes with
 the commit of the batch. Commits are durable: redb's default
@@ -86,19 +86,16 @@ serializes deletion with concurrent requests even when no entity existed
 when the delete arrived. The `force` flag only bypasses current and retained
 temp-tag protection; it does not bypass the entity. The entity:
 
-1. Switches to `Deleting(old)`. Changes wait from here on, readers and
-   observers look through to the old state.
+1. Bumps the delete counter, ending observers, and switches to `Deleting`.
+   The cached state is discarded. Readers see the entry as absent; changes
+   wait from here on.
 2. Sends `delete` to the metadata actor. Deletes arriving together still land
    in one transaction.
-3. **Skipped** (there is no entry): restores the old state. Nothing was lost,
-   since writes waited. A gc delete of content protected by a temp tag never
-   gets here, the main actor skips it before.
-4. **Deleted**: bumps the entity's delete count, which ends observers even if
-   they only wake after the entry was filled again, and switches to
-   `Deleting(NonExisting)`. The task waits for the notice of the commit,
-   which keeps the entity alive, so it cannot unload and come back with new
-   files that the unlink would take.
-5. The notice unlinks every file and switches to `NonExisting`. Waiting
+3. Waits for the notice of the commit, including when no metadata row
+   existed. The task keeps the entity alive, so it cannot unload and come
+   back with new files that the unlink would take. Protected hashes are
+   skipped by the main actor before reaching the entity.
+4. The notice unlinks every file and switches to `NonExisting`. Waiting
    writes continue on an empty entry: a running download keeps going with
    only the ranges that arrive from now on.
 
@@ -106,6 +103,14 @@ The main actor answers `DeleteBlobs` once every entity is done, after its file
 cleanup attempts. Unlink failures are logged. Shutdown waits for running
 deletes before shutting down the entities, since an entity in shutdown takes
 no new tasks.
+
+Metadata errors abort the whole store. The main actor cancels workers and
+releases pending callers instead of leaving entities waiting for notices
+that will never arrive. On a transaction error, the database remains locked
+until those workers stop. This path does not persist entity state, apply
+pending cleanup, or clear the unclean-run marker. There is no per-entity
+rollback. The known `TryReference` ordering gaps are separate from this
+failure handling.
 
 ## What this replaces
 
@@ -145,5 +150,8 @@ the blob stayed gone. `write_after_read_sees_a_delete` and
   references. A sweep at open after an unclean shutdown is planned.
 - After `export_path` with `TryReference` copies across file systems, the
   entity still uses the owned data file, so the notice keeps it and it leaks.
+- A same-filesystem `TryReference` export renames before committing the
+  external location. If that commit fails, metadata can still refer to the
+  old path. Aborting the store does not repair this ordering gap.
 - The extension point itself (a trait or protocol type for the metadata
   store) is not designed yet.

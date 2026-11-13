@@ -61,7 +61,7 @@ pub(super) fn referenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFileP
 #[derive(Debug)]
 pub(crate) struct FileNotice {
     pub hash: Hash,
-    /// The entry was deleted, so an entity must reset and acknowledge it.
+    /// A delete committed, even if no entry existed. The entity must finish cleanup.
     pub deleted: bool,
     /// Files the entry referenced before or during the batch, and no longer does.
     pub parts: Vec<BaoFilePart>,
