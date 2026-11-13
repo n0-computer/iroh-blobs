@@ -66,9 +66,9 @@ concurrent requests even if no entity existed when it arrived. A delete that
 is not forced skips content with a current or retained temp tag; that check
 happens in the main actor, before the fan-out. The entity:</p>
 <ol>
-<li>Bumps its delete counter, which ends observers, and switches to
-<code>Deleting</code>. The cached state is dropped: readers see no entry, and changes
-wait from here on.</li>
+<li>Starts a new generation of the entry, which ends observers, and
+switches to <code>Deleting</code>. The cached state is dropped: readers see no
+entry, and changes wait from here on.</li>
 <li>Sends <code>delete</code> to the metadata actor. Deletes that arrive together still
 land in one transaction.</li>
 <li>Waits for the notice of the commit, which comes even if there was no
