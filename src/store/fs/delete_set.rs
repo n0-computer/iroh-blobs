@@ -109,6 +109,11 @@ impl DeleteHandle {
         Self { ds, options }
     }
 
+    /// The paths of the store this handle deletes files from.
+    pub(super) fn paths(&self) -> &PathOptions {
+        &self.options
+    }
+
     /// Open a file transaction. You can open only one transaction at a time.
     pub(super) fn begin_write(&mut self) -> FileTransaction<'_> {
         FileTransaction::new(self)

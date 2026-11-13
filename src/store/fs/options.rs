@@ -111,10 +111,17 @@ impl Default for BatchOptions {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CrashConsistency {
-    /// Consistent after a process crash; an OS crash or power loss can corrupt recent entries.
+    /// Consistent after a process crash; recovers from an OS crash or power loss on the next open.
     ///
-    /// No data files are synced. After an OS crash or power loss, a recently
-    /// written entry can claim data that never reached the disk.
+    /// No data files are synced, so an OS crash or power loss can leave entries
+    /// that claim data that never reached the disk. The store records the boot
+    /// id while it is open, and if it finds one from another boot session on
+    /// open, every entry with files checks them again when it is next loaded.
+    /// Until then it may report less data than it has, never more.
+    ///
+    /// A clean shutdown does not sync, so an OS crash within seconds after it,
+    /// before the OS wrote out its cache, goes unnoticed. Where there is no boot
+    /// id, every unclean shutdown counts as a possible OS crash.
     #[default]
     ProcessCrash,
     /// Consistent after an OS crash or power loss too, at the cost of fsyncs.
@@ -123,6 +130,13 @@ pub enum CrashConsistency {
     /// depends on them is recorded, for imports as well as downloads. That
     /// costs a few fsyncs for every blob above the inline threshold, which
     /// slows down imports and downloads of many small blobs considerably.
+    /// On Linux, Android, macOS and iOS, opening the store also flushes the data
+    /// filesystem after recovery, before recording the new run. This includes
+    /// writes inherited from an earlier run, but may wait for unrelated writes
+    /// on the same filesystem. If the flush fails, opening the store returns an
+    /// error and leaves the previous run record in place for the next attempt.
+    /// Other platforms do not yet perform this startup flush, so switching from
+    /// `ProcessCrash` can leave earlier writes unsynced.
     PowerLoss,
 }
 
