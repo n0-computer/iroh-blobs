@@ -162,7 +162,7 @@
 <a href=#162 id=162 data-nosnippet>162</a>            Command::Batch(_cmd) =&gt; {}
 <a href=#163 id=163 data-nosnippet>163</a>            Command::GcRun(cmd) =&gt; {
 <a href=#164 id=164 data-nosnippet>164</a>                <span class="comment">// nothing to protect, since nothing is ever deleted
-<a href=#165 id=165 data-nosnippet>165</a>                </span>cmd.tx.send(()).<span class="kw">await</span>.ok();
+<a href=#165 id=165 data-nosnippet>165</a>                </span>cmd.tx.send(<span class="prelude-val">Ok</span>(Default::default())).<span class="kw">await</span>.ok();
 <a href=#166 id=166 data-nosnippet>166</a>            }
 <a href=#167 id=167 data-nosnippet>167</a>            Command::CreateTag(cmd) =&gt; {
 <a href=#168 id=168 data-nosnippet>168</a>                cmd.tx
