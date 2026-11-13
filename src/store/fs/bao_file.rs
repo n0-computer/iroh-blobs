@@ -376,7 +376,7 @@ pub(crate) enum BaoFileStorage {
     /// Metadata failure aborts the store instead of restoring the old state.
     Deleting,
     /// Readers see the retained state; all mutations wait for unfreeze.
-    Frozen(Box<BaoFileStorage>, u64),
+    Frozen(Box<BaoFileStorage>),
 }
 
 impl fmt::Debug for BaoFileStorage {
@@ -390,7 +390,7 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
             BaoFileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
             BaoFileStorage::Deleting => f.debug_struct("Deleting").finish(),
-            BaoFileStorage::Frozen(old, _) => f.debug_tuple("Frozen").field(old).finish(),
+            BaoFileStorage::Frozen(old) => f.debug_tuple("Frozen").field(old).finish(),
         }
     }
 }
@@ -461,7 +461,7 @@ impl BaoFileStorage {
     /// The immutable view remains readable while writes are frozen.
     pub(super) fn readable(&self) -> &Self {
         match self {
-            Self::Frozen(old, _) => old,
+            Self::Frozen(old) => old,
             state => state,
         }
     }
@@ -476,7 +476,7 @@ impl BaoFileStorage {
             }
             BaoFileStorage::NonExisting => Bitfield::empty(),
             BaoFileStorage::Deleting => Bitfield::empty(),
-            BaoFileStorage::Frozen(old, _) => old.bitfield(),
+            BaoFileStorage::Frozen(old) => old.bitfield(),
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
             BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
@@ -582,7 +582,7 @@ impl BaoFileStorage {
                 BaoFilePart::Outboard => matches!(x.outboard, MemOrFile::File(_)),
                 BaoFilePart::Sizes | BaoFilePart::Bitfield => false,
             },
-            BaoFileStorage::Frozen(old, _) => old.references(part),
+            BaoFileStorage::Frozen(old) => old.references(part),
             BaoFileStorage::Loading | BaoFileStorage::Poisoned | BaoFileStorage::Deleting => true,
         }
     }

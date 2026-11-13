@@ -284,39 +284,41 @@ async fn wait_writable(ctx: &HashContext) {
     }
 }
 
-/// A freeze task keeps the entity alive until an unfreeze command is processed.
-/// Cancellation of the entity task also restores the state before shutdown.
-async fn freeze_entry(ctx: HashContext, id: u64, ack: tokio::sync::oneshot::Sender<()>) {
+/// Freezes the entry until `release` fires or is dropped, then restores it.
+///
+/// The task is the only one that ends its freeze, also when it is dropped,
+/// and a freeze waits in `wait_writable` for an earlier one to end. So no two
+/// freezes overlap, and a freeze needs no owner id. The task keeps the entity
+/// alive while it holds the freeze.
+async fn freeze_entry(
+    ctx: HashContext,
+    ack: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+) {
     ctx.load().await;
     wait_writable(&ctx).await;
     ctx.state.send_modify(|state| {
-        *state = BaoFileStorage::Frozen(Box::new(state.take()), id);
+        *state = BaoFileStorage::Frozen(Box::new(state.take()));
     });
-    struct UnfreezeOnDrop(HashContext, u64);
+    struct UnfreezeOnDrop(HashContext);
     impl Drop for UnfreezeOnDrop {
         fn drop(&mut self) {
-            unfreeze_entry(&self.0, self.1);
+            unfreeze_entry(&self.0);
         }
     }
-    let _guard = UnfreezeOnDrop(ctx.clone(), id);
+    let _guard = UnfreezeOnDrop(ctx);
     if ack.send(()).is_err() {
         return;
     }
-    loop {
-        let mut changes = ctx.state.0.subscribe();
-        if !matches!(ctx.state.borrow().deref(), BaoFileStorage::Frozen(_, token) if *token == id) {
-            break;
-        }
-        changes.changed().await.ok();
-    }
+    release.await.ok();
 }
 
-fn unfreeze_entry(ctx: &HashContext, id: u64) {
+fn unfreeze_entry(ctx: &HashContext) {
     ctx.state.send_if_modified(|state| {
-        if !matches!(state, BaoFileStorage::Frozen(_, token) if *token == id) {
+        if !matches!(state, BaoFileStorage::Frozen(_)) {
             return false;
         }
-        let BaoFileStorage::Frozen(old, _) = state.take() else {
+        let BaoFileStorage::Frozen(old) = state.take() else {
             unreachable!()
         };
         *state = *old;
@@ -411,6 +413,8 @@ struct GcSession {
     deletes: usize,
     ending: bool,
     frozen: HashSet<Hash>,
+    // Only held: dropping these ends the freezes.
+    _release: Vec<tokio::sync::oneshot::Sender<()>>,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -814,14 +818,17 @@ impl Actor {
         let frozen = snapshot.hashseqs();
         let (cancel, cancelled) = tokio::sync::oneshot::channel();
         let mut acks = Vec::new();
+        let mut release = Vec::new();
         for &hash in &frozen {
             let (ack, rx) = tokio::sync::oneshot::channel();
             acks.push(rx);
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            release.push(release_tx);
             if let Some(task) = self
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        freeze_entry(ctx, id, ack).await;
+                        freeze_entry(ctx, ack, release_rx).await;
                     }
                 })
                 .await
@@ -834,14 +841,15 @@ impl Actor {
             deletes: 0,
             ending: false,
             frozen,
+            _release: release,
             cancel: Some(cancel),
         });
         let internal = self.context.internal_cmd_tx.clone();
         self.spawn(async move {
             let proto::GcRunMsg { tx, mut rx, .. } = cmd;
             let mut result = Ok(snapshot);
-            // Even on cancellation/failure, settle every freeze before exit.
-            // Otherwise an unfreeze could overtake an acquisition still loading.
+            // Reply only once every root is frozen. Exiting early is still safe:
+            // a freeze that lands after its release was dropped ends at once.
             for ack in acks {
                 if ack.await.is_err() {
                     result = Err(api::Error::other("entity stopped while freezing"));
@@ -870,20 +878,8 @@ impl Actor {
         if gc.deletes != 0 {
             return;
         }
-        let gc = self.gc.take().unwrap();
-        for hash in gc.frozen {
-            if let Some(task) = self
-                .handles
-                .spawn(hash, move |arg| async move {
-                    if let SpawnArg::Active(ctx) = arg {
-                        unfreeze_entry(&ctx, id);
-                    }
-                })
-                .await
-            {
-                self.spawn(task);
-            }
-        }
+        // Dropping the session drops the release senders, which ends the freezes.
+        self.gc = None;
         self.temp_tags.end_gc_run();
     }
 
@@ -2218,14 +2214,13 @@ pub mod tests {
             .await?;
             let mut deletes = actor.deletes.subscribe();
             let hash = Hash::new("held deletion");
-            let (saved_tx, saved_rx) = tokio::sync::oneshot::channel();
             let (ack, frozen) = tokio::sync::oneshot::channel();
+            let (release, release_rx) = tokio::sync::oneshot::channel();
             if let Some(task) = actor
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        saved_tx.send(ctx.clone()).ok();
-                        freeze_entry(ctx, u64::MAX, ack).await;
+                        freeze_entry(ctx, ack, release_rx).await;
                     }
                 })
                 .await
@@ -2233,7 +2228,6 @@ pub mod tests {
                 actor.spawn(task);
             }
             let actor_task = tokio::spawn(actor.run());
-            let ctx = saved_rx.await?;
             frozen.await?;
             let store = Store::from_client(cmd_tx);
             let run = store.gc_run().await?;
@@ -2258,7 +2252,7 @@ pub mod tests {
             assert!(tokio::time::timeout(Duration::from_millis(30), &mut tag)
                 .await
                 .is_err());
-            unfreeze_entry(&ctx, u64::MAX);
+            drop(release);
             delete.await??;
             let _tag = tag.await??;
             assert!(!store.has(hash).await?);

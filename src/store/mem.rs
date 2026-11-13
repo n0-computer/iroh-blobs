@@ -493,7 +493,7 @@ impl Actor {
                     .map(|hash| {
                         let entry = self.get_or_create_entry(hash);
                         entry.0.state.send_modify(|state| {
-                            *state = BaoFileStorage::Frozen(Box::new(std::mem::take(state)), id);
+                            *state = BaoFileStorage::Frozen(Box::new(std::mem::take(state)));
                         });
                         (hash, entry)
                     })
@@ -616,10 +616,10 @@ impl Actor {
         gc.cancel.send(()).ok();
         for entry in gc.frozen.into_values() {
             entry.0.state.send_if_modified(|state| {
-                if !matches!(state, BaoFileStorage::Frozen(_, token) if *token == id) {
+                if !matches!(state, BaoFileStorage::Frozen(_)) {
                     return false;
                 }
-                let BaoFileStorage::Frozen(old, _) = std::mem::take(state) else {
+                let BaoFileStorage::Frozen(old) = std::mem::take(state) else {
                     unreachable!()
                 };
                 *state = *old;
@@ -1071,7 +1071,7 @@ struct State {
 pub enum BaoFileStorage {
     Partial(PartialMemStorage),
     Complete(CompleteStorage),
-    Frozen(Box<BaoFileStorage>, u64),
+    Frozen(Box<BaoFileStorage>),
 }
 
 impl BaoFileStorage {
@@ -1080,7 +1080,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.bitfield.clone(),
             Self::Complete(entry) => Bitfield::complete(entry.size()),
-            Self::Frozen(old, _) => old.bitfield(),
+            Self::Frozen(old) => old.bitfield(),
         }
     }
 }
@@ -1165,7 +1165,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.data.as_ref(),
             Self::Complete(entry) => &entry.data,
-            Self::Frozen(old, _) => old.data(),
+            Self::Frozen(old) => old.data(),
         }
     }
 
@@ -1173,7 +1173,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.outboard.as_ref(),
             Self::Complete(entry) => &entry.outboard,
-            Self::Frozen(old, _) => old.outboard(),
+            Self::Frozen(old) => old.outboard(),
         }
     }
 
@@ -1181,7 +1181,7 @@ impl BaoFileStorage {
         match self {
             Self::Partial(entry) => entry.current_size(),
             Self::Complete(entry) => entry.size(),
-            Self::Frozen(old, _) => old.size(),
+            Self::Frozen(old) => old.size(),
         }
     }
 }
