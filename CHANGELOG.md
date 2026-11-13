@@ -2,6 +2,48 @@
 
 All notable changes to iroh-blobs will be documented in this file.
 
+## [0.105.0](https://github.com/n0-computer/iroh-blobs/compare/v0.104.1..0.105.0) - 2026-11-13
+
+### ⛰️  Features
+
+- *(api)* Check protocol rules with state machines in proto::rules ([#342](https://github.com/n0-computer/iroh-blobs/issues/342)) - ([d4f547d](https://github.com/n0-computer/iroh-blobs/commit/d4f547d2f53f46bdf65a03ef47be6e4c95018e19))
+- *(api)* [**breaking**] Add Store::from_client for custom store backends ([#259](https://github.com/n0-computer/iroh-blobs/issues/259)) - ([50bcf22](https://github.com/n0-computer/iroh-blobs/commit/50bcf22eea485c64ffcbcc5e2187e12cbf0fb8fc))
+- *(api)* [**breaking**] Stream tag and temporary-tag listings ([#344](https://github.com/n0-computer/iroh-blobs/issues/344)) - ([cfd4b4c](https://github.com/n0-computer/iroh-blobs/commit/cfd4b4ccb0a68a5990045adadf3d996318c4d021))
+- *(fs-store)* Detect and recover from an OS crash with CrashConsistency::ProcessCrash ([#353](https://github.com/n0-computer/iroh-blobs/issues/353)) - ([967c3c9](https://github.com/n0-computer/iroh-blobs/commit/967c3c9ffb6abb39d0fb364cb5f3d1d3e36184bc))
+- *(provider)* [**breaking**] Consistent event mask rules, observe disabled by default ([#271](https://github.com/n0-computer/iroh-blobs/issues/271)) - ([fa38652](https://github.com/n0-computer/iroh-blobs/commit/fa38652614139b3408792b2c1660b264dcacd685))
+- [**breaking**] Add unstable-util feature, gate rand-using helpers behind it ([#305](https://github.com/n0-computer/iroh-blobs/issues/305)) - ([7484675](https://github.com/n0-computer/iroh-blobs/commit/74846750839d979631e7e91e6d10cf297764188a))
+
+### 🐛 Bug Fixes
+
+- *(fs-store)* [**breaking**] Sync an imported blob before recording it as complete ([#351](https://github.com/n0-computer/iroh-blobs/issues/351)) - ([1c91927](https://github.com/n0-computer/iroh-blobs/commit/1c91927c6a87cde587c447073b18cf604fa2217f))
+- *(fs-store)* Write the in-memory size into its chunk group slot ([#354](https://github.com/n0-computer/iroh-blobs/issues/354)) - ([a38139c](https://github.com/n0-computer/iroh-blobs/commit/a38139cd09f6debcecf3de1271ee48b822d3590b))
+- *(fs-store)* Sync data files only for CrashConsistency::PowerLoss ([#352](https://github.com/n0-computer/iroh-blobs/issues/352)) - ([d259ca8](https://github.com/n0-computer/iroh-blobs/commit/d259ca8da3c55f1f51bf23cf5555e2122af03aae))
+- *(fs-store)* Fall back to copy for a TryReference export across drives on windows ([#361](https://github.com/n0-computer/iroh-blobs/issues/361)) - ([d3b726c](https://github.com/n0-computer/iroh-blobs/commit/d3b726c75d1008ce5b0bc5ec77db4b9db086c08d))
+- *(protocol)* Don't underflow in ChunkRangesSeq::as_single ([#356](https://github.com/n0-computer/iroh-blobs/issues/356)) - ([59b4f3b](https://github.com/n0-computer/iroh-blobs/commit/59b4f3bf9fcecf927c12edc399af9c6d226191b5))
+- *(provider)* [**breaking**] Report the push outcome to the pusher ([#348](https://github.com/n0-computer/iroh-blobs/issues/348)) - ([1587207](https://github.com/n0-computer/iroh-blobs/commit/15872075f567ef07a31b007f8e439acd262e6697))
+
+### 🚜 Refactor
+
+- [**breaking**] Answer the empty hash in the client, never in the store ([#341](https://github.com/n0-computer/iroh-blobs/issues/341)) - ([441ab47](https://github.com/n0-computer/iroh-blobs/commit/441ab47928bd70f2a95e8de172448b0e062ddcaf))
+
+### 📚 Documentation
+
+- *(api)* Add state machine diagrams to the irpc protocol streams ([#343](https://github.com/n0-computer/iroh-blobs/issues/343)) - ([8f02e05](https://github.com/n0-computer/iroh-blobs/commit/8f02e0558fddff0b9c6dd35e65324c036aec5ee2))
+
+### 🧪 Testing
+
+- *(gc)* Pass the protect argument in gc_temp_to_named_handover ([#340](https://github.com/n0-computer/iroh-blobs/issues/340)) - ([46c029f](https://github.com/n0-computer/iroh-blobs/commit/46c029f459683910963aef89c29f97972dad3c3f))
+- Run network tests against a local relay ([#347](https://github.com/n0-computer/iroh-blobs/issues/347)) - ([73261bb](https://github.com/n0-computer/iroh-blobs/commit/73261bbb1b8c7f34e0c02cb027dc57b2d77f07ff))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump taiki-e/install-action from 2.87.30 to 2.88.0 in the github-actions group ([#345](https://github.com/n0-computer/iroh-blobs/issues/345)) - ([fdce981](https://github.com/n0-computer/iroh-blobs/commit/fdce9812af61f03cea57d2f02a4418397a348a80))
+- *(deps)* Bump constant_time_eq from 0.4.2 to 0.6.1 ([#346](https://github.com/n0-computer/iroh-blobs/issues/346)) - ([8567645](https://github.com/n0-computer/iroh-blobs/commit/8567645a229621fe050ae54ce26096102ce7549e))
+
+### Deps
+
+- [**breaking**] Update to irpc 1.0 ([#335](https://github.com/n0-computer/iroh-blobs/issues/335)) - ([ea60df0](https://github.com/n0-computer/iroh-blobs/commit/ea60df040aa8e046dd0f346206e354db69b2f3c4))
+
 ## [0.104.1](https://github.com/n0-computer/iroh-blobs/compare/v0.104.0..0.104.1) - 2026-11-04
 
 ### 🐛 Bug Fixes
