@@ -1,0 +1,196 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="File based blob store."><title>iroh_blobs::store::fs - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (900485642 2026-04-08)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module fs</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../iroh_blobs/index.html">iroh_<wbr>blobs</a><span class="version">0.105.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module fs</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#file-based-blob-store" title="File based blob store.">File based blob store.</a></li><li><a href="#design" title="Design">Design</a></li><li><a href="#actors" title="Actors">Actors</a></li><li><a href="#metadata-protocol" title="Metadata protocol">Metadata protocol</a></li><li><a href="#entities" title="Entities">Entities</a></li><li><a href="#file-notices" title="File notices">File notices</a></li><li><a href="#deletes" title="Deletes">Deletes</a></li><li><a href="#gc-sessions" title="GC sessions">GC sessions</a></li><li><a href="#tasks" title="Tasks">Tasks</a></li><li><a href="#context" title="Context">Context</a></li><li><a href="#runtime" title="Runtime">Runtime</a></li><li><a href="#limitations" title="Limitations">Limitations</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In iroh_<wbr>blobs::<wbr>store</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">iroh_blobs</a>::<wbr><a href="../index.html">store</a></div><h1>Module <span>fs</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/iroh_blobs/store/fs.rs.html#1-3667">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="file-based-blob-store"><a class="doc-anchor" href="#file-based-blob-store">§</a>File based blob store.</h2>
+<p>A file based blob store needs a writeable directory to work with.</p>
+<h2 id="design"><a class="doc-anchor" href="#design">§</a>Design</h2>
+<p>The metadata actor owns the metadata, and each entity owns the files of its
+hash. They talk only by messages. An entity’s in-memory state is a cache of
+its entry, valid as long as the entity is the only writer of that entry.
+Entries only grow, which is why a write to a complete entry can be a no-op.
+A delete is the one change that does not grow an entry, so it goes through
+the entity too.</p>
+<h2 id="actors"><a class="doc-anchor" href="#actors">§</a>Actors</h2>
+<ul>
+<li><strong>Main actor</strong>: handles user commands, runs the entity manager, holds the
+temp tags, forwards tag, status, listing and lifecycle commands to the
+metadata actor, fans deletes out to the entities, and routes file notices.</li>
+<li><strong>Entity actors</strong>, one per hash that is currently being worked on: run the
+per-hash tasks (import, export, observe, persist, delete). While an entity
+exists, it is the only one that writes and deletes the files of its hash.</li>
+<li><strong>Metadata actor</strong>: owns the redb database with the entry of each hash,
+inlined data and outboards of small blobs, and the tags. It groups queued
+commands into read or write transactions. It never touches data files,
+except for recovery when the store opens, before any entity exists.</li>
+</ul>
+<p>All senders to the metadata actor share one channel, so it sees commands in
+the order the sends completed.</p>
+<h2 id="metadata-protocol"><a class="doc-anchor" href="#metadata-protocol">§</a>Metadata protocol</h2>
+<p>An entity talks to the metadata actor through <code>EntryMeta</code>, scoped to its
+hash:</p>
+<div><table><thead><tr><th>Method</th><th>Waits</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>get()</code></td><td>for the reply</td><td>get the entry state</td></tr>
+<tr><td><code>set(state)</code></td><td>until applied</td><td>replace the entry state</td></tr>
+<tr><td><code>update(state)</code></td><td>no</td><td>merge into the entry state</td></tr>
+<tr><td><code>update_await(state)</code></td><td>until applied</td><td>merge into the entry state</td></tr>
+<tr><td><code>delete()</code></td><td>until applied</td><td>ensure the entry is absent; a notice confirms the commit</td></tr>
+</tbody></table>
+</div>
+<p>“Applied” means visible to later commands, not durable. Durability comes with
+the commit of the batch, and commits are durable (redb’s default
+<code>Durability::Immediate</code>).</p>
+<p>After each commit, the metadata actor sends a <code>FileNotice</code> to the main actor
+for each hash that was deleted, or no longer references some of its files:
+whether the entry was deleted, and which files it referenced before or during
+the batch and no longer does. The channel is unbounded, so the metadata actor
+never waits on the main actor, which waits on it.</p>
+<h2 id="entities"><a class="doc-anchor" href="#entities">§</a>Entities</h2>
+<p>An entity’s state is <code>Initial</code>, <code>Loading</code> or <code>Deleting</code> while it is in
+transition, and otherwise a loaded <code>Settled</code> entry: <code>NonExisting</code>,
+<code>Partial</code>, <code>Complete</code> or <code>Poisoned</code>. A settled entry is <code>ReadWrite</code>, or
+<code>ReadOnly</code> while a gc session freezes it.</p>
+<p>An entity’s tasks are futures polled by one actor, so they only interleave at
+<code>.await</code> points. Every change of an entity’s state or files runs after
+<code>wait_writable</code>, which waits while the state is <code>Loading</code>, <code>Deleting</code> or
+<code>ReadOnly</code>, with no <code>.await</code> between the check and the change. Readers use
+<code>wait_settled</code>, which only waits for <code>Loading</code> and <code>Deleting</code>. Both wait on
+the entity’s state <code>watch</code>.</p>
+<h2 id="file-notices"><a class="doc-anchor" href="#file-notices">§</a>File notices</h2>
+<p>The main actor routes each notice:</p>
+<ul>
+<li><strong>An entity exists</strong> for the hash, running or still shutting down, since
+its shutdown may write the bitfield: the notice goes into its unbounded
+inbox. The entity unlinks the files its own state does not use. Its state
+is never behind its entry.</li>
+<li><strong>No entity exists</strong>: the main actor unlinks the files itself. Only it
+creates entities, so none can appear in between, and none has writes in
+flight. This also covers notices that arrive after the entities shut down.</li>
+</ul>
+<h2 id="deletes"><a class="doc-anchor" href="#deletes">§</a>Deletes</h2>
+<p>The main actor fans <code>DeleteBlobs</code> out to the entity of each hash, creating it
+without loading if needed, also for inline entries. That orders a delete with
+concurrent requests even if no entity existed when it arrived. A delete that
+is not forced skips content with a current or retained temp tag; that check
+happens in the main actor, before the fan-out. The entity:</p>
+<ol>
+<li>Starts a new generation of the entry, which ends observers, and
+switches to <code>Deleting</code>. The cached state is dropped: readers see no
+entry, and changes wait from here on.</li>
+<li>Sends <code>delete</code> to the metadata actor. Deletes that arrive together still
+land in one transaction.</li>
+<li>Waits for the notice of the commit, which comes even if there was no
+entry. Waiting keeps the entity alive, so it cannot unload and come back
+with new files that the unlink would take.</li>
+<li>The notice unlinks every file and switches to <code>NonExisting</code>. Waiting
+writes continue on an empty entry: a running download keeps going with
+the ranges that arrive from then on.</li>
+</ol>
+<p>The main actor answers <code>DeleteBlobs</code> once every entity is done, after its
+unlink attempts. Unlink failures are logged. Shutdown waits for running
+deletes before it shuts down the entities, since an entity in shutdown takes
+no new tasks.</p>
+<p>A metadata error aborts the whole store. The main actor cancels the workers
+and releases pending callers instead of leaving entities waiting for notices
+that will never come. There is no per-entity rollback, and the abort does not
+persist entity state or clear the unclean-run marker.</p>
+<h2 id="gc-sessions"><a class="doc-anchor" href="#gc-sessions">§</a>GC sessions</h2>
+<p><code>GcRun</code> is a bidi streaming request that enters an exclusive gc session. The
+store first sends a snapshot of candidates and roots. GC then sends its sweep
+deletes on the session’s update channel, and gets one reply per delete, in
+order. Closing the update channel ends the session. A second <code>GcRun</code> waits
+until the current session ends.</p>
+<p>While a session lasts, the main actor holds back all tag changes: setting,
+creating, deleting and renaming tags, creating temp tags, and import
+completion, which creates a temp tag. It queues them with their reply
+channels and keeps handling reads and other blob writes. Temp tag drops and
+scope ends cannot wait; <code>TempTags</code> keeps their protection until the session
+ends. A batch scope that ended meanwhile is not recreated: its queued tag and
+import requests are rejected.</p>
+<p>To build the snapshot, the main actor sends <code>Snapshot</code> to the metadata actor,
+a top-level command, so tag changes queued before it are committed. It takes
+all blobs as candidates, and the named tags plus current and retained temp
+tags as roots. Then it freezes each HashSeq root through its entity, and
+sends the snapshot only once every freeze is acknowledged. It keeps running
+meanwhile, handling entity restarts and notices. The mem store takes the same
+view and freezes its handles in place.</p>
+<p>A freeze turns <code>ReadWrite</code> into <code>ReadOnly</code> with the same settled entry: reads
+go on, while writes, replacing imports and deletes wait. Complete and
+poisoned entries are frozen too, since a delete would turn them into an entry
+that can grow again. A freeze task keeps the entity alive. All freezes of a
+session wait on one release channel; ending the session drops it, and each
+freeze task turns its entry back into <code>ReadWrite</code> itself. A freeze waits for an earlier one to end, so freezes never
+overlap. If a freeze task is dropped at shutdown instead, <code>persist</code> looks
+through the freeze.</p>
+<p>GC traverses exactly the snapshot’s roots, calls the protect callback, and
+sweeps only the snapshot’s candidates. Incomplete HashSeqs contribute the
+children in their available chunks, and missing chunks never hold up a run.
+Their writes stay frozen until the sweep ends, so no new reference can appear
+between traversal and deletion. Blobs added after the snapshot are not
+candidates, so a run never sweeps them.</p>
+<p>Sweep deletes travel on the session’s own channel, so none can arrive after
+its session ended. The session task finishes each delete before it reads the
+next update, and the session ends only after that, even if the GC client or
+its connection disappears. So a held-back tag change can never overtake a
+sweep delete. Sweeping a frozen root is rejected, since it would wait on the
+sweep’s own freeze. A plain <code>DeleteBlobs</code> is independent of the session: it
+can be sent at any time, and during a session it skips protected content and
+waits on frozen roots.</p>
+<p>Shutdown stops accepting work, rejects held-back tag changes, and cancels a
+running session without waiting for its client. It lets deletes that were
+already sent to entities finish before it closes the metadata actor.</p>
+<p>The protect callback runs in the GC task while the session is held. It must
+only add protected hashes. It must not await, directly or through another
+task, anything the session holds back: tag changes, temp tag creation, import
+completion, and writes to or deletes of frozen HashSeq roots. Those wait for
+the session to end, which waits for the callback, so the GC run and
+everything queued behind it would deadlock. External systems must protect
+content in the store before they publish references to it. If they protect
+content that was unprotected before, they must check it is still there
+afterwards: a tag does not bring back data that GC already deleted.</p>
+<h2 id="tasks"><a class="doc-anchor" href="#tasks">§</a>Tasks</h2>
+<p>Tasks do not return a result. They are responsible for sending an error
+to the requester if possible. Otherwise, just dropping the sender will
+also fail the receiver, but without a descriptive error message.</p>
+<p>Tasks are usually implemented as an impl fn that does return a result,
+and a wrapper (named <code>..._task</code>) that just forwards the error, if any.</p>
+<p>That way you can use <code>?</code> syntax in the task implementation. The impl fns
+are also easier to test.</p>
+<h2 id="context"><a class="doc-anchor" href="#context">§</a>Context</h2>
+<p>The main actor holds a TaskContext that is needed for almost all tasks,
+such as the config and a way to interact with the database.</p>
+<p>For tasks that are specific to a hash, a HashContext combines the task
+context with a slot from the table of the main actor that can be used
+to obtain an unique handle for the hash.</p>
+<h2 id="runtime"><a class="doc-anchor" href="#runtime">§</a>Runtime</h2>
+<p>The fs store owns and manages its own tokio runtime. Almost all store
+operations are small synchronous IO operations: file reads and writes, and
+redb transactions. Running them on a dedicated runtime lets the store
+perform them directly inside its tasks. The alternative, wrapping every
+tiny operation in <code>spawn_blocking</code>, would be slow and error-prone. It also
+means that blocking IO in the store never stalls the caller’s runtime, and
+the store works no matter which runtime flavor the caller uses.</p>
+<p>Dropping the store shuts down the runtime and closes the database in the
+background, without waiting for either to finish. The database stays locked
+until it is closed, so loading the store again right after dropping it will
+usually fail. Also, some parts of the persistent state won’t make it to
+disk, so operations involving large partial blobs will have a large initial
+delay on the next startup.</p>
+<p>It is also not guaranteed that all write operations will make it to disk.
+The on-disk store will be in a consistent state, but might miss some writes
+in the last seconds before shutdown.</p>
+<p>To avoid this, await <a href="../../api/struct.Store.html#method.shutdown" title="method iroh_blobs::api::Store::shutdown"><code>crate::api::Store::shutdown</code></a> before dropping the
+store. It returns once the database is closed and ephemeral state is saved
+to disk, so the store can be loaded again right away.</p>
+<p>Note that if you use the store inside a [<code>iroh::protocol::Router</code>] and shut
+down the router using [<code>iroh::protocol::Router::shutdown</code>], the store will be
+safely shut down as well. Any store refs you are holding will be inoperable
+after this.</p>
+<h2 id="limitations"><a class="doc-anchor" href="#limitations">§</a>Limitations</h2>
+<ul>
+<li>A crash between a commit and the unlink of its notice leaves files that
+nothing references.</li>
+<li>After <code>export_path</code> with <code>TryReference</code> copies across file systems, the
+entity still uses the owned data file, so the notice keeps it and it
+leaks.</li>
+<li>A same-file-system <code>TryReference</code> export renames the file before it
+commits the external location. If that commit fails, the metadata can
+still refer to the old path.</li>
+</ul>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="options/index.html" title="mod iroh_blobs::store::fs::options">options</a></dt><dd>Options for configuring the file store.</dd></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.FsStore.html" title="struct iroh_blobs::store::fs::FsStore">FsStore</a></dt><dd>A file based store.</dd></dl></section></div></main></body></html>
