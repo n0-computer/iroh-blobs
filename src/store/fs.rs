@@ -1890,12 +1890,13 @@ async fn export_path_impl(
                     external.truncate(MAX_EXTERNAL_PATHS);
                 } else {
                     // the file was previously owned, so we can just move it.
-                    // if that fails with ERR_CROSS, we fall back to copy.
+                    // if the target is on another file system or drive, we
+                    // fall back to copy: EXDEV on unix, ERROR_NOT_SAME_DEVICE
+                    // on windows.
                     match std::fs::rename(&source_path, &target) {
                         Ok(()) => {}
                         Err(cause) => {
-                            const ERR_CROSS: i32 = 18;
-                            if cause.raw_os_error() == Some(ERR_CROSS) {
+                            if cause.kind() == io::ErrorKind::CrossesDevices {
                                 reflink_or_copy_with_progress(&source_path, &target, size, tx)
                                     .await?;
                             } else {
