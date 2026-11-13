@@ -346,10 +346,22 @@ jobs:
       - name: Install wasm-tools
         uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
 
-      - name: Install wasm-pack
+      # The runner's bindgen schema must match the library in Cargo.lock exactly.
+      - name: Read wasm-bindgen version
+        id: wasm-bindgen
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open("Cargo.lock", "rb") as lock:
+              packages = tomllib.load(lock)["package"]
+          version = next(p["version"] for p in packages if p["name"] == "wasm-bindgen")
+          print(f"version={version}")
+          PY
+
+      - name: Install wasm-bindgen test runner
         uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
-          tool: wasm-bindgen,wasm-pack
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
 
       - name: wasm32 build
         run: cargo build --locked --target wasm32-unknown-unknown --no-default-features
@@ -363,3 +375,9 @@ jobs:
       - name: Ensure no 'import "env"' in wasm
         run: |
           ! wasm-tools print --skeleton target/wasm32-unknown-unknown/debug/iroh_blobs.wasm | grep 'import "env"'
+
+      # Select only the wasm integration test. wasm-pack also builds native unit tests.
+      - name: wasm32 tests under Node
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: cargo test --locked --target wasm32-unknown-unknown --no-default-features --test wasm_mem_store
