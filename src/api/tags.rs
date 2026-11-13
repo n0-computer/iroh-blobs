@@ -40,14 +40,7 @@ impl Tags {
     pub async fn list_temp_tags(
         &self,
     ) -> irpc::Result<impl Stream<Item = super::Result<HashAndFormat>>> {
-        self.list_temp_tags_impl(false).await
-    }
-
-    async fn list_temp_tags_impl(
-        &self,
-        include_dropped: bool,
-    ) -> irpc::Result<impl Stream<Item = super::Result<HashAndFormat>>> {
-        let options = ListTempTagsRequest { include_dropped };
+        let options = ListTempTagsRequest;
         trace!("{:?}", options);
         let mut rx = self.client.server_streaming(options, 32).await?;
         Ok(Gen::new(|co| async move {

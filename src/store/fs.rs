@@ -911,11 +911,7 @@ impl Actor {
             }
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
-                let tts = if cmd.inner.include_dropped {
-                    self.temp_tags.list_for_gc()
-                } else {
-                    self.temp_tags.list()
-                };
+                let tts = self.temp_tags.list();
                 self.spawn(async move {
                     for tt in tts {
                         if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
