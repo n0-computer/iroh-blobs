@@ -52,12 +52,17 @@
 //!
 //! # Entities
 //!
+//! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
+//! transition, and otherwise a loaded `Settled` entry: `NonExisting`,
+//! `Partial`, `Complete` or `Poisoned`. A settled entry is `ReadWrite`, or
+//! `ReadOnly` while a gc session freezes it.
+//!
 //! An entity's tasks are futures polled by one actor, so they only interleave at
 //! `.await` points. Every change of an entity's state or files runs after
 //! `wait_writable`, which waits while the state is `Loading`, `Deleting` or
-//! `Frozen`, with no `.await` between the check and the change. Readers use
-//! `wait_settled`, which permits `Frozen` and reads its retained state. Both
-//! wait on the entity's state `watch`.
+//! `ReadOnly`, with no `.await` between the check and the change. Readers use
+//! `wait_settled`, which only waits for `Loading` and `Deleting`. Both wait on
+//! the entity's state `watch`.
 //!
 //! # File notices
 //!
@@ -125,12 +130,12 @@
 //! meanwhile, handling entity restarts and notices. The mem store takes the same
 //! view and freezes its handles in place.
 //!
-//! `Frozen(old)` keeps the entry readable with its state and bitfield, while
-//! writes, replacing imports and deletes wait. Complete and poisoned entries are
-//! frozen too, since a delete would turn them into an entry that can grow again.
-//! A freeze task keeps the entity alive. All freezes of a session wait on one
-//! release channel; ending the session drops it, and each freeze task restores
-//! `old` itself. A freeze waits for an earlier one to end, so freezes never
+//! A freeze turns `ReadWrite` into `ReadOnly` with the same settled entry: reads
+//! go on, while writes, replacing imports and deletes wait. Complete and
+//! poisoned entries are frozen too, since a delete would turn them into an entry
+//! that can grow again. A freeze task keeps the entity alive. All freezes of a
+//! session wait on one release channel; ending the session drops it, and each
+//! freeze task turns its entry back into `ReadWrite` itself. A freeze waits for an earlier one to end, so freezes never
 //! overlap. If a freeze task is dropped at shutdown instead, `persist` looks
 //! through the freeze.
 //!
@@ -275,7 +280,9 @@ use crate::{
     protocol::ChunkRangesExt,
     store::{
         fs::{
-            bao_file::{BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader},
+            bao_file::{
+                BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
+            },
             util::entity_manager::{self, ActiveEntityState},
         },
         gc::run_gc,
@@ -429,7 +436,7 @@ async fn wait_writable(ctx: &HashContext) {
         let mut changes = ctx.state.0.subscribe();
         if !matches!(
             &ctx.state.borrow().storage,
-            BaoFileStorage::Loading | BaoFileStorage::Deleting | BaoFileStorage::Frozen(..)
+            BaoFileStorage::Loading | BaoFileStorage::Deleting | BaoFileStorage::ReadOnly(_)
         ) {
             return;
         }
@@ -452,7 +459,11 @@ async fn freeze_entry(
     ctx.load().await;
     wait_writable(&ctx).await;
     ctx.state.send_modify(|state| {
-        state.storage = BaoFileStorage::Frozen(Box::new(state.take()));
+        // Loaded, and not in a delete or another freeze, see above.
+        state.storage = match state.take() {
+            BaoFileStorage::ReadWrite(settled) => BaoFileStorage::ReadOnly(settled),
+            other => other,
+        };
     });
     if ack.send(()).is_ok() {
         // Nothing is ever sent, so this returns once the sender is dropped.
@@ -463,13 +474,13 @@ async fn freeze_entry(
 
 fn unfreeze_entry(ctx: &HashContext) {
     ctx.state.send_if_modified(|state| {
-        if !matches!(state.storage, BaoFileStorage::Frozen(_)) {
+        if !matches!(state.storage, BaoFileStorage::ReadOnly(_)) {
             return false;
         }
-        let BaoFileStorage::Frozen(old) = state.take() else {
+        let BaoFileStorage::ReadOnly(settled) = state.take() else {
             unreachable!()
         };
-        state.storage = *old;
+        state.storage = BaoFileStorage::ReadWrite(settled);
         true
     });
 }
@@ -491,19 +502,19 @@ async fn load_entity(ctx: &HashContext) {
     // we must assign a new state even in the error case, otherwise
     // tasks waiting for loading would stall!
     let state = match ctx.meta().get().await {
-        Ok(state) => match BaoFileStorage::open(state, ctx).await {
-            Ok(handle) => handle,
+        Ok(state) => match Settled::open(state, ctx).await {
+            Ok(settled) => settled,
             Err(cause) => {
                 error!("failed to open {}, poisoning: {cause}", ctx.id);
-                BaoFileStorage::Poisoned
+                Settled::Poisoned
             }
         },
         Err(cause) => {
             error!("failed to get {} from db, poisoning: {cause}", ctx.id);
-            BaoFileStorage::Poisoned
+            Settled::Poisoned
         }
     };
-    ctx.state.set_storage(state);
+    ctx.state.set_storage(BaoFileStorage::ReadWrite(state));
 }
 
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
@@ -520,7 +531,8 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
         // Metadata failure aborts the store. A command racing a graceful
         // shutdown can also be rejected, without a failure to trigger abort.
         // Release waiters with an error instead of restoring the old state.
-        ctx.state.set_storage(BaoFileStorage::Poisoned);
+        ctx.state
+            .set_storage(BaoFileStorage::ReadWrite(Settled::Poisoned));
         return Err(cause);
     }
     // The notice after the commit unlinks the files and ends Deleting.
@@ -539,7 +551,8 @@ async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
             BaoFileStorage::Deleting
         ));
         delete_files(paths, &ctx.id, &ALL_PARTS);
-        ctx.state.set_storage(BaoFileStorage::NonExisting);
+        ctx.state
+            .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
         return;
     }
     wait_writable(ctx).await;
@@ -669,7 +682,16 @@ impl SyncEntityApi for HashContext {
         wait_writable(self).await;
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
+            // After wait_writable the entry is loaded and writable, unless
+            // it was never loaded: then the write is ignored, as before.
+            let settled = match state.take() {
+                BaoFileStorage::ReadWrite(settled) => settled,
+                other => {
+                    state.storage = other;
+                    return false;
+                }
+            };
+            let (settled, update) = match settled.write_batch(batch, bitfield, self) {
                 Ok(written) => written,
                 Err(cause) => {
                     error!("failed to write batch for {}, poisoning: {cause}", self.id);
@@ -679,7 +701,7 @@ impl SyncEntityApi for HashContext {
                 }
             };
             res = Ok(update);
-            state.storage = state1;
+            state.storage = BaoFileStorage::ReadWrite(settled);
             true
         });
         if let Some(update) = res? {
@@ -708,31 +730,25 @@ impl SyncEntityApi for HashContext {
 
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
-        match self.state.borrow().readable() {
-            BaoFileStorage::Complete(mem) => Ok(mem.size()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
-            BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting | BaoFileStorage::Deleting | BaoFileStorage::Frozen(..) => {
-                Err(io::ErrorKind::NotFound.into())
-            }
+        let state = self.state.borrow();
+        match state.settled() {
+            Some(Settled::Complete(mem)) => Ok(mem.size()),
+            Some(Settled::Partial(file)) => file.current_size(),
+            Some(Settled::Poisoned) => Err(io::Error::other("poisoned storage")),
+            Some(Settled::NonExisting) => Err(io::ErrorKind::NotFound.into()),
+            None => Err(state.unsettled_error()),
         }
     }
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.state.borrow().readable() {
-            BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
-            BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting | BaoFileStorage::Deleting | BaoFileStorage::Frozen(..) => {
-                Err(io::ErrorKind::NotFound.into())
-            }
+        let state = self.state.borrow();
+        match state.settled() {
+            Some(Settled::Complete(mem)) => Ok(mem.bitfield()),
+            Some(Settled::Partial(file)) => Ok(file.bitfield().clone()),
+            Some(Settled::Poisoned) => Err(io::Error::other("poisoned storage")),
+            Some(Settled::NonExisting) => Err(io::ErrorKind::NotFound.into()),
+            None => Err(state.unsettled_error()),
         }
     }
 }
@@ -1714,11 +1730,9 @@ impl EntityApi for HashContext {
         self.state.send_if_modified(|guard| {
             let hash = &self.id;
             // A freeze task dropped at shutdown leaves its freeze in place.
-            let state = match guard.take() {
-                BaoFileStorage::Frozen(old) => *old,
-                state => state,
-            };
-            let BaoFileStorage::Partial(fs) = state else {
+            let (BaoFileStorage::ReadWrite(Settled::Partial(fs))
+            | BaoFileStorage::ReadOnly(Settled::Partial(fs))) = guard.take()
+            else {
                 return false;
             };
             let path = self.global.options.path.bitfield_path(hash);
@@ -2082,7 +2096,10 @@ async fn export_path_impl(
                 // meanwhile. Then it stays deleted, and this was just a copy.
                 // No await between the check and sending the set.
                 wait_writable(ctx).await;
-                if matches!(&ctx.state.borrow().storage, BaoFileStorage::Complete(_)) {
+                if matches!(
+                    &ctx.state.borrow().storage,
+                    BaoFileStorage::ReadWrite(Settled::Complete(_))
+                ) {
                     // The notice after the commit deletes the owned data file,
                     // unless this entity's state still uses it.
                     // TODO: after a copy across file systems it does, so the
