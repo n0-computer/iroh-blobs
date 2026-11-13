@@ -820,6 +820,98 @@ mod tests {
         Ok(())
     }
 
+    /// A batch scope that ends while its tag and import requests wait for a gc
+    /// session must not be recreated when they run: they are rejected instead.
+    async fn gc_closed_scope_rejects_deferred_work(store: &Store) -> TestResult {
+        use crate::api::proto::{BatchRequest, CreateTempTagRequest};
+
+        let (scope_tx, scope_rx) = store.client().client_streaming(BatchRequest, 1).await?;
+        let scope = scope_rx.await?;
+        let anchor = Hash::new("scope anchor");
+        let _anchor = store
+            .client()
+            .rpc(CreateTempTagRequest {
+                scope,
+                value: anchor.into(),
+            })
+            .await?;
+        let run = store.gc_run().await?;
+        let child = Hash::new("deferred scope child");
+        let client = store.client().clone();
+        let pending = tokio::spawn(async move {
+            client
+                .rpc(CreateTempTagRequest {
+                    scope,
+                    value: child.into(),
+                })
+                .await
+        });
+        let mut imports = Vec::new();
+        for size in [0, 17, 100_000] {
+            let data = bytes::Bytes::from(vec![9; size]);
+            let hash = Hash::new(&data);
+            let import = store
+                .client()
+                .server_streaming(
+                    crate::api::proto::ImportBytesRequest {
+                        scope,
+                        data,
+                        format: crate::BlobFormat::Raw,
+                    },
+                    32,
+                )
+                .await?;
+            imports.push((hash, import));
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        drop(scope_tx);
+        loop {
+            let mut tags = store.tags().list_temp_tags().await?;
+            let mut present = false;
+            while let Some(tag) = tags.next().await {
+                present |= tag?.hash == anchor;
+            }
+            if !present {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        drop(run);
+        assert!(pending.await?.is_err(), "ended scope accepted a tag");
+        for (hash, mut import) in imports {
+            let mut failed = false;
+            while let Some(item) = import.recv().await? {
+                match item {
+                    crate::api::blobs::AddProgressItem::Error(_) => failed = true,
+                    crate::api::blobs::AddProgressItem::Done(_) => {
+                        panic!("ended scope accepted an import")
+                    }
+                    _ => {}
+                }
+            }
+            assert!(failed);
+            if hash != Hash::EMPTY {
+                assert!(
+                    !store.has(hash).await?,
+                    "rejected import modified the store"
+                );
+            }
+        }
+        let mut tags = store.tags().list_temp_tags().await?;
+        let mut resurrected = false;
+        while let Some(tag) = tags.next().await {
+            resurrected |= tag?.hash == child;
+        }
+        assert!(!resurrected, "closed scope was recreated");
+        // Lazy global scope creation and unrelated imports still work.
+        let tag = store
+            .add_slice("global import after rejected batch")
+            .temp_tag()
+            .await?;
+        assert!(store.has(tag.hash()).await?);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn gc_session_mem() -> TestResult {
         let store = crate::store::mem::MemStore::new();
@@ -828,6 +920,7 @@ mod tests {
             gc_suspends_tag_mutations(&store).await?;
             gc_cancellation_releases_session(&store).await?;
             gc_cancel_during_delete(&store).await?;
+            gc_closed_scope_rejects_deferred_work(&store).await?;
             gc_shutdown_releases_session(&store).await
         })
         .await??;
@@ -844,9 +937,31 @@ mod tests {
             gc_suspends_tag_mutations(&store).await?;
             gc_cancellation_releases_session(&store).await?;
             gc_cancel_during_delete(&store).await?;
+            gc_closed_scope_rejects_deferred_work(&store).await?;
             gc_shutdown_releases_session(&store).await
         })
         .await??;
+        Ok(())
+    }
+
+    /// Shutdown must not wait for a gc client that does not read its replies.
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_shutdown_with_unread_replies_fs() -> TestResult {
+        use crate::api::proto::{GcRunRequest, GcRunUpdate};
+        let dir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(dir.path()).await?;
+        let (tx, mut rx) = store.client().bidi_streaming(GcRunRequest, 1, 1).await?;
+        rx.recv().await?;
+        // The second reply does not fit the reply channel, so the session
+        // task blocks sending it.
+        for _ in 0..2 {
+            tx.send(GcRunUpdate::Delete(vec![])).await?;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout(Duration::from_secs(5), store.shutdown()).await??;
+        drop(rx);
+        drop(tx);
         Ok(())
     }
 
@@ -1100,133 +1215,6 @@ mod tests {
                 ..
             }) if cause.kind() == io::ErrorKind::NotFound
         ));
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod lifecycle_tests {
-    use super::*;
-    use crate::api::proto::{BatchRequest, CreateTempTagRequest};
-    #[tokio::test]
-    #[cfg(feature = "fs-store")]
-    async fn shutdown_backpressured_gc() -> testresult::TestResult {
-        use crate::api::proto::{GcRunRequest, GcRunUpdate};
-        let dir = tempfile::tempdir()?;
-        let store = crate::store::fs::FsStore::load(dir.path()).await?;
-        let (tx, mut rx) = store.client().bidi_streaming(GcRunRequest, 1, 1).await?;
-        rx.recv().await?;
-        for _ in 0..2 {
-            tx.send(GcRunUpdate::Delete(vec![])).await?;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let result = tokio::time::timeout(Duration::from_secs(5), store.shutdown()).await;
-        result??;
-        drop(rx);
-        drop(tx);
-        Ok(())
-    }
-    async fn closed_scope(store: &Store) -> testresult::TestResult {
-        let (scope_tx, scope_rx) = store.client().client_streaming(BatchRequest, 1).await?;
-        let scope = scope_rx.await?;
-        let anchor = Hash::new("scope anchor");
-        let _anchor = store
-            .client()
-            .rpc(CreateTempTagRequest {
-                scope,
-                value: anchor.into(),
-            })
-            .await?;
-        let run = store.gc_run().await?;
-        let child = Hash::new("deferred scope child");
-        let client = store.client().clone();
-        let pending = tokio::spawn(async move {
-            client
-                .rpc(CreateTempTagRequest {
-                    scope,
-                    value: child.into(),
-                })
-                .await
-        });
-        let mut imports = Vec::new();
-        for size in [0, 17, 100_000] {
-            let data = bytes::Bytes::from(vec![9; size]);
-            let hash = Hash::new(&data);
-            let import = store
-                .client()
-                .server_streaming(
-                    crate::api::proto::ImportBytesRequest {
-                        scope,
-                        data,
-                        format: crate::BlobFormat::Raw,
-                    },
-                    32,
-                )
-                .await?;
-            imports.push((hash, import));
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        drop(scope_tx);
-        loop {
-            let mut tags = store.tags().list_temp_tags().await?;
-            let mut present = false;
-            while let Some(tag) = tags.next().await {
-                present |= tag?.hash == anchor;
-            }
-            if !present {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        drop(run);
-        assert!(pending.await?.is_err(), "ended scope accepted a tag");
-        for (hash, mut import) in imports {
-            let mut failed = false;
-            while let Some(item) = import.recv().await? {
-                match item {
-                    crate::api::blobs::AddProgressItem::Error(_) => failed = true,
-                    crate::api::blobs::AddProgressItem::Done(_) => {
-                        panic!("ended scope accepted an import")
-                    }
-                    _ => {}
-                }
-            }
-            assert!(failed);
-            if hash != Hash::EMPTY {
-                assert!(
-                    !store.has(hash).await?,
-                    "rejected import modified the store"
-                );
-            }
-        }
-        let mut tags = store.tags().list_temp_tags().await?;
-        let mut resurrected = false;
-        while let Some(tag) = tags.next().await {
-            resurrected |= tag?.hash == child;
-        }
-        assert!(!resurrected, "closed scope was recreated");
-        // Lazy global scope creation and unrelated imports still work.
-        let tag = store
-            .add_slice("global import after rejected batch")
-            .temp_tag()
-            .await?;
-        assert!(store.has(tag.hash()).await?);
-        Ok(())
-    }
-    #[tokio::test]
-    async fn closed_scope_deferred_work() -> testresult::TestResult {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            closed_scope(&crate::store::mem::MemStore::new()).await?;
-            #[cfg(feature = "fs-store")]
-            {
-                let dir = tempfile::tempdir()?;
-                let store = crate::store::fs::FsStore::load(dir.path()).await?;
-                closed_scope(&store).await?;
-                store.shutdown().await?;
-            }
-            testresult::TestResult::Ok(())
-        })
-        .await??;
         Ok(())
     }
 }
