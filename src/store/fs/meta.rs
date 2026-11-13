@@ -572,7 +572,7 @@ impl Bookkeeping {
             let deleted = self.deleted.remove(&hash);
             let after = tables.blobs().get(hash)?.map(|e| e.value());
             let still = referenced_parts(after.as_ref());
-            let parts: Vec<_> = before
+            let parts: smallvec::SmallVec<_> = before
                 .into_iter()
                 .filter(|part| !still.contains(part))
                 .collect();
@@ -1668,7 +1668,10 @@ mod tests {
         assert!(!notices[0].deleted);
         let mut parts = notices[0].parts.clone();
         parts.sort();
-        assert_eq!(parts, vec![BaoFilePart::Sizes, BaoFilePart::Bitfield]);
+        assert_eq!(
+            parts.as_slice(),
+            [BaoFilePart::Sizes, BaoFilePart::Bitfield]
+        );
         Ok(())
     }
 }

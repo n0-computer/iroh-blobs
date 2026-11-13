@@ -64,7 +64,7 @@ pub(crate) struct FileNotice {
     /// A delete committed, even if no entry existed. The entity must finish cleanup.
     pub deleted: bool,
     /// Files the entry referenced before or during the batch, and no longer does.
-    pub parts: Vec<BaoFilePart>,
+    pub parts: smallvec::SmallVec<[BaoFilePart; 4]>,
 }
 
 /// Delete the given files of an entry, ignoring files that do not exist.
