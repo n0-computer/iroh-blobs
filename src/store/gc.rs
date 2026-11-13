@@ -85,24 +85,25 @@ pub(super) async fn gc_mark_task(
 
 async fn gc_sweep_task(
     store: &Store,
-    run: &crate::api::blobs::GcRun,
+    run: &mut crate::api::blobs::GcRun,
     live: &HashSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> crate::api::Result<()> {
     let mut count = 0;
     let mut batch = Vec::new();
-    for &hash in &run.snapshot.candidates {
+    // The sweep is the last use of the candidates, so take them.
+    let candidates = std::mem::take(&mut run.snapshot.candidates);
+    for hash in candidates {
         if !live.contains(&hash) {
             batch.push(hash);
             count += 1;
         }
         if batch.len() >= 100 {
-            run.delete(store, batch.clone()).await?;
-            batch.clear();
+            run.delete(std::mem::take(&mut batch)).await?;
         }
     }
     if !batch.is_empty() {
-        run.delete(store, batch).await?;
+        run.delete(batch).await?;
     }
     store.sync_db().await?;
     co.yield_(GcSweepEvent::CustomDebug(format!(
@@ -126,7 +127,7 @@ fn gc_mark<'a>(
 
 fn gc_sweep<'a>(
     store: &'a Store,
-    run: &'a crate::api::blobs::GcRun,
+    run: &'a mut crate::api::blobs::GcRun,
     live: &'a HashSet<Hash>,
 ) -> impl Stream<Item = GcSweepEvent> + 'a {
     Gen::new(|co| async move {
@@ -209,7 +210,7 @@ pub async fn gc_run_once(
     debug!(externally_protected = live.len(), "gc: start");
     // Enter returns only after tag mutations are suspended and every captured
     // HashSeq root is frozen. Dropping the guard exits on success/error/cancel.
-    let run = store.gc_run().await?;
+    let mut run = store.gc_run().await?;
     {
         let mut stream = gc_mark(store, live, &run.snapshot.roots);
         while let Some(ev) = stream.next().await {
@@ -239,7 +240,7 @@ pub async fn gc_run_once(
     }
     debug!(total_protected = live.len(), "gc: sweep");
     {
-        let mut stream = gc_sweep(store, &run, live);
+        let mut stream = gc_sweep(store, &mut run, live);
         while let Some(ev) = stream.next().await {
             match ev {
                 GcSweepEvent::CustomDebug(msg) => {
@@ -463,8 +464,8 @@ mod tests {
         let old_hash = old.hash();
         drop(old);
         store.sync_db().await?;
-        let run = store.gc_run().await?;
-        let candidates = &run.snapshot.candidates;
+        let mut run = store.gc_run().await?;
+        let candidates = run.snapshot.candidates.clone();
         assert!(candidates.contains(&kept.hash()));
         assert!(candidates.contains(&dropped_hash));
         assert!(candidates.contains(&old_hash));
@@ -477,7 +478,7 @@ mod tests {
         let ranges = ChunkRanges::from(..ChunkNum(16));
         let (untagged, bao) = create_n0_bao(&data, &ranges)?;
         store.import_bao_bytes(untagged, ranges, bao).await?;
-        let mut stream = gc_sweep(store, &run, &live);
+        let mut stream = gc_sweep(store, &mut run, &live);
         while let Some(ev) = stream.next().await {
             if let GcSweepEvent::Error(err) = ev {
                 return Err(err.into());
@@ -567,8 +568,8 @@ mod tests {
         drop(garbage);
         store.sync_db().await?;
 
-        let run = store.gc_run().await?;
-        assert!(run.delete(store, vec![complete_hash]).await.is_err());
+        let mut run = store.gc_run().await?;
+        assert!(run.delete(vec![complete_hash]).await.is_err());
         assert!(run.snapshot.candidates.contains(&late_hash));
         assert!(run.snapshot.roots.contains(&root_tag.hash_and_format()));
         let writer_store = store.clone();
@@ -585,7 +586,6 @@ mod tests {
                 .delete_with_opts(DeleteOptions {
                     hashes: vec![complete_hash],
                     force: true,
-                    gc_id: None,
                 })
                 .await
         });
@@ -612,7 +612,7 @@ mod tests {
         drop(mark);
         assert!(live.contains(&hash));
         assert!(!live.contains(&late_hash));
-        let mut sweep = gc_sweep(store, &run, &live);
+        let mut sweep = gc_sweep(store, &mut run, &live);
         while let Some(event) = sweep.next().await {
             if let GcSweepEvent::Error(err) = event {
                 return Err(err.into());
@@ -736,11 +736,11 @@ mod tests {
             .temp_tag()
             .await?;
         for _ in 0..5 {
-            let (updates, reply) = store
+            let (updates, events) = store
                 .client()
-                .client_streaming(crate::api::proto::GcRunRequest, 1)
+                .bidi_streaming(crate::api::proto::GcRunRequest, 1, 1)
                 .await?;
-            drop(reply);
+            drop(events);
             drop(updates);
             let run = store.gc_run().await?;
             let next_store = store.clone();
@@ -756,10 +756,11 @@ mod tests {
         Ok(())
     }
 
-    /// A delete delayed in transit must be rejected if its GC session ended,
-    /// including when another session has already started.
+    /// A sweep delete the store received finishes before the session ends, even
+    /// if the client disconnects right after sending it. Deferred tag ops only
+    /// run after it.
     async fn gc_cancel_during_delete(store: &Store) -> TestResult {
-        use tokio::sync::oneshot;
+        use crate::api::proto::{GcEvent, GcRunRequest, GcRunUpdate};
         let garbage = store
             .add_slice("cancelled-sweep candidate")
             .temp_tag()
@@ -767,40 +768,19 @@ mod tests {
         let hash = garbage.hash();
         drop(garbage);
         store.sync_db().await?;
-        let inner = store.client().as_local().expect("local store");
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
-        let (queued, queued_rx) = oneshot::channel();
-        let (release, released) = oneshot::channel();
-        let responder = tokio::spawn(async move {
-            let mut pause = Some((queued, released));
-            while let Some(cmd) = rx.recv().await {
-                if matches!(cmd, Command::DeleteBlobs(_)) {
-                    if let Some((queued, released)) = pause.take() {
-                        queued.send(()).unwrap();
-                        released.await.unwrap();
-                    }
-                }
-                if inner.send_raw(cmd).await.is_err() {
-                    break;
-                }
-            }
-        });
-        let proxy = Store::from_client(tx);
-        let gc_store = proxy.clone();
-        let gc =
-            tokio::spawn(async move { gc_run_once(&gc_store, &mut HashSet::new(), None).await });
-        queued_rx.await?;
-        gc.abort();
-        assert!(gc.await.unwrap_err().is_cancelled());
+        let (updates, mut events) = store.client().bidi_streaming(GcRunRequest, 1, 1).await?;
+        let Some(GcEvent::Snapshot(Ok(snapshot))) = events.recv().await? else {
+            panic!("expected the gc snapshot");
+        };
+        assert!(snapshot.candidates.contains(&hash));
         let tag_store = store.clone();
-        let tag = tokio::spawn(async move { tag_store.tags().temp_tag(hash).await });
+        let mut tag = tokio::spawn(async move { tag_store.tags().temp_tag(hash).await });
+        assert_pending(&mut tag).await;
+        updates.send(GcRunUpdate::Delete(vec![hash])).await?;
+        drop(updates);
+        drop(events);
         let _tag = tag.await??;
-        let next = store.gc_run().await?;
-        release.send(()).unwrap();
-        drop(proxy);
-        responder.await?;
-        assert!(store.has(hash).await?, "a stale sweep deleted the blob");
-        drop(next);
+        assert!(!store.has(hash).await?, "the tag overtook the sweep delete");
         Ok(())
     }
 

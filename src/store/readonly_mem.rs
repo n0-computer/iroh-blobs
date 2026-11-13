@@ -161,8 +161,15 @@ impl Actor {
             }
             Command::Batch(_cmd) => {}
             Command::GcRun(cmd) => {
-                // nothing to protect, since nothing is ever deleted
-                cmd.tx.send(Ok(Default::default())).await.ok();
+                // nothing to protect, and nothing to sweep
+                let crate::api::proto::GcRunMsg { tx, mut rx, .. } = cmd;
+                let snapshot = crate::api::proto::GcEvent::Snapshot(Ok(Default::default()));
+                if tx.send(snapshot).await.is_ok() {
+                    while let Ok(Some(_)) = rx.recv().await {
+                        let res = Err(unsupported("delete blobs not supported").into());
+                        tx.send(crate::api::proto::GcEvent::Deleted(res)).await.ok();
+                    }
+                }
             }
             Command::CreateTag(cmd) => {
                 cmd.tx

@@ -186,18 +186,20 @@ pub(crate) enum InternalCommand {
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
     EndGcRun(EndGcRun),
-    GcDeleteDone(GcDeleteDone),
+    GcDelete(GcDelete),
 }
 
 /// A gc run ended, see [`proto::GcRunRequest`].
+///
+/// Sessions are exclusive, so this needs no session id.
 #[derive(Debug)]
-pub(crate) struct EndGcRun {
-    id: u64,
-}
+pub(crate) struct EndGcRun;
 
+/// A sweep delete from the session task of the current gc run.
 #[derive(Debug)]
-pub(crate) struct GcDeleteDone {
-    id: u64,
+pub(crate) struct GcDelete {
+    hashes: Vec<Hash>,
+    tx: tokio::sync::oneshot::Sender<api::Result<()>>,
 }
 
 #[derive(Debug)]
@@ -210,7 +212,7 @@ impl InternalCommand {
         match self {
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
-            Self::EndGcRun(_) | Self::GcDeleteDone(_) => tracing::Span::current(),
+            Self::EndGcRun(_) | Self::GcDelete(_) => tracing::Span::current(),
             Self::FinishImport(cmd) => cmd.span.clone(),
         }
     }
@@ -402,11 +404,54 @@ async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
     delete_files(paths, &ctx.id, &parts);
 }
 
+/// Waits for the deletes of one request, and reports the last error.
+async fn collect_deletes(
+    results: Vec<tokio::sync::oneshot::Receiver<io::Result<()>>>,
+) -> api::Result<()> {
+    let mut res = Ok(());
+    for rx in results {
+        match rx.await {
+            Ok(Ok(())) => {}
+            Ok(Err(cause)) => res = Err(api::Error::from(cause)),
+            Err(_) => res = Err(api::Error::other("delete task dropped")),
+        }
+    }
+    res
+}
+
+/// Handles the sweep deletes of a gc session until the client closes it.
+///
+/// Each delete is awaited before the next update is read, so when this returns,
+/// every delete the session received is done. Shutdown only cancels between
+/// deletes.
+async fn gc_session(
+    tx: &irpc::channel::mpsc::Sender<proto::GcEvent>,
+    rx: &mut irpc::channel::mpsc::Receiver<proto::GcRunUpdate>,
+    mut cancelled: tokio::sync::oneshot::Receiver<()>,
+    internal: &tokio::sync::mpsc::Sender<InternalCommand>,
+) {
+    loop {
+        let update = tokio::select! {
+            update = rx.recv() => update,
+            _ = &mut cancelled => return,
+        };
+        let Ok(Some(proto::GcRunUpdate::Delete(hashes))) = update else {
+            return;
+        };
+        let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+        let cmd = GcDelete { hashes, tx: res_tx };
+        if internal.send(cmd.into()).await.is_err() {
+            return;
+        }
+        let res = res_rx
+            .await
+            .unwrap_or_else(|_| Err(api::Error::other("gc delete dropped")));
+        tx.send(proto::GcEvent::Deleted(res)).await.ok();
+    }
+}
+
 #[derive(Debug)]
 struct GcSession {
-    id: u64,
-    deletes: usize,
-    ending: bool,
     frozen: HashSet<Hash>,
     // Only held: dropping it ends the freezes.
     _release: tokio::sync::watch::Sender<()>,
@@ -440,7 +485,6 @@ struct Actor {
     // temp tags
     temp_tags: TempTags,
     gc: Option<GcSession>,
-    next_gc_id: u64,
     deferred: VecDeque<Deferred>,
     // waiters for idle state.
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
@@ -736,15 +780,8 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
-            InternalCommand::EndGcRun(cmd) => self.exit_gc(cmd.id).await,
-            InternalCommand::GcDeleteDone(cmd) => {
-                if let Some(gc) = self.gc.as_mut().filter(|gc| gc.id == cmd.id) {
-                    gc.deletes -= 1;
-                    if gc.ending {
-                        self.exit_gc(cmd.id).await;
-                    }
-                }
-            }
+            InternalCommand::EndGcRun(_) => self.exit_gc(),
+            InternalCommand::GcDelete(cmd) => self.gc_delete(cmd).await,
             InternalCommand::ClearScope(cmd) => {
                 trace!("{cmd:?}");
                 self.temp_tags.end_scope(cmd.scope);
@@ -794,22 +831,18 @@ impl Actor {
                 roots.insert(row.map_err(api::Error::other)?.1.value());
             }
             api::Result::Ok(proto::GcSnapshot {
-                id: 0,
                 candidates,
                 roots: roots.into_iter().collect(),
             })
         });
-        let mut snapshot = match snapshot {
+        let snapshot = match snapshot {
             Ok(snapshot) => snapshot,
             Err(err) => {
                 self.temp_tags.end_gc_run();
-                cmd.tx.send(Err(err)).await.ok();
+                cmd.tx.send(proto::GcEvent::Snapshot(Err(err))).await.ok();
                 return;
             }
         };
-        self.next_gc_id += 1;
-        let id = self.next_gc_id;
-        snapshot.id = id;
         let frozen = snapshot.hashseqs();
         let (cancel, cancelled) = tokio::sync::oneshot::channel();
         let mut acks = Vec::new();
@@ -831,9 +864,6 @@ impl Actor {
             }
         }
         self.gc = Some(GcSession {
-            id,
-            deletes: 0,
-            ending: false,
             frozen,
             _release: release,
             cancel: Some(cancel),
@@ -841,40 +871,47 @@ impl Actor {
         let internal = self.context.internal_cmd_tx.clone();
         self.spawn(async move {
             let proto::GcRunMsg { tx, mut rx, .. } = cmd;
-            let mut result = Ok(snapshot);
             // Reply only once every root is frozen. Exiting early is still safe:
             // a freeze that lands after its release was dropped ends at once.
+            let mut result = Ok(snapshot);
             for ack in acks {
                 if ack.await.is_err() {
                     result = Err(api::Error::other("entity stopped while freezing"));
                 }
             }
-            if result.is_ok() {
-                if tx.send(result).await.is_ok() {
-                    tokio::select! {
-                        _ = rx.recv() => {}
-                        _ = cancelled => {}
-                    }
-                }
-            } else {
-                tx.send(result).await.ok();
+            let ok = result.is_ok();
+            if tx.send(proto::GcEvent::Snapshot(result)).await.is_ok() && ok {
+                gc_session(&tx, &mut rx, cancelled, &internal).await;
             }
-            internal.send(EndGcRun { id }.into()).await.ok();
+            // Every delete this session received is done, so it may end.
+            internal.send(EndGcRun.into()).await.ok();
         });
     }
 
-    async fn exit_gc(&mut self, id: u64) {
-        if self.gc.as_ref().map(|gc| gc.id) != Some(id) {
-            return;
-        }
-        let gc = self.gc.as_mut().unwrap();
-        gc.ending = true;
-        if gc.deletes != 0 {
-            return;
-        }
+    fn exit_gc(&mut self) {
         // Dropping the session drops the release sender, which ends the freezes.
         self.gc = None;
         self.temp_tags.end_gc_run();
+    }
+
+    /// Runs a sweep delete of the current gc session.
+    async fn gc_delete(&mut self, cmd: GcDelete) {
+        let GcDelete { hashes, tx } = cmd;
+        let Some(gc) = &self.gc else {
+            // The session task sends this, and the session ends after it.
+            tx.send(Err(api::Error::other("no gc session"))).ok();
+            return;
+        };
+        // A sweep must never wait on its own frozen roots.
+        if hashes.iter().any(|hash| gc.frozen.contains(hash)) {
+            tx.send(Err(api::Error::other("cannot sweep a frozen GC root")))
+                .ok();
+            return;
+        }
+        let results = self.spawn_deletes(hashes, false).await;
+        self.spawn(async move {
+            tx.send(collect_deletes(results).await).ok();
+        });
     }
 
     async fn run(mut self) {
@@ -1042,31 +1079,22 @@ impl Actor {
     /// Deletes through each hash's entity, and answers once all are done.
     async fn delete_blobs(&mut self, cmd: proto::DeleteBlobsMsg) {
         let proto::DeleteBlobsMsg {
-            inner:
-                proto::BlobDeleteRequest {
-                    hashes,
-                    force,
-                    gc_id,
-                },
+            inner: proto::BlobDeleteRequest { hashes, force },
             tx,
             ..
         } = cmd;
-        if let Some(id) = gc_id {
-            let Some(gc) = self.gc.as_mut().filter(|gc| gc.id == id && !gc.ending) else {
-                tx.send(Err(api::Error::other("GC session ended")))
-                    .await
-                    .ok();
-                return;
-            };
-            // A sweep must never wait on its own frozen roots.
-            if hashes.iter().any(|hash| gc.frozen.contains(hash)) {
-                tx.send(Err(api::Error::other("cannot sweep a frozen GC root")))
-                    .await
-                    .ok();
-                return;
-            }
-            gc.deletes += 1;
-        }
+        let results = self.spawn_deletes(hashes, force).await;
+        self.spawn(async move {
+            tx.send(collect_deletes(results).await).await.ok();
+        });
+    }
+
+    /// Starts a delete through the entity of each hash that is not protected.
+    async fn spawn_deletes(
+        &mut self,
+        hashes: Vec<Hash>,
+        force: bool,
+    ) -> Vec<tokio::sync::oneshot::Receiver<io::Result<()>>> {
         let mut results = Vec::with_capacity(hashes.len());
         for hash in hashes {
             let (res_tx, res_rx) = tokio::sync::oneshot::channel();
@@ -1094,21 +1122,7 @@ impl Actor {
                 self.spawn(task);
             }
         }
-        let internal = self.context.internal_cmd_tx.clone();
-        self.spawn(async move {
-            let mut res = Ok(());
-            for rx in results {
-                match rx.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(cause)) => res = Err(api::Error::from(cause)),
-                    Err(_) => res = Err(api::Error::other("delete task dropped")),
-                }
-            }
-            if let Some(id) = gc_id {
-                internal.send(GcDeleteDone { id }.into()).await.ok();
-            }
-            tx.send(res).await.ok();
-        });
+        results
     }
 
     /// Creates the actor and spawns the database actor.
@@ -1169,7 +1183,6 @@ impl Actor {
             handles: EntityManagerState::new(slot_context, 1024, 32, 2),
             temp_tags: Default::default(),
             gc: None,
-            next_gc_id: 0,
             deferred: VecDeque::new(),
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
@@ -2171,7 +2184,6 @@ pub mod tests {
             .delete_with_opts(api::blobs::DeleteOptions {
                 hashes: vec![hash],
                 force: true,
-                gc_id: None,
             })
             .await?;
         assert!(matches!(
@@ -2229,30 +2241,26 @@ pub mod tests {
             let actor_task = tokio::spawn(actor.run());
             frozen.await?;
             let store = Store::from_client(cmd_tx);
-            let run = store.gc_run().await?;
-            let id = run.snapshot.id;
-            let delete_store = store.clone();
-            let delete = tokio::spawn(async move {
-                delete_store
-                    .blobs()
-                    .delete_with_opts(proto::BlobDeleteRequest {
-                        hashes: vec![hash],
-                        force: false,
-                        gc_id: Some(id),
-                    })
-                    .await
-            });
+            // A raw client, to send a delete and disconnect without its reply.
+            let (updates, mut events) = store
+                .client()
+                .bidi_streaming(proto::GcRunRequest, 1, 1)
+                .await?;
+            let Some(proto::GcEvent::Snapshot(Ok(_))) = events.recv().await? else {
+                panic!("expected the gc snapshot");
+            };
+            updates.send(proto::GcRunUpdate::Delete(vec![hash])).await?;
             while *deletes.borrow_and_update() == 0 {
                 deletes.changed().await?;
             }
-            drop(run);
+            drop(updates);
+            drop(events);
             let tag_store = store.clone();
             let mut tag = tokio::spawn(async move { tag_store.tags().temp_tag(hash).await });
             assert!(tokio::time::timeout(Duration::from_millis(30), &mut tag)
                 .await
                 .is_err());
             drop(release);
-            delete.await??;
             let _tag = tag.await??;
             assert!(!store.has(hash).await?);
             store.shutdown().await?;
@@ -3153,7 +3161,6 @@ pub mod tests {
             .delete_with_opts(crate::api::proto::BlobDeleteRequest {
                 hashes: vec![hash],
                 force: true,
-                gc_id: None,
             })
             .await?;
         assert!(
@@ -3224,7 +3231,6 @@ pub mod tests {
                     store.blobs().delete_with_opts(api::blobs::DeleteOptions {
                         hashes: vec![hash],
                         force: true,
-                        gc_id: None,
                     })
                 )
                 .await?

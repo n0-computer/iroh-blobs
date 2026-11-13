@@ -51,8 +51,8 @@ use super::{
             ListBlobsRules, ObserveRules, Step, StreamRules,
         },
         BatchResponse, BlobStatusRequest, CreateTempTagRequest, ExportBaoRequest, ExportRangesItem,
-        GcRunRequest, GcRunUpdate, ImportBaoRequest, ImportByteStreamRequest, ImportBytesRequest,
-        ImportPathRequest, ListBlobsItem, ListRequest, Scope,
+        GcEvent, GcRunRequest, GcRunUpdate, ImportBaoRequest, ImportByteStreamRequest,
+        ImportBytesRequest, ImportPathRequest, ListBlobsItem, ListRequest, Scope,
     },
     remote::HashSeqChunk,
     tags::TagInfo,
@@ -153,13 +153,13 @@ impl Blobs {
         BlobReader::new(self.clone(), options)
     }
 
-    /// Delete a blob.
+    /// Delete blobs, regardless of tags.
     ///
-    /// GC uses this after excluding live roots and their children from its
-    /// candidate snapshot. Unless forced, deletion also respects current and
-    /// GC-retained temp tags. Named tags are accounted for by GC's mark phase.
+    /// Unless forced, deletion respects current and GC-retained temp tags. GC
+    /// does not use this: it sweeps within its session, see [`GcRunRequest`].
     ///
     /// Users should rely only on garbage collection for blob deletion.
+    #[cfg(test)]
     pub(crate) async fn delete_with_opts(&self, mut options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
         // the empty blob is always present, so it is never deleted
@@ -177,7 +177,6 @@ impl Blobs {
         self.delete_with_opts(DeleteOptions {
             hashes: hashes.into_iter().map(Into::into).collect(),
             force: false,
-            gc_id: None,
         })
         .await
     }
@@ -560,9 +559,15 @@ impl Blobs {
     ///
     /// See [`GcRunRequest`].
     pub(crate) async fn gc_run(&self) -> super::Result<GcRun> {
-        let (tx, rx) = self.client.client_streaming(GcRunRequest, 1).await?;
-        let snapshot = rx.await.map_err(irpc::Error::from)??;
-        Ok(GcRun { snapshot, _tx: tx })
+        let (tx, mut rx) = self.client.bidi_streaming(GcRunRequest, 1, 1).await?;
+        let snapshot = match rx.recv().await.map_err(irpc::Error::from)? {
+            Some(GcEvent::Snapshot(snapshot)) => snapshot?,
+            Some(GcEvent::Deleted(_)) => {
+                return Err(super::Error::other("gc run: deleted before the snapshot"));
+            }
+            None => return Err(super::Error::other("gc run ended before the snapshot")),
+        };
+        Ok(GcRun { snapshot, tx, rx })
     }
 }
 
@@ -570,26 +575,25 @@ impl Blobs {
 #[derive(Debug)]
 pub(crate) struct GcRun {
     pub snapshot: super::proto::GcSnapshot,
-    _tx: irpc::channel::mpsc::Sender<GcRunUpdate>,
+    tx: mpsc::Sender<GcRunUpdate>,
+    rx: mpsc::Receiver<GcEvent>,
 }
 
 impl GcRun {
-    /// The store rejects late requests and retains the freeze until accepted
-    /// sweep deletes finish, including when the caller or transport disappears.
-    pub(crate) async fn delete(
-        &self,
-        store: &super::Store,
-        hashes: Vec<Hash>,
-    ) -> super::Result<()> {
-        store
-            .blobs()
-            .delete_with_opts(DeleteOptions {
-                hashes,
-                force: false,
-                gc_id: Some(self.snapshot.id),
-            })
+    /// Sweeps candidates within this session.
+    ///
+    /// The store finishes a delete it received before it ends the session, even
+    /// if this future or the whole run is dropped meanwhile.
+    pub(crate) async fn delete(&mut self, hashes: Vec<Hash>) -> super::Result<()> {
+        self.tx
+            .send(GcRunUpdate::Delete(hashes))
             .await
-            .map_err(super::Error::other)
+            .map_err(irpc::Error::from)?;
+        match self.rx.recv().await.map_err(irpc::Error::from)? {
+            Some(GcEvent::Deleted(res)) => res,
+            Some(GcEvent::Snapshot(_)) => Err(super::Error::other("gc run: second snapshot")),
+            None => Err(super::Error::other("gc run ended during a delete")),
+        }
     }
 }
 

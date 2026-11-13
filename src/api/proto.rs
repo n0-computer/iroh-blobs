@@ -156,7 +156,7 @@ pub enum Request {
     WaitIdle(WaitIdleRequest),
     #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
-    #[rpc(tx = oneshot::Sender<super::Result<GcSnapshot>>, rx = mpsc::Receiver<GcRunUpdate>)]
+    #[rpc(tx = mpsc::Sender<GcEvent>, rx = mpsc::Receiver<GcRunUpdate>)]
     GcRun(GcRunRequest),
 }
 
@@ -184,9 +184,13 @@ pub struct SyncDbRequest;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShutdownRequest;
 
-/// Enter an exclusive GC session. The reply contains a fixed candidate/root
-/// snapshot, with HashSeq roots frozen and tag mutations suspended. Closing
-/// the update channel exits the session, including on client cancellation.
+/// Enter an exclusive GC session.
+///
+/// The first event is a [`GcEvent::Snapshot`], sent once HashSeq roots are
+/// frozen and tag mutations are suspended. The client then sends sweep deletes
+/// as [`GcRunUpdate::Delete`], and gets a [`GcEvent::Deleted`] for each, in
+/// order. Closing the update channel exits the session, also on cancellation;
+/// the store finishes the deletes it received before it releases the session.
 /// Reads and ordinary blob writes remain available. Callbacks must not await
 /// tag mutations or writes to frozen roots while holding the session.
 #[derive(Debug, Serialize, Deserialize)]
@@ -194,8 +198,6 @@ pub struct GcRunRequest;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GcSnapshot {
-    /// Identifies the session for sweep deletes.
-    pub id: u64,
     pub candidates: Vec<Hash>,
     pub roots: Vec<HashAndFormat>,
 }
@@ -210,9 +212,21 @@ impl GcSnapshot {
     }
 }
 
-/// Nothing is sent on a gc run's channel. Closing it ends the run.
+/// From the client in a gc session, see [`GcRunRequest`].
 #[derive(Debug, Serialize, Deserialize)]
-pub enum GcRunUpdate {}
+pub enum GcRunUpdate {
+    /// Delete these candidates, unless a temp tag protects them.
+    Delete(Vec<Hash>),
+}
+
+/// From the store in a gc session, see [`GcRunRequest`].
+#[derive(Debug, Serialize, Deserialize)]
+pub enum GcEvent {
+    /// The first event: the session snapshot, or why the session failed.
+    Snapshot(super::Result<GcSnapshot>),
+    /// The result of one [`GcRunUpdate::Delete`].
+    Deleted(super::Result<()>),
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobStatusRequest {
@@ -238,9 +252,6 @@ pub struct BlobDeleteRequest {
     /// Bypass current and retained temp-tag protection. In the fs store,
     /// deletion still runs through the entity to coordinate state and files.
     pub force: bool,
-    /// Sweep deletes are accepted only within this GC session. Manual deletes
-    /// use `None`; they do not participate in GC's root/candidate contract.
-    pub gc_id: Option<u64>,
 }
 
 /// Import the given bytes.

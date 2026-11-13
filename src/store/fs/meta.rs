@@ -1540,7 +1540,6 @@ mod tests {
             handles: EntityManagerState::new(context, 16, 32, 2),
             temp_tags: Default::default(),
             gc: None,
-            next_gc_id: 0,
             deferred: Default::default(),
             idle_waiters: Vec::new(),
             _rt: fs::RtWrapper(None),
@@ -1587,7 +1586,6 @@ mod tests {
                 .delete_with_opts(crate::api::proto::BlobDeleteRequest {
                     hashes: vec![hash],
                     force: true,
-                    gc_id: None,
                 }),
         )
         .await?;

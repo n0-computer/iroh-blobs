@@ -123,9 +123,11 @@ Also the GC `protected` set and `ClearProtected`.
 
 ## GC session
 
-`GcRun` enters one exclusive GC session and returns a fixed candidate/root
-snapshot. Its update channel carries no messages; closing it exits. A request
-for another session waits until the current one exits.
+`GcRun` is a bidi streaming request that enters one exclusive GC session. The
+store first sends a fixed candidate/root snapshot. GC then sends its sweep
+deletes on the session's update channel and gets one reply per delete, in
+order. Closing the update channel exits. A request for another session waits
+until the current one exits.
 
 The main actor suspends all tag mutations, including raw tags, named-tag
 replacement/deletion/rename, temp-tag creation, and import completion (which
@@ -142,12 +144,14 @@ actor keeps running while it waits, including handling entity restarts and
 post-commit notices. Mem captures the same view and freezes handles under
 their existing state watches.
 
-`Frozen(old, id)` preserves the entry's readable state and bitfield. Writes,
+`Frozen(old)` preserves the entry's readable state and bitfield. Writes,
 replacement imports, and deletion wait on the existing state watch. Complete
-entries freeze too, preventing deletion/recreation. A freeze task keeps the
-fs entity alive. Unfreeze uses the same entity inbox; it restores `old` and
-wakes writers without another acknowledgement. Session IDs prevent delayed
-cleanup from an older freeze from releasing a later one.
+and poisoned entries freeze too: a delete would turn them into an entry that
+can grow again. A freeze task keeps the fs entity alive. All freezes of a
+session wait on one release channel; dropping the session releases them, and
+each freeze task restores `old` itself. A freeze waits for an earlier one to
+end, so freezes never overlap and need no owner id. If a freeze task is
+dropped at shutdown instead, `persist` looks through the freeze.
 
 The shared GC loop traverses exactly the captured roots, invokes the external
 protection callback, and sweeps only captured candidates. Incomplete HashSeqs
@@ -157,11 +161,14 @@ visible between traversal and deletion. Newly created hashes absent from the
 candidate snapshot cannot be swept this round.
 
 Dropping the guard on completion, error, or cancellation releases freezes and
-replays queued tag operations. Sweep deletes carry the session ID. The store
-rejects stale requests and waits for accepted deletes to finish before exiting
-the session, even if the GC caller or transport disappears. Deferred tag
-publication therefore cannot overtake a sweep delete. Sweeping a frozen root
-is rejected rather than waiting on the sweep's own freeze.
+replays queued tag operations. Sweep deletes travel on the session's own
+channel, so none can arrive after its session ended. The session task runs
+each delete to completion before it reads the next update, and the session
+ends only after that, even if the GC caller or transport disappears. Deferred
+tag publication therefore cannot overtake a sweep delete. Sweeping a frozen
+root is rejected rather than waiting on the sweep's own freeze. A raw
+`DeleteBlobs` is separate from the session: it can be sent at any time, and
+during a session it skips protected content and waits on frozen roots.
 Cancelling entry still settles all freeze acquisitions before unfreezing.
 Shutdown stops admitting work and rejects deferred tag operations before
 cancelling a held session, rather than waiting for its client to release it.
