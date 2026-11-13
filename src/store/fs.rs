@@ -284,33 +284,28 @@ async fn wait_writable(ctx: &HashContext) {
     }
 }
 
-/// Freezes the entry until `release` fires or is dropped, then restores it.
+/// Freezes the entry until the sender of `release` is dropped, then restores it.
 ///
-/// The task is the only one that ends its freeze, also when it is dropped,
-/// and a freeze waits in `wait_writable` for an earlier one to end. So no two
-/// freezes overlap, and a freeze needs no owner id. The task keeps the entity
-/// alive while it holds the freeze.
+/// The task is the only one that ends its freeze, and a freeze waits in
+/// `wait_writable` for an earlier one to end. So no two freezes overlap, and a
+/// freeze needs no owner id. The task keeps the entity alive while it holds the
+/// freeze. If the task is dropped instead, the entity is shutting down, and
+/// `persist` looks through the freeze.
 async fn freeze_entry(
     ctx: HashContext,
     ack: tokio::sync::oneshot::Sender<()>,
-    release: tokio::sync::oneshot::Receiver<()>,
+    mut release: tokio::sync::watch::Receiver<()>,
 ) {
     ctx.load().await;
     wait_writable(&ctx).await;
     ctx.state.send_modify(|state| {
         *state = BaoFileStorage::Frozen(Box::new(state.take()));
     });
-    struct UnfreezeOnDrop(HashContext);
-    impl Drop for UnfreezeOnDrop {
-        fn drop(&mut self) {
-            unfreeze_entry(&self.0);
-        }
+    if ack.send(()).is_ok() {
+        // Nothing is ever sent, so this returns once the sender is dropped.
+        release.changed().await.ok();
     }
-    let _guard = UnfreezeOnDrop(ctx);
-    if ack.send(()).is_err() {
-        return;
-    }
-    release.await.ok();
+    unfreeze_entry(&ctx);
 }
 
 fn unfreeze_entry(ctx: &HashContext) {
@@ -413,8 +408,8 @@ struct GcSession {
     deletes: usize,
     ending: bool,
     frozen: HashSet<Hash>,
-    // Only held: dropping these ends the freezes.
-    _release: Vec<tokio::sync::oneshot::Sender<()>>,
+    // Only held: dropping it ends the freezes.
+    _release: tokio::sync::watch::Sender<()>,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -818,12 +813,11 @@ impl Actor {
         let frozen = snapshot.hashseqs();
         let (cancel, cancelled) = tokio::sync::oneshot::channel();
         let mut acks = Vec::new();
-        let mut release = Vec::new();
+        let (release, _) = tokio::sync::watch::channel(());
         for &hash in &frozen {
             let (ack, rx) = tokio::sync::oneshot::channel();
             acks.push(rx);
-            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-            release.push(release_tx);
+            let release_rx = release.subscribe();
             if let Some(task) = self
                 .handles
                 .spawn(hash, move |arg| async move {
@@ -878,7 +872,7 @@ impl Actor {
         if gc.deletes != 0 {
             return;
         }
-        // Dropping the session drops the release senders, which ends the freezes.
+        // Dropping the session drops the release sender, which ends the freezes.
         self.gc = None;
         self.temp_tags.end_gc_run();
     }
@@ -1534,7 +1528,12 @@ impl EntityApi for HashContext {
     async fn persist(&self) {
         self.state.send_if_modified(|guard| {
             let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
+            // A freeze task dropped at shutdown leaves its freeze in place.
+            let state = match guard.take() {
+                BaoFileStorage::Frozen(old) => *old,
+                state => state,
+            };
+            let BaoFileStorage::Partial(fs) = state else {
                 return false;
             };
             let path = self.global.options.path.bitfield_path(hash);
@@ -2215,7 +2214,7 @@ pub mod tests {
             let mut deletes = actor.deletes.subscribe();
             let hash = Hash::new("held deletion");
             let (ack, frozen) = tokio::sync::oneshot::channel();
-            let (release, release_rx) = tokio::sync::oneshot::channel();
+            let (release, release_rx) = tokio::sync::watch::channel(());
             if let Some(task) = actor
                 .handles
                 .spawn(hash, move |arg| async move {
