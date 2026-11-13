@@ -260,7 +260,7 @@ use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use n0_error::{Result, StdResultExt};
-use n0_future::{future::yield_now, io, Stream, StreamExt};
+use n0_future::{future::yield_now, io, stream, StreamExt};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
@@ -285,7 +285,7 @@ use crate::{
             util::entity_manager::{self, ActiveEntityState},
         },
         gc::run_gc,
-        util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
+        util::{drain, BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         IROH_BLOCK_SIZE,
     },
     util::{
@@ -552,29 +552,6 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
 }
 
 /// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
-/// Sends the items of a metadata listing to its client, then the end marker.
-///
-/// Stops at the first error, after sending it, or when the client goes away.
-async fn drain<T, I: irpc::RpcMessage>(
-    items: impl Stream<Item = api::Result<T>>,
-    tx: irpc::channel::mpsc::Sender<I>,
-    item: impl Fn(T) -> I,
-    error: impl Fn(api::Error) -> I,
-    done: I,
-) {
-    let mut items = std::pin::pin!(items);
-    while let Some(next) = items.next().await {
-        let (next, stop) = match next {
-            Ok(value) => (item(value), false),
-            Err(cause) => (error(cause), true),
-        };
-        if tx.send(next).await.is_err() || stop {
-            return;
-        }
-    }
-    tx.send(done).await.ok();
-}
-
 async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
     let paths = &ctx.global.options.path;
     if notice.deleted {
@@ -946,15 +923,14 @@ impl Actor {
             }
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
-                let tts = self.temp_tags.list();
-                self.spawn(async move {
-                    for tt in tts {
-                        if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
-                            return;
-                        }
-                    }
-                    cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
-                });
+                let tts = self.temp_tags.list().into_iter().map(Ok);
+                self.spawn(drain(
+                    stream::iter(tts),
+                    cmd.tx,
+                    proto::ListTempTagsItem::Tag,
+                    proto::ListTempTagsItem::Error,
+                    proto::ListTempTagsItem::Done,
+                ));
             }
             Command::ImportBytes(cmd) => {
                 trace!("{cmd:?}");
