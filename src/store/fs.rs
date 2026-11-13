@@ -79,9 +79,9 @@
 //! is not forced skips content with a current or retained temp tag; that check
 //! happens in the main actor, before the fan-out. The entity:
 //!
-//! 1. Bumps its delete counter, which ends observers, and switches to
-//!    `Deleting`. The cached state is dropped: readers see no entry, and changes
-//!    wait from here on.
+//! 1. Starts a new generation of the entry, which ends observers, and
+//!    switches to `Deleting`. The cached state is dropped: readers see no
+//!    entry, and changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
 //! 3. Waits for the notice of the commit, which comes even if there was no
@@ -510,10 +510,10 @@ async fn load_entity(ctx: &HashContext) {
 /// Metadata failure aborts the store, so there is no rollback state to retain.
 async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     wait_writable(ctx).await;
-    // Counting the delete ends observers, even if they next wake only after
-    // this hash was re-imported.
+    // A new generation ends observers, even if they next wake only after this
+    // hash was re-imported.
     ctx.state.send_modify(|state| {
-        state.deletes += 1;
+        state.generation += 1;
         state.storage = BaoFileStorage::Deleting;
     });
     if let Err(cause) = ctx.meta().delete().await {

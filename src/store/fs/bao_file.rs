@@ -593,15 +593,15 @@ impl BaoFileStorage {
     }
 }
 
-/// The state of an entity: its storage, and how often its entry was deleted.
+/// The state of an entity: its storage, and the generation of its entry.
 ///
 /// Derefs to the storage, which is what almost all code looks at.
 #[derive(Debug, Default)]
 pub(crate) struct EntityState {
-    /// How many deletes started on this entity. Only ever grows, also across
-    /// recycling, so observers can end even if they wake only after the entry
-    /// was filled again.
-    pub deletes: u64,
+    /// Starts a new generation with every delete of the entry. Observers end
+    /// when it changes, even if they wake only after the entry was filled
+    /// again. Only ever grows, also across recycling.
+    pub generation: u64,
     pub storage: BaoFileStorage,
 }
 
@@ -628,7 +628,7 @@ impl DerefMut for EntityState {
 pub(crate) struct BaoFileHandle(pub(super) watch::Sender<EntityState>);
 
 impl BaoFileHandle {
-    /// Replaces the storage, keeping the delete count.
+    /// Replaces the storage, keeping the generation.
     pub(super) fn set_storage(&self, storage: BaoFileStorage) {
         self.send_modify(|state| state.storage = storage);
     }
@@ -636,7 +636,7 @@ impl BaoFileHandle {
 
 impl entity_manager::Reset for BaoFileHandle {
     fn reset(&mut self) {
-        // Keeps the delete count.
+        // Keeps the generation.
         self.send_modify(|state| state.storage = BaoFileStorage::Initial);
     }
 }
@@ -801,15 +801,18 @@ impl PartialMemStorage {
 
 pub struct BaoFileStorageSubscriber {
     receiver: watch::Receiver<EntityState>,
-    /// The entity's delete count when the subscription started.
-    start: u64,
+    /// The entry's generation when the subscription started.
+    generation: u64,
 }
 
 impl BaoFileStorageSubscriber {
     pub fn new(handle: &BaoFileHandle) -> Self {
         let receiver = handle.subscribe();
-        let start = receiver.borrow().deletes;
-        Self { receiver, start }
+        let generation = receiver.borrow().generation;
+        Self {
+            receiver,
+            generation,
+        }
     }
 
     /// Forward observed *values* to the given sender
@@ -870,9 +873,9 @@ impl BaoFileStorageSubscriber {
     /// Observers end the stream on `None`, since there is no error channel,
     /// and since observed ranges must only ever grow.
     fn bitfield(&self) -> Option<Bitfield> {
-        // The count and the storage come from the same value.
+        // The generation and the storage come from the same value.
         let state = self.receiver.borrow();
-        if state.deletes != self.start {
+        if state.generation != self.generation {
             return None;
         }
         match &state.storage {
