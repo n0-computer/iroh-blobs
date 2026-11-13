@@ -259,9 +259,8 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
-use meta::{list_blobs, list_tags};
 use n0_error::{Result, StdResultExt};
-use n0_future::{future::yield_now, io};
+use n0_future::{future::yield_now, io, Stream, StreamExt};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
@@ -553,6 +552,29 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
 }
 
 /// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
+/// Sends the items of a metadata listing to its client, then the end marker.
+///
+/// Stops at the first error, after sending it, or when the client goes away.
+async fn drain<T, I: irpc::RpcMessage>(
+    items: impl Stream<Item = api::Result<T>>,
+    tx: irpc::channel::mpsc::Sender<I>,
+    item: impl Fn(T) -> I,
+    error: impl Fn(api::Error) -> I,
+    done: I,
+) {
+    let mut items = std::pin::pin!(items);
+    while let Some(next) = items.next().await {
+        let (next, stop) = match next {
+            Ok(value) => (item(value), false),
+            Err(cause) => (error(cause), true),
+        };
+        if tx.send(next).await.is_err() || stop {
+            return;
+        }
+    }
+    tx.send(done).await.ok();
+}
+
 async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
     let paths = &ctx.global.options.path;
     if notice.deleted {
@@ -857,8 +879,15 @@ impl Actor {
             }
             Command::ListTags(cmd) => {
                 trace!("{cmd:?}");
-                match self.db().snapshot(cmd.span.clone()).await {
-                    Ok(snapshot) => self.spawn(list_tags(snapshot, cmd)),
+                let request = cmd.inner.clone();
+                match self.db().list_tags(cmd.span.clone(), request).await {
+                    Ok(tags) => self.spawn(drain(
+                        tags,
+                        cmd.tx,
+                        proto::ListTagsItem::Tag,
+                        proto::ListTagsItem::Error,
+                        proto::ListTagsItem::Done,
+                    )),
                     Err(cause) => {
                         self.spawn(async move {
                             cmd.tx
@@ -888,8 +917,14 @@ impl Actor {
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
-                match self.db().snapshot(cmd.span.clone()).await {
-                    Ok(snapshot) => self.spawn(list_blobs(snapshot, cmd)),
+                match self.db().list_blobs(cmd.span.clone()).await {
+                    Ok(hashes) => self.spawn(drain(
+                        hashes,
+                        cmd.tx,
+                        proto::ListBlobsItem::Hash,
+                        proto::ListBlobsItem::Error,
+                        proto::ListBlobsItem::Done,
+                    )),
                     Err(cause) => {
                         self.spawn(async move {
                             cmd.tx
@@ -1003,32 +1038,24 @@ impl Actor {
         }
     }
 
+    /// Collects the gc candidates, and the named tags plus the current and
+    /// retained temp tags as roots.
+    async fn gc_snapshot(&mut self, span: tracing::Span) -> api::Result<proto::GcSnapshot> {
+        let (candidates, tags) = self.db().gc_snapshot(span).await?;
+        let candidates = candidates.try_collect::<_, _, Vec<_>>().await?;
+        let mut roots = tags.try_collect::<_, _, HashSet<_>>().await?;
+        roots.extend(self.temp_tags.list_for_gc());
+        Ok(proto::GcSnapshot {
+            candidates,
+            roots: roots.into_iter().collect(),
+        })
+    }
+
     async fn enter_gc(&mut self, cmd: proto::GcRunMsg) {
-        use redb::ReadableTable;
         self.temp_tags.start_gc_run();
         // Snapshot is a top-level metadata command: earlier tag mutations have
         // committed before this returns. Main has not dispatched any later ones.
-        let tables = self.db().snapshot(cmd.span.clone()).await;
-        let snapshot = tables.map_err(api::Error::from).and_then(|tables| {
-            let candidates = tables
-                .blobs
-                .iter()
-                .map_err(api::Error::other)?
-                .map(|row| row.map(|(hash, _)| hash.value()).map_err(api::Error::other))
-                .collect::<api::Result<Vec<_>>>()?;
-            let mut roots = self
-                .temp_tags
-                .list_for_gc()
-                .into_iter()
-                .collect::<HashSet<_>>();
-            for row in tables.tags.iter().map_err(api::Error::other)? {
-                roots.insert(row.map_err(api::Error::other)?.1.value());
-            }
-            api::Result::Ok(proto::GcSnapshot {
-                candidates,
-                roots: roots.into_iter().collect(),
-            })
-        });
+        let snapshot = self.gc_snapshot(cmd.span.clone()).await;
         let snapshot = match snapshot {
             Ok(snapshot) => snapshot,
             Err(err) => {
