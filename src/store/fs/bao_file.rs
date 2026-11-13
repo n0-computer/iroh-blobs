@@ -2,12 +2,8 @@ use core::fmt;
 use std::{
     fs::{File, OpenOptions},
     io,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
 };
 
 use bao_tree::{
@@ -597,23 +593,51 @@ impl BaoFileStorage {
     }
 }
 
+/// The state of an entity: its storage, and how often its entry was deleted.
+///
+/// Derefs to the storage, which is what almost all code looks at.
+#[derive(Debug, Default)]
+pub(crate) struct EntityState {
+    /// How many deletes started on this entity. Only ever grows, also across
+    /// recycling, so observers can end even if they wake only after the entry
+    /// was filled again.
+    pub deletes: u64,
+    pub storage: BaoFileStorage,
+}
+
+impl Deref for EntityState {
+    type Target = BaoFileStorage;
+
+    fn deref(&self) -> &BaoFileStorage {
+        &self.storage
+    }
+}
+
+impl DerefMut for EntityState {
+    fn deref_mut(&mut self) -> &mut BaoFileStorage {
+        &mut self.storage
+    }
+}
+
 /// A cheaply cloneable handle to a bao file.
 ///
 /// You must call [Self::persist] to write the bitfield to disk, if you want to persist
 /// the file handle, otherwise the bitfield will not be written to disk and will have
 /// to be reconstructed on next use.
-///
-/// The second field counts the deletes of the entry, so observers can end
-/// even if they wake only after the entry was filled again.
 #[derive(Debug, Clone, Default, derive_more::Deref)]
-pub(crate) struct BaoFileHandle(
-    #[deref] pub(super) watch::Sender<BaoFileStorage>,
-    pub(super) Arc<AtomicU64>,
-);
+pub(crate) struct BaoFileHandle(pub(super) watch::Sender<EntityState>);
+
+impl BaoFileHandle {
+    /// Replaces the storage, keeping the delete count.
+    pub(super) fn set_storage(&self, storage: BaoFileStorage) {
+        self.send_modify(|state| state.storage = storage);
+    }
+}
 
 impl entity_manager::Reset for BaoFileHandle {
     fn reset(&mut self) {
-        self.send_replace(BaoFileStorage::Initial);
+        // Keeps the delete count.
+        self.send_modify(|state| state.storage = BaoFileStorage::Initial);
     }
 }
 
@@ -729,7 +753,7 @@ impl BaoFileHandle {
         outboard: MemOrFile<Bytes, File>,
     ) {
         self.send_if_modified(|guard| {
-            let needs_complete = match guard {
+            let needs_complete = match guard.storage {
                 BaoFileStorage::NonExisting => true,
                 BaoFileStorage::Complete(_) => false,
                 BaoFileStorage::PartialMem(_) => true,
@@ -739,7 +763,7 @@ impl BaoFileHandle {
                 _ => false,
             };
             if needs_complete {
-                *guard = BaoFileStorage::Complete(CompleteStorage { data, outboard });
+                guard.storage = BaoFileStorage::Complete(CompleteStorage { data, outboard });
                 true
             } else {
                 true
@@ -776,22 +800,16 @@ impl PartialMemStorage {
 }
 
 pub struct BaoFileStorageSubscriber {
-    receiver: watch::Receiver<BaoFileStorage>,
-    /// The handle's delete count, and its value when the subscription started.
-    deletes: Arc<AtomicU64>,
+    receiver: watch::Receiver<EntityState>,
+    /// The entity's delete count when the subscription started.
     start: u64,
 }
 
 impl BaoFileStorageSubscriber {
     pub fn new(handle: &BaoFileHandle) -> Self {
-        // Read the count before the first value, so a delete in between ends
-        // the subscription early rather than never.
-        let start = handle.1.load(Ordering::SeqCst);
-        Self {
-            receiver: handle.subscribe(),
-            deletes: handle.1.clone(),
-            start,
-        }
+        let receiver = handle.subscribe();
+        let start = receiver.borrow().deletes;
+        Self { receiver, start }
     }
 
     /// Forward observed *values* to the given sender
@@ -852,13 +870,14 @@ impl BaoFileStorageSubscriber {
     /// Observers end the stream on `None`, since there is no error channel,
     /// and since observed ranges must only ever grow.
     fn bitfield(&self) -> Option<Bitfield> {
-        if self.deletes.load(Ordering::SeqCst) != self.start {
+        // The count and the storage come from the same value.
+        let state = self.receiver.borrow();
+        if state.deletes != self.start {
             return None;
         }
-        let state = self.receiver.borrow();
-        match state.deref() {
+        match &state.storage {
             BaoFileStorage::Poisoned => None,
-            state => Some(state.bitfield()),
+            storage => Some(storage.bitfield()),
         }
     }
 

@@ -416,7 +416,7 @@ async fn wait_settled(ctx: &HashContext) {
     // Checking and subscribing is one synchronous step, so no change can slip
     // in between: tasks of an entity only interleave at awaits.
     while matches!(
-        ctx.state.borrow().deref(),
+        &ctx.state.borrow().storage,
         BaoFileStorage::Loading | BaoFileStorage::Deleting
     ) {
         ctx.state.0.subscribe().changed().await.ok();
@@ -428,7 +428,7 @@ async fn wait_writable(ctx: &HashContext) {
     loop {
         let mut changes = ctx.state.0.subscribe();
         if !matches!(
-            ctx.state.borrow().deref(),
+            &ctx.state.borrow().storage,
             BaoFileStorage::Loading | BaoFileStorage::Deleting | BaoFileStorage::Frozen(..)
         ) {
             return;
@@ -452,7 +452,7 @@ async fn freeze_entry(
     ctx.load().await;
     wait_writable(&ctx).await;
     ctx.state.send_modify(|state| {
-        *state = BaoFileStorage::Frozen(Box::new(state.take()));
+        state.storage = BaoFileStorage::Frozen(Box::new(state.take()));
     });
     if ack.send(()).is_ok() {
         // Nothing is ever sent, so this returns once the sender is dropped.
@@ -463,13 +463,13 @@ async fn freeze_entry(
 
 fn unfreeze_entry(ctx: &HashContext) {
     ctx.state.send_if_modified(|state| {
-        if !matches!(state, BaoFileStorage::Frozen(_)) {
+        if !matches!(state.storage, BaoFileStorage::Frozen(_)) {
             return false;
         }
         let BaoFileStorage::Frozen(old) = state.take() else {
             unreachable!()
         };
-        *state = *old;
+        state.storage = *old;
         true
     });
 }
@@ -479,8 +479,8 @@ async fn load_entity(ctx: &HashContext) {
     wait_settled(ctx).await;
     let mut load = false;
     ctx.state.send_if_modified(|guard| {
-        if matches!(guard.deref(), BaoFileStorage::Initial) {
-            *guard = BaoFileStorage::Loading;
+        if matches!(guard.storage, BaoFileStorage::Initial) {
+            guard.storage = BaoFileStorage::Loading;
             load = true;
         }
         load
@@ -503,23 +503,24 @@ async fn load_entity(ctx: &HashContext) {
             BaoFileStorage::Poisoned
         }
     };
-    ctx.state.send_replace(state);
+    ctx.state.set_storage(state);
 }
 
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
 async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     wait_writable(ctx).await;
-    // End observers even if they next wake after this hash was re-imported.
-    ctx.state
-        .1
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    ctx.state.send_replace(BaoFileStorage::Deleting);
+    // Counting the delete ends observers, even if they next wake only after
+    // this hash was re-imported.
+    ctx.state.send_modify(|state| {
+        state.deletes += 1;
+        state.storage = BaoFileStorage::Deleting;
+    });
     if let Err(cause) = ctx.meta().delete().await {
         // Metadata failure aborts the store. A command racing a graceful
         // shutdown can also be rejected, without a failure to trigger abort.
         // Release waiters with an error instead of restoring the old state.
-        ctx.state.send_replace(BaoFileStorage::Poisoned);
+        ctx.state.set_storage(BaoFileStorage::Poisoned);
         return Err(cause);
     }
     // The notice after the commit unlinks the files and ends Deleting.
@@ -534,11 +535,11 @@ async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
         // delete_entry holds Deleting until this. Unlink every file, since the
         // entity may have written files its entry did not reference yet.
         debug_assert!(matches!(
-            ctx.state.borrow().deref(),
+            &ctx.state.borrow().storage,
             BaoFileStorage::Deleting
         ));
         delete_files(paths, &ctx.id, &ALL_PARTS);
-        ctx.state.send_replace(BaoFileStorage::NonExisting);
+        ctx.state.set_storage(BaoFileStorage::NonExisting);
         return;
     }
     wait_writable(ctx).await;
@@ -678,7 +679,7 @@ impl SyncEntityApi for HashContext {
                 }
             };
             res = Ok(update);
-            *state = state1;
+            state.storage = state1;
             true
         });
         if let Some(update) = res? {
@@ -2081,7 +2082,7 @@ async fn export_path_impl(
                 // meanwhile. Then it stays deleted, and this was just a copy.
                 // No await between the check and sending the set.
                 wait_writable(ctx).await;
-                if matches!(ctx.state.borrow().deref(), BaoFileStorage::Complete(_)) {
+                if matches!(&ctx.state.borrow().storage, BaoFileStorage::Complete(_)) {
                     // The notice after the commit deletes the owned data file,
                     // unless this entity's state still uses it.
                     // TODO: after a copy across file systems it does, so the
