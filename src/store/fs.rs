@@ -54,7 +54,7 @@
 //!
 //! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
 //! transition, and otherwise a loaded `Settled` entry: `NonExisting`,
-//! `Partial`, `Complete` or `Poisoned`. A settled entry is `ReadWrite`, or
+//! `Partial`, `Complete` or `Invalid`. A settled entry is `ReadWrite`, or
 //! `ReadOnly` while a gc session freezes it.
 //!
 //! An entity's tasks are futures polled by one actor, so they only interleave at
@@ -132,7 +132,7 @@
 //!
 //! A freeze turns `ReadWrite` into `ReadOnly` with the same settled entry: reads
 //! go on, while writes, replacing imports and deletes wait. Complete and
-//! poisoned entries are frozen too, since a delete would turn them into an entry
+//! invalid entries are frozen too, since a delete would turn them into an entry
 //! that can grow again. A freeze task keeps the entity alive. All freezes of a
 //! session wait on one release channel; ending the session drops it, and each
 //! freeze task turns its entry back into `ReadWrite` itself. A freeze waits for an earlier one to end, so freezes never
@@ -458,13 +458,22 @@ async fn freeze_entry(
 ) {
     ctx.load().await;
     wait_writable(&ctx).await;
-    ctx.state.send_modify(|state| {
-        // Loaded, and not in a delete or another freeze, see above.
-        state.storage = match state.take() {
-            BaoFileStorage::ReadWrite(settled) => BaoFileStorage::ReadOnly(settled),
-            other => other,
-        };
+    // Loaded, and not in a delete or another freeze, see above.
+    let frozen = ctx.state.send_if_modified(|state| match state.take() {
+        BaoFileStorage::ReadWrite(settled) => {
+            state.storage = BaoFileStorage::ReadOnly(settled);
+            true
+        }
+        other => {
+            state.storage = other;
+            false
+        }
     });
+    if !frozen {
+        debug_assert!(false, "freeze of an entry that is not writable");
+        // Without an ack, the gc session fails instead of trusting the freeze.
+        return;
+    }
     if ack.send(()).is_ok() {
         // Nothing is ever sent, so this returns once the sender is dropped.
         release.changed().await.ok();
@@ -505,13 +514,16 @@ async fn load_entity(ctx: &HashContext) {
         Ok(state) => match Settled::open(state, ctx).await {
             Ok(settled) => settled,
             Err(cause) => {
-                error!("failed to open {}, poisoning: {cause}", ctx.id);
-                Settled::Poisoned
+                error!("failed to open {}, marking it invalid: {cause}", ctx.id);
+                Settled::Invalid
             }
         },
         Err(cause) => {
-            error!("failed to get {} from db, poisoning: {cause}", ctx.id);
-            Settled::Poisoned
+            error!(
+                "failed to get {} from db, marking it invalid: {cause}",
+                ctx.id
+            );
+            Settled::Invalid
         }
     };
     ctx.state.set_storage(BaoFileStorage::ReadWrite(state));
@@ -532,7 +544,7 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
         // shutdown can also be rejected, without a failure to trigger abort.
         // Release waiters with an error instead of restoring the old state.
         ctx.state
-            .set_storage(BaoFileStorage::ReadWrite(Settled::Poisoned));
+            .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
         return Err(cause);
     }
     // The notice after the commit unlinks the files and ends Deleting.
@@ -682,11 +694,12 @@ impl SyncEntityApi for HashContext {
         wait_writable(self).await;
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            // After wait_writable the entry is loaded and writable, unless
-            // it was never loaded: then the write is ignored, as before.
+            // Imports load the entity first, and wait_writable leaves it
+            // loaded and writable.
             let settled = match state.take() {
                 BaoFileStorage::ReadWrite(settled) => settled,
                 other => {
+                    debug_assert!(false, "write to an entry that is not writable");
                     state.storage = other;
                     return false;
                 }
@@ -694,9 +707,12 @@ impl SyncEntityApi for HashContext {
             let (settled, update) = match settled.write_batch(batch, bitfield, self) {
                 Ok(written) => written,
                 Err(cause) => {
-                    error!("failed to write batch for {}, poisoning: {cause}", self.id);
+                    error!(
+                        "failed to write batch for {}, marking it invalid: {cause}",
+                        self.id
+                    );
                     res = Err(cause);
-                    // the entry is poisoned now, wake up observers so they can end
+                    // the entry is invalid now, wake up observers so they can end
                     return true;
                 }
             };
@@ -731,24 +747,22 @@ impl SyncEntityApi for HashContext {
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
         let state = self.state.borrow();
-        match state.settled() {
-            Some(Settled::Complete(mem)) => Ok(mem.size()),
-            Some(Settled::Partial(file)) => file.current_size(),
-            Some(Settled::Poisoned) => Err(io::Error::other("poisoned storage")),
-            Some(Settled::NonExisting) => Err(io::ErrorKind::NotFound.into()),
-            None => Err(state.unsettled_error()),
+        match state.try_settled()? {
+            Settled::Complete(mem) => Ok(mem.size()),
+            Settled::Partial(file) => file.current_size(),
+            Settled::Invalid => Err(io::Error::other("invalid storage")),
+            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
         let state = self.state.borrow();
-        match state.settled() {
-            Some(Settled::Complete(mem)) => Ok(mem.bitfield()),
-            Some(Settled::Partial(file)) => Ok(file.bitfield().clone()),
-            Some(Settled::Poisoned) => Err(io::Error::other("poisoned storage")),
-            Some(Settled::NonExisting) => Err(io::ErrorKind::NotFound.into()),
-            None => Err(state.unsettled_error()),
+        match state.try_settled()? {
+            Settled::Complete(mem) => Ok(mem.bitfield()),
+            Settled::Partial(file) => Ok(file.bitfield().clone()),
+            Settled::Invalid => Err(io::Error::other("invalid storage")),
+            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 }
@@ -2966,7 +2980,7 @@ pub mod tests {
     /// instead of panicking.
     #[tokio::test]
     #[traced_test]
-    async fn test_observe_poisoned_missing_data_file() -> TestResult<()> {
+    async fn test_observe_invalid_missing_data_file() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -2989,7 +3003,7 @@ pub mod tests {
     /// Importing into an entry whose data file is missing must fail.
     #[tokio::test]
     #[traced_test]
-    async fn test_import_bao_poisoned_missing_data_file() -> TestResult<()> {
+    async fn test_import_bao_invalid_missing_data_file() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -3010,11 +3024,11 @@ pub mod tests {
         Ok(())
     }
 
-    /// An observer must see the stream end when a write poisons the entry.
+    /// An observer must see the stream end when a write makes the entry invalid.
     #[cfg(unix)]
     #[tokio::test]
     #[traced_test]
-    async fn test_observe_ends_when_write_poisons() -> TestResult<()> {
+    async fn test_observe_ends_when_write_invalidates() -> TestResult<()> {
         use std::os::unix::fs::PermissionsExt;
 
         let testdir = tempfile::tempdir()?;
@@ -3394,7 +3408,7 @@ pub mod tests {
     }
 
     /// Requests that reach the store after its shutdown must not panic its tasks,
-    /// e.g. on an entry that the shutdown poisoned.
+    /// e.g. on an entry that the shutdown made invalid.
     #[tokio::test]
     #[traced_test]
     async fn test_requests_after_shutdown_do_not_panic() -> TestResult<()> {

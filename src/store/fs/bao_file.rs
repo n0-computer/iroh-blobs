@@ -363,9 +363,10 @@ pub(crate) enum Settled {
     ///
     /// Writing to this is a no-op, since it is already complete.
     Complete(CompleteStorage),
-    /// An IO error happened during an operation, or the entity was persisted
-    /// and its state is no longer usable.
-    Poisoned,
+    /// The in-memory state cannot be trusted: an IO error happened during an
+    /// operation, or the entity was persisted. Writes fail. A finished import
+    /// or a delete replaces it, and recycling the entity resets it.
+    Invalid,
 }
 
 impl fmt::Debug for BaoFileStorage {
@@ -386,7 +387,7 @@ impl fmt::Debug for Settled {
             Settled::NonExisting => f.debug_struct("NonExisting").finish(),
             Settled::Partial(x) => x.fmt(f),
             Settled::Complete(x) => x.fmt(f),
-            Settled::Poisoned => f.debug_struct("Poisoned").finish(),
+            Settled::Invalid => f.debug_struct("Invalid").finish(),
         }
     }
 }
@@ -459,7 +460,7 @@ impl Settled {
             Settled::NonExisting => Bitfield::empty(),
             Settled::Partial(x) => x.bitfield.clone(),
             Settled::Complete(x) => Bitfield::complete(x.data.size()),
-            Settled::Poisoned => panic!("poisoned storage should not be used"),
+            Settled::Invalid => panic!("invalid storage should not be used"),
         }
     }
 
@@ -498,7 +499,7 @@ impl Settled {
                 // unless there is a bug, this would just write the exact same data
                 (self, None)
             }
-            Settled::Poisoned => return Err(io::Error::other("poisoned storage")),
+            Settled::Invalid => return Err(io::Error::other("invalid storage")),
         })
     }
 
@@ -513,7 +514,7 @@ impl Settled {
                 BaoFilePart::Sizes | BaoFilePart::Bitfield => false,
             },
             // Cannot tell.
-            Settled::Poisoned => true,
+            Settled::Invalid => true,
         }
     }
 }
@@ -575,15 +576,14 @@ impl BaoFileStorage {
         }
     }
 
-    /// The error for reading an entry that is not settled.
-    pub(super) fn unsettled_error(&self) -> io::Error {
+    /// The loaded entry for a reader, or the error for a state in transition.
+    pub(super) fn try_settled(&self) -> io::Result<&Settled> {
         match self {
-            Self::Initial => io::Error::other("initial"),
-            Self::Loading => io::Error::other("loading"),
+            Self::ReadWrite(s) | Self::ReadOnly(s) => Ok(s),
+            Self::Initial => Err(io::Error::other("initial")),
+            Self::Loading => Err(io::Error::other("loading")),
             // A delete in progress: readers see no entry.
-            Self::Deleting | Self::ReadWrite(_) | Self::ReadOnly(_) => {
-                io::ErrorKind::NotFound.into()
-            }
+            Self::Deleting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 
@@ -610,9 +610,9 @@ impl BaoFileStorage {
         }
     }
 
-    /// Takes the state, leaving a poisoned one behind.
+    /// Takes the state, leaving an invalid one behind.
     pub fn take(&mut self) -> Self {
-        std::mem::replace(self, Self::ReadWrite(Settled::Poisoned))
+        std::mem::replace(self, Self::ReadWrite(Settled::Invalid))
     }
 }
 
@@ -671,12 +671,11 @@ pub struct DataReader(pub(super) BaoFileHandle);
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
         let guard = self.0.borrow();
-        match guard.settled() {
-            Some(Settled::Partial(x)) => x.data.read_bytes_at(offset, size),
-            Some(Settled::Complete(x)) => x.data.read_bytes_at(offset, size),
-            Some(Settled::Poisoned) => Err(io::Error::other("poisoned storage")),
-            Some(Settled::NonExisting) => Err(io::ErrorKind::NotFound.into()),
-            None => Err(guard.unsettled_error()),
+        match guard.try_settled()? {
+            Settled::Partial(x) => x.data.read_bytes_at(offset, size),
+            Settled::Complete(x) => x.data.read_bytes_at(offset, size),
+            Settled::Invalid => Err(io::Error::other("invalid storage")),
+            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 }
@@ -688,12 +687,11 @@ pub struct OutboardReader(pub(super) BaoFileHandle);
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         let guard = self.0.borrow();
-        match guard.settled() {
-            Some(Settled::Partial(x)) => x.outboard.read_at(offset, buf),
-            Some(Settled::Complete(x)) => x.outboard.read_at(offset, buf),
-            Some(Settled::Poisoned) => Err(io::Error::other("poisoned storage")),
-            Some(Settled::NonExisting) => Err(io::ErrorKind::NotFound.into()),
-            None => Err(guard.unsettled_error()),
+        match guard.try_settled()? {
+            Settled::Partial(x) => x.outboard.read_at(offset, buf),
+            Settled::Complete(x) => x.outboard.read_at(offset, buf),
+            Settled::Invalid => Err(io::Error::other("invalid storage")),
+            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 }
@@ -769,7 +767,7 @@ impl BaoFileHandle {
     ) {
         self.send_if_modified(|guard| {
             // A finished import does not depend on the old content, so it
-            // completes any writable state, a poisoned one included.
+            // completes any writable state, an invalid one included.
             let needs_complete = match &guard.storage {
                 BaoFileStorage::ReadWrite(Settled::Complete(_)) => false,
                 BaoFileStorage::ReadWrite(_) => true,
@@ -884,7 +882,7 @@ impl BaoFileStorageSubscriber {
         }
     }
 
-    /// The current bitfield, or `None` if the storage is poisoned or the entry was deleted.
+    /// The current bitfield, or `None` if the storage is invalid or the entry was deleted.
     ///
     /// Observers end the stream on `None`, since there is no error channel,
     /// and since observed ranges must only ever grow.
@@ -895,7 +893,7 @@ impl BaoFileStorageSubscriber {
             return None;
         }
         match state.settled() {
-            Some(Settled::Poisoned) => None,
+            Some(Settled::Invalid) => None,
             _ => Some(state.storage.bitfield()),
         }
     }
