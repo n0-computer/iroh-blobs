@@ -43,7 +43,7 @@ use tracing::{debug, error, info, info_span, trace, warn, Span};
 use super::{
     boot_id,
     entry_state::{DataLocation, EntryState, OutboardLocation},
-    file_deletes::{referenced_parts, BaoFilePart, FileNotice},
+    file_deletes::{referenced_parts, BaoFileParts, FileNotice},
     options::{BatchOptions, PathOptions},
     util::PeekableReceiver,
 };
@@ -532,7 +532,7 @@ struct Bookkeeping {
     /// Hashes whose entry was written or removed in the current write batch,
     /// with every file their entry referenced in it: before the batch, or in
     /// any state the batch gave it. Files may exist for each of those.
-    written: HashMap<Hash, Vec<BaoFilePart>>,
+    written: HashMap<Hash, BaoFileParts>,
     /// Hashes whose entry was deleted in the current write batch.
     deleted: HashSet<Hash>,
 }
@@ -572,7 +572,7 @@ impl Bookkeeping {
             let deleted = self.deleted.remove(&hash);
             let after = tables.blobs().get(hash)?.map(|e| e.value());
             let still = referenced_parts(after.as_ref());
-            let parts: smallvec::SmallVec<_> = before
+            let parts: BaoFileParts = before
                 .into_iter()
                 .filter(|part| !still.contains(part))
                 .collect();
@@ -1128,7 +1128,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        super::options::{CrashConsistency, Options, PathOptions},
+        super::{
+            file_deletes::BaoFilePart,
+            options::{CrashConsistency, Options, PathOptions},
+        },
         *,
     };
 

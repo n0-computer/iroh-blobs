@@ -123,6 +123,7 @@ impl MemStore {
     pub fn new_with_opts(opts: Options) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
         let gc_sender = sender.downgrade();
+        let (gc_delete_tx, gc_delete_rx) = tokio::sync::mpsc::channel(1);
         n0_future::task::spawn(
             Actor {
                 commands: receiver,
@@ -135,7 +136,8 @@ impl MemStore {
                 temp_tags: Default::default(),
                 idle_waiters: Default::default(),
                 gc: None,
-                gc_deletes: tokio::sync::mpsc::channel(1),
+                gc_delete_tx,
+                gc_delete_rx,
                 deferred: VecDeque::new(),
             }
             .run(),
@@ -174,11 +176,10 @@ struct Actor {
     // temp tags
     temp_tags: TempTags,
     gc: Option<GcSession>,
-    // Sweep deletes of the gc session task, run by the actor itself.
-    gc_deletes: (
-        tokio::sync::mpsc::Sender<GcDelete>,
-        tokio::sync::mpsc::Receiver<GcDelete>,
-    ),
+    // Sweep deletes of the gc session task, run by the actor itself. The
+    // sender is cloned into each session task.
+    gc_delete_tx: tokio::sync::mpsc::Sender<GcDelete>,
+    gc_delete_rx: tokio::sync::mpsc::Receiver<GcDelete>,
     deferred: VecDeque<Deferred>,
     // idle waiters
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
@@ -480,7 +481,7 @@ impl Actor {
                     .collect();
                 let (cancel, cancelled) = tokio::sync::oneshot::channel();
                 self.gc = Some(GcSession { frozen, cancel });
-                let deletes = self.gc_deletes.0.clone();
+                let deletes = self.gc_delete_tx.clone();
                 self.spawn(async move {
                     let crate::api::proto::GcRunMsg { tx, rx, .. } = cmd;
                     if tx.send(GcEvent::Snapshot(Ok(snapshot))).await.is_ok() {
@@ -651,7 +652,7 @@ impl Actor {
                 }
             }
             tokio::select! {
-                Some(cmd) = self.gc_deletes.1.recv() => {
+                Some(cmd) = self.gc_delete_rx.recv() => {
                     self.gc_delete(cmd);
                 }
                 cmd = self.commands.recv() => {

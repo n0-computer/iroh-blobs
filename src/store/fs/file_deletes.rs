@@ -21,18 +21,21 @@ pub(super) const ALL_PARTS: [BaoFilePart; 4] = [
     BaoFilePart::Bitfield,
 ];
 
+/// Some of the four files of an entry. Never allocates.
+pub(crate) type BaoFileParts = smallvec::SmallVec<[BaoFilePart; 4]>;
+
 /// The owned files of an entry that the given state does not reference.
 ///
 /// This may include files that do not exist. Deleting those is a no-op.
-pub(super) fn unreferenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFilePart> {
+pub(super) fn unreferenced_parts<I>(state: Option<&EntryState<I>>) -> BaoFileParts {
     match state {
-        None => ALL_PARTS.to_vec(),
-        Some(EntryState::Partial { .. }) => Vec::new(),
+        None => BaoFileParts::from(ALL_PARTS),
+        Some(EntryState::Partial { .. }) => BaoFileParts::new(),
         Some(EntryState::Complete {
             data_location,
             outboard_location,
         }) => {
-            let mut parts = vec![BaoFilePart::Sizes, BaoFilePart::Bitfield];
+            let mut parts = smallvec::smallvec![BaoFilePart::Sizes, BaoFilePart::Bitfield];
             if !matches!(data_location, DataLocation::Owned(_)) {
                 parts.push(BaoFilePart::Data);
             }
@@ -45,7 +48,7 @@ pub(super) fn unreferenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFil
 }
 
 /// The owned files of an entry that the given state references.
-pub(super) fn referenced_parts<I>(state: Option<&EntryState<I>>) -> Vec<BaoFilePart> {
+pub(super) fn referenced_parts<I>(state: Option<&EntryState<I>>) -> BaoFileParts {
     let unreferenced = unreferenced_parts(state);
     ALL_PARTS
         .into_iter()
@@ -64,7 +67,7 @@ pub(crate) struct FileNotice {
     /// A delete committed, even if no entry existed. The entity must finish cleanup.
     pub deleted: bool,
     /// Files the entry referenced before or during the batch, and no longer does.
-    pub parts: smallvec::SmallVec<[BaoFilePart; 4]>,
+    pub parts: BaoFileParts,
 }
 
 /// Delete the given files of an entry, ignoring files that do not exist.
