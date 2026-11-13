@@ -122,8 +122,20 @@ Also the GC `protected` set and `ClearProtected`. A gc run is now a request
 (`GcRun`) that lasts until gc drops it. While it lasts, a delete that is not
 forced keeps content that has a temp tag, or had one at any time since the
 run started. The main actor checks this before fanning a delete out, and it
-is also where temp tags are created. So no tag, no protection: a download
-without a temp tag can be cut in half by gc, and continues from scratch.
+is also where temp tags are created.
+
+GC collects a fixed list of deletion candidates before marking roots. The fs
+store lists from a redb read snapshot; the mem store copies its current keys.
+Sweep only considers those candidates, never a fresh listing. A new blob
+absent from the candidate snapshot survives the round without a temp tag.
+This includes children downloaded after marking has traversed their growing
+HashSeq root. Unreferenced new blobs become eligible in a later round.
+
+The candidate list is local to GC, not a store-side write-protection set.
+It does not protect hashes already in the snapshot from later deletion:
+resuming or reusing an existing unmarked blob still requires a temp tag.
+In particular, a late HashSeq chunk revealing an existing candidate does
+not retroactively mark that child.
 
 Marking reads named roots first, then the union of current temp roots and
 temp roots retained since the oldest active gc run started. A continuously
@@ -131,6 +143,9 @@ tagged root missed by the named snapshot must have had a temp tag before
 that snapshot, so it appears in the second listing even after repeated
 handovers. HashSeq roots in that union are traversed to protect their
 children too. Ordinary temp-tag listings still show only current tags.
+Incomplete HashSeqs contribute the children in their available chunks;
+they do not stop collection of unrelated garbage. GC does not wait for
+the remaining chunks, which might never arrive.
 
 ## The bug this fixes
 
