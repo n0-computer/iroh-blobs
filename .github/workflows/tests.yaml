@@ -8,7 +8,9 @@ on:
       rust-version:
         description: 'The version of the rust compiler to run'
         type: string
-        default: 'stable'
+        # Pinned: with 1.100, rustc command lines on the windows runner exceed
+        # the length limit under sccache (os error 206). Go back to stable once fixed.
+        default: '1.99.1'
       flaky:
         description: 'Whether to also run flaky tests'
         type: boolean
