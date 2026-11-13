@@ -50,8 +50,8 @@ use super::{
             AddProgressRules, DebugOnly, ExportBaoRules, ExportPathRules, ExportRangesRules,
             ListBlobsRules, ObserveRules, Step, StreamRules,
         },
-        BatchResponse, BlobStatusRequest, ClearProtectedRequest, CreateTempTagRequest,
-        ExportBaoRequest, ExportRangesItem, ImportBaoRequest, ImportByteStreamRequest,
+        BatchResponse, BlobStatusRequest, CreateTempTagRequest, ExportBaoRequest, ExportRangesItem,
+        GcEvent, GcRunRequest, GcRunUpdate, ImportBaoRequest, ImportByteStreamRequest,
         ImportBytesRequest, ImportPathRequest, ListBlobsItem, ListRequest, Scope,
     },
     remote::HashSeqChunk,
@@ -153,13 +153,13 @@ impl Blobs {
         BlobReader::new(self.clone(), options)
     }
 
-    /// Delete a blob.
+    /// Delete blobs, regardless of tags.
     ///
-    /// This function is not public, because it does not work as expected when called manually,
-    /// because blobs are protected from deletion. This is only called from the gc task, which
-    /// clears the protections before.
+    /// Unless forced, deletion respects current and GC-retained temp tags. GC
+    /// does not use this: it sweeps within its session, see [`GcRunRequest`].
     ///
     /// Users should rely only on garbage collection for blob deletion.
+    #[cfg(test)]
     pub(crate) async fn delete_with_opts(&self, mut options: DeleteOptions) -> RequestResult<()> {
         trace!("{options:?}");
         // the empty blob is always present, so it is never deleted
@@ -169,6 +169,7 @@ impl Blobs {
     }
 
     /// See [`Self::delete_with_opts`].
+    #[cfg(all(test, feature = "fs-store"))]
     pub(crate) async fn delete(
         &self,
         hashes: impl IntoIterator<Item = impl Into<Hash>>,
@@ -554,11 +555,45 @@ impl Blobs {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn clear_protected(&self) -> RequestResult<()> {
-        let msg = ClearProtectedRequest;
-        self.client.rpc(msg).await??;
-        Ok(())
+    /// Starts a gc run, which lasts until the returned guard is dropped.
+    ///
+    /// See [`GcRunRequest`].
+    pub(crate) async fn gc_run(&self) -> super::Result<GcRun> {
+        let (tx, mut rx) = self.client.bidi_streaming(GcRunRequest, 1, 1).await?;
+        let snapshot = match rx.recv().await.map_err(irpc::Error::from)? {
+            Some(GcEvent::Snapshot(snapshot)) => snapshot?,
+            Some(GcEvent::Deleted(_)) => {
+                return Err(super::Error::other("gc run: deleted before the snapshot"));
+            }
+            None => return Err(super::Error::other("gc run ended before the snapshot")),
+        };
+        Ok(GcRun { snapshot, tx, rx })
+    }
+}
+
+/// A running gc run, see [`Blobs::gc_run`]. Dropping it ends the run.
+#[derive(Debug)]
+pub(crate) struct GcRun {
+    pub snapshot: super::proto::GcSnapshot,
+    tx: mpsc::Sender<GcRunUpdate>,
+    rx: mpsc::Receiver<GcEvent>,
+}
+
+impl GcRun {
+    /// Sweeps candidates within this session.
+    ///
+    /// The store finishes a delete it received before it ends the session, even
+    /// if this future or the whole run is dropped meanwhile.
+    pub(crate) async fn delete(&mut self, hashes: Vec<Hash>) -> super::Result<()> {
+        self.tx
+            .send(GcRunUpdate::Delete(hashes))
+            .await
+            .map_err(irpc::Error::from)?;
+        match self.rx.recv().await.map_err(irpc::Error::from)? {
+            Some(GcEvent::Deleted(res)) => res,
+            Some(GcEvent::Snapshot(_)) => Err(super::Error::other("gc run: second snapshot")),
+            None => Err(super::Error::other("gc run ended during a delete")),
+        }
     }
 }
 

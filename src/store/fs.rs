@@ -2,27 +2,172 @@
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
-//! General design:
+//! # Design
 //!
-//! The file store consists of two actors.
+//! The metadata actor owns the metadata, and each entity owns the files of its
+//! hash. They talk only by messages. An entity's in-memory state is a cache of
+//! its entry, valid as long as the entity is the only writer of that entry.
+//! Entries only grow, which is why a write to a complete entry can be a no-op.
+//! A delete is the one change that does not grow an entry, so it goes through
+//! the entity too.
 //!
-//! # The main actor
+//! # Actors
 //!
-//! The purpose of the main actor is to handle user commands and own a map of
-//! handles for hashes that are currently being worked on.
+//! - **Main actor**: handles user commands, runs the entity manager, holds the
+//!   temp tags, forwards tag, status, listing and lifecycle commands to the
+//!   metadata actor, fans deletes out to the entities, and routes file notices.
+//! - **Entity actors**, one per hash that is currently being worked on: run the
+//!   per-hash tasks (import, export, observe, persist, delete). While an entity
+//!   exists, it is the only one that writes and deletes the files of its hash.
+//! - **Metadata actor**: owns the redb database with the entry of each hash,
+//!   inlined data and outboards of small blobs, and the tags. It groups queued
+//!   commands into read or write transactions. It never touches data files,
+//!   except for recovery when the store opens, before any entity exists.
 //!
-//! It also owns tasks for ongoing import and export operations, as well as the
-//! database actor.
+//! All senders to the metadata actor share one channel, so it sees commands in
+//! the order the sends completed.
 //!
-//! Handling a command almost always involves either forwarding it to the
-//! database actor or creating a hash context and spawning a task.
+//! # Metadata protocol
 //!
-//! # The database actor
+//! An entity talks to the metadata actor through `EntryMeta`, scoped to its
+//! hash:
 //!
-//! The database actor is responsible for storing metadata about each hash,
-//! as well as inlined data and outboard data for small files.
+//! | Method | Waits | Meaning |
+//! |---|---|---|
+//! | `get()` | for the reply | get the entry state |
+//! | `set(state)` | until applied | replace the entry state |
+//! | `update(state)` | no | merge into the entry state |
+//! | `update_await(state)` | until applied | merge into the entry state |
+//! | `delete()` | until applied | ensure the entry is absent; a notice confirms the commit |
 //!
-//! In addition to the metadata, the database actor also stores tags.
+//! "Applied" means visible to later commands, not durable. Durability comes with
+//! the commit of the batch, and commits are durable (redb's default
+//! `Durability::Immediate`).
+//!
+//! After each commit, the metadata actor sends a `FileNotice` to the main actor
+//! for each hash that was deleted, or no longer references some of its files:
+//! whether the entry was deleted, and which files it referenced before or during
+//! the batch and no longer does. The channel is unbounded, so the metadata actor
+//! never waits on the main actor, which waits on it.
+//!
+//! # Entities
+//!
+//! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
+//! transition, and otherwise a loaded `Settled` entry: `NonExisting`,
+//! `Partial`, `Complete` or `Invalid`. A settled entry is `ReadWrite`, or
+//! `ReadOnly` while a gc session freezes it.
+//!
+//! An entity's tasks are futures polled by one actor, so they only interleave at
+//! `.await` points. Every change of an entity's state or files runs after
+//! `wait_writable`, which waits while the state is `Loading`, `Deleting` or
+//! `ReadOnly`, with no `.await` between the check and the change. Readers use
+//! `wait_settled`, which only waits for `Loading` and `Deleting`. Both wait on
+//! the entity's state `watch`.
+//!
+//! # File notices
+//!
+//! The main actor routes each notice:
+//!
+//! - **An entity exists** for the hash, running or still shutting down, since
+//!   its shutdown may write the bitfield: the notice goes into its unbounded
+//!   inbox. The entity unlinks the files its own state does not use. Its state
+//!   is never behind its entry.
+//! - **No entity exists**: the main actor unlinks the files itself. Only it
+//!   creates entities, so none can appear in between, and none has writes in
+//!   flight. This also covers notices that arrive after the entities shut down.
+//!
+//! # Deletes
+//!
+//! The main actor fans `DeleteBlobs` out to the entity of each hash, creating it
+//! without loading if needed, also for inline entries. That orders a delete with
+//! concurrent requests even if no entity existed when it arrived. A delete that
+//! is not forced skips content with a current or retained temp tag; that check
+//! happens in the main actor, before the fan-out. The entity:
+//!
+//! 1. Starts a new generation of the entry, which ends observers, and
+//!    switches to `Deleting`. The cached state is dropped: readers see no
+//!    entry, and changes wait from here on.
+//! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
+//!    land in one transaction.
+//! 3. Waits for the notice of the commit, which comes even if there was no
+//!    entry. Waiting keeps the entity alive, so it cannot unload and come back
+//!    with new files that the unlink would take.
+//! 4. The notice unlinks every file and switches to `NonExisting`. Waiting
+//!    writes continue on an empty entry: a running download keeps going with
+//!    the ranges that arrive from then on.
+//!
+//! The main actor answers `DeleteBlobs` once every entity is done, after its
+//! unlink attempts. Unlink failures are logged. Shutdown waits for running
+//! deletes before it shuts down the entities, since an entity in shutdown takes
+//! no new tasks.
+//!
+//! A metadata error aborts the whole store. The main actor cancels the workers
+//! and releases pending callers instead of leaving entities waiting for notices
+//! that will never come. There is no per-entity rollback, and the abort does not
+//! persist entity state or clear the unclean-run marker.
+//!
+//! # GC sessions
+//!
+//! `GcRun` is a bidi streaming request that enters an exclusive gc session. The
+//! store first sends a snapshot of candidates and roots. GC then sends its sweep
+//! deletes on the session's update channel, and gets one reply per delete, in
+//! order. Closing the update channel ends the session. A second `GcRun` waits
+//! until the current session ends.
+//!
+//! While a session lasts, the main actor holds back all tag changes: setting,
+//! creating, deleting and renaming tags, creating temp tags, and import
+//! completion, which creates a temp tag. It queues them with their reply
+//! channels and keeps handling reads and other blob writes. Temp tag drops and
+//! scope ends cannot wait; `TempTags` keeps their protection until the session
+//! ends. A batch scope that ended meanwhile is not recreated: its queued tag and
+//! import requests are rejected.
+//!
+//! To build the snapshot, the main actor sends `Snapshot` to the metadata actor,
+//! a top-level command, so tag changes queued before it are committed. It takes
+//! all blobs as candidates, and the named tags plus current and retained temp
+//! tags as roots. Then it freezes each HashSeq root through its entity, and
+//! sends the snapshot only once every freeze is acknowledged. It keeps running
+//! meanwhile, handling entity restarts and notices. The mem store takes the same
+//! view and freezes its handles in place.
+//!
+//! A freeze turns `ReadWrite` into `ReadOnly` with the same settled entry: reads
+//! go on, while writes, replacing imports and deletes wait. Complete and
+//! invalid entries are frozen too, since a delete would turn them into an entry
+//! that can grow again. A freeze task keeps the entity alive. All freezes of a
+//! session wait on one release channel; ending the session drops it, and each
+//! freeze task turns its entry back into `ReadWrite` itself. A freeze waits for an earlier one to end, so freezes never
+//! overlap. If a freeze task is dropped at shutdown instead, `persist` looks
+//! through the freeze.
+//!
+//! GC traverses exactly the snapshot's roots, calls the protect callback, and
+//! sweeps only the snapshot's candidates. Incomplete HashSeqs contribute the
+//! children in their available chunks, and missing chunks never hold up a run.
+//! Their writes stay frozen until the sweep ends, so no new reference can appear
+//! between traversal and deletion. Blobs added after the snapshot are not
+//! candidates, so a run never sweeps them.
+//!
+//! Sweep deletes travel on the session's own channel, so none can arrive after
+//! its session ended. The session task finishes each delete before it reads the
+//! next update, and the session ends only after that, even if the GC client or
+//! its connection disappears. So a held-back tag change can never overtake a
+//! sweep delete. Sweeping a frozen root is rejected, since it would wait on the
+//! sweep's own freeze. A plain `DeleteBlobs` is independent of the session: it
+//! can be sent at any time, and during a session it skips protected content and
+//! waits on frozen roots.
+//!
+//! Shutdown stops accepting work, rejects held-back tag changes, and cancels a
+//! running session without waiting for its client. It lets deletes that were
+//! already sent to entities finish before it closes the metadata actor.
+//!
+//! The protect callback runs in the GC task while the session is held. It must
+//! only add protected hashes. It must not await, directly or through another
+//! task, anything the session holds back: tag changes, temp tag creation, import
+//! completion, and writes to or deletes of frozen HashSeq roots. Those wait for
+//! the session to end, which waits for the callback, so the GC run and
+//! everything queued behind it would deadlock. External systems must protect
+//! content in the store before they publish references to it. If they protect
+//! content that was unprotected before, they must check it is still there
+//! afterwards: a tag does not bring back data that GC already deleted.
 //!
 //! # Tasks
 //!
@@ -74,7 +219,19 @@
 //! down the router using [`iroh::protocol::Router::shutdown`], the store will be
 //! safely shut down as well. Any store refs you are holding will be inoperable
 //! after this.
+//!
+//! # Limitations
+//!
+//! - A crash between a commit and the unlink of its notice leaves files that
+//!   nothing references.
+//! - After `export_path` with `TryReference` copies across file systems, the
+//!   entity still uses the owned data file, so the notice keeps it and it
+//!   leaks.
+//! - A same-file-system `TryReference` export renames the file before it
+//!   commits the external location. If that commit fails, the metadata can
+//!   still refer to the old path.
 use std::{
+    collections::{HashSet, VecDeque},
     fmt::{self, Debug},
     fs,
     future::Future,
@@ -98,8 +255,6 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use bytes::Bytes;
-use delete_set::{BaoFilePart, ProtectHandle};
 use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
@@ -125,7 +280,9 @@ use crate::{
     protocol::ChunkRangesExt,
     store::{
         fs::{
-            bao_file::{BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader},
+            bao_file::{
+                BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
+            },
             util::entity_manager::{self, ActiveEntityState},
         },
         gc::run_gc,
@@ -140,9 +297,10 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
+use file_deletes::{delete_files, FileNotice, ALL_PARTS};
 mod boot_id;
-mod delete_set;
 mod entry_state;
+mod file_deletes;
 mod import;
 mod meta;
 pub mod options;
@@ -185,6 +343,21 @@ pub(crate) enum InternalCommand {
     Dump(meta::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
+    EndGcRun(EndGcRun),
+    GcDelete(GcDelete),
+}
+
+/// A gc run ended, see [`proto::GcRunRequest`].
+///
+/// Sessions are exclusive, so this needs no session id.
+#[derive(Debug)]
+pub(crate) struct EndGcRun;
+
+/// A sweep delete from the session task of the current gc run.
+#[derive(Debug)]
+pub(crate) struct GcDelete {
+    hashes: Vec<Hash>,
+    tx: tokio::sync::oneshot::Sender<api::Result<()>>,
 }
 
 #[derive(Debug)]
@@ -197,6 +370,7 @@ impl InternalCommand {
         match self {
             Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
+            Self::EndGcRun(_) | Self::GcDelete(_) => tracing::Span::current(),
             Self::FinishImport(cmd) => cmd.span.clone(),
         }
     }
@@ -211,8 +385,6 @@ struct TaskContext {
     pub db: meta::Db,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
-    /// Handle to protect files from deletion.
-    pub protect: ProtectHandle,
 }
 
 impl TaskContext {
@@ -243,6 +415,237 @@ impl entity_manager::Params for EmParams {
     }
 }
 
+/// Waits until the entity is neither loading nor deleting.
+///
+/// Loading may create files, and deleting resets the state, so both must be
+/// done before a task may look at the state or touch files.
+async fn wait_settled(ctx: &HashContext) {
+    // Checking and subscribing is one synchronous step, so no change can slip
+    // in between: tasks of an entity only interleave at awaits.
+    while matches!(
+        &ctx.state.borrow().storage,
+        BaoFileStorage::Loading | BaoFileStorage::Deleting
+    ) {
+        ctx.state.0.subscribe().changed().await.ok();
+    }
+}
+
+/// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
+async fn wait_writable(ctx: &HashContext) {
+    loop {
+        let mut changes = ctx.state.0.subscribe();
+        if !matches!(
+            &ctx.state.borrow().storage,
+            BaoFileStorage::Loading | BaoFileStorage::Deleting | BaoFileStorage::ReadOnly(_)
+        ) {
+            return;
+        }
+        changes.changed().await.ok();
+    }
+}
+
+/// Freezes the entry until the sender of `release` is dropped, then restores it.
+///
+/// The task is the only one that ends its freeze, and a freeze waits in
+/// `wait_writable` for an earlier one to end. So no two freezes overlap, and a
+/// freeze needs no owner id. The task keeps the entity alive while it holds the
+/// freeze. If the task is dropped instead, the entity is shutting down, and
+/// `persist` looks through the freeze.
+async fn freeze_entry(
+    ctx: HashContext,
+    ack: tokio::sync::oneshot::Sender<()>,
+    mut release: tokio::sync::watch::Receiver<()>,
+) {
+    ctx.load().await;
+    wait_writable(&ctx).await;
+    // Loaded, and not in a delete or another freeze, see above.
+    let frozen = ctx.state.send_if_modified(|state| match state.take() {
+        BaoFileStorage::ReadWrite(settled) => {
+            state.storage = BaoFileStorage::ReadOnly(settled);
+            true
+        }
+        other => {
+            state.storage = other;
+            false
+        }
+    });
+    if !frozen {
+        debug_assert!(false, "freeze of an entry that is not writable");
+        // Without an ack, the gc session fails instead of trusting the freeze.
+        return;
+    }
+    if ack.send(()).is_ok() {
+        // Nothing is ever sent, so this returns once the sender is dropped.
+        release.changed().await.ok();
+    }
+    unfreeze_entry(&ctx);
+}
+
+fn unfreeze_entry(ctx: &HashContext) {
+    ctx.state.send_if_modified(|state| {
+        if !matches!(state.storage, BaoFileStorage::ReadOnly(_)) {
+            return false;
+        }
+        let BaoFileStorage::ReadOnly(settled) = state.take() else {
+            unreachable!()
+        };
+        state.storage = BaoFileStorage::ReadWrite(settled);
+        true
+    });
+}
+
+/// Loads the entity's state from the metadata, unless it is loaded already.
+async fn load_entity(ctx: &HashContext) {
+    wait_settled(ctx).await;
+    let mut load = false;
+    ctx.state.send_if_modified(|guard| {
+        if matches!(guard.storage, BaoFileStorage::Initial) {
+            guard.storage = BaoFileStorage::Loading;
+            load = true;
+        }
+        load
+    });
+    if !load {
+        return;
+    }
+    // we must assign a new state even in the error case, otherwise
+    // tasks waiting for loading would stall!
+    let state = match ctx.meta().get().await {
+        Ok(state) => match Settled::open(state, ctx).await {
+            Ok(settled) => settled,
+            Err(cause) => {
+                error!("failed to open {}, marking it invalid: {cause}", ctx.id);
+                Settled::Invalid
+            }
+        },
+        Err(cause) => {
+            error!(
+                "failed to get {} from db, marking it invalid: {cause}",
+                ctx.id
+            );
+            Settled::Invalid
+        }
+    };
+    ctx.state.set_storage(BaoFileStorage::ReadWrite(state));
+}
+
+/// Delete unconditionally, keeping writes suspended until committed cleanup.
+/// Metadata failure aborts the store, so there is no rollback state to retain.
+async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
+    wait_writable(ctx).await;
+    // A new generation ends observers, even if they next wake only after this
+    // hash was re-imported.
+    ctx.state.send_modify(|state| {
+        state.generation += 1;
+        state.storage = BaoFileStorage::Deleting;
+    });
+    if let Err(cause) = ctx.meta().delete().await {
+        // Metadata failure aborts the store. A command racing a graceful
+        // shutdown can also be rejected, without a failure to trigger abort.
+        // Release waiters with an error instead of restoring the old state.
+        ctx.state
+            .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
+        return Err(cause);
+    }
+    // The notice after the commit unlinks the files and ends Deleting.
+    wait_settled(ctx).await;
+    Ok(())
+}
+
+/// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
+async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
+    let paths = &ctx.global.options.path;
+    if notice.deleted {
+        // delete_entry holds Deleting until this. Unlink every file, since the
+        // entity may have written files its entry did not reference yet.
+        debug_assert!(matches!(
+            &ctx.state.borrow().storage,
+            BaoFileStorage::Deleting
+        ));
+        delete_files(paths, &ctx.id, &ALL_PARTS);
+        ctx.state
+            .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
+        return;
+    }
+    wait_writable(ctx).await;
+    // Files the committed state no longer references, unless this entity's
+    // state, which is never behind its entry, uses them again.
+    let parts: Vec<_> = {
+        let state = ctx.state.borrow();
+        notice
+            .parts
+            .into_iter()
+            .filter(|part| !state.references(*part))
+            .collect()
+    };
+    delete_files(paths, &ctx.id, &parts);
+}
+
+/// Waits for the deletes of one request, and reports the last error.
+async fn collect_deletes(
+    results: Vec<tokio::sync::oneshot::Receiver<io::Result<()>>>,
+) -> api::Result<()> {
+    let mut res = Ok(());
+    for rx in results {
+        match rx.await {
+            Ok(Ok(())) => {}
+            Ok(Err(cause)) => res = Err(api::Error::from(cause)),
+            Err(_) => res = Err(api::Error::other("delete task dropped")),
+        }
+    }
+    res
+}
+
+/// Handles the sweep deletes of a gc session until the client closes it.
+///
+/// Each delete is awaited before the next update is read, so when this returns,
+/// every delete the session received is done. Shutdown only cancels between
+/// deletes.
+async fn gc_session(
+    tx: &irpc::channel::mpsc::Sender<proto::GcEvent>,
+    rx: &mut irpc::channel::mpsc::Receiver<proto::GcRunUpdate>,
+    mut cancelled: tokio::sync::oneshot::Receiver<()>,
+    internal: &tokio::sync::mpsc::Sender<InternalCommand>,
+) {
+    loop {
+        let update = tokio::select! {
+            update = rx.recv() => update,
+            _ = &mut cancelled => return,
+        };
+        let Ok(Some(proto::GcRunUpdate::Delete(hashes))) = update else {
+            return;
+        };
+        let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+        let cmd = GcDelete { hashes, tx: res_tx };
+        if internal.send(cmd.into()).await.is_err() {
+            return;
+        }
+        let res = res_rx
+            .await
+            .unwrap_or_else(|_| Err(api::Error::other("gc delete dropped")));
+        tokio::select! {
+            result = tx.send(proto::GcEvent::Deleted(res)) => {
+                if result.is_err() { return; }
+            }
+            _ = &mut cancelled => return,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GcSession {
+    frozen: HashSet<Hash>,
+    // Only held: dropping it ends the freezes.
+    _release: tokio::sync::watch::Sender<()>,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+#[derive(Debug)]
+enum Deferred {
+    Command(Command),
+    Import(ImportEntryMsg),
+}
+
 #[derive(Debug)]
 struct Actor {
     // Context that can be cheaply shared with tasks.
@@ -251,12 +654,20 @@ struct Actor {
     cmd_rx: tokio::sync::mpsc::Receiver<Command>,
     // Receiver for incoming file store specific commands.
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
+    // What committed metadata batches mean for files, from the database actor.
+    notices: tokio::sync::mpsc::UnboundedReceiver<FileNotice>,
+    // A failed metadata task must abort the workers, including notice waiters.
+    metadata_task: Option<tokio::task::JoinHandle<Result<(), meta::Failure>>>,
+    // How many deletes are running, so shutdown can let them finish.
+    deletes: Arc<tokio::sync::watch::Sender<usize>>,
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
     // Entity manager that handles concurrency for entities.
     handles: EntityManagerState<EmParams>,
     // temp tags
     temp_tags: TempTags,
+    gc: Option<GcSession>,
+    deferred: VecDeque<Deferred>,
     // waiters for idle state.
     idle_waiters: Vec<irpc::channel::oneshot::Sender<()>>,
     // our private tokio runtime. It has to live somewhere.
@@ -272,74 +683,45 @@ impl SyncEntityApi for HashContext {
     /// If it is Loading, it will wait until loading is done.
     /// If it is any other state, it will be a noop.
     async fn load(&self) {
-        enum Action {
-            Load,
-            Wait,
-            None,
-        }
-        let mut action = Action::None;
-        self.state.send_if_modified(|guard| match guard.deref() {
-            BaoFileStorage::Initial => {
-                *guard = BaoFileStorage::Loading;
-                action = Action::Load;
-                true
-            }
-            BaoFileStorage::Loading => {
-                action = Action::Wait;
-                false
-            }
-            _ => false,
-        });
-        match action {
-            Action::Load => {
-                // we must assign a new state even in the error case, otherwise
-                // tasks waiting for loading would stall!
-                let state = match self.global.db.get(self.id).await {
-                    Ok(state) => match BaoFileStorage::open(state, self).await {
-                        Ok(handle) => handle,
-                        Err(cause) => {
-                            error!("failed to open {}, poisoning: {cause}", self.id);
-                            BaoFileStorage::Poisoned
-                        }
-                    },
-                    Err(cause) => {
-                        error!("failed to get {} from db, poisoning: {cause}", self.id);
-                        BaoFileStorage::Poisoned
-                    }
-                };
-                self.state.send_replace(state);
-            }
-            Action::Wait => {
-                // we are in state loading already, so we just need to wait for the
-                // other task to complete loading.
-                while matches!(self.state.borrow().deref(), BaoFileStorage::Loading) {
-                    self.state.0.subscribe().changed().await.ok();
-                }
-            }
-            Action::None => {}
-        }
+        load_entity(self).await
     }
 
     /// Write a batch and notify the db
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
+        // No await between this and the closure, so the closure never sees a
+        // delete in progress.
+        wait_writable(self).await;
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
-            let (state1, update) = match state.take().write_batch(batch, bitfield, self) {
+            // Imports load the entity first, and wait_writable leaves it
+            // loaded and writable.
+            let settled = match state.take() {
+                BaoFileStorage::ReadWrite(settled) => settled,
+                other => {
+                    debug_assert!(false, "write to an entry that is not writable");
+                    state.storage = other;
+                    return false;
+                }
+            };
+            let (settled, update) = match settled.write_batch(batch, bitfield, self) {
                 Ok(written) => written,
                 Err(cause) => {
-                    error!("failed to write batch for {}, poisoning: {cause}", self.id);
+                    error!(
+                        "failed to write batch for {}, marking it invalid: {cause}",
+                        self.id
+                    );
                     res = Err(cause);
-                    // the entry is poisoned now, wake up observers so they can end
+                    // the entry is invalid now, wake up observers so they can end
                     return true;
                 }
             };
             res = Ok(update);
-            *state = state1;
+            state.storage = BaoFileStorage::ReadWrite(settled);
             true
         });
         if let Some(update) = res? {
-            self.global.db.update(self.id, update).await?;
+            self.meta().update(update).await?;
         }
         Ok(())
     }
@@ -364,68 +746,30 @@ impl SyncEntityApi for HashContext {
 
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
-        match self.state.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.size()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.current_size()),
-            BaoFileStorage::Partial(file) => file.current_size(),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        let state = self.state.borrow();
+        match state.try_settled()? {
+            Settled::Complete(mem) => Ok(mem.size()),
+            Settled::Partial(file) => file.current_size(),
+            Settled::Invalid => Err(io::Error::other("invalid storage")),
+            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
-        match self.state.borrow().deref() {
-            BaoFileStorage::Complete(mem) => Ok(mem.bitfield()),
-            BaoFileStorage::PartialMem(mem) => Ok(mem.bitfield().clone()),
-            BaoFileStorage::Partial(file) => Ok(file.bitfield().clone()),
-            BaoFileStorage::Poisoned => Err(io::Error::other("poisoned storage")),
-            BaoFileStorage::Initial => Err(io::Error::other("initial")),
-            BaoFileStorage::Loading => Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        let state = self.state.borrow();
+        match state.try_settled()? {
+            Settled::Complete(mem) => Ok(mem.bitfield()),
+            Settled::Partial(file) => Ok(file.bitfield().clone()),
+            Settled::Invalid => Err(io::Error::other("invalid storage")),
+            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
         }
     }
 }
 
 impl HashContext {
-    /// The outboard for the file.
-    pub fn outboard(&self) -> io::Result<PreOrderOutboard<OutboardReader>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id),
-            tree,
-            data: outboard,
-        })
-    }
-
-    fn db(&self) -> &meta::Db {
-        &self.global.db
-    }
-
     pub fn options(&self) -> &Arc<Options> {
         &self.global.options
-    }
-
-    pub fn protect(&self, parts: impl IntoIterator<Item = BaoFilePart>) {
-        self.global.protect.protect(self.id, parts);
-    }
-
-    /// Update the entry state in the database, and wait for completion.
-    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().update_await(self.id, state).await?;
-        Ok(())
-    }
-
-    pub async fn get_entry_state(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        self.db().get(self.id).await
-    }
-
-    /// Update the entry state in the database, and wait for completion.
-    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db().set(self.id, state).await
     }
 }
 
@@ -452,9 +796,30 @@ impl Actor {
         }
     }
 
+    /// Abort workers without persisting their cached state or unlinking files.
+    /// On a transaction error, `result` retains the database lock until all
+    /// workers have stopped, preventing a reopened store from racing them.
+    async fn abort_on_metadata_failure(
+        result: Result<Result<(), meta::Failure>, JoinError>,
+        tasks: &mut JoinSet<()>,
+    ) -> bool {
+        match &result {
+            Ok(Ok(())) => return false,
+            Ok(Err(failure)) => error!("metadata failed; aborting store: {:#}", failure.error),
+            Err(cause) => error!("metadata task stopped; aborting store: {cause}"),
+        }
+        tasks.shutdown().await;
+        drop(result);
+        true
+    }
+
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
         let CreateTempTagMsg { tx, inner, .. } = cmd;
-        let mut tt = self.temp_tags.create(inner.scope, inner.value);
+        let Some(mut tt) = self.temp_tags.create(inner.scope, inner.value) else {
+            // This RPC has no application-error response; closing its reply
+            // reports a request error to the caller.
+            return;
+        };
         if tx.is_rpc() {
             tt.leak();
         }
@@ -462,6 +827,10 @@ impl Actor {
     }
 
     async fn handle_command(&mut self, cmd: Command) {
+        if self.gc.is_some() && (cmd.mutates_tags() || matches!(cmd, Command::GcRun(_))) {
+            self.deferred.push_back(Deferred::Command(cmd));
+            return;
+        }
         let span = cmd.span().clone();
         let _entered = span.enter();
         debug_assert_eq!(cmd.validate(), Ok(()), "protocol violation in {cmd:?}");
@@ -508,17 +877,14 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
-            Command::ClearProtected(cmd) => {
-                trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
-            }
+            Command::GcRun(cmd) => self.enter_gc(cmd).await,
             Command::BlobStatus(cmd) => {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
             Command::DeleteBlobs(cmd) => {
                 trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
+                self.delete_blobs(cmd).await;
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
@@ -601,31 +967,176 @@ impl Actor {
                 trace!("{cmd:?}");
                 self.db().send(cmd.into()).await.ok();
             }
+            InternalCommand::EndGcRun(_) => self.exit_gc(),
+            InternalCommand::GcDelete(cmd) => self.gc_delete(cmd).await,
             InternalCommand::ClearScope(cmd) => {
                 trace!("{cmd:?}");
                 self.temp_tags.end_scope(cmd.scope);
             }
             InternalCommand::FinishImport(cmd) => {
+                // Finishing an import both modifies an entity and creates a temp tag.
+                if self.gc.is_some() {
+                    self.deferred.push_back(Deferred::Import(cmd));
+                    return;
+                }
                 trace!("{cmd:?}");
                 let value = HashAndFormat {
                     hash: cmd.hash,
                     format: cmd.format,
                 };
+                let Some(tt) = self.temp_tags.create(cmd.scope, value) else {
+                    cmd.tx
+                        .send(AddProgressItem::Error(io::Error::other(
+                            "batch scope has ended",
+                        )))
+                        .await
+                        .ok();
+                    return;
+                };
                 if cmd.hash == Hash::EMPTY {
                     // the empty blob is always present, so there is nothing to store or protect
-                    let tt = TempTag::new(value, None);
                     cmd.tx.send(AddProgressItem::Done(tt)).await.ok();
                     return;
                 }
-                let tt = self.temp_tags.create(cmd.scope, value);
                 (tt, cmd).spawn(&mut self.handles, &mut self.tasks).await;
             }
         }
     }
 
+    async fn enter_gc(&mut self, cmd: proto::GcRunMsg) {
+        use redb::ReadableTable;
+        self.temp_tags.start_gc_run();
+        // Snapshot is a top-level metadata command: earlier tag mutations have
+        // committed before this returns. Main has not dispatched any later ones.
+        let tables = self.db().snapshot(cmd.span.clone()).await;
+        let snapshot = tables.map_err(api::Error::from).and_then(|tables| {
+            let candidates = tables
+                .blobs
+                .iter()
+                .map_err(api::Error::other)?
+                .map(|row| row.map(|(hash, _)| hash.value()).map_err(api::Error::other))
+                .collect::<api::Result<Vec<_>>>()?;
+            let mut roots = self
+                .temp_tags
+                .list_for_gc()
+                .into_iter()
+                .collect::<HashSet<_>>();
+            for row in tables.tags.iter().map_err(api::Error::other)? {
+                roots.insert(row.map_err(api::Error::other)?.1.value());
+            }
+            api::Result::Ok(proto::GcSnapshot {
+                candidates,
+                roots: roots.into_iter().collect(),
+            })
+        });
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.temp_tags.end_gc_run();
+                cmd.tx.send(proto::GcEvent::Snapshot(Err(err))).await.ok();
+                return;
+            }
+        };
+        let frozen = snapshot.hashseqs();
+        let (cancel, mut cancelled) = tokio::sync::oneshot::channel();
+        let mut acks = Vec::new();
+        let (release, _) = tokio::sync::watch::channel(());
+        for &hash in &frozen {
+            let (ack, rx) = tokio::sync::oneshot::channel();
+            acks.push(rx);
+            let release_rx = release.subscribe();
+            if let Some(task) = self
+                .handles
+                .spawn(hash, move |arg| async move {
+                    if let SpawnArg::Active(ctx) = arg {
+                        freeze_entry(ctx, ack, release_rx).await;
+                    }
+                })
+                .await
+            {
+                self.spawn(task);
+            }
+        }
+        self.gc = Some(GcSession {
+            frozen,
+            _release: release,
+            cancel: Some(cancel),
+        });
+        let internal = self.context.internal_cmd_tx.clone();
+        self.spawn(async move {
+            let proto::GcRunMsg { tx, mut rx, .. } = cmd;
+            // Reply only once every root is frozen. Exiting early is still safe:
+            // a freeze that lands after its release was dropped ends at once.
+            let mut result = Ok(snapshot);
+            for ack in acks {
+                if ack.await.is_err() {
+                    result = Err(api::Error::other("entity stopped while freezing"));
+                }
+            }
+            let ok = result.is_ok();
+            let delivered = tokio::select! {
+                result = tx.send(proto::GcEvent::Snapshot(result)) => result.is_ok(),
+                _ = &mut cancelled => false,
+            };
+            if delivered && ok {
+                gc_session(&tx, &mut rx, cancelled, &internal).await;
+            }
+            // Every delete this session received is done, so it may end.
+            internal.send(EndGcRun.into()).await.ok();
+        });
+    }
+
+    fn exit_gc(&mut self) {
+        // Dropping the session drops the release sender, which ends the freezes.
+        self.gc = None;
+        self.temp_tags.end_gc_run();
+    }
+
+    /// Runs a sweep delete of the current gc session.
+    async fn gc_delete(&mut self, cmd: GcDelete) {
+        let GcDelete { hashes, tx } = cmd;
+        let Some(gc) = &self.gc else {
+            // The session task sends this, and the session ends after it.
+            tx.send(Err(api::Error::other("no gc session"))).ok();
+            return;
+        };
+        // A sweep must never wait on its own frozen roots.
+        if hashes.iter().any(|hash| gc.frozen.contains(hash)) {
+            tx.send(Err(api::Error::other("cannot sweep a frozen GC root")))
+                .ok();
+            return;
+        }
+        let results = self.spawn_deletes(hashes, false).await;
+        self.spawn(async move {
+            tx.send(collect_deletes(results).await).ok();
+        });
+    }
+
     async fn run(mut self) {
+        let mut closing = false;
+        let mut shutdown = None;
         loop {
+            if self.gc.is_none() {
+                if closing {
+                    break;
+                }
+                if let Some(cmd) = self.deferred.pop_front() {
+                    match cmd {
+                        Deferred::Command(cmd) => self.handle_command(cmd).await,
+                        Deferred::Import(cmd) => self.handle_fs_command(cmd.into()).await,
+                    }
+                    continue;
+                }
+            }
+
             tokio::select! {
+                result = async { self.metadata_task.as_mut().unwrap().await },
+                    if self.metadata_task.is_some() => {
+                    self.metadata_task.take();
+                    if Self::abort_on_metadata_failure(result, &mut self.tasks).await {
+                        return;
+                    }
+                }
                 task = self.handles.tick() => {
                     if let Some(task) = task {
                         self.spawn(task);
@@ -634,11 +1145,32 @@ impl Actor {
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
-                cmd = self.cmd_rx.recv() => {
+                Some(notice) = self.notices.recv() => {
+                    self.handle_notice(notice).await;
+                }
+                cmd = self.cmd_rx.recv(), if !closing => {
                     let Some(cmd) = cmd else {
-                        break;
+                        closing = true;
+                        if let Some(gc) = self.gc.as_mut() {
+                            if let Some(cancel) = gc.cancel.take() { cancel.send(()).ok(); }
+                        }
+                        continue;
                     };
-                    self.handle_command(cmd).await;
+                    if let Command::Shutdown(cmd) = cmd {
+                        // Stop admitting work before releasing a GC freeze. In
+                        // particular, deferred tags must not overtake a sweep
+                        // delete whose caller still holds the session guard.
+                        closing = true;
+                        shutdown = Some(cmd);
+                        self.cmd_rx.close();
+                        while self.cmd_rx.try_recv().is_ok() {}
+                        self.deferred.clear();
+                        if let Some(gc) = self.gc.as_mut() {
+                            if let Some(cancel) = gc.cancel.take() { cancel.send(()).ok(); }
+                        }
+                    } else {
+                        self.handle_command(cmd).await;
+                    }
                 }
                 Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     Self::log_task_result(res);
@@ -650,6 +1182,7 @@ impl Actor {
             if !self.idle_waiters.is_empty()
                 && self.tasks.is_empty()
                 && self.fs_cmd_rx.is_empty()
+                && self.notices.is_empty()
                 && !self.handles.has_pending()
             {
                 for tx in self.idle_waiters.drain(..) {
@@ -657,10 +1190,137 @@ impl Actor {
                 }
             }
         }
-        self.handles.shutdown().await;
-        while let Some(res) = self.tasks.join_next().await {
-            Self::log_task_result(res);
+        // A delete waits for the notice of its commit, and an entity in
+        // shutdown takes no new tasks, so let running deletes finish first.
+        let mut deletes = self.deletes.subscribe();
+        while *deletes.borrow_and_update() > 0 {
+            tokio::select! {
+                result = async { self.metadata_task.as_mut().unwrap().await },
+                    if self.metadata_task.is_some() => {
+                    self.metadata_task.take();
+                    if Self::abort_on_metadata_failure(result, &mut self.tasks).await {
+                        return;
+                    }
+                }
+                Some(notice) = self.notices.recv() => {
+                    self.handle_notice(notice).await;
+                }
+                _ = deletes.changed() => {}
+                task = self.handles.tick() => {
+                    if let Some(task) = task {
+                        self.spawn(task);
+                    }
+                }
+                Some(res) = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                    Self::log_task_result(res);
+                }
+            }
         }
+        if let Some(cmd) = shutdown {
+            self.db().send(cmd.into()).await.ok();
+            // Keep the runtime alive until metadata has delivered the shutdown
+            // reply, even when there are no entity tasks left to drain.
+            if let Some(task) = self.metadata_task.take() {
+                if Self::abort_on_metadata_failure(task.await, &mut self.tasks).await {
+                    return;
+                }
+            }
+        }
+        self.handles.shutdown().await;
+        while !self.tasks.is_empty() {
+            tokio::select! {
+                result = async { self.metadata_task.as_mut().unwrap().await },
+                    if self.metadata_task.is_some() => {
+                    self.metadata_task.take();
+                    if Self::abort_on_metadata_failure(result, &mut self.tasks).await {
+                        return;
+                    }
+                }
+                Some(res) = self.tasks.join_next() => Self::log_task_result(res),
+            }
+        }
+        // No entity exists anymore, so what the last batches left to do is
+        // done here directly. No acknowledgement, the database is closed.
+        while let Ok(notice) = self.notices.try_recv() {
+            delete_files(&self.context.options.path, &notice.hash, &notice.parts);
+        }
+    }
+
+    /// Hands a notice to the hash's entity, or acts on it directly if there is none.
+    async fn handle_notice(&mut self, notice: FileNotice) {
+        trace!("{notice:?}");
+        if self.handles.contains(&notice.hash) {
+            // Queue the notice even while the entity is shutting down.
+            let task = self
+                .handles
+                .spawn(notice.hash, move |arg| async move {
+                    match arg {
+                        SpawnArg::Active(ctx) => apply_notice(&ctx, notice).await,
+                        SpawnArg::Dead => {
+                            warn!("no entity for {}, its files stay", notice.hash);
+                        }
+                    }
+                })
+                .await;
+            if let Some(task) = task {
+                self.spawn(task);
+            }
+        } else {
+            // No entity exists for the hash, and none can be created before
+            // this is done, since only this actor creates them. So nothing
+            // else touches these files, and no writes from before are in
+            // flight.
+            delete_files(&self.context.options.path, &notice.hash, &notice.parts);
+        }
+    }
+
+    /// Deletes through each hash's entity, and answers once all are done.
+    async fn delete_blobs(&mut self, cmd: proto::DeleteBlobsMsg) {
+        let proto::DeleteBlobsMsg {
+            inner: proto::BlobDeleteRequest { hashes, force },
+            tx,
+            ..
+        } = cmd;
+        let results = self.spawn_deletes(hashes, force).await;
+        self.spawn(async move {
+            tx.send(collect_deletes(results).await).await.ok();
+        });
+    }
+
+    /// Starts a delete through the entity of each hash that is not protected.
+    async fn spawn_deletes(
+        &mut self,
+        hashes: Vec<Hash>,
+        force: bool,
+    ) -> Vec<tokio::sync::oneshot::Receiver<io::Result<()>>> {
+        let mut results = Vec::with_capacity(hashes.len());
+        for hash in hashes {
+            let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+            results.push(res_rx);
+            // Only this actor creates temp tags, so none can appear between
+            // this check and the delete reaching the entity.
+            if !force && self.temp_tags.protects(hash) {
+                trace!("delete {hash}: skip, protected by a temp tag");
+                res_tx.send(Ok(())).ok();
+                continue;
+            }
+            let running = RunningDelete::new(&self.deletes);
+            let task = self
+                .handles
+                .spawn(hash, move |arg| async move {
+                    let _running = running;
+                    let res = match arg {
+                        SpawnArg::Active(ctx) => delete_entry(&ctx).await,
+                        SpawnArg::Dead => Err(io::Error::other("no entity to delete through")),
+                    };
+                    res_tx.send(res).ok();
+                })
+                .await;
+            if let Some(task) = task {
+                self.spawn(task);
+            }
+        }
+        results
     }
 
     /// Creates the actor and spawns the database actor.
@@ -690,11 +1350,13 @@ impl Actor {
         );
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
-        let (protect, ds) = delete_set::pair(Arc::new(options.path.clone()));
+        let (notices_send, notices) = tokio::sync::mpsc::unbounded_channel();
+        let paths = Arc::new(options.path.clone());
         let db_actor = meta::Actor::new(
             db_path,
             db_recv,
-            ds,
+            notices_send,
+            paths,
             options.batch.clone(),
             options.syncs_files(),
         )?;
@@ -706,19 +1368,41 @@ impl Actor {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
-            protect,
         });
-        tokio::spawn(db_actor.run());
+        let metadata_task = Some(tokio::spawn(db_actor.run()));
         Ok(Self {
             context: slot_context.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
+            notices,
+            metadata_task,
+            deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
-            handles: EntityManagerState::new(slot_context, 1024, 32, 32, 2),
+            handles: EntityManagerState::new(slot_context, 1024, 32, 2),
             temp_tags: Default::default(),
+            gc: None,
+            deferred: VecDeque::new(),
             idle_waiters: Vec::new(),
             _rt: RtWrapper(None),
         })
+    }
+}
+
+/// Counts a running delete for as long as it lives, see `Actor::deletes`.
+///
+/// Counted by drop, so a delete whose entity never ran it is not waited for.
+struct RunningDelete(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl RunningDelete {
+    fn new(deletes: &Arc<tokio::sync::watch::Sender<usize>>) -> Self {
+        deletes.send_modify(|n| *n += 1);
+        Self(deletes.clone())
+    }
+}
+
+impl Drop for RunningDelete {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n -= 1);
     }
 }
 
@@ -747,9 +1431,8 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
     /// Handle the command on success by spawning a task into the per-hash context.
     fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
 
-    /// Opportunity to send an error if spawning fails due to the task being busy (inbox full)
-    /// or dead (e.g. panic in one of the running tasks).
-    fn on_error(self, arg: SpawnArg<EmParams>) -> impl Future<Output = ()> + Send + 'static;
+    /// Opportunity to send an error if the entity is dead (e.g. after a panic).
+    fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
 
     async fn spawn(
         self,
@@ -766,11 +1449,8 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
                         SpawnArg::Active(state) => {
                             self.handle(state).await;
                         }
-                        SpawnArg::Busy => {
-                            self.on_error(arg).await;
-                        }
                         SpawnArg::Dead => {
-                            self.on_error(arg).await;
+                            self.on_error().await;
                         }
                     }
                 }
@@ -787,18 +1467,14 @@ impl HashSpecificCommand for ObserveMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.observe(self).await
     }
-    async fn on_error(self, _arg: SpawnArg<EmParams>) {}
+    async fn on_error(self) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_path(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx
             .send(ExportProgressItem::Error(api::Error::from(err)))
             .await
@@ -809,12 +1485,8 @@ impl HashSpecificCommand for ExportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_bao(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx
             .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(err)))
             .await
@@ -825,12 +1497,8 @@ impl HashSpecificCommand for ExportRangesMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.export_ranges(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx
             .send(ExportRangesItem::Error(api::Error::from(err)))
             .await
@@ -841,12 +1509,8 @@ impl HashSpecificCommand for ImportBaoMsg {
     async fn handle(self, ctx: HashContext) {
         ctx.import_bao(self).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.tx.send(Err(api::Error::from(err))).await.ok();
     }
 }
@@ -860,12 +1524,8 @@ impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
         let (tt, cmd) = self;
         ctx.finish_import(cmd, tt).await
     }
-    async fn on_error(self, arg: SpawnArg<EmParams>) {
-        let err = match arg {
-            SpawnArg::Busy => io::ErrorKind::ResourceBusy.into(),
-            SpawnArg::Dead => err_entity_dead(),
-            _ => unreachable!(),
-        };
+    async fn on_error(self) {
+        let err = err_entity_dead();
         self.1.tx.send(AddProgressItem::Error(err)).await.ok();
     }
 }
@@ -927,6 +1587,10 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 
 /// The minimal API you need to implement for an entity for a store to work.
 trait EntityApi {
+    /// The hash of the entry.
+    fn id(&self) -> Hash;
+    /// The metadata of the entry.
+    fn meta(&self) -> meta::EntryMeta<'_>;
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -965,10 +1629,29 @@ trait SyncEntityApi: EntityApi {
 
     /// Write a batch of content items to the entry.
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
+
+    /// The outboard for the entry.
+    fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
+        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
+        let outboard = self.outboard_reader();
+        Ok(PreOrderOutboard {
+            root: blake3::Hash::from(self.id()),
+            tree,
+            data: outboard,
+        })
+    }
 }
 
 /// The high level entry point per entry.
 impl EntityApi for HashContext {
+    fn id(&self) -> Hash {
+        self.id
+    }
+
+    fn meta(&self) -> meta::EntryMeta<'_> {
+        self.global.db.entry(self.id)
+    }
+
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
@@ -991,7 +1674,7 @@ impl EntityApi for HashContext {
     async fn observe(&self, cmd: ObserveMsg) {
         trace!("{cmd:?}");
         self.load().await;
-        BaoFileStorageSubscriber::new(self.state.subscribe())
+        BaoFileStorageSubscriber::new(&self.state)
             .forward(cmd.tx)
             .await
             .ok();
@@ -1056,7 +1739,10 @@ impl EntityApi for HashContext {
     async fn persist(&self) {
         self.state.send_if_modified(|guard| {
             let hash = &self.id;
-            let BaoFileStorage::Partial(fs) = guard.take() else {
+            // A freeze task dropped at shutdown leaves its freeze in place.
+            let (BaoFileStorage::ReadWrite(Settled::Partial(fs))
+            | BaoFileStorage::ReadOnly(Settled::Partial(fs))) = guard.take()
+            else {
                 return false;
             };
             let path = self.global.options.path.bitfield_path(hash);
@@ -1123,13 +1809,13 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         }
     }
     ctx.load().await;
+    wait_writable(ctx).await;
     let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
     //   the entry exists in the db, but we don't have a handle
     //   the entry does not exist at all.
     // convert the import source to a data location and drop the open files
-    ctx.protect([BaoFilePart::Data, BaoFilePart::Outboard]);
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
         ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
@@ -1210,7 +1896,7 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         data_location,
         outboard_location,
     };
-    ctx.update_await(state).await?;
+    ctx.meta().update_await(state).await?;
     Ok(())
 }
 
@@ -1221,11 +1907,11 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 async fn import_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     size: NonZeroU64,
     rx: &mut mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id.fmt_short(), size);
+    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
     let mut batch = Vec::<BaoContentItem>::new();
     let mut ranges = ChunkRanges::empty();
     while let Some(item) = rx.recv().await? {
@@ -1254,7 +1940,7 @@ async fn import_bao_impl(
 }
 
 async fn export_ranges_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
 ) -> io::Result<()> {
@@ -1297,7 +1983,7 @@ async fn export_ranges_impl(
 }
 
 async fn export_bao_impl(
-    ctx: &HashContext,
+    ctx: &impl SyncEntityApi,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
 ) -> io::Result<()> {
@@ -1330,7 +2016,7 @@ async fn export_path_impl(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    let state = ctx.get_entry_state().await?;
+    let state = ctx.meta().get().await?;
     let (data_location, outboard_location) = match state {
         Some(EntryState::Complete {
             data_location,
@@ -1383,6 +2069,7 @@ async fn export_path_impl(
                 );
             }
             ExportMode::TryReference => {
+                wait_writable(ctx).await;
                 if !external.is_empty() {
                     // the file already exists externally, so we need to copy it.
                     // if the OS supports reflink, we might as well use that.
@@ -1415,12 +2102,25 @@ async fn export_path_impl(
                     }
                     external.push(target);
                 };
-                // setting the new entry state will also take care of deleting the owned data file!
-                ctx.set(EntryState::Complete {
-                    data_location: DataLocation::External(external, size),
-                    outboard_location,
-                })
-                .await?;
+                // The copy took a while, so the entry may have been deleted
+                // meanwhile. Then it stays deleted, and this was just a copy.
+                // No await between the check and sending the set.
+                wait_writable(ctx).await;
+                if matches!(
+                    &ctx.state.borrow().storage,
+                    BaoFileStorage::ReadWrite(Settled::Complete(_))
+                ) {
+                    // The notice after the commit deletes the owned data file,
+                    // unless this entity's state still uses it.
+                    // TODO: after a copy across file systems it does, so the
+                    // owned file leaks.
+                    ctx.meta()
+                        .set(EntryState::Complete {
+                            data_location: DataLocation::External(external, size),
+                            outboard_location,
+                        })
+                        .await?;
+                }
             }
         },
     }
@@ -1631,6 +2331,7 @@ pub mod tests {
     };
 
     use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
+    use bytes::Bytes;
     use n0_future::{stream, Stream, StreamExt};
     use n0_tracing_test::traced_test;
     use testresult::TestResult;
@@ -1657,6 +2358,118 @@ pub mod tests {
         1024 * 1024,     // data file, outboard inline (many hash pairs)
         1024 * 1024 * 8, // data file, outboard file
     ];
+
+    /// A write to an entity that a read loaded sees a delete that happened in between.
+    ///
+    /// The observer keeps the entity loaded for reading while the blob is
+    /// deleted. If the write took the entity's old state, the import would find
+    /// the blob complete and do nothing, and the blob would be gone.
+    #[tokio::test]
+    #[traced_test]
+    async fn write_after_read_sees_a_delete() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let store = FsStore::load(testdir.path().join("db")).await?;
+        let data = test_data(100_000);
+        let hash = store.add_bytes(data.clone()).await?.hash;
+        let bao = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await?;
+        let mut observer = std::pin::pin!(store.observe(hash).stream().await?);
+        let first = observer.next().await.expect("a first bitfield");
+        assert!(first.is_complete());
+
+        store
+            .blobs()
+            .delete_with_opts(api::blobs::DeleteOptions {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        assert!(matches!(
+            store.status(hash).await?,
+            api::blobs::BlobStatus::NotFound
+        ));
+
+        store
+            .import_bao_bytes(hash, ChunkRanges::all(), bao)
+            .await?;
+        assert!(matches!(
+            store.status(hash).await?,
+            api::blobs::BlobStatus::Complete { size: 100_000 }
+        ));
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_ref());
+        // The observer never sees the blob shrink, its stream ends instead.
+        let rest =
+            tokio::time::timeout(Duration::from_secs(5), observer.collect::<Vec<_>>()).await?;
+        assert!(rest.iter().all(|bitfield| bitfield.is_complete()));
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Disconnecting a GC client must not resume tags ahead of an accepted
+    /// delete. Hold its entity frozen independently to make that race explicit.
+    #[tokio::test]
+    async fn gc_cancel_waits_for_accepted_delete() -> TestResult<()> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let dir = tempfile::tempdir()?;
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
+            let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
+            let mut actor = Actor::new(
+                dir.path().join("blobs.db"),
+                cmd_rx,
+                fs_rx,
+                fs_tx,
+                Arc::new(Options::new(dir.path())),
+            )
+            .await?;
+            let mut deletes = actor.deletes.subscribe();
+            let hash = Hash::new("held deletion");
+            let (ack, frozen) = tokio::sync::oneshot::channel();
+            let (release, release_rx) = tokio::sync::watch::channel(());
+            if let Some(task) = actor
+                .handles
+                .spawn(hash, move |arg| async move {
+                    if let SpawnArg::Active(ctx) = arg {
+                        freeze_entry(ctx, ack, release_rx).await;
+                    }
+                })
+                .await
+            {
+                actor.spawn(task);
+            }
+            let actor_task = tokio::spawn(actor.run());
+            frozen.await?;
+            let store = Store::from_client(cmd_tx);
+            // A raw client, to send a delete and disconnect without its reply.
+            let (updates, mut events) = store
+                .client()
+                .bidi_streaming(proto::GcRunRequest, 1, 1)
+                .await?;
+            let Some(proto::GcEvent::Snapshot(Ok(_))) = events.recv().await? else {
+                panic!("expected the gc snapshot");
+            };
+            updates.send(proto::GcRunUpdate::Delete(vec![hash])).await?;
+            while *deletes.borrow_and_update() == 0 {
+                deletes.changed().await?;
+            }
+            drop(updates);
+            drop(events);
+            let tag_store = store.clone();
+            let mut tag = tokio::spawn(async move { tag_store.tags().temp_tag(hash).await });
+            assert!(tokio::time::timeout(Duration::from_millis(30), &mut tag)
+                .await
+                .is_err());
+            drop(release);
+            let _tag = tag.await??;
+            assert!(!store.has(hash).await?);
+            store.shutdown().await?;
+            actor_task.await?;
+            TestResult::Ok(())
+        })
+        .await??;
+        Ok(())
+    }
 
     /// A last task can finish after its follow-up queue was polled empty.
     #[tokio::test]
@@ -2163,7 +2976,7 @@ pub mod tests {
     /// instead of panicking.
     #[tokio::test]
     #[traced_test]
-    async fn test_observe_poisoned_missing_data_file() -> TestResult<()> {
+    async fn test_observe_invalid_missing_data_file() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -2186,7 +2999,7 @@ pub mod tests {
     /// Importing into an entry whose data file is missing must fail.
     #[tokio::test]
     #[traced_test]
-    async fn test_import_bao_poisoned_missing_data_file() -> TestResult<()> {
+    async fn test_import_bao_invalid_missing_data_file() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let db_dir = testdir.path().join("db");
         let options = Options::new(&db_dir);
@@ -2207,11 +3020,11 @@ pub mod tests {
         Ok(())
     }
 
-    /// An observer must see the stream end when a write poisons the entry.
+    /// An observer must see the stream end when a write makes the entry invalid.
     #[cfg(unix)]
     #[tokio::test]
     #[traced_test]
-    async fn test_observe_ends_when_write_poisons() -> TestResult<()> {
+    async fn test_observe_ends_when_write_invalidates() -> TestResult<()> {
         use std::os::unix::fs::PermissionsExt;
 
         let testdir = tempfile::tempdir()?;
@@ -2507,8 +3320,9 @@ pub mod tests {
                 let (_, bao) = create_n0_bao(&data, &rest)?;
                 store.import_bao_bytes(hash, rest, bao).await?;
             }
-            store.wait_idle().await?;
+            // The files go after the commit, through a notice to the entity.
             store.sync_db().await?;
+            store.wait_idle().await?;
             let inlined = size <= options.inline.max_data_inlined as usize;
             assert_eq!(path.data_path(&hash).exists(), !inlined, "size={size}");
             assert!(!path.outboard_path(&hash).exists(), "by_import={by_import}");
@@ -2520,8 +3334,77 @@ pub mod tests {
         Ok(())
     }
 
+    /// Deleting an observed entry ends the observer, and its files are gone once the delete returns.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_delete_ends_observers_and_removes_files() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let db_dir = testdir.path().join("db");
+        let options = Options::new(&db_dir);
+        let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        let data = test_data(1024 * 1024);
+        let half = ChunkRanges::from(..ChunkNum(4));
+        let (hash, bao) = create_n0_bao(&data, &half)?;
+        store.import_bao_bytes(hash, half, bao).await?;
+        store.wait_idle().await?;
+        let files = [
+            path.data_path(&hash),
+            path.outboard_path(&hash),
+            path.sizes_path(&hash),
+        ];
+        assert!(files.iter().all(|f| f.exists()));
+        let mut obs = Box::pin(store.observe(hash).stream().await?);
+        obs.next().await.expect("initial bitfield");
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        assert!(
+            files.iter().all(|f| !f.exists()),
+            "the delete returns after the files are gone"
+        );
+        assert!(!path.bitfield_path(&hash).exists());
+        let rest = tokio::time::timeout(Duration::from_secs(5), obs.collect::<Vec<_>>()).await?;
+        assert!(rest.is_empty(), "the observer ends instead of seeing less");
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    /// No metadata row is still a completed delete, including observer teardown.
+    #[tokio::test]
+    async fn test_delete_absent_entry_completes_and_can_be_reimported() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let options = Options::new(dir.path());
+        let store = FsStore::load_with_opts(dir.path().join("blobs.db"), options.clone()).await?;
+        let data = test_data(100_000);
+        let hash = Hash::new(&data);
+        let mut observer = Box::pin(store.observe(hash).stream().await?);
+        assert!(observer.next().await.is_some());
+        // A file left by an interrupted import need not have a metadata row.
+        std::fs::write(options.path.data_path(&hash), b"orphan")?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            store.blobs().delete(vec![hash, hash]),
+        )
+        .await??;
+        assert!(!options.path.data_path(&hash).exists());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), observer.next())
+                .await?
+                .is_none()
+        );
+        assert_eq!(store.add_bytes(data.clone()).await?.hash, hash);
+        assert_eq!(store.get_bytes(hash).await?, data);
+        store.shutdown().await?;
+        Ok(())
+    }
+
     /// Requests that reach the store after its shutdown must not panic its tasks,
-    /// e.g. on an entry that the shutdown poisoned.
+    /// e.g. on an entry that the shutdown made invalid.
     #[tokio::test]
     #[traced_test]
     async fn test_requests_after_shutdown_do_not_panic() -> TestResult<()> {
@@ -2542,6 +3425,17 @@ pub mod tests {
         store.shutdown().await?;
         for hash in [complete, unknown] {
             let timeout = Duration::from_secs(5);
+            for _ in 0..2 {
+                assert!(tokio::time::timeout(
+                    timeout,
+                    store.blobs().delete_with_opts(api::blobs::DeleteOptions {
+                        hashes: vec![hash],
+                        force: true,
+                    })
+                )
+                .await?
+                .is_err());
+            }
             tokio::time::timeout(timeout, store.observe(hash))
                 .await
                 .ok();

@@ -38,6 +38,7 @@ pub enum GcSweepEvent {
 pub(super) async fn gc_mark_task(
     store: &Store,
     live: &mut HashSet<Hash>,
+    roots: &[HashAndFormat],
     co: &Co<GcMarkEvent>,
 ) -> crate::api::Result<()> {
     macro_rules! trace {
@@ -60,27 +61,10 @@ pub(super) async fn gc_mark_task(
             seqs.insert(hash);
         }
     };
-    // Temp tags are read before named tags, so that a blob whose temp tag is
-    // replaced by a named tag between the two reads, as `with_named_tag` does,
-    // is seen in at least one of them (#247).
-    //
-    // TODO: this is a stopgap. The opposite handover, from a named tag to a
-    // temp tag, can still be missed. The planned fix is to also list every
-    // temp tag that existed since the start of the run, which works for any
-    // read order.
-    trace!("traversing temp roots");
-    let mut tts = store.tags().list_temp_tags().await?;
-    while let Some(tt) = tts.next().await {
-        let tt = tt?;
-        trace!("adding temp root {:?}", tt);
-        add_root(tt);
-    }
-    trace!("traversing tags");
-    let mut tags = store.tags().list().await?;
-    while let Some(tag) = tags.next().await {
-        let info = tag?;
-        trace!("adding root {:?} {:?}", info.name, info.hash_and_format());
-        add_root(info.hash_and_format());
+    // Entry freezes and tag suspension cover this exact root snapshot until
+    // the GC guard is dropped. Never re-list roots during the session.
+    for &root in roots {
+        add_root(root);
     }
     for hash in seqs {
         let mut stream = store.export_bao(hash, ChunkRanges::all()).hashes();
@@ -101,38 +85,41 @@ pub(super) async fn gc_mark_task(
 
 async fn gc_sweep_task(
     store: &Store,
+    run: &mut crate::api::blobs::GcRun,
     live: &HashSet<Hash>,
     co: &Co<GcSweepEvent>,
 ) -> crate::api::Result<()> {
-    let mut blobs = store.blobs().list().stream().await?;
     let mut count = 0;
     let mut batch = Vec::new();
-    while let Some(hash) = blobs.next().await {
-        let hash = hash?;
+    // The sweep is the last use of the candidates, so take them.
+    let candidates = std::mem::take(&mut run.snapshot.candidates);
+    for hash in candidates {
         if !live.contains(&hash) {
             batch.push(hash);
             count += 1;
         }
         if batch.len() >= 100 {
-            store.blobs().delete(batch.clone()).await?;
-            batch.clear();
+            run.delete(std::mem::take(&mut batch)).await?;
         }
     }
     if !batch.is_empty() {
-        store.blobs().delete(batch).await?;
+        run.delete(batch).await?;
     }
     store.sync_db().await?;
-    co.yield_(GcSweepEvent::CustomDebug(format!("deleted {count} blobs")))
-        .await;
+    co.yield_(GcSweepEvent::CustomDebug(format!(
+        "requested deletion of {count} blobs"
+    )))
+    .await;
     Ok(())
 }
 
 fn gc_mark<'a>(
     store: &'a Store,
     live: &'a mut HashSet<Hash>,
+    roots: &'a [HashAndFormat],
 ) -> impl Stream<Item = GcMarkEvent> + 'a {
     Gen::new(|co| async move {
-        if let Err(e) = gc_mark_task(store, live, &co).await {
+        if let Err(e) = gc_mark_task(store, live, roots, &co).await {
             co.yield_(GcMarkEvent::Error(e)).await;
         }
     })
@@ -140,10 +127,11 @@ fn gc_mark<'a>(
 
 fn gc_sweep<'a>(
     store: &'a Store,
+    run: &'a mut crate::api::blobs::GcRun,
     live: &'a HashSet<Hash>,
 ) -> impl Stream<Item = GcSweepEvent> + 'a {
     Gen::new(|co| async move {
-        if let Err(e) = gc_sweep_task(store, live, &co).await {
+        if let Err(e) = gc_sweep_task(store, run, live, &co).await {
             co.yield_(GcSweepEvent::Error(e)).await;
         }
     })
@@ -159,8 +147,23 @@ pub struct GcConfig {
     pub interval: Duration,
     /// Optional callback to manually add protected blobs.
     ///
-    /// The callback is called before each garbage collection run. It gets a `&mut HashSet<Hash>`
-    /// and returns a future that returns [`ProtectOutcome`]. All hashes that are added to the
+    /// The callback is called after marking, before sweeping. It gets a `&mut HashSet<Hash>`
+    /// and returns a future that returns [`ProtectOutcome`].
+    ///
+    /// # Deadlocks
+    ///
+    /// The callback runs while the GC run holds the store's GC session. The
+    /// store holds back these operations until the session ends, so a callback
+    /// that awaits one of them, directly or through another task, deadlocks the
+    /// GC run and everything waiting behind it:
+    ///
+    /// - setting, creating, deleting or renaming tags, and creating temp tags,
+    /// - completing an import, since every import ends with a temp tag,
+    /// - writing to, downloading into, or deleting a HashSeq root of this run.
+    ///
+    /// Reads, and writes to other blobs, are fine.
+    ///
+    /// All hashes that are added to the
     /// [`HashSet`] will be protected from garbage collection during this run.
     ///
     /// In normal operation, return [`ProtectOutcome::Continue`] from the callback. If you return
@@ -197,19 +200,32 @@ pub type ProtectCb = Arc<
 
 /// Runs a single mark-and-sweep garbage collection cycle.
 ///
-/// The optional `protect` callback ([`GcConfig::add_protected`]) is invoked after the mark phase,
-/// immediately before the sweep. Capturing the protected set this late is required for correctness:
-/// a reference committed after an earlier snapshot, whose import temp tag was dropped before the
-/// mark phase, would otherwise be missed by both protections and swept while still referenced.
+/// Entering GC captures candidates and roots, freezes HashSeq data, and defers
+/// all tag mutations (including imports that publish a temp tag). Available
+/// chunks of incomplete roots are traversed without waiting for missing data.
+/// Blobs absent from the candidate snapshot cannot be swept this round.
+///
+/// The optional `protect` callback ([`GcConfig::add_protected`]) runs after
+/// marking, before sweep. It must only add hashes to `live`, and must not wait
+/// for anything the session holds back, see [`GcConfig::add_protected`] for the
+/// deadlock this causes. External writers must acquire store protection before
+/// publishing references, and establish/check content after acquisition if it
+/// was previously unprotected.
+///
+/// Completion, errors and cancellation release the session. Sweep deletes go
+/// over the session itself, and the store finishes the ones it received before
+/// it resumes deferred tag publication.
 pub async fn gc_run_once(
     store: &Store,
     live: &mut HashSet<Hash>,
     protect: Option<&ProtectCb>,
 ) -> crate::api::Result<()> {
     debug!(externally_protected = live.len(), "gc: start");
+    // Enter returns only after tag mutations are suspended and every captured
+    // HashSeq root is frozen. Dropping the guard exits on success/error/cancel.
+    let mut run = store.gc_run().await?;
     {
-        store.clear_protected().await?;
-        let mut stream = gc_mark(store, live);
+        let mut stream = gc_mark(store, live, &run.snapshot.roots);
         while let Some(ev) = stream.next().await {
             match ev {
                 GcMarkEvent::CustomDebug(msg) => {
@@ -237,7 +253,7 @@ pub async fn gc_run_once(
     }
     debug!(total_protected = live.len(), "gc: sweep");
     {
-        let mut stream = gc_sweep(store, live);
+        let mut stream = gc_sweep(store, &mut run, live);
         while let Some(ev) = stream.next().await {
             match ev {
                 GcSweepEvent::CustomDebug(msg) => {
@@ -448,33 +464,59 @@ mod tests {
         Ok(())
     }
 
-    /// Blobs written after the mark phase of a gc run, so not in `live`,
-    /// must survive the sweep of that run.
+    /// New blobs are deferred to the next candidate snapshot, even without a
+    /// tag. Existing candidates still need current or retained temp protection.
     async fn gc_import_after_mark_survives(store: &Store) -> TestResult<()> {
         use bao_tree::ChunkNum;
 
         use crate::{api::blobs::BlobStatus, store::util::tests::create_n0_bao};
-        // the mark phase of a run that sees nothing live
-        store.clear_protected().await?;
+        let kept = store.add_slice(vec![0u8; 100000]).temp_tag().await?;
+        let dropped = store.add_slice(vec![2u8; 100000]).temp_tag().await?;
+        let dropped_hash = dropped.hash();
+        let old = store.add_slice("old untagged blob").temp_tag().await?;
+        let old_hash = old.hash();
+        drop(old);
+        store.sync_db().await?;
+        let mut run = store.gc_run().await?;
+        let candidates = run.snapshot.candidates.clone();
+        assert!(candidates.contains(&kept.hash()));
+        assert!(candidates.contains(&dropped_hash));
+        assert!(candidates.contains(&old_hash));
+        // Model a mark that missed these roots. Temp-tag retention protects
+        // candidates even when a tag is dropped before sweep.
         let live = HashSet::new();
-        // a complete import and a partial import between mark and sweep
-        let a = store.add_slice(vec![0u8; 100000]).temp_tag().await?;
-        let ah = a.hash();
+        drop(dropped);
+        // Written after candidate collection, without any tag.
         let data = vec![1u8; 100000];
         let ranges = ChunkRanges::from(..ChunkNum(16));
-        let (bh, b_bao) = create_n0_bao(&data, &ranges)?;
-        store.import_bao_bytes(bh, ranges, b_bao).await?;
-        let mut stream = gc_sweep(store, &live);
+        let (untagged, bao) = create_n0_bao(&data, &ranges)?;
+        store.import_bao_bytes(untagged, ranges, bao).await?;
+        let mut stream = gc_sweep(store, &mut run, &live);
         while let Some(ev) = stream.next().await {
             if let GcSweepEvent::Error(err) = ev {
                 return Err(err.into());
             }
         }
-        assert!(store.has(ah).await?, "complete import was swept");
+        assert!(store.has(kept.hash()).await?, "a temp tag protects");
         assert!(
-            store.status(bh).await? != BlobStatus::NotFound,
-            "partial import was swept"
+            store.has(dropped_hash).await?,
+            "a dropped tag protects this round"
         );
+        assert!(
+            !store.has(old_hash).await?,
+            "old unprotected candidates are swept"
+        );
+        assert!(matches!(
+            store.status(untagged).await?,
+            BlobStatus::Partial { .. }
+        ));
+        drop(stream);
+        drop(run);
+
+        // Deferral lasts only this round; there is no retained write-protection set.
+        gc_run_once(store, &mut HashSet::new(), None).await?;
+        assert_eq!(store.status(untagged).await?, BlobStatus::NotFound);
+        assert!(store.has(kept.hash()).await?);
         Ok(())
     }
 
@@ -494,103 +536,432 @@ mod tests {
         gc_import_after_mark_survives(&store).await
     }
 
-    /// Returns a store that forwards every request to `inner`, and runs
-    /// `handover` once the first tag listing of a gc run, named or temp, has
-    /// gone to `inner`. The handover thus lands between the two listings.
-    ///
-    /// `handover` must make a request to `inner` before it changes any temp
-    /// tag, so that the listing is answered first.
-    fn store_with_handover<F>(inner: &Store, handover: F) -> Store
-    where
-        F: FnOnce() -> n0_future::boxed::BoxFuture<()> + Send + 'static,
-    {
-        use crate::api::proto::Command;
-        let inner = inner.client().as_local().expect("a local store");
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
-        tokio::spawn(async move {
-            let mut handover = Some(handover);
-            while let Some(cmd) = rx.recv().await {
-                let listing = matches!(cmd, Command::ListTags(_) | Command::ListTempTags(_));
-                if inner.send_raw(cmd).await.is_err() {
-                    break;
-                }
-                if let Some(handover) = handover.take_if(|_| listing) {
-                    handover().await;
-                }
-            }
-        });
-        Store::from_client(tx)
+    async fn assert_pending<T>(task: &mut tokio::task::JoinHandle<T>) {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), task)
+                .await
+                .is_err(),
+            "operation completed while GC held the freeze"
+        );
     }
 
-    #[tokio::test]
-    async fn gc_aborts_on_temp_tag_listing_error() -> TestResult {
-        gc_aborts_on_incomplete_temp_tag_listing(false).await
-    }
+    /// A partial root remains readable but cannot gain references; a complete
+    /// root cannot be deleted/recreated. Unrelated writes/deletes still proceed.
+    async fn gc_freezes_hashseqs(store: &Store) -> TestResult {
+        use bao_tree::ChunkNum;
 
-    #[tokio::test]
-    async fn gc_aborts_on_temp_tag_listing_closed_early() -> TestResult {
-        gc_aborts_on_incomplete_temp_tag_listing(true).await
-    }
-
-    async fn gc_aborts_on_incomplete_temp_tag_listing(close_early: bool) -> TestResult {
-        use crate::api::proto::Command;
-
-        let store = crate::store::mem::MemStore::new();
-        let tag = store
-            .add_slice("must survive a failed mark")
+        use crate::{api::blobs::DeleteOptions, store::util::tests::create_n0_bao};
+        let child = store.add_slice("known child").temp_tag().await?;
+        let hash = child.hash();
+        let late = store.add_slice("unpublished child").temp_tag().await?;
+        let late_hash = late.hash();
+        drop(late);
+        let data: bytes::Bytes = std::iter::repeat_n(hash, 512)
+            .chain(std::iter::repeat_n(late_hash, 512))
+            .chain(std::iter::repeat_n(Hash::new("unavailable"), 512))
+            .collect::<HashSeq>()
+            .into();
+        let first = ChunkRanges::from(..ChunkNum(16));
+        let (root, bao) = create_n0_bao(&data, &first)?;
+        let root_tag = store.tags().temp_tag(HashAndFormat::hash_seq(root)).await?;
+        store
+            .import_bao_bytes(root, first.clone(), bao.clone())
+            .await?;
+        let complete_data: bytes::Bytes = [hash].into_iter().collect::<HashSeq>().into();
+        let complete = store
+            .add_bytes_with_opts(AddBytesOptions {
+                data: complete_data.clone(),
+                format: BlobFormat::HashSeq,
+            })
             .temp_tag()
             .await?;
-        let hash = tag.hash();
-        drop(tag);
-        let inner = store.client().as_local().expect("a local store");
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Command>(32);
-        let responder = tokio::spawn(async move {
-            while let Some(cmd) = rx.recv().await {
-                if let Command::ListTempTags(cmd) = cmd {
-                    if close_early {
-                        continue;
-                    }
-                    cmd.tx
-                        .send(crate::api::proto::ListTempTagsItem::Error(
-                            crate::api::Error::io(
-                                io::ErrorKind::Unsupported,
-                                "temp tag listing unsupported",
-                            ),
-                        ))
-                        .await
-                        .unwrap();
-                } else if inner.send_raw(cmd).await.is_err() {
-                    break;
-                }
-            }
+        let complete_hash = complete.hash();
+        let garbage = store.add_slice("garbage").temp_tag().await?;
+        let garbage_hash = garbage.hash();
+        drop(garbage);
+        store.sync_db().await?;
+
+        let mut run = store.gc_run().await?;
+        assert!(run.delete(vec![complete_hash]).await.is_err());
+        assert!(run.snapshot.candidates.contains(&late_hash));
+        assert!(run.snapshot.roots.contains(&root_tag.hash_and_format()));
+        let writer_store = store.clone();
+        let mut writer = tokio::spawn(async move {
+            let range = ChunkRanges::from(ChunkNum(16)..ChunkNum(32));
+            let (_, bao) = create_n0_bao(&data, &range)?;
+            writer_store.import_bao_bytes(root, range, bao).await?;
+            TestResult::Ok(())
         });
-        let proxy = Store::from_client(tx);
-        assert!(gc_run_once(&proxy, &mut HashSet::new(), None)
-            .await
-            .is_err());
-        assert!(store.has(hash).await?, "GC swept after a failed mark");
-        drop(proxy);
-        responder.await?;
+        let delete_store = store.clone();
+        let mut delete = tokio::spawn(async move {
+            delete_store
+                .blobs()
+                .delete_with_opts(DeleteOptions {
+                    hashes: vec![complete_hash],
+                    force: true,
+                })
+                .await
+        });
+        assert_pending(&mut writer).await;
+        assert_pending(&mut delete).await;
+        assert_eq!(store.export_bao(root, first).bao_to_vec().await?, bao);
+        assert_eq!(store.get_bytes(complete_hash).await?, complete_data);
+        let mut observed = store.observe(root).stream().await?;
+        assert!(observed.next().await.is_some());
+
+        // A raw download needs no tag operation and is outside the candidates.
+        let new_data = b"new raw download";
+        let (new_hash, new_bao) = create_n0_bao(new_data, &ChunkRanges::all())?;
+        store
+            .import_bao_bytes(new_hash, ChunkRanges::all(), new_bao)
+            .await?;
+        let mut live = HashSet::new();
+        let mut mark = gc_mark(store, &mut live, &run.snapshot.roots);
+        while let Some(event) = mark.next().await {
+            if let GcMarkEvent::Error(err) = event {
+                return Err(err.into());
+            }
+        }
+        drop(mark);
+        assert!(live.contains(&hash));
+        assert!(!live.contains(&late_hash));
+        let mut sweep = gc_sweep(store, &mut run, &live);
+        while let Some(event) = sweep.next().await {
+            if let GcSweepEvent::Error(err) = event {
+                return Err(err.into());
+            }
+        }
+        drop(sweep);
+        assert!(!store.has(garbage_hash).await?);
+        assert!(store.has(new_hash).await?);
+        assert_pending(&mut writer).await;
+        assert_pending(&mut delete).await;
+        drop(run);
+        writer.await??;
+        delete.await??;
+        assert!(!store.has(complete_hash).await?);
+        // The previously unknown reference is only published after sweep.
+        let mut hashes = store
+            .export_bao(root, ChunkRanges::from(..ChunkNum(32)))
+            .hashes();
+        let mut seen = HashSet::new();
+        while let Some(hash) = hashes.next().await {
+            seen.insert(hash?);
+        }
+        assert!(seen.contains(&late_hash));
+        drop(hashes);
+        drop(observed);
+        drop(root_tag);
+        drop(complete);
+        drop(child);
         Ok(())
     }
 
-    /// A blob whose temp tag is replaced by a named tag during the mark, as
-    /// `with_named_tag` does, survives the run (#247).
-    #[tokio::test]
-    #[traced_test]
-    async fn gc_temp_to_named_handover() -> TestResult {
-        let store = crate::store::mem::MemStore::new();
-        let tt = store.add_slice("handover").temp_tag().await?;
-        let hash = tt.hash();
-        let inner = (*store).clone();
-        let proxy = store_with_handover(&store, move || {
-            Box::pin(async move {
-                inner.tags().set("named", tt.hash_and_format()).await.ok();
-                drop(tt);
+    async fn gc_suspends_tag_mutations(store: &Store) -> TestResult {
+        let a = store.add_slice("a").temp_tag().await?;
+        let b = store.add_slice("b").temp_tag().await?;
+        let ah = a.hash();
+        let bh = b.hash();
+        for name in ["set", "rename", "delete"] {
+            store.tags().set(name, ah).await?;
+        }
+        let run = store.gc_run().await?;
+        let mut changes = Vec::new();
+        for kind in 0..5 {
+            let store = store.clone();
+            changes.push(tokio::spawn(async move {
+                match kind {
+                    0 => store.tags().set("set", bh).await?,
+                    1 => {
+                        store.tags().create(bh).await?;
+                    }
+                    2 => store.tags().rename("rename", "renamed").await?,
+                    3 => {
+                        store.tags().delete("delete").await?;
+                    }
+                    4 => {
+                        store
+                            .tags()
+                            .set("hashseq", HashAndFormat::hash_seq(bh))
+                            .await?
+                    }
+                    _ => unreachable!(),
+                }
+                TestResult::Ok(())
+            }));
+        }
+        let mut temps = Vec::new();
+        for value in [HashAndFormat::raw(bh), HashAndFormat::hash_seq(bh)] {
+            let store = store.clone();
+            temps.push(tokio::spawn(
+                async move { store.tags().temp_tag(value).await },
+            ));
+        }
+        let import_store = store.clone();
+        let mut import =
+            tokio::spawn(async move { import_store.add_slice("new import").temp_tag().await });
+        for task in &mut changes {
+            assert_pending(task).await;
+        }
+        for task in &mut temps {
+            assert_pending(task).await;
+        }
+        assert_pending(&mut import).await;
+        // Reads work, and replacements/deletes have not taken effect.
+        let mut tags = store.tags().list().await?;
+        let mut before = Vec::new();
+        while let Some(tag) = tags.next().await {
+            before.push(tag?);
+        }
+        assert_eq!(before.len(), 3);
+        assert!(before.iter().all(|tag| tag.hash == ah));
+        drop(tags);
+        // The root captured at entry remains protected even when its tag drops.
+        drop(a);
+        assert!(run.snapshot.roots.contains(&HashAndFormat::raw(ah)));
+        drop(run);
+        for task in changes {
+            task.await??;
+        }
+        let mut held = Vec::new();
+        for task in temps {
+            held.push(task.await??);
+        }
+        held.push(import.await??);
+        let mut tags = store.tags().list().await?;
+        let mut names = std::collections::BTreeSet::new();
+        while let Some(tag) = tags.next().await {
+            names.insert(tag?.name);
+        }
+        assert!(names.contains(&crate::api::Tag::from("renamed")));
+        assert!(!names.contains(&crate::api::Tag::from("delete")));
+        Ok(())
+    }
+
+    /// Cancel a client while waiting for the entry reply, and while holding a
+    /// session. Both cases must release freezes and let later sessions enter.
+    async fn gc_cancellation_releases_session(store: &Store) -> TestResult {
+        let root = store
+            .add_bytes_with_opts(AddBytesOptions {
+                data: [Hash::new("child")].into_iter().collect::<HashSeq>().into(),
+                format: BlobFormat::HashSeq,
             })
+            .temp_tag()
+            .await?;
+        for _ in 0..5 {
+            let (updates, events) = store
+                .client()
+                .bidi_streaming(crate::api::proto::GcRunRequest, 1, 1)
+                .await?;
+            drop(events);
+            drop(updates);
+            let run = store.gc_run().await?;
+            let next_store = store.clone();
+            let mut next = tokio::spawn(async move { next_store.gc_run().await });
+            assert_pending(&mut next).await;
+            drop(run);
+            drop(next.await??);
+        }
+        store
+            .tags()
+            .set("after cancellation", root.hash_and_format())
+            .await?;
+        Ok(())
+    }
+
+    /// A sweep delete the store received finishes before the session ends, even
+    /// if the client disconnects right after sending it. Deferred tag ops only
+    /// run after it.
+    async fn gc_cancel_during_delete(store: &Store) -> TestResult {
+        use crate::api::proto::{GcEvent, GcRunRequest, GcRunUpdate};
+        let garbage = store
+            .add_slice("cancelled-sweep candidate")
+            .temp_tag()
+            .await?;
+        let hash = garbage.hash();
+        drop(garbage);
+        store.sync_db().await?;
+        let (updates, mut events) = store.client().bidi_streaming(GcRunRequest, 1, 1).await?;
+        let Some(GcEvent::Snapshot(Ok(snapshot))) = events.recv().await? else {
+            panic!("expected the gc snapshot");
+        };
+        assert!(snapshot.candidates.contains(&hash));
+        let tag_store = store.clone();
+        let mut tag = tokio::spawn(async move { tag_store.tags().temp_tag(hash).await });
+        assert_pending(&mut tag).await;
+        updates.send(GcRunUpdate::Delete(vec![hash])).await?;
+        drop(updates);
+        drop(events);
+        let _tag = tag.await??;
+        assert!(!store.has(hash).await?, "the tag overtook the sweep delete");
+        Ok(())
+    }
+
+    async fn gc_shutdown_releases_session(store: &Store) -> TestResult {
+        let root = store
+            .add_bytes_with_opts(AddBytesOptions {
+                data: [Hash::new("shutdown child")]
+                    .into_iter()
+                    .collect::<HashSeq>()
+                    .into(),
+                format: BlobFormat::HashSeq,
+            })
+            .temp_tag()
+            .await?;
+        let run = store.gc_run().await?;
+        let tag_store = store.clone();
+        let hash = root.hash();
+        let mut tag = tokio::spawn(async move { tag_store.tags().temp_tag(hash).await });
+        assert_pending(&mut tag).await;
+        store.shutdown().await?;
+        assert!(tag.await?.is_err(), "shutdown must reject deferred tags");
+        drop(run);
+        drop(root);
+        Ok(())
+    }
+
+    /// A batch scope that ends while its tag and import requests wait for a gc
+    /// session must not be recreated when they run: they are rejected instead.
+    async fn gc_closed_scope_rejects_deferred_work(store: &Store) -> TestResult {
+        use crate::api::proto::{BatchRequest, CreateTempTagRequest};
+
+        let (scope_tx, scope_rx) = store.client().client_streaming(BatchRequest, 1).await?;
+        let scope = scope_rx.await?;
+        let anchor = Hash::new("scope anchor");
+        let _anchor = store
+            .client()
+            .rpc(CreateTempTagRequest {
+                scope,
+                value: anchor.into(),
+            })
+            .await?;
+        let run = store.gc_run().await?;
+        let child = Hash::new("deferred scope child");
+        let client = store.client().clone();
+        let pending = tokio::spawn(async move {
+            client
+                .rpc(CreateTempTagRequest {
+                    scope,
+                    value: child.into(),
+                })
+                .await
         });
-        gc_run_once(&proxy, &mut HashSet::new(), None).await?;
-        assert!(store.has(hash).await?, "the handed over blob was swept");
+        let mut imports = Vec::new();
+        for size in [0, 17, 100_000] {
+            let data = bytes::Bytes::from(vec![9; size]);
+            let hash = Hash::new(&data);
+            let import = store
+                .client()
+                .server_streaming(
+                    crate::api::proto::ImportBytesRequest {
+                        scope,
+                        data,
+                        format: crate::BlobFormat::Raw,
+                    },
+                    32,
+                )
+                .await?;
+            imports.push((hash, import));
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        drop(scope_tx);
+        loop {
+            let mut tags = store.tags().list_temp_tags().await?;
+            let mut present = false;
+            while let Some(tag) = tags.next().await {
+                present |= tag?.hash == anchor;
+            }
+            if !present {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        drop(run);
+        assert!(pending.await?.is_err(), "ended scope accepted a tag");
+        for (hash, mut import) in imports {
+            let mut failed = false;
+            while let Some(item) = import.recv().await? {
+                match item {
+                    crate::api::blobs::AddProgressItem::Error(_) => failed = true,
+                    crate::api::blobs::AddProgressItem::Done(_) => {
+                        panic!("ended scope accepted an import")
+                    }
+                    _ => {}
+                }
+            }
+            assert!(failed);
+            if hash != Hash::EMPTY {
+                assert!(
+                    !store.has(hash).await?,
+                    "rejected import modified the store"
+                );
+            }
+        }
+        let mut tags = store.tags().list_temp_tags().await?;
+        let mut resurrected = false;
+        while let Some(tag) = tags.next().await {
+            resurrected |= tag?.hash == child;
+        }
+        assert!(!resurrected, "closed scope was recreated");
+        // Lazy global scope creation and unrelated imports still work.
+        let tag = store
+            .add_slice("global import after rejected batch")
+            .temp_tag()
+            .await?;
+        assert!(store.has(tag.hash()).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gc_session_mem() -> TestResult {
+        let store = crate::store::mem::MemStore::new();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            gc_freezes_hashseqs(&store).await?;
+            gc_suspends_tag_mutations(&store).await?;
+            gc_cancellation_releases_session(&store).await?;
+            gc_cancel_during_delete(&store).await?;
+            gc_closed_scope_rejects_deferred_work(&store).await?;
+            gc_shutdown_releases_session(&store).await
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_session_fs() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(dir.path()).await?;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            gc_freezes_hashseqs(&store).await?;
+            gc_suspends_tag_mutations(&store).await?;
+            gc_cancellation_releases_session(&store).await?;
+            gc_cancel_during_delete(&store).await?;
+            gc_closed_scope_rejects_deferred_work(&store).await?;
+            gc_shutdown_releases_session(&store).await
+        })
+        .await??;
+        Ok(())
+    }
+
+    /// Shutdown must not wait for a gc client that does not read its replies.
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_shutdown_with_unread_replies_fs() -> TestResult {
+        use crate::api::proto::{GcRunRequest, GcRunUpdate};
+        let dir = tempfile::tempdir()?;
+        let store = crate::store::fs::FsStore::load(dir.path()).await?;
+        let (tx, mut rx) = store.client().bidi_streaming(GcRunRequest, 1, 1).await?;
+        rx.recv().await?;
+        // The second reply does not fit the reply channel, so the session
+        // task blocks sending it.
+        for _ in 0..2 {
+            tx.send(GcRunUpdate::Delete(vec![])).await?;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout(Duration::from_secs(5), store.shutdown()).await??;
+        drop(rx);
+        drop(tx);
         Ok(())
     }
 
@@ -749,70 +1120,38 @@ mod tests {
         gc_protect_race(&store).await
     }
 
-    /// A blob whose reference is committed during a GC run is not swept.
-    ///
-    /// Models an iroh-docs-style consumer: committed references are reported via the
-    /// `add_protected` callback, and an import temp tag is held across each commit. The callback
-    /// imports a blob and drops its temp tag without reporting it, modeling a reference committed
-    /// just after the protect snapshot. The blob must survive: `gc_run_once` runs the callback
-    /// after `clear_protected`, so the import is covered by the store's protected set.
+    /// The callback reports external references while concurrent tag publication
+    /// waits. Its snapshot and the store snapshot together protect old content.
     async fn gc_protect_race(store: &Store) -> TestResult {
         use tokio::sync::{mpsc, oneshot};
-
-        // A committed reference, protected only via the callback; its import temp tag is dropped.
-        let existing = {
-            let tt = store.blobs().add_slice("existing").temp_tag().await?;
-            let hash = tt.hash();
-            drop(tt);
-            hash
-        };
-
-        // The racy import runs in a separate task: a `ProtectCb` future must be `Sync`, but the
-        // import future is not (the real iroh-docs callback only awaits channels for this reason).
-        let (trigger_tx, mut trigger_rx) = mpsc::channel::<oneshot::Sender<Hash>>(1);
-        let store_writer = store.clone();
-        let writer = tokio::spawn(async move {
-            while let Some(ack) = trigger_rx.recv().await {
-                let tt = store_writer
-                    .blobs()
-                    .add_slice("racy")
-                    .temp_tag()
-                    .await
-                    .expect("import failed");
-                let hash = tt.hash();
-                drop(tt); // temp tag dropped after the (modeled) commit
-                let _ = ack.send(hash);
-            }
-        });
-
-        let cb: ProtectCb = Arc::new(move |live: &mut HashSet<Hash>| {
-            let trigger_tx = trigger_tx.clone();
+        let tt = store.add_slice("external").temp_tag().await?;
+        let hash = tt.hash();
+        drop(tt);
+        let (entered_tx, mut entered_rx) = mpsc::channel::<oneshot::Sender<()>>(1);
+        let cb: ProtectCb = Arc::new(move |live| {
+            live.insert(hash);
+            let entered_tx = entered_tx.clone();
             Box::pin(async move {
-                // Snapshot of committed references at callback time.
-                live.insert(existing);
-                // Trigger the racy write and wait for it to complete. Its hash is intentionally
-                // NOT added to `live`, modeling a reference committed just after this snapshot.
-                let (ack_tx, ack_rx) = oneshot::channel();
-                trigger_tx.send(ack_tx).await.expect("writer gone");
-                ack_rx.await.expect("writer gone");
+                let (release, released) = oneshot::channel();
+                entered_tx.send(release).await.unwrap();
+                released.await.unwrap();
                 ProtectOutcome::Continue
             })
         });
-
-        let mut live = HashSet::new();
-        gc_run_once(store, &mut live, Some(&cb)).await?;
-
-        // The racy blob is content-addressed, so its hash is deterministic.
-        let racy = Hash::new("racy");
-        assert!(
-            store.has(existing).await?,
-            "committed reference reported by the callback must survive"
-        );
-        assert!(
-            store.has(racy).await?,
-            "blob imported during the GC run must survive (protected set must be honored)"
-        );
-        drop(writer);
+        let gc_store = store.clone();
+        let gc =
+            tokio::spawn(
+                async move { gc_run_once(&gc_store, &mut HashSet::new(), Some(&cb)).await },
+            );
+        let release = entered_rx.recv().await.unwrap();
+        let writer_store = store.clone();
+        let mut writer = tokio::spawn(async move { writer_store.tags().temp_tag(hash).await });
+        assert_pending(&mut writer).await;
+        assert!(store.has(hash).await?);
+        release.send(()).unwrap();
+        gc.await??;
+        let _tag = writer.await??;
+        assert!(store.has(hash).await?);
         Ok(())
     }
 

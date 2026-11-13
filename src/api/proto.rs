@@ -156,8 +156,23 @@ pub enum Request {
     WaitIdle(WaitIdleRequest),
     #[rpc(tx = oneshot::Sender<()>)]
     Shutdown(ShutdownRequest),
-    #[rpc(tx = oneshot::Sender<super::Result<()>>)]
-    ClearProtected(ClearProtectedRequest),
+    #[rpc(tx = mpsc::Sender<GcEvent>, rx = mpsc::Receiver<GcRunUpdate>)]
+    GcRun(GcRunRequest),
+}
+
+impl Command {
+    /// These operations can change the root set. Temp-tag drops are instead
+    /// retained by TempTags for the lifetime of the GC session.
+    pub(crate) fn mutates_tags(&self) -> bool {
+        matches!(
+            self,
+            Self::SetTag(_)
+                | Self::CreateTag(_)
+                | Self::DeleteTags(_)
+                | Self::RenameTag(_)
+                | Self::CreateTempTag(_)
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,8 +184,51 @@ pub struct SyncDbRequest;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShutdownRequest;
 
+/// Enter an exclusive GC session.
+///
+/// The first event is a [`GcEvent::Snapshot`], sent once HashSeq roots are
+/// frozen and tag mutations are suspended. The client then sends sweep deletes
+/// as [`GcRunUpdate::Delete`], and gets a [`GcEvent::Deleted`] for each, in
+/// order. Closing the update channel exits the session, also on cancellation;
+/// the store finishes the deletes it received before it releases the session.
+/// Reads and ordinary blob writes remain available. A client must not await,
+/// while holding the session, anything the session holds back: tag mutations,
+/// import completions, and writes to or deletes of frozen roots. That would
+/// deadlock, since those wait for the session to end.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ClearProtectedRequest;
+pub struct GcRunRequest;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct GcSnapshot {
+    pub candidates: Vec<Hash>,
+    pub roots: Vec<HashAndFormat>,
+}
+
+impl GcSnapshot {
+    pub(crate) fn hashseqs(&self) -> std::collections::HashSet<Hash> {
+        self.roots
+            .iter()
+            .filter(|root| !root.format.is_raw())
+            .map(|root| root.hash)
+            .collect()
+    }
+}
+
+/// From the client in a gc session, see [`GcRunRequest`].
+#[derive(Debug, Serialize, Deserialize)]
+pub enum GcRunUpdate {
+    /// Delete these candidates, unless a temp tag protects them.
+    Delete(Vec<Hash>),
+}
+
+/// From the store in a gc session, see [`GcRunRequest`].
+#[derive(Debug, Serialize, Deserialize)]
+pub enum GcEvent {
+    /// The first event: the session snapshot, or why the session failed.
+    Snapshot(super::Result<GcSnapshot>),
+    /// The result of one [`GcRunUpdate::Delete`].
+    Deleted(super::Result<()>),
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobStatusRequest {
@@ -189,10 +247,12 @@ pub enum BatchResponse {
     Ping,
 }
 
-/// Options for force deletion of blobs.
+/// Options for deleting blobs.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobDeleteRequest {
     pub hashes: Vec<Hash>,
+    /// Bypass current and retained temp-tag protection. In the fs store,
+    /// deletion still runs through the entity to coordinate state and files.
     pub force: bool,
 }
 
