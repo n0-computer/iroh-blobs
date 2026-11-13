@@ -1,0 +1,94 @@
+<svg class="fsd" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 830 476" width="830" height="476" style="max-width: 100%; height: auto" role="img" aria-label="A notice when no entity exists">
+  <!--
+    Sequence diagram for docs/fs-store-file-deletes-scenarios.md.
+    Time runs down. Lanes are lifelines, slanted arrows are messages:
+    indigo = message to or from the metadata actor (dashed = reply),
+    slate = file IO of the entity, rose = file delete, amber = live/parked state.
+    Boxes are steps an actor takes, metadata boxes are one batch.
+  -->
+  <style>
+    /* dark palette: rustdoc dark and ayu themes, or prefers-color-scheme when standalone */
+    :root[data-theme="dark"] .fsd [fill="#f3f4f6"], :root[data-theme="ayu"] .fsd [fill="#f3f4f6"] { fill: #1f2430 }
+    :root[data-theme="dark"] .fsd [fill="#fff"], :root[data-theme="ayu"] .fsd [fill="#fff"] { fill: #11141b }
+    :root[data-theme="dark"] .fsd [fill="#374151"], :root[data-theme="ayu"] .fsd [fill="#374151"] { fill: #e5e7eb }
+    :root[data-theme="dark"] .fsd [fill="#888"], :root[data-theme="ayu"] .fsd [fill="#888"] { fill: #9ca3af }
+    :root[data-theme="dark"] .fsd [fill="#9ca3af"], :root[data-theme="ayu"] .fsd [fill="#9ca3af"] { fill: #6b7280 }
+    :root[data-theme="dark"] .fsd [fill="#6366f1"], :root[data-theme="ayu"] .fsd [fill="#6366f1"] { fill: #818cf8 }
+    :root[data-theme="dark"] .fsd [fill="#d97706"], :root[data-theme="ayu"] .fsd [fill="#d97706"] { fill: #fbbf24 }
+    :root[data-theme="dark"] .fsd [fill="#e11d48"], :root[data-theme="ayu"] .fsd [fill="#e11d48"] { fill: #fb7185 }
+    :root[data-theme="dark"] .fsd [fill="#475569"], :root[data-theme="ayu"] .fsd [fill="#475569"] { fill: #94a3b8 }
+    :root[data-theme="dark"] .fsd [stroke="#f3f4f6"], :root[data-theme="ayu"] .fsd [stroke="#f3f4f6"] { stroke: #1f2430 }
+    :root[data-theme="dark"] .fsd [stroke="#fff"], :root[data-theme="ayu"] .fsd [stroke="#fff"] { stroke: #11141b }
+    :root[data-theme="dark"] .fsd [stroke="#374151"], :root[data-theme="ayu"] .fsd [stroke="#374151"] { stroke: #e5e7eb }
+    :root[data-theme="dark"] .fsd [stroke="#888"], :root[data-theme="ayu"] .fsd [stroke="#888"] { stroke: #9ca3af }
+    :root[data-theme="dark"] .fsd [stroke="#9ca3af"], :root[data-theme="ayu"] .fsd [stroke="#9ca3af"] { stroke: #6b7280 }
+    :root[data-theme="dark"] .fsd [stroke="#6366f1"], :root[data-theme="ayu"] .fsd [stroke="#6366f1"] { stroke: #818cf8 }
+    :root[data-theme="dark"] .fsd [stroke="#d97706"], :root[data-theme="ayu"] .fsd [stroke="#d97706"] { stroke: #fbbf24 }
+    :root[data-theme="dark"] .fsd [stroke="#e11d48"], :root[data-theme="ayu"] .fsd [stroke="#e11d48"] { stroke: #fb7185 }
+    :root[data-theme="dark"] .fsd [stroke="#475569"], :root[data-theme="ayu"] .fsd [stroke="#475569"] { stroke: #94a3b8 }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#f3f4f6"], .fsd:root [fill="#f3f4f6"] { fill: #1f2430 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#fff"], .fsd:root [fill="#fff"] { fill: #11141b }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#374151"], .fsd:root [fill="#374151"] { fill: #e5e7eb }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#888"], .fsd:root [fill="#888"] { fill: #9ca3af }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#9ca3af"], .fsd:root [fill="#9ca3af"] { fill: #6b7280 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#6366f1"], .fsd:root [fill="#6366f1"] { fill: #818cf8 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#d97706"], .fsd:root [fill="#d97706"] { fill: #fbbf24 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#e11d48"], .fsd:root [fill="#e11d48"] { fill: #fb7185 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#475569"], .fsd:root [fill="#475569"] { fill: #94a3b8 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#f3f4f6"], .fsd:root [stroke="#f3f4f6"] { stroke: #1f2430 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#fff"], .fsd:root [stroke="#fff"] { stroke: #11141b }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#374151"], .fsd:root [stroke="#374151"] { stroke: #e5e7eb }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#888"], .fsd:root [stroke="#888"] { stroke: #9ca3af }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#9ca3af"], .fsd:root [stroke="#9ca3af"] { stroke: #6b7280 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#6366f1"], .fsd:root [stroke="#6366f1"] { stroke: #818cf8 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#d97706"], .fsd:root [stroke="#d97706"] { stroke: #fbbf24 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#e11d48"], .fsd:root [stroke="#e11d48"] { stroke: #fb7185 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#475569"], .fsd:root [stroke="#475569"] { stroke: #94a3b8 }
+    }
+  </style>
+  <defs>
+    <marker id="fs-notice-no-entity-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-notice-no-entity-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-notice-no-entity-file" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="fs-notice-no-entity-rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/></marker>
+  </defs>
+  <rect x="0" y="0" width="830" height="476" rx="12" fill="#f3f4f6"/>
+  <text x="415" y="28" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">A notice when no entity exists</text>
+  <line x1="22" y1="60" x2="22" y2="456" stroke="#9ca3af" stroke-width="1" marker-end="url(#fs-notice-no-entity-axis)"/>
+  <defs><marker id="fs-notice-no-entity-axis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker></defs>
+  <text x="22" y="54" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#888">t</text>
+  <line x1="100" y1="74" x2="100" y2="460" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="51" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="100" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">files of h</text>
+  <line x1="300" y1="74" x2="300" y2="460" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="258" y="46" width="84" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="300" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">entity h</text>
+  <line x1="510" y1="74" x2="510" y2="460" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="446" y="46" width="128" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="510" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">metadata actor</text>
+  <line x1="720" y1="74" x2="720" y2="460" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="671" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="720" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">main actor</text>
+  <!-- Update(h, Complete) -->
+  <line x1="303" y1="110" x2="506" y2="118" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-notice-no-entity-msg)"/>
+  <text x="405" y="104" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Update(h, Complete)</text>
+  <text x="405" y="133" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">does not wait</text>
+  <rect x="204" y="146" width="191" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="300" y="166" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">idle: on_shutdown, persist</text>
+  <text x="300" y="181" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">entity gone</text>
+  <rect x="431" y="210" width="159" height="57" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="510" y="230" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">write batch, commit</text>
+  <text x="510" y="245" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">no longer referenced:</text>
+  <text x="510" y="260" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">sizes, bitfield</text>
+  <!-- FileNotice(h, sizes, bitfield) -->
+  <line x1="513" y1="303" x2="716" y2="311" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-notice-no-entity-msg)"/>
+  <text x="615" y="297" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">FileNotice(h, sizes, bitfield)</text>
+  <rect x="624" y="331" width="191" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="720" y="351" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">no entity for h</text>
+  <text x="720" y="366" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">none can appear meanwhile:</text>
+  <text x="720" y="381" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">only main creates them</text>
+  <!-- rm sizes, bitfield -->
+  <line x1="717" y1="424" x2="104" y2="432" stroke="#e11d48" stroke-width="1.5" marker-end="url(#fs-notice-no-entity-rm)"/>
+  <text x="200" y="418" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#e11d48">rm sizes, bitfield</text>
+</svg>
