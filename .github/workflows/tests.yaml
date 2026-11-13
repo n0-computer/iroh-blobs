@@ -183,7 +183,7 @@ jobs:
         RUST_TARGET: ${{ matrix.target }}
       run: |
         rustup toolchain install $env:RUST_TOOLCHAIN
-        rustup toolchain default $env:RUST_TOOLCHAIN
+        rustup default $env:RUST_TOOLCHAIN
         rustup target add $env:RUST_TARGET
         rustup set default-host $env:RUST_TARGET
 
