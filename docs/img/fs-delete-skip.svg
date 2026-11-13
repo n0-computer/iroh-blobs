@@ -1,0 +1,115 @@
+<svg class="fsd" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 807" width="1010" height="807" style="max-width: 100%; height: auto" role="img" aria-label="Skipped deletes">
+  <!--
+    Sequence diagram for docs/fs-store-file-deletes-scenarios.md.
+    Time runs down. Lanes are lifelines, slanted arrows are messages:
+    indigo = message to or from the metadata actor (dashed = reply),
+    slate = file IO of the entity, rose = file delete, amber = live/parked state.
+    Boxes are steps an actor takes, metadata boxes are one batch.
+  -->
+  <style>
+    /* dark palette: rustdoc dark and ayu themes, or prefers-color-scheme when standalone */
+    :root[data-theme="dark"] .fsd [fill="#f3f4f6"], :root[data-theme="ayu"] .fsd [fill="#f3f4f6"] { fill: #1f2430 }
+    :root[data-theme="dark"] .fsd [fill="#fff"], :root[data-theme="ayu"] .fsd [fill="#fff"] { fill: #11141b }
+    :root[data-theme="dark"] .fsd [fill="#374151"], :root[data-theme="ayu"] .fsd [fill="#374151"] { fill: #e5e7eb }
+    :root[data-theme="dark"] .fsd [fill="#888"], :root[data-theme="ayu"] .fsd [fill="#888"] { fill: #9ca3af }
+    :root[data-theme="dark"] .fsd [fill="#9ca3af"], :root[data-theme="ayu"] .fsd [fill="#9ca3af"] { fill: #6b7280 }
+    :root[data-theme="dark"] .fsd [fill="#6366f1"], :root[data-theme="ayu"] .fsd [fill="#6366f1"] { fill: #818cf8 }
+    :root[data-theme="dark"] .fsd [fill="#d97706"], :root[data-theme="ayu"] .fsd [fill="#d97706"] { fill: #fbbf24 }
+    :root[data-theme="dark"] .fsd [fill="#e11d48"], :root[data-theme="ayu"] .fsd [fill="#e11d48"] { fill: #fb7185 }
+    :root[data-theme="dark"] .fsd [fill="#475569"], :root[data-theme="ayu"] .fsd [fill="#475569"] { fill: #94a3b8 }
+    :root[data-theme="dark"] .fsd [stroke="#f3f4f6"], :root[data-theme="ayu"] .fsd [stroke="#f3f4f6"] { stroke: #1f2430 }
+    :root[data-theme="dark"] .fsd [stroke="#fff"], :root[data-theme="ayu"] .fsd [stroke="#fff"] { stroke: #11141b }
+    :root[data-theme="dark"] .fsd [stroke="#374151"], :root[data-theme="ayu"] .fsd [stroke="#374151"] { stroke: #e5e7eb }
+    :root[data-theme="dark"] .fsd [stroke="#888"], :root[data-theme="ayu"] .fsd [stroke="#888"] { stroke: #9ca3af }
+    :root[data-theme="dark"] .fsd [stroke="#9ca3af"], :root[data-theme="ayu"] .fsd [stroke="#9ca3af"] { stroke: #6b7280 }
+    :root[data-theme="dark"] .fsd [stroke="#6366f1"], :root[data-theme="ayu"] .fsd [stroke="#6366f1"] { stroke: #818cf8 }
+    :root[data-theme="dark"] .fsd [stroke="#d97706"], :root[data-theme="ayu"] .fsd [stroke="#d97706"] { stroke: #fbbf24 }
+    :root[data-theme="dark"] .fsd [stroke="#e11d48"], :root[data-theme="ayu"] .fsd [stroke="#e11d48"] { stroke: #fb7185 }
+    :root[data-theme="dark"] .fsd [stroke="#475569"], :root[data-theme="ayu"] .fsd [stroke="#475569"] { stroke: #94a3b8 }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#f3f4f6"], .fsd:root [fill="#f3f4f6"] { fill: #1f2430 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#fff"], .fsd:root [fill="#fff"] { fill: #11141b }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#374151"], .fsd:root [fill="#374151"] { fill: #e5e7eb }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#888"], .fsd:root [fill="#888"] { fill: #9ca3af }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#9ca3af"], .fsd:root [fill="#9ca3af"] { fill: #6b7280 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#6366f1"], .fsd:root [fill="#6366f1"] { fill: #818cf8 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#d97706"], .fsd:root [fill="#d97706"] { fill: #fbbf24 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#e11d48"], .fsd:root [fill="#e11d48"] { fill: #fb7185 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [fill="#475569"], .fsd:root [fill="#475569"] { fill: #94a3b8 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#f3f4f6"], .fsd:root [stroke="#f3f4f6"] { stroke: #1f2430 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#fff"], .fsd:root [stroke="#fff"] { stroke: #11141b }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#374151"], .fsd:root [stroke="#374151"] { stroke: #e5e7eb }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#888"], .fsd:root [stroke="#888"] { stroke: #9ca3af }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#9ca3af"], .fsd:root [stroke="#9ca3af"] { stroke: #6b7280 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#6366f1"], .fsd:root [stroke="#6366f1"] { stroke: #818cf8 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#d97706"], .fsd:root [stroke="#d97706"] { stroke: #fbbf24 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#e11d48"], .fsd:root [stroke="#e11d48"] { stroke: #fb7185 }
+      :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-theme="ayu"]) .fsd [stroke="#475569"], .fsd:root [stroke="#475569"] { stroke: #94a3b8 }
+    }
+  </style>
+  <defs>
+    <marker id="fs-delete-skip-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-delete-skip-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/></marker>
+    <marker id="fs-delete-skip-file" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="fs-delete-skip-rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1010" height="807" rx="12" fill="#f3f4f6"/>
+  <text x="505" y="28" text-anchor="middle" font-family="'Space Mono', monospace" font-size="13" fill="#6366f1">Skipped deletes</text>
+  <line x1="22" y1="60" x2="22" y2="787" stroke="#9ca3af" stroke-width="1" marker-end="url(#fs-delete-skip-axis)"/>
+  <defs><marker id="fs-delete-skip-axis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker></defs>
+  <text x="22" y="54" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#888">t</text>
+  <line x1="200" y1="74" x2="200" y2="791" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="158" y="46" width="84" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="200" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">entity b</text>
+  <line x1="430" y1="74" x2="430" y2="791" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="366" y="46" width="128" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="430" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">metadata actor</text>
+  <line x1="680" y1="74" x2="680" y2="791" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="631" y="46" width="98" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="680" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">main actor</text>
+  <line x1="900" y1="74" x2="900" y2="791" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="881" y="46" width="39" height="28" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="900" y="64" text-anchor="middle" font-family="'Space Mono', monospace" font-size="12" fill="#6366f1">gc</text>
+  <!-- DeleteBlobs([a, b]) -->
+  <line x1="897" y1="110" x2="684" y2="118" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="790" y="104" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">DeleteBlobs([a, b])</text>
+  <text x="790" y="133" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">not forced</text>
+  <rect x="581" y="146" width="198" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="680" y="166" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">a: a temp tag protects it</text>
+  <text x="680" y="181" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">skip</text>
+  <text x="680" y="196" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">b: spawn delete on entity b</text>
+  <!-- delete_entry -->
+  <line x1="677" y1="239" x2="204" y2="247" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="315" y="233" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">delete_entry</text>
+  <rect x="153" y="267" width="94" height="42" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="200" y="287" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">Deleting</text>
+  <text x="200" y="302" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">writes wait</text>
+  <!-- Delete(b) -->
+  <line x1="203" y1="345" x2="426" y2="353" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="315" y="339" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Delete(b)</text>
+  <rect x="364" y="373" width="133" height="42" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="430" y="393" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">no entry for b</text>
+  <text x="430" y="408" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">nothing to remove</text>
+  <!-- Ok -->
+  <line x1="427" y1="451" x2="204" y2="459" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-skip-reply)"/>
+  <text x="315" y="445" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
+  <rect x="399" y="479" width="61" height="27" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="430" y="499" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">commit</text>
+  <!-- FileNotice(b, deleted) -->
+  <line x1="433" y1="542" x2="676" y2="550" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="555" y="536" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">FileNotice(b, deleted)</text>
+  <text x="555" y="565" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10" fill="#888">sent even without an entry</text>
+  <!-- notice into its inbox -->
+  <line x1="677" y1="592" x2="204" y2="600" stroke="#6366f1" stroke-width="1.5" marker-end="url(#fs-delete-skip-msg)"/>
+  <text x="315" y="586" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">notice into its inbox</text>
+  <rect x="104" y="620" width="191" height="57" rx="6" fill="#fff" stroke="#475569" stroke-width="1.2"/>
+  <text x="200" y="640" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">rm all four files (if any)</text>
+  <text x="200" y="655" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#d97706">NonExisting</text>
+  <text x="200" y="670" text-anchor="middle" font-family="'Space Mono', monospace" font-size="10.5" fill="#374151">waiting writes go on</text>
+  <!-- Ok -->
+  <line x1="203" y1="713" x2="676" y2="721" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-skip-reply)"/>
+  <text x="555" y="707" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
+  <!-- Ok -->
+  <line x1="683" y1="755" x2="896" y2="763" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fs-delete-skip-reply)"/>
+  <text x="790" y="749" text-anchor="middle" font-family="'Space Mono', monospace" font-size="11" fill="#6366f1">Ok</text>
+</svg>
