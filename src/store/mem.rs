@@ -66,7 +66,7 @@ use crate::{
         util::{SizeInfo, SparseMemFile, Tag},
         IROH_BLOCK_SIZE,
     },
-    util::temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
+    util::temp_tag::{TagDrop, TempTagScope, TempTags},
     BlobFormat, Hash, HashAndFormat,
 };
 
@@ -479,12 +479,16 @@ impl Actor {
                         (hash, entry)
                     })
                     .collect();
-                let (cancel, cancelled) = tokio::sync::oneshot::channel();
+                let (cancel, mut cancelled) = tokio::sync::oneshot::channel();
                 self.gc = Some(GcSession { frozen, cancel });
                 let deletes = self.gc_delete_tx.clone();
                 self.spawn(async move {
                     let crate::api::proto::GcRunMsg { tx, rx, .. } = cmd;
-                    if tx.send(GcEvent::Snapshot(Ok(snapshot))).await.is_ok() {
+                    let delivered = tokio::select! {
+                        result = tx.send(GcEvent::Snapshot(Ok(snapshot))) => result.is_ok(),
+                        _ = &mut cancelled => false,
+                    };
+                    if delivered {
                         gc_session(&tx, rx, cancelled, &deletes).await;
                     }
                     // Every delete this session received is done, so it may end.
@@ -519,7 +523,11 @@ impl Actor {
 
     async fn create_temp_tag(&mut self, cmd: CreateTempTagMsg) {
         let CreateTempTagMsg { tx, inner, .. } = cmd;
-        let mut tt = self.temp_tags.create(inner.scope, inner.value);
+        let Some(mut tt) = self.temp_tags.create(inner.scope, inner.value) else {
+            // This RPC has no application-error response; closing its reply
+            // reports a request error to the caller.
+            return;
+        };
         if tx.is_rpc() {
             tt.leak();
         }
@@ -540,15 +548,23 @@ impl Actor {
             }
         };
         let hash = import_data.outboard.root().into();
+        let Some(tt) = self.temp_tags.create(
+            import_data.scope,
+            HashAndFormat {
+                hash,
+                format: import_data.format,
+            },
+        ) else {
+            import_data
+                .tx
+                .send(AddProgressItem::Error(io::Error::other(
+                    "batch scope has ended",
+                )))
+                .await
+                .ok();
+            return;
+        };
         if hash == Hash::EMPTY {
-            // the empty blob is always present, so there is nothing to store or protect
-            let tt = TempTag::new(
-                HashAndFormat {
-                    hash,
-                    format: import_data.format,
-                },
-                None,
-            );
             import_data.tx.send(AddProgressItem::Done(tt)).await.ok();
             return;
         }
@@ -564,13 +580,6 @@ impl Actor {
                     CompleteStorage::new(import_data.data, import_data.outboard.data.into()).into();
                 true
             });
-        let tt = self.temp_tags.create(
-            import_data.scope,
-            HashAndFormat {
-                hash,
-                format: import_data.format,
-            },
-        );
         import_data.tx.send(AddProgressItem::Done(tt)).await.ok();
     }
 
@@ -720,7 +729,12 @@ async fn gc_session(
         let res = res_rx
             .await
             .unwrap_or_else(|_| Err(api::Error::other("gc delete dropped")));
-        tx.send(GcEvent::Deleted(res)).await.ok();
+        tokio::select! {
+            result = tx.send(GcEvent::Deleted(res)) => {
+                if result.is_err() { return; }
+            }
+            _ = &mut cancelled => return,
+        }
     }
 }
 

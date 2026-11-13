@@ -235,8 +235,19 @@ impl TempTags {
         roots.into_iter().collect()
     }
 
-    pub fn create(&mut self, scope: Scope, content: HashAndFormat) -> TempTag {
-        self.scope(scope).temp_tag(content)
+    /// Only the global scope may be created lazily. A missing batch scope
+    /// has ended (or never existed), so late work must not recreate it.
+    pub fn create(&mut self, scope: Scope, content: HashAndFormat) -> Option<TempTag> {
+        let scope = if scope == Scope::GLOBAL {
+            self.scope(scope)
+        } else {
+            self.scopes.get(&scope)?
+        };
+        Some(if content.hash == Hash::EMPTY {
+            TempTag::new(content, None)
+        } else {
+            scope.temp_tag(content)
+        })
     }
 
     pub fn contains(&self, hash: Hash) -> bool {
@@ -366,7 +377,7 @@ mod tests {
         let mut tags = TempTags::default();
         let (scope, _) = tags.create_scope();
         let content = HashAndFormat::hash_seq(Hash::new(b"collection"));
-        let _tag = tags.create(scope, content);
+        let _tag = tags.create(scope, content).unwrap();
         tags.start_gc_run();
         tags.start_gc_run();
         tags.end_scope(scope);
@@ -397,7 +408,7 @@ mod tests {
             });
             for index in 1usize..=10_000 {
                 let hash = Hash::new(index.to_le_bytes());
-                let tag = tags.create(scope, HashAndFormat::raw(hash));
+                let tag = tags.create(scope, HashAndFormat::raw(hash)).unwrap();
                 tx.send((index, tag)).unwrap();
                 while done.load(Ordering::Acquire) != index {
                     assert!(tags.protects(hash), "GC protection disappeared during drop");
