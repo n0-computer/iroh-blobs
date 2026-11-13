@@ -56,9 +56,10 @@ waits on the main actor, which waits on it.
 
 An entity's tasks are futures polled by one actor, so they only interleave at
 `.await` points. Every change of an entity's state or files runs after a
-`wait_settled`, which waits while the state is `Loading` or `Deleting`, with no
-`.await` between the check and the change. The state is the entity's existing
-`watch`, so waiting needs no extra machinery.
+`wait_writable`, which waits while the state is `Loading`, `Deleting`, or
+`Frozen`, with no `.await` between the check and the change. Readers use
+`wait_settled`, which permits `Frozen` and reads its retained state. Both use
+the entity's existing state `watch`.
 
 ## File notices
 
@@ -118,34 +119,63 @@ failure handling.
   marking in `DeleteBlobs`.
 - The `protect` calls in `finish_import_impl` and `PartialMemStorage::persist`.
 
-Also the GC `protected` set and `ClearProtected`. A gc run is now a request
-(`GcRun`) that lasts until gc drops it. While it lasts, a delete that is not
-forced keeps content that has a temp tag, or had one at any time since the
-run started. The main actor checks this before fanning a delete out, and it
-is also where temp tags are created.
+Also the GC `protected` set and `ClearProtected`.
 
-GC collects a fixed list of deletion candidates before marking roots. The fs
-store lists from a redb read snapshot; the mem store copies its current keys.
-Sweep only considers those candidates, never a fresh listing. A new blob
-absent from the candidate snapshot survives the round without a temp tag.
-This includes children downloaded after marking has traversed their growing
-HashSeq root. Unreferenced new blobs become eligible in a later round.
+## GC session
 
-The candidate list is local to GC, not a store-side write-protection set.
-It does not protect hashes already in the snapshot from later deletion:
-resuming or reusing an existing unmarked blob still requires a temp tag.
-In particular, a late HashSeq chunk revealing an existing candidate does
-not retroactively mark that child.
+`GcRun` enters one exclusive GC session and returns a fixed candidate/root
+snapshot. Its update channel carries no messages; closing it exits. A request
+for another session waits until the current one exits.
 
-Marking reads named roots first, then the union of current temp roots and
-temp roots retained since the oldest active gc run started. A continuously
-tagged root missed by the named snapshot must have had a temp tag before
-that snapshot, so it appears in the second listing even after repeated
-handovers. HashSeq roots in that union are traversed to protect their
-children too. Ordinary temp-tag listings still show only current tags.
-Incomplete HashSeqs contribute the children in their available chunks;
-they do not stop collection of unrelated garbage. GC does not wait for
-the remaining chunks, which might never arrive.
+The main actor suspends all tag mutations, including raw tags, named-tag
+replacement/deletion/rename, temp-tag creation, and import completion (which
+publishes a temp tag). It retains each request and its reply channel in a
+queue and keeps processing reads and ordinary blob writes. A replacement
+leaves the old tag in place. Temp-tag drops and scope ends cannot wait; their
+protection is retained through the session by the existing `TempTags` logic.
+
+In fs, a top-level metadata snapshot commits earlier tag operations before
+capturing candidates and named roots. Those roots are combined with current
+and retained temp roots. Each HashSeq root is loaded and frozen through its
+entity inbox. Entry replies only after every freeze acknowledges; the main
+actor keeps running while it waits, including handling entity restarts and
+post-commit notices. Mem captures the same view and freezes handles under
+their existing state watches.
+
+`Frozen(old, id)` preserves the entry's readable state and bitfield. Writes,
+replacement imports, and deletion wait on the existing state watch. Complete
+entries freeze too, preventing deletion/recreation. A freeze task keeps the
+fs entity alive. Unfreeze uses the same entity inbox; it restores `old` and
+wakes writers without another acknowledgement. Session IDs prevent delayed
+cleanup from an older freeze from releasing a later one.
+
+The shared GC loop traverses exactly the captured roots, invokes the external
+protection callback, and sweeps only captured candidates. Incomplete HashSeqs
+contribute their available children; missing chunks never hold up collection.
+Their writes remain frozen until sweep ends, so new references cannot become
+visible between traversal and deletion. Newly created hashes absent from the
+candidate snapshot cannot be swept this round.
+
+Dropping the guard on completion, error, or cancellation releases freezes and
+replays queued tag operations. Sweep deletes carry the session ID. The store
+rejects stale requests and waits for accepted deletes to finish before exiting
+the session, even if the GC caller or transport disappears. Deferred tag
+publication therefore cannot overtake a sweep delete. Sweeping a frozen root
+is rejected rather than waiting on the sweep's own freeze.
+Cancelling entry still settles all freeze acquisitions before unfreezing.
+Shutdown stops admitting work and rejects deferred tag operations before
+cancelling a held session, rather than waiting for its client to release it.
+It drains already-dispatched deletes before closing metadata. Metadata failure
+retains the existing whole-store abort behavior.
+
+The callback runs in the shared GC task, not the main actor. It must only add
+protected hashes and must not await suspended tag mutations or writes to a
+frozen HashSeq. External systems must acquire store protection before
+publishing references. If they acquire protection for previously unprotected
+content, they must establish/check that content after acquisition: waiting
+for a tag does not resurrect data that GC already deleted. A callback that
+bypasses this publication contract cannot make concurrent external mutations
+atomic with the store.
 
 ## The bug this fixes
 

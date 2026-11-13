@@ -375,6 +375,8 @@ pub(crate) enum BaoFileStorage {
     /// Readers see the entry as absent; mutations wait until cleanup finishes.
     /// Metadata failure aborts the store instead of restoring the old state.
     Deleting,
+    /// Readers see the retained state; all mutations wait for unfreeze.
+    Frozen(Box<BaoFileStorage>, u64),
 }
 
 impl fmt::Debug for BaoFileStorage {
@@ -388,6 +390,7 @@ impl fmt::Debug for BaoFileStorage {
             BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
             BaoFileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
             BaoFileStorage::Deleting => f.debug_struct("Deleting").finish(),
+            BaoFileStorage::Frozen(old, _) => f.debug_tuple("Frozen").field(old).finish(),
         }
     }
 }
@@ -455,6 +458,14 @@ impl PartialMemStorage {
 }
 
 impl BaoFileStorage {
+    /// The immutable view remains readable while writes are frozen.
+    pub(super) fn readable(&self) -> &Self {
+        match self {
+            Self::Frozen(old, _) => old,
+            state => state,
+        }
+    }
+
     pub fn bitfield(&self) -> Bitfield {
         match self {
             BaoFileStorage::Initial => {
@@ -465,6 +476,7 @@ impl BaoFileStorage {
             }
             BaoFileStorage::NonExisting => Bitfield::empty(),
             BaoFileStorage::Deleting => Bitfield::empty(),
+            BaoFileStorage::Frozen(old, _) => old.bitfield(),
             BaoFileStorage::PartialMem(x) => x.bitfield.clone(),
             BaoFileStorage::Partial(x) => x.bitfield.clone(),
             BaoFileStorage::Complete(x) => Bitfield::complete(x.data.size()),
@@ -570,6 +582,7 @@ impl BaoFileStorage {
                 BaoFilePart::Outboard => matches!(x.outboard, MemOrFile::File(_)),
                 BaoFilePart::Sizes | BaoFilePart::Bitfield => false,
             },
+            BaoFileStorage::Frozen(old, _) => old.references(part),
             BaoFileStorage::Loading | BaoFileStorage::Poisoned | BaoFileStorage::Deleting => true,
         }
     }
@@ -611,14 +624,14 @@ pub struct DataReader(pub(super) BaoFileHandle);
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
         let guard = self.0.borrow();
-        match guard.deref() {
+        match guard.readable() {
             BaoFileStorage::PartialMem(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Partial(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Complete(x) => x.data.read_bytes_at(offset, size),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting | BaoFileStorage::Deleting => {
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting | BaoFileStorage::Frozen(..) => {
                 io::Result::Err(io::ErrorKind::NotFound.into())
             }
         }
@@ -632,14 +645,14 @@ pub struct OutboardReader(pub(super) BaoFileHandle);
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         let guard = self.0.borrow();
-        match guard.deref() {
+        match guard.readable() {
             BaoFileStorage::Complete(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::PartialMem(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Partial(x) => x.outboard.read_at(offset, buf),
             BaoFileStorage::Poisoned => io::Result::Err(io::Error::other("poisoned storage")),
             BaoFileStorage::Initial => io::Result::Err(io::Error::other("initial")),
             BaoFileStorage::Loading => io::Result::Err(io::Error::other("loading")),
-            BaoFileStorage::NonExisting | BaoFileStorage::Deleting => {
+            BaoFileStorage::NonExisting | BaoFileStorage::Deleting | BaoFileStorage::Frozen(..) => {
                 io::Result::Err(io::ErrorKind::NotFound.into())
             }
         }

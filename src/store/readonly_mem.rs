@@ -162,7 +162,7 @@ impl Actor {
             Command::Batch(_cmd) => {}
             Command::GcRun(cmd) => {
                 // nothing to protect, since nothing is ever deleted
-                cmd.tx.send(()).await.ok();
+                cmd.tx.send(Ok(Default::default())).await.ok();
             }
             Command::CreateTag(cmd) => {
                 cmd.tx
