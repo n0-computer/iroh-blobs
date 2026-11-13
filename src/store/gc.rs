@@ -148,9 +148,21 @@ pub struct GcConfig {
     /// Optional callback to manually add protected blobs.
     ///
     /// The callback is called after marking, before sweeping. It gets a `&mut HashSet<Hash>`
-    /// and returns a future that returns [`ProtectOutcome`]. It must not await tag
-    /// mutations, imports that publish a temp tag, or writes to protected HashSeqs:
-    /// those are suspended during GC.
+    /// and returns a future that returns [`ProtectOutcome`].
+    ///
+    /// # Deadlocks
+    ///
+    /// The callback runs while the GC run holds the store's GC session. The
+    /// store holds back these operations until the session ends, so a callback
+    /// that awaits one of them, directly or through another task, deadlocks the
+    /// GC run and everything waiting behind it:
+    ///
+    /// - setting, creating, deleting or renaming tags, and creating temp tags,
+    /// - completing an import, since every import ends with a temp tag,
+    /// - writing to, downloading into, or deleting a HashSeq root of this run.
+    ///
+    /// Reads, and writes to other blobs, are fine.
+    ///
     /// All hashes that are added to the
     /// [`HashSet`] will be protected from garbage collection during this run.
     ///
@@ -195,13 +207,14 @@ pub type ProtectCb = Arc<
 ///
 /// The optional `protect` callback ([`GcConfig::add_protected`]) runs after
 /// marking, before sweep. It must only add hashes to `live`, and must not wait
-/// for a tag mutation or a write to a frozen HashSeq. External writers must
-/// acquire store protection before publishing references, and establish/check
-/// content after acquisition if it was previously unprotected.
+/// for anything the session holds back, see [`GcConfig::add_protected`] for the
+/// deadlock this causes. External writers must acquire store protection before
+/// publishing references, and establish/check content after acquisition if it
+/// was previously unprotected.
 ///
-/// Completion, errors and cancellation release the session. The store waits
-/// for accepted sweep deletes before resuming deferred tag publication, and
-/// rejects requests arriving after their session ends.
+/// Completion, errors and cancellation release the session. Sweep deletes go
+/// over the session itself, and the store finishes the ones it received before
+/// it resumes deferred tag publication.
 pub async fn gc_run_once(
     store: &Store,
     live: &mut HashSet<Hash>,

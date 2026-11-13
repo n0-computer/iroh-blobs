@@ -191,8 +191,10 @@ pub struct ShutdownRequest;
 /// as [`GcRunUpdate::Delete`], and gets a [`GcEvent::Deleted`] for each, in
 /// order. Closing the update channel exits the session, also on cancellation;
 /// the store finishes the deletes it received before it releases the session.
-/// Reads and ordinary blob writes remain available. Callbacks must not await
-/// tag mutations or writes to frozen roots while holding the session.
+/// Reads and ordinary blob writes remain available. A client must not await,
+/// while holding the session, anything the session holds back: tag mutations,
+/// import completions, and writes to or deletes of frozen roots. That would
+/// deadlock, since those wait for the session to end.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GcRunRequest;
 

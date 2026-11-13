@@ -175,9 +175,13 @@ cancelling a held session, rather than waiting for its client to release it.
 It drains already-dispatched deletes before closing metadata. Metadata failure
 retains the existing whole-store abort behavior.
 
-The callback runs in the shared GC task, not the main actor. It must only add
-protected hashes and must not await suspended tag mutations or writes to a
-frozen HashSeq. External systems must acquire store protection before
+The callback runs in the shared GC task, not the main actor, while the
+session is held. It must only add protected hashes, and must not await,
+directly or through another task, anything the session holds back: tag
+mutations, temp tag creation, import completion, and writes to or deletes of
+frozen HashSeq roots. Those wait for the session to end, which waits for the
+callback, so awaiting one deadlocks the GC run and everything queued behind
+it. External systems must acquire store protection before
 publishing references. If they acquire protection for previously unprotected
 content, they must establish/check that content after acquisition: waiting
 for a tag does not resurrect data that GC already deleted. A callback that
