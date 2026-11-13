@@ -1478,11 +1478,14 @@ mod tests {
     /// Cached observers and idle waiters must also stop, and old files must survive.
     #[tokio::test]
     async fn failed_commit_aborts_store_without_unlinking() -> testresult::TestResult<()> {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::time::Duration;
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            time::Duration,
+        };
+
+        use n0_future::StreamExt;
 
         use crate::store::fs::{self, entity_manager::EntityManagerState};
-        use n0_future::StreamExt;
 
         let dir = tempfile::tempdir()?;
         let options = Arc::new(Options::new(dir.path()));

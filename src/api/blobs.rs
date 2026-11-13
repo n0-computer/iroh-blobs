@@ -169,7 +169,7 @@ impl Blobs {
     }
 
     /// See [`Self::delete_with_opts`].
-    #[cfg(test)]
+    #[cfg(all(test, feature = "fs-store"))]
     pub(crate) async fn delete(
         &self,
         hashes: impl IntoIterator<Item = impl Into<Hash>>,
