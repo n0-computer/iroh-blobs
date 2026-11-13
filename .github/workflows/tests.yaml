@@ -8,9 +8,9 @@ on:
       rust-version:
         description: 'The version of the rust compiler to run'
         type: string
-        # Pinned: with 1.100, rustc command lines on the windows runner exceed
-        # the length limit under sccache (os error 206). Go back to stable once fixed.
-        default: '1.99.1'
+        # `stable` installs 1.99.1 for now, see the install steps. The label
+        # stays `stable`, since required checks are named after it.
+        default: 'stable'
       flaky:
         description: 'Whether to also run flaky tests'
         type: boolean
@@ -69,7 +69,9 @@ jobs:
     - name: Install ${{ matrix.rust }} rust
       uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
-        toolchain: ${{ matrix.rust }}
+        # Pinned: with 1.100, rustc command lines on the windows runner exceed
+        # the length limit under sccache (os error 206). Drop once fixed.
+        toolchain: ${{ matrix.rust == 'stable' && '1.99.1' || matrix.rust }}
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
@@ -179,7 +181,8 @@ jobs:
 
     - name: Install ${{ matrix.rust }}
       env:
-        RUST_TOOLCHAIN: ${{ matrix.rust }}
+        # Pinned, see the other install step.
+        RUST_TOOLCHAIN: ${{ matrix.rust == 'stable' && '1.99.1' || matrix.rust }}
         RUST_TARGET: ${{ matrix.target }}
       run: |
         rustup toolchain install $env:RUST_TOOLCHAIN
