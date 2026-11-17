@@ -23,7 +23,7 @@ use bao_tree::{ChunkNum, ChunkRanges};
 use testresult::TestResult;
 
 use super::{
-    meta::move_run_to_another_boot,
+    meta::trigger_reboot_check,
     options::{CrashConsistency, Options},
     FsStore,
 };
@@ -191,7 +191,7 @@ async fn os_crash_without_sync_claims_no_lost_data() -> TestResult<()> {
     lazyfs.clear_cache()?;
     // LazyFS keeps the boot id, so stand in for the reboot.
     assert!(
-        move_run_to_another_boot(&lazyfs.mount_point().join("blobs.db"))?,
+        trigger_reboot_check(&lazyfs.mount_point().join("blobs.db"))?,
         "the crashed run must still be recorded"
     );
     let store = open(lazyfs.mount_point(), CrashConsistency::ProcessCrash).await?;
