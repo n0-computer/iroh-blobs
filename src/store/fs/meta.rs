@@ -590,24 +590,26 @@ impl Bookkeeping {
 
     /// What the batch means for files, once it is committed.
     ///
-    /// For each hash written in the batch: whether its entry was deleted, and
-    /// which files it referenced in the batch and no longer does.
-    fn file_notices(&mut self, tables: &impl ReadableTables) -> ActorResult<Vec<FileNotice>> {
+    /// For each hash written in the batch: whether its entry was deleted, or
+    /// else which files it referenced in the batch and no longer does.
+    fn file_notices(
+        &mut self,
+        tables: &impl ReadableTables,
+    ) -> ActorResult<Vec<(Hash, FileNotice)>> {
         let mut res = Vec::new();
         for (hash, before) in self.written.drain() {
-            let deleted = self.deleted.remove(&hash);
+            if self.deleted.remove(&hash) {
+                res.push((hash, FileNotice::Deleted));
+                continue;
+            }
             let after = tables.blobs().get(hash)?.map(|e| e.value());
             let still = referenced_parts(after.as_ref());
             let parts: BaoFileParts = before
                 .into_iter()
                 .filter(|part| !still.contains(part))
                 .collect();
-            if deleted || !parts.is_empty() {
-                res.push(FileNotice {
-                    hash,
-                    deleted,
-                    parts,
-                });
+            if !parts.is_empty() {
+                res.push((hash, FileNotice::Unreferenced(parts)));
             }
         }
         Ok(res)
@@ -665,7 +667,7 @@ pub struct Actor {
     db: DbWrapper,
     cmds: PeekableReceiver<Command>,
     /// Where the file consequences of each committed batch go, see [`FileNotice`].
-    notices: tokio::sync::mpsc::UnboundedSender<FileNotice>,
+    notices: tokio::sync::mpsc::UnboundedSender<(Hash, FileNotice)>,
     options: BatchOptions,
     state: Bookkeeping,
 }
@@ -674,7 +676,7 @@ impl Actor {
     pub fn new(
         db_path: PathBuf,
         cmds: tokio::sync::mpsc::Receiver<Command>,
-        notices: tokio::sync::mpsc::UnboundedSender<FileNotice>,
+        notices: tokio::sync::mpsc::UnboundedSender<(Hash, FileNotice)>,
         paths: Arc<PathOptions>,
         options: BatchOptions,
         syncs_files: bool,
@@ -1342,7 +1344,7 @@ mod tests {
         db: &Database,
         state: &mut Bookkeeping,
         f: impl FnOnce(&mut Tables, &mut Bookkeeping) -> testresult::TestResult<()>,
-    ) -> testresult::TestResult<Vec<FileNotice>> {
+    ) -> testresult::TestResult<Vec<(Hash, FileNotice)>> {
         let tx = db.begin_write()?;
         let mut tables = Tables::new(&tx)?;
         f(&mut tables, state)?;
@@ -1420,7 +1422,7 @@ mod tests {
         assert!(
             notices
                 .iter()
-                .all(|n| !n.parts.contains(&BaoFilePart::Data)),
+                .all(|(_, n)| !n.parts().contains(&BaoFilePart::Data)),
             "committed metadata still refers to this file: {notices:?}"
         );
         Ok(())
@@ -1452,8 +1454,7 @@ mod tests {
             Ok(())
         })?;
         assert_eq!(notices.len(), 1);
-        assert!(notices[0].deleted);
-        assert_eq!(notices[0].parts.len(), 4, "a partial entry uses every file");
+        assert!(matches!(notices[0], (h, FileNotice::Deleted) if h == hash));
         Ok(())
     }
 
@@ -1478,8 +1479,7 @@ mod tests {
                 Ok(())
             })?;
             assert_eq!(notices.len(), 1);
-            assert_eq!(notices[0].hash, hash);
-            assert!(notices[0].deleted);
+            assert!(matches!(notices[0], (h, FileNotice::Deleted) if h == hash));
         }
         Ok(())
     }
@@ -1707,8 +1707,10 @@ mod tests {
             Ok(())
         })?;
         assert_eq!(notices.len(), 1);
-        assert!(!notices[0].deleted);
-        let mut parts = notices[0].parts.clone();
+        let (_, FileNotice::Unreferenced(parts)) = &notices[0] else {
+            panic!("expected unreferenced files, got {notices:?}");
+        };
+        let mut parts = parts.clone();
         parts.sort();
         assert_eq!(
             parts.as_slice(),
