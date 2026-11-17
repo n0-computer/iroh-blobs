@@ -296,7 +296,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, FileNotice, ALL_PARTS};
+use file_deletes::{delete_files, BaoFilePart, FileNotice, ALL_PARTS};
 mod boot_id;
 mod entry_state;
 mod file_deletes;
@@ -305,6 +305,8 @@ mod import;
 mod lazyfs_tests;
 mod meta;
 pub mod options;
+mod storage;
+use storage::{Mode, Storage};
 mod sync_fs;
 pub(crate) mod util;
 use entry_state::EntryState;
@@ -1875,8 +1877,10 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     let data = match &data_location {
         DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
         DataLocation::Owned(size) => {
-            let path = ctx.options().path.data_path(&hash);
-            let file = fs::File::open(&path)?;
+            let file = ctx
+                .options()
+                .path
+                .open_part(&hash, BaoFilePart::Data, Mode::Read)?;
             MemOrFile::File(FixedSize::new(file, *size))
         }
         DataLocation::External(paths, size) => {
@@ -1891,8 +1895,10 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
         OutboardLocation::NotNeeded => MemOrFile::empty(),
         OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
         OutboardLocation::Owned => {
-            let path = ctx.options().path.outboard_path(&hash);
-            let file = fs::File::open(&path)?;
+            let file = ctx
+                .options()
+                .path
+                .open_part(&hash, BaoFilePart::Outboard, Mode::Read)?;
             MemOrFile::File(file)
         }
     };

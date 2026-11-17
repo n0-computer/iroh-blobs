@@ -1,6 +1,6 @@
 use core::fmt;
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
@@ -27,6 +27,7 @@ use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     file_deletes::BaoFilePart,
     options::Options,
+    storage::{Mode, Storage},
 };
 use crate::{
     api::blobs::Bitfield,
@@ -79,17 +80,6 @@ impl CompleteStorage {
     pub fn bitfield(&self) -> Bitfield {
         Bitfield::complete(self.size())
     }
-}
-
-/// Create a file for reading and writing, but *without* truncating the existing
-/// file.
-fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
 }
 
 /// Opens the first external data file that can be opened.
@@ -196,9 +186,9 @@ impl PartialFileStorage {
     fn load(hash: &Hash, options: &Options) -> io::Result<Self> {
         let paths = &options.path;
         let bitfield_path = paths.bitfield_path(hash);
-        let data = create_read_write(paths.data_path(hash))?;
-        let outboard = create_read_write(paths.outboard_path(hash))?;
-        let sizes = create_read_write(paths.sizes_path(hash))?;
+        let data = paths.open_part(hash, BaoFilePart::Data, Mode::ReadWrite)?;
+        let outboard = paths.open_part(hash, BaoFilePart::Outboard, Mode::ReadWrite)?;
+        let sizes = paths.open_part(hash, BaoFilePart::Sizes, Mode::ReadWrite)?;
         let bitfield = match read_checksummed_and_truncate(&bitfield_path, options.syncs_files()) {
             Ok(bitfield) => bitfield,
             Err(cause) => {
@@ -404,8 +394,9 @@ impl PartialMemStorage {
             let data: Bytes = self.data.to_vec().into();
             (MemOrFile::Mem(data.clone()), DataLocation::Inline(data))
         } else {
-            let data_path = options.path.data_path(hash);
-            let mut data_file = create_read_write(&data_path)?;
+            let mut data_file = options
+                .path
+                .open_part(hash, BaoFilePart::Data, Mode::ReadWrite)?;
             self.data.persist(&mut data_file)?;
             if options.syncs_files() {
                 data_file.sync_all()?;
@@ -427,8 +418,10 @@ impl PartialMemStorage {
                 (MemOrFile::empty(), OutboardLocation::NotNeeded)
             }
         } else {
-            let outboard_path = ctx.global.options.path.outboard_path(hash);
-            let mut outboard_file = create_read_write(&outboard_path)?;
+            let mut outboard_file =
+                options
+                    .path
+                    .open_part(hash, BaoFilePart::Outboard, Mode::ReadWrite)?;
             self.outboard.persist(&mut outboard_file)?;
             if options.syncs_files() {
                 outboard_file.sync_all()?;
@@ -708,8 +701,9 @@ impl Settled {
                 let data = match data_location {
                     DataLocation::Inline(data) => MemOrFile::Mem(data),
                     DataLocation::Owned(size) => {
-                        let path = options.path.data_path(hash);
-                        let file = std::fs::File::open(&path)?;
+                        let file = options
+                            .path
+                            .open_part(hash, BaoFilePart::Data, Mode::Read)?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
                     DataLocation::External(paths, size) => {
@@ -721,8 +715,10 @@ impl Settled {
                     OutboardLocation::NotNeeded => MemOrFile::empty(),
                     OutboardLocation::Inline(data) => MemOrFile::Mem(data),
                     OutboardLocation::Owned => {
-                        let path = options.path.outboard_path(hash);
-                        let file = std::fs::File::open(&path)?;
+                        let file =
+                            options
+                                .path
+                                .open_part(hash, BaoFilePart::Outboard, Mode::Read)?;
                         MemOrFile::File(file)
                     }
                 };
@@ -792,9 +788,9 @@ impl PartialMemStorage {
         let options = &ctx.global.options.path;
         let sync = ctx.global.options.syncs_files();
         let hash = &ctx.id;
-        let mut data = create_read_write(options.data_path(hash))?;
-        let mut outboard = create_read_write(options.outboard_path(hash))?;
-        let mut sizes = create_read_write(options.sizes_path(hash))?;
+        let mut data = options.open_part(hash, BaoFilePart::Data, Mode::ReadWrite)?;
+        let mut outboard = options.open_part(hash, BaoFilePart::Outboard, Mode::ReadWrite)?;
+        let mut sizes = options.open_part(hash, BaoFilePart::Sizes, Mode::ReadWrite)?;
         self.data.persist(&mut data)?;
         self.outboard.persist(&mut outboard)?;
         self.size.persist(&mut sizes)?;
