@@ -70,16 +70,17 @@
 //!
 //! A committed state no longer referencing a file does not make it garbage: the
 //! entity may use it again, since its state is never behind its entry. So the
-//! main actor routes unreferenced parts:
+//! main actor hands the parts to the hash's entity, into its unbounded inbox,
+//! also while it shuts down, since its shutdown may write the bitfield. If
+//! there is no entity, one is woken for this. The entity checks each part
+//! against its own state, and only unlinks those it does not use. A woken
+//! entity is not loaded, so it references none of its files and unlinks all
+//! the parts. That keeps all file IO in entities, and waking one is cheap next
+//! to an unlink.
 //!
-//! - **An entity exists** for the hash, running or still shutting down, since
-//!   its shutdown may write the bitfield: the parts go into its unbounded
-//!   inbox. The entity checks each part against its own state, and only
-//!   unlinks those it does not use.
-//! - **No entity exists**: the main actor unlinks the files itself. Only it
-//!   creates entities, so none can appear in between, and none has writes in
-//!   flight, so the committed state is all there is. This also covers parts
-//!   that arrive after the entities shut down.
+//! At shutdown, the main actor hands the parts of the last batch to the
+//! entities before they shut down. Parts that arrive after that stay, as after
+//! a crash.
 //!
 //! # Deletes
 //!
@@ -563,6 +564,10 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
 }
 
 /// Deletes the parts a committed batch stopped referencing, unless the entity still uses them.
+///
+/// This must not load the entity: it is woken just for this, and loading would
+/// cost a metadata round trip and opening files. Not loaded, it references
+/// none of its files, so it deletes all the parts.
 async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
     wait_writable(ctx).await;
     // The committed state no longer references these parts, but this entity's
@@ -1229,6 +1234,12 @@ impl Actor {
                 }
             }
         }
+        // The metadata actor committed its last batch. Hand what that left to
+        // do to the entities while they still take tasks, since only they
+        // touch files.
+        while let Ok((hash, parts)) = self.unreferenced.try_recv() {
+            self.route_unreferenced(hash, parts).await;
+        }
         self.handles.shutdown().await;
         while !self.tasks.is_empty() {
             tokio::select! {
@@ -1242,40 +1253,32 @@ impl Actor {
                 Some(res) = self.tasks.join_next() => Self::log_task_result(res),
             }
         }
-        // No entity exists anymore, so what the last batches left to do is
-        // done here directly. No acknowledgement, the database is closed.
-        while let Ok((hash, parts)) = self.unreferenced.try_recv() {
-            delete_files(&self.context.options.path, &hash, &parts.0);
-        }
+        // Parts that still arrive now stay, as after a crash: nothing
+        // references them, and only entities touch files.
     }
 
-    /// Hands unreferenced parts to the hash's entity, or deletes them itself if there is none.
+    /// Hands unreferenced parts to the hash's entity, waking it if there is none.
+    ///
+    /// All file IO happens in entities. Waking one is cheap next to the unlink
+    /// it does: `delete_unreferenced` does not load, and an entity that was not
+    /// loaded references none of its files, so it deletes all the parts.
     async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
         trace!("{} {parts:?}", hash.fmt_short());
-        if self.handles.contains(&hash) {
-            // Queue them even while the entity is shutting down. The entity
-            // checks them against its own state before deleting.
-            let task = self
-                .handles
-                .spawn(hash, move |arg| async move {
-                    match arg {
-                        SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
-                        SpawnArg::Dead => {
-                            warn!("no entity for {}, its files stay", hash);
-                        }
+        // Queued even while the entity is shutting down. The entity checks
+        // the parts against its own state before deleting.
+        let task = self
+            .handles
+            .spawn(hash, move |arg| async move {
+                match arg {
+                    SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
+                    SpawnArg::Dead => {
+                        warn!("no entity for {}, its files stay", hash);
                     }
-                })
-                .await;
-            if let Some(task) = task {
-                self.spawn(task);
-            }
-        } else {
-            // No entity exists for the hash, and none can be created before
-            // this is done, since only this actor creates them. So nothing
-            // else touches these files, and no writes from before are in
-            // flight: with no entity state to check against, the committed
-            // state is the whole truth, and the parts are garbage.
-            delete_files(&self.context.options.path, &hash, &parts.0);
+                }
+            })
+            .await;
+        if let Some(task) = task {
+            self.spawn(task);
         }
     }
 
@@ -1617,6 +1620,8 @@ trait EntityApi {
         release: tokio::sync::watch::Receiver<()>,
     );
     /// Delete the parts a committed batch stopped referencing, after checking each against the entity's own state.
+    ///
+    /// The entity may be woken just for this, so this must not load it.
     async fn delete_unreferenced(&self, parts: UnreferencedParts);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);
