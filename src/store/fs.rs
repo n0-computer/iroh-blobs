@@ -15,7 +15,8 @@
 //!
 //! - **Main actor**: handles user commands, runs the entity manager, holds the
 //!   temp tags, forwards tag, status, listing and lifecycle commands to the
-//!   metadata actor, fans deletes out to the entities, and routes file notices.
+//!   metadata actor, fans deletes out to the entities, and routes unreferenced
+//!   parts.
 //! - **Entity actors**, one per hash that is currently being worked on: run the
 //!   per-hash tasks (import, export, observe, persist, delete). While an entity
 //!   exists, it is the only one that writes and deletes the files of its hash.
@@ -38,17 +39,18 @@
 //! | `set(state)` | until applied | replace the entry state |
 //! | `update(state)` | no | merge into the entry state |
 //! | `update_await(state)` | until applied | merge into the entry state |
-//! | `delete()` | until applied | ensure the entry is absent; a notice confirms the commit |
+//! | `delete()` | until committed | ensure the entry is absent |
 //!
 //! "Applied" means visible to later commands, not durable. Durability comes with
 //! the commit of the batch, and commits are durable (redb's default
-//! `Durability::Immediate`).
+//! `Durability::Immediate`). Only `delete()` is answered after the commit, since
+//! its entity unlinks the files right after.
 //!
-//! After each commit, the metadata actor sends a `FileNotice` to the main actor
-//! for each hash that was deleted, or no longer references some of its files:
-//! whether the entry was deleted, and which files it referenced before or during
-//! the batch and no longer does. The channel is unbounded, so the metadata actor
-//! never waits on the main actor, which waits on it.
+//! After each commit, the metadata actor sends `UnreferencedParts` to the main
+//! actor for each hash that is not deleted and no longer references some of its
+//! files: the files it referenced before or during the batch and no longer does.
+//! The channel is unbounded, so the metadata actor never waits on the main
+//! actor, which waits on it.
 //!
 //! # Entities
 //!
@@ -64,17 +66,20 @@
 //! `wait_settled`, which only waits for `Loading` and `Deleting`. Both wait on
 //! the entity's state `watch`.
 //!
-//! # File notices
+//! # Unreferenced parts
 //!
-//! The main actor routes each notice:
+//! A committed state no longer referencing a file does not make it garbage: the
+//! entity may use it again, since its state is never behind its entry. So the
+//! main actor routes unreferenced parts:
 //!
 //! - **An entity exists** for the hash, running or still shutting down, since
-//!   its shutdown may write the bitfield: the notice goes into its unbounded
-//!   inbox. The entity unlinks the files its own state does not use. Its state
-//!   is never behind its entry.
+//!   its shutdown may write the bitfield: the parts go into its unbounded
+//!   inbox. The entity checks each part against its own state, and only
+//!   unlinks those it does not use.
 //! - **No entity exists**: the main actor unlinks the files itself. Only it
 //!   creates entities, so none can appear in between, and none has writes in
-//!   flight. This also covers notices that arrive after the entities shut down.
+//!   flight, so the committed state is all there is. This also covers parts
+//!   that arrive after the entities shut down.
 //!
 //! # Deletes
 //!
@@ -89,12 +94,12 @@
 //!    entry, and changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
-//! 3. Waits for the notice of the commit, which comes even if there was no
-//!    entry. Waiting keeps the entity alive, so it cannot unload and come back
-//!    with new files that the unlink would take.
-//! 4. The notice unlinks every file and switches to `NonExisting`. Waiting
-//!    writes continue on an empty entry: a running download keeps going with
-//!    the ranges that arrive from then on.
+//! 3. Waits for the answer, which comes once the delete is committed, even if
+//!    there was no entry. Waiting keeps the entity alive, so it cannot unload
+//!    and come back with new files that the unlink would take.
+//! 4. Unlinks every file, also those its entry did not reference yet, and
+//!    switches to `NonExisting`. Waiting writes continue on an empty entry: a
+//!    running download keeps going with the ranges that arrive from then on.
 //!
 //! The main actor answers `DeleteBlobs` once every entity is done, after its
 //! unlink attempts. Unlink failures are logged. Shutdown waits for running
@@ -102,8 +107,8 @@
 //! no new tasks.
 //!
 //! A metadata error aborts the whole store. The main actor cancels the workers
-//! and releases pending callers instead of leaving entities waiting for notices
-//! that will never come. There is no per-entity rollback, and the abort does not
+//! and releases pending callers. A delete in a failed batch gets no answer, and
+//! fails instead of unlinking. There is no per-entity rollback, and the abort does not
 //! persist entity state or clear the unclean-run marker.
 //!
 //! # GC sessions
@@ -127,7 +132,7 @@
 //! all blobs as candidates, and the named tags plus current and retained temp
 //! tags as roots. Then it freezes each HashSeq root through its entity, and
 //! sends the snapshot only once every freeze is acknowledged. It keeps running
-//! meanwhile, handling entity restarts and notices. The mem store takes the same
+//! meanwhile, handling entity restarts and unreferenced parts. The mem store takes the same
 //! view and freezes its handles in place.
 //!
 //! A freeze turns `ReadWrite` into `ReadOnly` with the same settled entry: reads
@@ -222,11 +227,11 @@
 //!
 //! # Limitations
 //!
-//! - A crash between a commit and the unlink of its notice leaves files that
+//! - A crash between a commit and the unlink that follows it leaves files that
 //!   nothing references.
 //! - After `export_path` with `TryReference` copies across file systems, the
-//!   entity still uses the owned data file, so the notice keeps it and it
-//!   leaks.
+//!   entity still uses the owned data file, so its check keeps the file when
+//!   it comes back unreferenced, and it leaks.
 //! - A same-file-system `TryReference` export renames the file before it
 //!   commits the external location. If that commit fails, the metadata can
 //!   still refer to the old path.
@@ -296,7 +301,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, FileNotice, ALL_PARTS};
+use file_deletes::{delete_files, UnreferencedParts, ALL_PARTS};
 mod boot_id;
 mod entry_state;
 mod file_deletes;
@@ -557,13 +562,15 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     Ok(())
 }
 
-/// Deletes the files a committed batch stopped referencing, see [`FileNotice`].
-async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
+/// Deletes the parts a committed batch stopped referencing, unless the entity still uses them.
+async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
     wait_writable(ctx).await;
-    // Unless this entity's state, which is never behind its entry, uses them again.
+    // The committed state no longer references these parts, but this entity's
+    // state, which is never behind its entry, may use them again. Check each
+    // one against it before deleting.
     let parts: Vec<_> = {
         let state = ctx.state.borrow();
-        notice
+        parts
             .0
             .into_iter()
             .filter(|part| !state.references(*part))
@@ -645,9 +652,9 @@ struct Actor {
     cmd_rx: tokio::sync::mpsc::Receiver<Command>,
     // Receiver for incoming file store specific commands.
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
-    // What committed metadata batches mean for files, from the database actor.
-    notices: tokio::sync::mpsc::UnboundedReceiver<(Hash, FileNotice)>,
-    // A failed metadata task must abort the workers, including notice waiters.
+    // Parts committed metadata batches stopped referencing, from the database actor.
+    unreferenced: tokio::sync::mpsc::UnboundedReceiver<(Hash, UnreferencedParts)>,
+    // A failed metadata task must abort the workers, including waiting deletes.
     metadata_task: Option<tokio::task::JoinHandle<Result<(), meta::Failure>>>,
     // How many deletes are running, so shutdown can let them finish.
     deletes: Arc<tokio::sync::watch::Sender<usize>>,
@@ -1140,8 +1147,8 @@ impl Actor {
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
-                Some((hash, notice)) = self.notices.recv() => {
-                    self.handle_notice(hash, notice).await;
+                Some((hash, parts)) = self.unreferenced.recv() => {
+                    self.route_unreferenced(hash, parts).await;
                 }
                 cmd = self.cmd_rx.recv(), if !closing => {
                     let Some(cmd) = cmd else {
@@ -1177,7 +1184,7 @@ impl Actor {
             if !self.idle_waiters.is_empty()
                 && self.tasks.is_empty()
                 && self.fs_cmd_rx.is_empty()
-                && self.notices.is_empty()
+                && self.unreferenced.is_empty()
                 && !self.handles.has_pending()
             {
                 for tx in self.idle_waiters.drain(..) {
@@ -1185,8 +1192,9 @@ impl Actor {
                 }
             }
         }
-        // A delete waits for the notice of its commit, and an entity in
-        // shutdown takes no new tasks, so let running deletes finish first.
+        // A delete waits for the metadata actor to answer once it is
+        // committed, and then unlinks the files, so let running deletes
+        // finish before the entities and the metadata actor shut down.
         let mut deletes = self.deletes.subscribe();
         while *deletes.borrow_and_update() > 0 {
             tokio::select! {
@@ -1197,8 +1205,8 @@ impl Actor {
                         return;
                     }
                 }
-                Some((hash, notice)) = self.notices.recv() => {
-                    self.handle_notice(hash, notice).await;
+                Some((hash, parts)) = self.unreferenced.recv() => {
+                    self.route_unreferenced(hash, parts).await;
                 }
                 _ = deletes.changed() => {}
                 task = self.handles.tick() => {
@@ -1236,21 +1244,22 @@ impl Actor {
         }
         // No entity exists anymore, so what the last batches left to do is
         // done here directly. No acknowledgement, the database is closed.
-        while let Ok((hash, notice)) = self.notices.try_recv() {
-            delete_files(&self.context.options.path, &hash, &notice.0);
+        while let Ok((hash, parts)) = self.unreferenced.try_recv() {
+            delete_files(&self.context.options.path, &hash, &parts.0);
         }
     }
 
-    /// Hands a notice to the hash's entity, or acts on it directly if there is none.
-    async fn handle_notice(&mut self, hash: Hash, notice: FileNotice) {
-        trace!("{} {notice:?}", hash.fmt_short());
+    /// Hands unreferenced parts to the hash's entity, or deletes them itself if there is none.
+    async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
+        trace!("{} {parts:?}", hash.fmt_short());
         if self.handles.contains(&hash) {
-            // Queue the notice even while the entity is shutting down.
+            // Queue them even while the entity is shutting down. The entity
+            // checks them against its own state before deleting.
             let task = self
                 .handles
                 .spawn(hash, move |arg| async move {
                     match arg {
-                        SpawnArg::Active(ctx) => ctx.apply_notice(notice).await,
+                        SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
                         SpawnArg::Dead => {
                             warn!("no entity for {}, its files stay", hash);
                         }
@@ -1264,8 +1273,9 @@ impl Actor {
             // No entity exists for the hash, and none can be created before
             // this is done, since only this actor creates them. So nothing
             // else touches these files, and no writes from before are in
-            // flight.
-            delete_files(&self.context.options.path, &hash, &notice.0);
+            // flight: with no entity state to check against, the committed
+            // state is the whole truth, and the parts are garbage.
+            delete_files(&self.context.options.path, &hash, &parts.0);
         }
     }
 
@@ -1345,12 +1355,12 @@ impl Actor {
         );
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
-        let (notices_send, notices) = tokio::sync::mpsc::unbounded_channel();
+        let (unreferenced_send, unreferenced) = tokio::sync::mpsc::unbounded_channel();
         let paths = Arc::new(options.path.clone());
         let db_actor = meta::Actor::new(
             db_path,
             db_recv,
-            notices_send,
+            unreferenced_send,
             paths,
             options.batch.clone(),
             options.syncs_files(),
@@ -1369,7 +1379,7 @@ impl Actor {
             context: slot_context.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
-            notices,
+            unreferenced,
             metadata_task,
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
@@ -1606,8 +1616,8 @@ trait EntityApi {
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     );
-    /// Act on what a committed metadata batch means for the entry's files.
-    async fn apply_notice(&self, notice: FileNotice);
+    /// Delete the parts a committed batch stopped referencing, after checking each against the entity's own state.
+    async fn delete_unreferenced(&self, parts: UnreferencedParts);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);
 }
@@ -1752,8 +1762,8 @@ impl EntityApi for HashContext {
         freeze_entry(self, ack, release).await
     }
 
-    async fn apply_notice(&self, notice: FileNotice) {
-        apply_notice(self, notice).await
+    async fn delete_unreferenced(&self, parts: UnreferencedParts) {
+        delete_unreferenced(self, parts).await
     }
 
     #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
@@ -2131,8 +2141,9 @@ async fn export_path_impl(
                     &ctx.state.borrow().storage,
                     BaoFileStorage::ReadWrite(Settled::Complete(_))
                 ) {
-                    // The notice after the commit deletes the owned data file,
-                    // unless this entity's state still uses it.
+                    // After the commit, the owned data file comes back as an
+                    // unreferenced part, and this entity deletes it unless its
+                    // state still uses it.
                     // TODO: after a copy across file systems it does, so the
                     // owned file leaks.
                     ctx.meta()
@@ -3341,7 +3352,7 @@ pub mod tests {
                 let (_, bao) = create_n0_bao(&data, &rest)?;
                 store.import_bao_bytes(hash, rest, bao).await?;
             }
-            // The files go after the commit, through a notice to the entity.
+            // The files go after the commit, as unreferenced parts the entity deletes.
             store.sync_db().await?;
             store.wait_idle().await?;
             let inlined = size <= options.inline.max_data_inlined as usize;
