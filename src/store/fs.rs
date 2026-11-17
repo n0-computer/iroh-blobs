@@ -31,7 +31,8 @@
 //! # Metadata protocol
 //!
 //! An entity talks to the metadata actor through `EntryMeta`, scoped to its
-//! hash:
+//! hash. The commands and client live in `metadata`; the redb actor in `meta`
+//! consumes the same protocol directly on one ordered queue:
 //!
 //! | Method | Waits | Meaning |
 //! |---|---|---|
@@ -299,6 +300,7 @@ mod import;
 #[cfg(test)]
 mod lazyfs_tests;
 mod meta;
+mod metadata;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
@@ -336,7 +338,7 @@ fn temp_name() -> String {
 #[derive(Debug)]
 #[enum_conversions()]
 pub(crate) enum InternalCommand {
-    Dump(meta::Dump),
+    Dump(metadata::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
     EndGcRun(EndGcRun),
@@ -378,7 +380,7 @@ struct TaskContext {
     // Store options such as paths and inline thresholds, in an Arc to cheaply share with tasks.
     pub options: Arc<Options>,
     // Metadata database, basically a mpsc sender with some extra functionality.
-    pub db: meta::Db,
+    pub db: metadata::Metadata,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
 }
@@ -487,7 +489,7 @@ struct Actor<S: EntityStorage = FileStorage> {
 }
 
 impl<S: EntityStorage> Actor<S> {
-    fn db(&self) -> &meta::Db {
+    fn db(&self) -> &metadata::Metadata {
         &self.context.db
     }
 
@@ -609,8 +611,8 @@ impl<S: EntityStorage> Actor<S> {
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
                 match self.db().list_blobs(cmd.span.clone()).await {
-                    Ok(hashes) => self.spawn(drain(
-                        hashes,
+                    Ok(entries) => self.spawn(drain(
+                        entries.map(|entry| entry.map(|(hash, _)| hash)),
                         cmd.tx,
                         proto::ListBlobsItem::Hash,
                         proto::ListBlobsItem::Error,
@@ -1087,7 +1089,7 @@ impl<S: EntityStorage> Actor<S> {
         remove_all_files(&options.path.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
-            db: meta::Db::new(db_send),
+            db: metadata::Metadata::new(db_send),
             internal_cmd_tx: fs_commands_tx,
         });
         let metadata_task = Some(tokio::spawn(db_actor.run()));
@@ -1102,7 +1104,8 @@ impl<S: EntityStorage> Actor<S> {
             tasks: JoinSet::new(),
             handles: EntityManagerState::new(
                 Arc::new(EntityContext {
-                    tasks: slot_context,
+                    metadata: slot_context.db.clone(),
+                    options: slot_context.options.clone(),
                     storage_config,
                 }),
                 1024,
@@ -1452,7 +1455,7 @@ impl FsStore {
         let (tx, rx) = oneshot::channel();
         self.db
             .send(
-                meta::Dump {
+                metadata::Dump {
                     tx,
                     span: tracing::Span::current(),
                 }

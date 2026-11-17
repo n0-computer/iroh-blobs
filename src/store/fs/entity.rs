@@ -4,9 +4,9 @@ use super::{
     export::export_path_impl,
     file_deletes::{BaoFilePart, UnreferencedParts, ALL_PARTS},
     import::{ImportEntry, ImportEntryMsg},
-    meta,
+    metadata::{EntryMeta, Metadata},
+    options::Options,
     util::entity_manager::{self, ActiveEntityState},
-    TaskContext,
 };
 use crate::{
     api::{
@@ -332,15 +332,9 @@ pub(super) struct EmParams<S: EntityStorage>(std::marker::PhantomData<S>);
 
 #[derive(Debug)]
 pub(super) struct EntityContext<S: EntityStorage> {
-    pub(super) tasks: Arc<TaskContext>,
+    pub(super) metadata: Metadata,
+    pub(super) options: Arc<Options>,
     pub(super) storage_config: Arc<S::Config>,
-}
-
-impl<S: EntityStorage> Deref for EntityContext<S> {
-    type Target = TaskContext;
-    fn deref(&self) -> &TaskContext {
-        &self.tasks
-    }
 }
 
 impl<S: EntityStorage> entity_manager::Params for EmParams<S> {
@@ -607,7 +601,7 @@ impl<S: EntityStorage> SyncEntityApi for HashContext<S> {
 /// The minimal API you need to implement for an entity for a store to work.
 pub(super) trait EntityApi {
     /// The metadata of the entry.
-    fn meta(&self) -> meta::EntryMeta<'_>;
+    fn meta(&self) -> EntryMeta<'_>;
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -671,8 +665,8 @@ pub(super) trait SyncEntityApi: EntityApi {
 
 /// The high level entry point per entry.
 impl<S: EntityStorage> EntityApi for HashContext<S> {
-    fn meta(&self) -> meta::EntryMeta<'_> {
-        self.global.db.entry(self.id)
+    fn meta(&self) -> EntryMeta<'_> {
+        self.global.metadata.entry(self.id)
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]

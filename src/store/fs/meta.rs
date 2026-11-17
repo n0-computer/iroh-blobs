@@ -12,7 +12,7 @@ use std::{
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
-use n0_future::{stream, Stream};
+use n0_future::stream;
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -30,14 +30,13 @@ use crate::{
     util::channel::oneshot,
     Hash,
 };
-mod proto;
 mod recovery;
 mod run;
-pub use proto::*;
+use super::metadata::*;
 pub(crate) mod tables;
 use run::{LastShutdown, Run};
 use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
-use tracing::{debug, info, info_span, trace, warn, Span};
+use tracing::{debug, info, info_span, trace, warn};
 
 use super::{
     boot_id,
@@ -101,246 +100,62 @@ impl ActorError {
 
 pub type ActorResult<T> = std::result::Result<T, ActorError>;
 
-#[derive(Debug, Clone)]
-pub struct Db {
-    sender: tokio::sync::mpsc::Sender<Command>,
+fn read_tables(db: &Database) -> ActorResult<ReadOnlyTables> {
+    let txn = db
+        .begin_read()
+        .map_err(|e| e!(ActorError::Transaction, e))?;
+    ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))
 }
 
-impl Db {
-    pub fn new(sender: tokio::sync::mpsc::Sender<Command>) -> Self {
-        Self { sender }
-    }
-
-    /// Takes a read snapshot after all earlier commands.
-    async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(Snapshot { tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send snapshot"))?;
-        rx.await.map_err(|_| io::Error::other("receive snapshot"))
-    }
-
-    /// Lists the tags of a snapshot taken after all earlier commands.
-    ///
-    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
-    pub async fn list_tags(
-        &self,
-        span: tracing::Span,
-        request: ListTagsRequest,
-    ) -> io::Result<impl Stream<Item = api::Result<TagInfo>> + Send + 'static> {
-        let snapshot = self.snapshot(span).await?;
-        let ListTagsRequest {
-            from,
-            to,
-            raw,
-            hash_seq,
-        } = request;
-        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
-        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-        let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
-        let tags = rows.filter_map(move |row| {
-            let (name, value) = match row {
-                Ok(row) => row,
-                Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
-            };
-            let value = value.value();
-            let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
-            wanted.then(|| {
-                Ok(TagInfo {
-                    name: name.value(),
-                    hash: value.hash,
-                    format: value.format,
-                })
+fn list_tags(snapshot: ReadOnlyTables, request: ListTagsRequest) -> io::Result<Listing<TagInfo>> {
+    let ListTagsRequest {
+        from,
+        to,
+        raw,
+        hash_seq,
+    } = request;
+    let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+    let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+    let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
+    let tags = rows.filter_map(move |row| {
+        let (name, value) = match row {
+            Ok(row) => row,
+            Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
+        };
+        let value = value.value();
+        let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
+        wanted.then(|| {
+            Ok(TagInfo {
+                name: name.value(),
+                hash: value.hash,
+                format: value.format,
             })
+        })
+    });
+    Ok(Box::pin(stream::iter(tags)))
+}
+
+fn gc_snapshot(snapshot: ReadOnlyTables) -> io::Result<GcSnapshotReply> {
+    let candidates = blob_entries(&snapshot)?.map(|entry| entry.map(|(hash, _)| hash));
+    let roots = snapshot
+        .tags
+        .range::<Tag>(..)
+        .map_err(io::Error::other)?
+        .map(|row| {
+            row.map(|(_, root)| root.value())
+                .map_err(api_error_from_storage_error)
         });
-        Ok(stream::iter(tags))
-    }
-
-    /// Lists the blobs of a snapshot taken after all earlier commands.
-    ///
-    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
-    pub async fn list_blobs(
-        &self,
-        span: tracing::Span,
-    ) -> io::Result<impl Stream<Item = api::Result<Hash>> + Send + 'static> {
-        let snapshot = self.snapshot(span).await?;
-        Ok(stream::iter(blob_hashes(&snapshot)?))
-    }
-
-    /// Reads the gc candidates (every blob) and the named tag roots from one
-    /// snapshot taken after all earlier commands.
-    pub async fn gc_snapshot(
-        &self,
-        span: tracing::Span,
-    ) -> io::Result<(
-        impl Stream<Item = api::Result<Hash>> + Send + 'static,
-        impl Stream<Item = api::Result<crate::HashAndFormat>> + Send + 'static,
-    )> {
-        let snapshot = self.snapshot(span).await?;
-        let candidates = blob_hashes(&snapshot)?;
-        let roots = snapshot
-            .tags
-            .range::<Tag>(..)
-            .map_err(io::Error::other)?
-            .map(|row| {
-                row.map(|(_, root)| root.value())
-                    .map_err(api_error_from_storage_error)
-            });
-        Ok((stream::iter(candidates), stream::iter(roots)))
-    }
-
-    pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(
-                Update {
-                    hash,
-                    state,
-                    tx: Some(tx),
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send update"))?;
-        rx.await
-            .map_err(|_e| io::Error::other("receive update"))??;
-        Ok(())
-    }
-
-    /// Update the entry state for a hash, without awaiting completion.
-    pub async fn update(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        self.sender
-            .send(
-                Update {
-                    hash,
-                    state,
-                    tx: None,
-                    span: Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send update"))
-    }
-
-    /// Set the entry state and await completion.
-    pub async fn set(&self, hash: Hash, entry_state: EntryState<Bytes>) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(
-                Set {
-                    hash,
-                    state: entry_state,
-                    tx,
-                    span: Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send update"))?;
-        rx.await.map_err(|_| io::Error::other("receive update"))??;
-        Ok(())
-    }
-
-    /// Get the entry state for a hash, if any.
-    pub async fn get(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(
-                Get {
-                    hash,
-                    tx,
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send get"))?;
-        let res = rx.await.map_err(|_| io::Error::other("receive get"))?;
-        Ok(res.state?)
-    }
-
-    /// Apply an unconditional delete, answered once it is committed, even if
-    /// there was no metadata entry.
-    ///
-    /// Only the hash's entity sends this, see [`Delete`].
-    pub async fn delete(&self, hash: Hash) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let span = Span::current();
-        self.sender
-            .send(Delete { hash, tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send delete"))?;
-        rx.await.map_err(|_| io::Error::other("receive delete"))??;
-        Ok(())
-    }
-
-    /// A view of this database scoped to a single entry.
-    pub fn entry(&self, hash: Hash) -> EntryMeta<'_> {
-        EntryMeta { db: self, hash }
-    }
-
-    /// Send a command. This exists so the main actor can directly forward commands.
-    ///
-    /// This will fail only if the database actor is dead. In that case the main
-    /// actor should probably also shut down.
-    pub async fn send(&self, cmd: Command) -> io::Result<()> {
-        self.sender
-            .send(cmd)
-            .await
-            .map_err(|_e| io::Error::other("actor down"))?;
-        Ok(())
-    }
-}
-
-/// The metadata of a single entry.
-///
-/// This is all an entity gets to see of the database.
-#[derive(Debug, Clone, Copy)]
-pub struct EntryMeta<'a> {
-    db: &'a Db,
-    hash: Hash,
-}
-
-impl EntryMeta<'_> {
-    /// The hash of the entry.
-    pub fn hash(&self) -> Hash {
-        self.hash
-    }
-
-    /// Apply an unconditional delete, answered once it is committed.
-    pub async fn delete(&self) -> io::Result<()> {
-        self.db.delete(self.hash).await
-    }
-
-    /// Get the entry state.
-    pub async fn get(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        self.db.get(self.hash).await
-    }
-
-    /// Replace the entry state, and wait for completion.
-    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db.set(self.hash, state).await
-    }
-
-    /// Merge into the entry state, without waiting for completion.
-    pub async fn update(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db.update(self.hash, state).await
-    }
-
-    /// Merge into the entry state, and wait for completion.
-    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db.update_await(self.hash, state).await
-    }
+    Ok((
+        Box::pin(stream::iter(candidates)),
+        Box::pin(stream::iter(roots)),
+    ))
 }
 
 fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
     trace!("{cmd:?}");
     let Get { hash, tx, .. } = cmd;
     let Some(entry) = tables.blobs().get(hash)? else {
-        tx.send(GetResult { state: Ok(None) });
+        tx.send(Ok(None));
         return Ok(());
     };
     let entry = entry.value();
@@ -358,9 +173,7 @@ fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
         }
         EntryState::Partial { size } => EntryState::Partial { size },
     };
-    tx.send(GetResult {
-        state: Ok(Some(entry)),
-    });
+    tx.send(Ok(Some(entry)));
     Ok(())
 }
 
@@ -485,7 +298,8 @@ fn handle_update(
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
     let state = match old_entry_opt {
-        Some(old) => EntryState::union(old, state)?,
+        Some(old) => EntryState::union(old, state)
+            .map_err(|cause| ActorError::inconsistent(cause.to_string()))?,
         None => state,
     };
     bookkeeping.references(hash, &state);
@@ -565,7 +379,7 @@ struct Bookkeeping {
     /// any state the batch gave it. Files may exist for each of those.
     written: HashMap<Hash, BaoFileParts>,
     /// Deletes in the current write batch, answered once it is committed.
-    deleted: HashMap<Hash, Vec<oneshot::Sender<ActorResult<()>>>>,
+    deleted: HashMap<Hash, Vec<oneshot::Sender<io::Result<()>>>>,
 }
 
 impl Bookkeeping {
@@ -592,14 +406,14 @@ impl Bookkeeping {
         &mut self,
         hash: Hash,
         before: Option<&EntryState<I>>,
-        tx: oneshot::Sender<ActorResult<()>>,
+        tx: oneshot::Sender<io::Result<()>>,
     ) {
         self.written(hash, before);
         self.deleted.entry(hash).or_default().push(tx);
     }
 
     /// The deletes of the batch, to answer once it is committed.
-    fn take_deletes(&mut self) -> Vec<oneshot::Sender<ActorResult<()>>> {
+    fn take_deletes(&mut self) -> Vec<oneshot::Sender<io::Result<()>>> {
         self.deleted.drain().flat_map(|(_, txs)| txs).collect()
     }
 
@@ -938,13 +752,21 @@ impl Actor {
                 Self::clear_run(db)?;
                 Some(cmd)
             }
-            TopLevelCommand::Snapshot(cmd) => {
-                trace!("{cmd:?}");
-                let txn = db
-                    .begin_read()
-                    .map_err(|e| e!(ActorError::Transaction, e))?;
-                let snapshot = ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))?;
-                cmd.tx.send(snapshot).ok();
+            TopLevelCommand::ListTags(cmd) => {
+                let snapshot = read_tables(db)?;
+                cmd.tx.send(list_tags(snapshot, cmd.request));
+                None
+            }
+            TopLevelCommand::ListBlobs(cmd) => {
+                let snapshot = read_tables(db)?;
+                let result =
+                    blob_entries(&snapshot).map(|rows| Box::pin(stream::iter(rows)) as BlobListing);
+                cmd.tx.send(result);
+                None
+            }
+            TopLevelCommand::GcSnapshot(cmd) => {
+                let snapshot = read_tables(db)?;
+                cmd.tx.send(gc_snapshot(snapshot));
                 None
             }
         })
@@ -1175,13 +997,13 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
     BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
 }
 
-/// The hashes of all blobs in a snapshot.
-fn blob_hashes(
+/// All blob states in a snapshot, retaining locations without loading inline bytes.
+fn blob_entries(
     snapshot: &ReadOnlyTables,
-) -> io::Result<impl Iterator<Item = api::Result<Hash>> + Send + 'static> {
+) -> io::Result<impl Iterator<Item = api::Result<(Hash, EntryState<()>)>> + Send + 'static> {
     let rows = snapshot.blobs.range::<Hash>(..).map_err(io::Error::other)?;
     Ok(rows.map(|row| {
-        row.map(|(hash, _)| hash.value())
+        row.map(|(hash, state)| (hash.value(), state.value()))
             .map_err(api_error_from_storage_error)
     }))
 }
@@ -1189,6 +1011,7 @@ fn blob_hashes(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use tracing::Span;
 
     use super::{
         super::{
@@ -1197,6 +1020,101 @@ mod tests {
         },
         *,
     };
+
+    /// Listings retain their view without holding up the actor. GC's two
+    /// streams must describe the same view, even when consumed after a write.
+    #[tokio::test]
+    async fn listing_replies_own_consistent_views() -> testresult::TestResult<()> {
+        use n0_future::StreamExt;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let dir = tempfile::tempdir()?;
+            let options = Options::new(dir.path());
+            std::fs::create_dir_all(&options.path.data_path)?;
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            let (unreferenced, _notices) = tokio::sync::mpsc::unbounded_channel();
+            let actor = Actor::new(
+                dir.path().join("blobs.db"),
+                rx,
+                unreferenced,
+                Arc::new(options.path),
+                options.batch,
+                false,
+            )?;
+            let task = tokio::spawn(actor.run());
+            let metadata = Metadata::new(tx);
+            let first = Hash::new("first");
+            let second = Hash::new("second");
+            metadata
+                .update(first, EntryState::Partial { size: None })
+                .await?;
+            let (reply, received) = irpc::channel::oneshot::channel();
+            let request = SetTagRequest {
+                name: Tag::from("root"),
+                value: first.into(),
+            };
+            let cmd: SetTagMsg = (request, reply).into();
+            metadata.send(cmd.into()).await?;
+            received.await??;
+            let blobs = metadata.list_blobs(Span::none()).await?;
+            let tags = metadata
+                .list_tags(Span::none(), ListTagsRequest::prefix(b"root"))
+                .await?;
+            let (candidates, roots) = metadata.gc_snapshot(Span::none()).await?;
+            // Do not poll any of the listings yet. Writes must still complete.
+            metadata
+                .update_await(
+                    second,
+                    EntryState::Complete {
+                        data_location: DataLocation::Inline(Bytes::from_static(b"second")),
+                        outboard_location: OutboardLocation::NotNeeded,
+                    },
+                )
+                .await?;
+            let (reply, received) = irpc::channel::oneshot::channel();
+            let request = SetTagRequest {
+                name: Tag::from("root"),
+                value: second.into(),
+            };
+            let cmd: SetTagMsg = (request, reply).into();
+            metadata.send(cmd.into()).await?;
+            received.await??;
+            let latest = metadata.list_blobs(Span::none()).await?;
+            let values = blobs.collect::<Vec<_>>().await;
+            assert_eq!(values.len(), 1);
+            assert_eq!(
+                *values[0].as_ref().unwrap(),
+                (first, EntryState::Partial { size: None })
+            );
+            let tags = tags.collect::<Vec<_>>().await;
+            assert_eq!(tags.len(), 1);
+            assert_eq!(tags[0].as_ref().unwrap().hash, first);
+            let candidates = candidates.collect::<Vec<_>>().await;
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(*candidates[0].as_ref().unwrap(), first);
+            let roots = roots.collect::<Vec<_>>().await;
+            assert_eq!(roots.len(), 1);
+            assert_eq!(roots[0].as_ref().unwrap().hash, first);
+            let latest = latest.collect::<Vec<_>>().await;
+            assert_eq!(latest.len(), 2);
+            let (_, state) = latest
+                .iter()
+                .map(|entry| entry.as_ref().unwrap())
+                .find(|(hash, _)| *hash == second)
+                .unwrap();
+            assert_eq!(
+                *state,
+                EntryState::Complete {
+                    data_location: DataLocation::Inline(()),
+                    outboard_location: OutboardLocation::NotNeeded,
+                }
+            );
+            drop(metadata);
+            assert!(task.await?.is_ok());
+            testresult::TestResult::Ok(())
+        })
+        .await??;
+        Ok(())
+    }
 
     fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
         Run {
@@ -1605,7 +1523,7 @@ mod tests {
         let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
         let context = Arc::new(fs::TaskContext {
             options: options.clone(),
-            db: Db::new(db_tx),
+            db: Metadata::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
         });
         let mut actor = fs::Actor::<fs::FileStorage> {
@@ -1619,7 +1537,8 @@ mod tests {
             tasks: tokio::task::JoinSet::new(),
             handles: EntityManagerState::new(
                 Arc::new(fs::EntityContext {
-                    tasks: context,
+                    metadata: context.db.clone(),
+                    options: context.options.clone(),
                     storage_config: options.clone(),
                 }),
                 16,

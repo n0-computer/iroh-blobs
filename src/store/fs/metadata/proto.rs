@@ -1,25 +1,29 @@
-//! Protocol for the metadata database.
-use std::fmt;
-
+//! Shared metadata commands. Replies contain only backend-independent types.
+use super::super::entry_state::EntryState;
 use bytes::Bytes;
+use n0_future::Stream;
+use std::{fmt, io, pin::Pin};
+
 use nested_enum_utils::enum_conversions;
 use tracing::Span;
 
-use super::{ActorResult, ReadOnlyTables};
 use crate::{
-    api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
-    store::{fs::entry_state::EntryState, util::DD},
+    api::{
+        self,
+        proto::{BlobStatusMsg, ListTagsRequest, ShutdownMsg, SyncDbMsg},
+        tags::TagInfo,
+    },
+    store::util::DD,
     util::channel::oneshot,
-    Hash,
+    Hash, HashAndFormat,
 };
 
 /// Get the entry state for a hash.
 ///
-/// This will read from the blobs table and enrich the result with the content
-/// of the inline data and inline outboard tables if necessary.
+/// Inline data and outboards are included in the returned entry.
 pub struct Get {
     pub hash: Hash,
-    pub tx: oneshot::Sender<GetResult>,
+    pub tx: oneshot::Sender<io::Result<Option<EntryState<Bytes>>>>,
     pub span: Span,
 }
 
@@ -42,36 +46,16 @@ impl fmt::Debug for Get {
 #[derive(Debug)]
 pub struct Delete {
     pub hash: Hash,
-    pub tx: oneshot::Sender<ActorResult<()>>,
+    pub tx: oneshot::Sender<io::Result<()>>,
     pub span: Span,
 }
 
-#[derive(Debug)]
-pub struct GetResult {
-    pub state: ActorResult<Option<EntryState<Bytes>>>,
-}
-
-/// Get the entry state for a hash.
-///
-/// This will read from the blobs table and enrich the result with the content
-/// of the inline data and inline outboard tables if necessary.
-#[derive(Debug)]
-pub struct Dump {
-    pub tx: oneshot::Sender<n0_error::Result<()>>,
-    pub span: Span,
-}
-
-#[derive(Debug)]
-pub struct Snapshot {
-    pub(crate) tx: tokio::sync::oneshot::Sender<ReadOnlyTables>,
-    pub span: Span,
-}
-
+/// Merge entry metadata. An optional reply acknowledges application, not commit.
 pub struct Update {
     pub hash: Hash,
     pub state: EntryState<Bytes>,
-    /// do I need this? Optional?
-    pub tx: Option<oneshot::Sender<ActorResult<()>>>,
+    /// If present, acknowledge once the merge is applied, before commit.
+    pub tx: Option<oneshot::Sender<io::Result<()>>>,
     pub span: Span,
 }
 
@@ -85,10 +69,11 @@ impl fmt::Debug for Update {
     }
 }
 
+/// Replace entry metadata and acknowledge application, not commit.
 pub struct Set {
     pub hash: Hash,
     pub state: EntryState<Bytes>,
-    pub tx: oneshot::Sender<ActorResult<()>>,
+    pub tx: oneshot::Sender<io::Result<()>>,
     pub span: Span,
 }
 
@@ -99,6 +84,45 @@ impl fmt::Debug for Set {
             .field("state", &DD(self.state.fmt_short()))
             .finish_non_exhaustive()
     }
+}
+
+/// An owned listing. The backend retains whatever snapshot the stream needs;
+/// consuming it does not block the metadata actor.
+pub type Listing<T> = Pin<Box<dyn Stream<Item = api::Result<T>> + Send + 'static>>;
+
+/// Blob locations from a consistent view, without inline payloads.
+pub type BlobListing = Listing<(Hash, EntryState<()>)>;
+
+/// Candidates and named roots from the same consistent view.
+pub type GcSnapshotReply = (Listing<Hash>, Listing<HashAndFormat>);
+
+/// Dump backend metadata for diagnostics.
+#[derive(Debug)]
+pub struct Dump {
+    pub tx: oneshot::Sender<n0_error::Result<()>>,
+    pub span: Span,
+}
+
+#[derive(derive_more::Debug)]
+pub struct ListTags {
+    pub request: ListTagsRequest,
+    #[debug(skip)]
+    pub tx: oneshot::Sender<io::Result<Listing<TagInfo>>>,
+    pub span: Span,
+}
+
+#[derive(derive_more::Debug)]
+pub struct ListBlobs {
+    #[debug(skip)]
+    pub tx: oneshot::Sender<io::Result<BlobListing>>,
+    pub span: Span,
+}
+
+#[derive(derive_more::Debug)]
+pub struct GcSnapshot {
+    #[debug(skip)]
+    pub tx: oneshot::Sender<io::Result<GcSnapshotReply>>,
+    pub span: Span,
 }
 
 /// Modification method: create a new unique tag and set it to a value.
@@ -159,7 +183,9 @@ impl ReadWriteCommand {
 pub enum TopLevelCommand {
     SyncDb(SyncDbMsg),
     Shutdown(ShutdownMsg),
-    Snapshot(Snapshot),
+    ListTags(ListTags),
+    ListBlobs(ListBlobs),
+    GcSnapshot(GcSnapshot),
 }
 
 impl TopLevelCommand {
@@ -167,7 +193,9 @@ impl TopLevelCommand {
         match self {
             Self::SyncDb(x) => &x.span,
             Self::Shutdown(x) => &x.span,
-            Self::Snapshot(x) => &x.span,
+            Self::ListTags(x) => &x.span,
+            Self::ListBlobs(x) => &x.span,
+            Self::GcSnapshot(x) => &x.span,
         }
     }
 }
@@ -179,6 +207,8 @@ pub enum Command {
     TopLevel(TopLevelCommand),
 }
 
+// Err returns the original command for further dispatch, without allocating.
+#[allow(clippy::result_large_err)]
 impl Command {
     pub fn non_top_level(self) -> std::result::Result<NonTopLevelCommand, Self> {
         match self {

@@ -330,3 +330,91 @@ async fn alternate_storage_freeze_and_write_failure() -> testresult::TestResult<
     .await??;
     Ok(())
 }
+
+/// Both storage and metadata are independent implementations. The coordinator
+/// only sees the shared protocol, including the post-commit delete barrier.
+#[tokio::test]
+async fn coordinator_uses_metadata_protocol_without_redb() -> testresult::TestResult<()> {
+    use super::metadata::{Command as MetaCommand, Metadata, ReadOnlyCommand, ReadWriteCommand};
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let dir = tempfile::tempdir()?;
+        let config = Arc::new(Config::default());
+        let data = Bytes::from(vec![42; 1024]);
+        let hash = Hash::new(&data);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let (deleting, delete_started) = tokio::sync::oneshot::channel();
+        let (commit, committed) = tokio::sync::oneshot::channel();
+        let mut deleting = Some(deleting);
+        let mut committed = Some(committed);
+        let expected = data.clone();
+        let backend = tokio::spawn(async move {
+            let mut present = false;
+            while let Some(command) = rx.recv().await {
+                match command {
+                    MetaCommand::ReadOnly(ReadOnlyCommand::Get(cmd)) => {
+                        assert_eq!(cmd.hash, hash);
+                        let state = present.then(|| EntryState::Complete {
+                            data_location: DataLocation::Inline(expected.clone()),
+                            outboard_location: OutboardLocation::NotNeeded,
+                        });
+                        cmd.tx.send(Ok(state));
+                    }
+                    MetaCommand::ReadWrite(ReadWriteCommand::Update(cmd)) => {
+                        assert_eq!(cmd.hash, hash);
+                        assert!(cmd.state.is_complete());
+                        present = true;
+                        if let Some(tx) = cmd.tx {
+                            tx.send(Ok(()));
+                        }
+                    }
+                    MetaCommand::ReadWrite(ReadWriteCommand::Delete(cmd)) => {
+                        assert_eq!(cmd.hash, hash);
+                        deleting.take().unwrap().send(()).unwrap();
+                        committed.take().unwrap().await.unwrap();
+                        present = false;
+                        cmd.tx.send(Ok(()));
+                    }
+                    _ => panic!("unexpected metadata command"),
+                }
+            }
+        });
+        let ctx = HashContext::<MemoryStorage> {
+            id: hash,
+            global: Arc::new(EntityContext {
+                metadata: Metadata::new(tx),
+                options: Arc::new(Options::new(dir.path())),
+                storage_config: config.clone(),
+            }),
+            state: Default::default(),
+        };
+        ctx.load().await;
+        ctx.write_batch(
+            &[BaoContentItem::Leaf(Leaf {
+                offset: 0,
+                data: data.clone(),
+            })],
+            &Bitfield::complete(1024),
+        )
+        .await?;
+        assert!(ctx.meta().get().await?.unwrap().is_complete());
+        assert_eq!(ctx.data_reader().read_bytes_at(0, 1024)?, data);
+        let (result, ()) = tokio::join!(ctx.delete(), async {
+            delete_started.await.unwrap();
+            // Files/storage must not be deleted until the metadata commit.
+            assert_eq!(config.deletes.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                ctx.data_reader().read_bytes_at(0, 1).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+            commit.send(()).unwrap();
+        });
+        result?;
+        assert_eq!(config.deletes.load(Ordering::SeqCst), 1);
+        assert!(ctx.meta().get().await?.is_none());
+        drop(ctx);
+        backend.await?;
+        testresult::TestResult::Ok(())
+    })
+    .await??;
+    Ok(())
+}

@@ -1,5 +1,6 @@
 //! Table definitions and accessors for the redb database.
 use redb::{ReadableTable, TableDefinition, TableError};
+use smallvec::SmallVec;
 
 use super::EntryState;
 use crate::{api::Tag, Hash, HashAndFormat};
@@ -98,5 +99,34 @@ impl ReadableTables for ReadOnlyTables {
     }
     fn inline_outboard(&self) -> &impl ReadableTable<Hash, &'static [u8]> {
         &self.inline_outboard
+    }
+}
+
+impl redb::Value for EntryState {
+    type SelfType<'a> = EntryState;
+
+    type AsBytes<'a> = SmallVec<[u8; 128]>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        postcard::from_bytes(data).unwrap()
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'a,
+        Self: 'b,
+    {
+        postcard::to_extend(value, SmallVec::new()).unwrap()
+    }
+
+    fn type_name() -> redb::TypeName {
+        redb::TypeName::new("EntryState")
     }
 }
