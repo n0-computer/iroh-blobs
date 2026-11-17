@@ -540,6 +540,7 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
         state.generation += 1;
         state.storage = BaoFileStorage::Deleting;
     });
+    // Answered once the delete is committed.
     if let Err(cause) = ctx.meta().delete().await {
         // Metadata failure aborts the store. A command racing a graceful
         // shutdown can also be rejected, without a failure to trigger abort.
@@ -548,40 +549,27 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
             .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
         return Err(cause);
     }
-    // The notice after the commit unlinks the files and ends Deleting.
-    wait_settled(ctx).await;
+    // No durable state references the files anymore. Unlink every one, since
+    // the entity may have written files its entry did not reference yet.
+    delete_files(&ctx.global.options.path, &ctx.id, &ALL_PARTS);
+    ctx.state
+        .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
     Ok(())
 }
 
-/// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
+/// Deletes the files a committed batch stopped referencing, see [`FileNotice`].
 async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
-    let paths = &ctx.global.options.path;
-    match notice {
-        FileNotice::Deleted => {
-            // delete_entry holds Deleting until this. Unlink every file, since
-            // the entity may have written files its entry did not reference yet.
-            debug_assert!(matches!(
-                &ctx.state.borrow().storage,
-                BaoFileStorage::Deleting
-            ));
-            delete_files(paths, &ctx.id, &ALL_PARTS);
-            ctx.state
-                .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
-        }
-        FileNotice::Unreferenced(parts) => {
-            wait_writable(ctx).await;
-            // Files the committed state no longer references, unless this
-            // entity's state, which is never behind its entry, uses them again.
-            let parts: Vec<_> = {
-                let state = ctx.state.borrow();
-                parts
-                    .into_iter()
-                    .filter(|part| !state.references(*part))
-                    .collect()
-            };
-            delete_files(paths, &ctx.id, &parts);
-        }
-    }
+    wait_writable(ctx).await;
+    // Unless this entity's state, which is never behind its entry, uses them again.
+    let parts: Vec<_> = {
+        let state = ctx.state.borrow();
+        notice
+            .0
+            .into_iter()
+            .filter(|part| !state.references(*part))
+            .collect()
+    };
+    delete_files(&ctx.global.options.path, &ctx.id, &parts);
 }
 
 /// Waits for the deletes of one request, and reports the last error.
@@ -1249,7 +1237,7 @@ impl Actor {
         // No entity exists anymore, so what the last batches left to do is
         // done here directly. No acknowledgement, the database is closed.
         while let Ok((hash, notice)) = self.notices.try_recv() {
-            delete_files(&self.context.options.path, &hash, notice.parts());
+            delete_files(&self.context.options.path, &hash, &notice.0);
         }
     }
 
@@ -1277,7 +1265,7 @@ impl Actor {
             // this is done, since only this actor creates them. So nothing
             // else touches these files, and no writes from before are in
             // flight.
-            delete_files(&self.context.options.path, &hash, notice.parts());
+            delete_files(&self.context.options.path, &hash, &notice.0);
         }
     }
 

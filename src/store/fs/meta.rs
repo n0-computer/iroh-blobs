@@ -1,7 +1,7 @@
 //! The metadata database
 #![allow(clippy::result_large_err)]
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io,
     ops::{Bound, Deref, DerefMut},
     path::PathBuf,
@@ -559,8 +559,8 @@ struct Bookkeeping {
     /// with every file their entry referenced in it: before the batch, or in
     /// any state the batch gave it. Files may exist for each of those.
     written: HashMap<Hash, BaoFileParts>,
-    /// Hashes whose entry was deleted in the current write batch.
-    deleted: HashSet<Hash>,
+    /// Deletes in the current write batch, answered once it is committed.
+    deleted: HashMap<Hash, Vec<oneshot::Sender<ActorResult<()>>>>,
 }
 
 impl Bookkeeping {
@@ -582,24 +582,34 @@ impl Bookkeeping {
         }
     }
 
-    /// Note that the entry of a hash was deleted.
-    fn deleted<I>(&mut self, hash: Hash, before: Option<&EntryState<I>>) {
+    /// Note that the entry of a hash was deleted, to answer `tx` once that is committed.
+    fn deleted<I>(
+        &mut self,
+        hash: Hash,
+        before: Option<&EntryState<I>>,
+        tx: oneshot::Sender<ActorResult<()>>,
+    ) {
         self.written(hash, before);
-        self.deleted.insert(hash);
+        self.deleted.entry(hash).or_default().push(tx);
+    }
+
+    /// The deletes of the batch, to answer once it is committed.
+    fn take_deletes(&mut self) -> Vec<oneshot::Sender<ActorResult<()>>> {
+        self.deleted.drain().flat_map(|(_, txs)| txs).collect()
     }
 
     /// What the batch means for files, once it is committed.
     ///
-    /// For each hash written in the batch: whether its entry was deleted, or
-    /// else which files it referenced in the batch and no longer does.
+    /// For each hash written but not deleted in the batch: which files it
+    /// referenced in the batch and no longer does. The entity of a deleted
+    /// hash removes all its files itself, once its delete is answered.
     fn file_notices(
         &mut self,
         tables: &impl ReadableTables,
     ) -> ActorResult<Vec<(Hash, FileNotice)>> {
         let mut res = Vec::new();
         for (hash, before) in self.written.drain() {
-            if self.deleted.remove(&hash) {
-                res.push((hash, FileNotice::Deleted));
+            if self.deleted.contains_key(&hash) {
                 continue;
             }
             let after = tables.blobs().get(hash)?.map(|e| e.value());
@@ -609,7 +619,7 @@ impl Bookkeeping {
                 .filter(|part| !still.contains(part))
                 .collect();
             if !parts.is_empty() {
-                res.push((hash, FileNotice::Unreferenced(parts)));
+                res.push((hash, FileNotice(parts)));
             }
         }
         Ok(res)
@@ -762,8 +772,8 @@ impl Actor {
         trace!("{cmd:?}");
         let Delete { hash, tx, .. } = cmd;
         let entry = tables.blobs.remove(hash)?.map(|entry| entry.value());
-        // files are deleted after the commit, see Bookkeeping::file_notices
-        state.deleted(hash, entry.as_ref());
+        // answered after the commit, then the entity deletes the files
+        state.deleted(hash, entry.as_ref(), tx);
         if let Some(EntryState::Complete {
             data_location,
             outboard_location,
@@ -776,7 +786,6 @@ impl Actor {
                 tables.inline_outboard.remove(hash)?;
             }
         }
-        tx.send(Ok(()));
         Ok(())
     }
 
@@ -1023,13 +1032,20 @@ impl Actor {
                         }
                     }
                     let notices = self.state.file_notices(&tables)?;
+                    let deletes = self.state.take_deletes();
                     drop(tables);
                     tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
                     // Files are only touched once the commit that stops
-                    // referencing them is durable. The main actor hands each
-                    // notice to the hash's entity, or acts on it itself if
-                    // there is none. Unbounded, so this actor never waits on
-                    // the main actor, which waits on this one.
+                    // referencing them is durable. A delete's entity removes
+                    // its files once its delete is answered. If the batch
+                    // fails, the answers are dropped and the deletes fail.
+                    for tx in deletes {
+                        tx.send(Ok(()));
+                    }
+                    // The main actor hands each notice to the hash's entity,
+                    // or acts on it itself if there is none. Unbounded, so
+                    // this actor never waits on the main actor, which waits
+                    // on this one.
                     for notice in notices {
                         self.notices.send(notice).ok();
                     }
@@ -1349,8 +1365,12 @@ mod tests {
         let mut tables = Tables::new(&tx)?;
         f(&mut tables, state)?;
         let notices = state.file_notices(&tables)?;
+        let deletes = state.take_deletes();
         drop(tables);
         tx.commit()?;
+        for tx in deletes {
+            tx.send(Ok(()));
+        }
         Ok(notices)
     }
 
@@ -1422,15 +1442,15 @@ mod tests {
         assert!(
             notices
                 .iter()
-                .all(|(_, n)| !n.parts().contains(&BaoFilePart::Data)),
+                .all(|(_, n)| !n.0.contains(&BaoFilePart::Data)),
             "committed metadata still refers to this file: {notices:?}"
         );
         Ok(())
     }
 
-    /// A delete names every file its entry used.
+    /// A delete is answered once committed, and leaves its files to its entity.
     #[test]
-    fn a_delete_names_the_files_of_the_entry() -> testresult::TestResult<()> {
+    fn a_delete_is_answered_after_the_commit() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
         let hash = Hash::new(b"partial");
         let mut state = Bookkeeping::default();
@@ -1448,25 +1468,30 @@ mod tests {
             Ok(())
         })?;
         assert!(notices.is_empty(), "a new entry leaves no files behind");
+        let (tx, rx) = oneshot::channel();
+        let oneshot::Receiver::Tokio(mut rx) = rx;
         let notices = write_batch(&db, &mut state, |tables, state| {
             let entry = tables.blobs.remove(hash)?.expect("an entry").value();
-            state.deleted(hash, Some(&entry));
+            state.deleted(hash, Some(&entry), tx);
+            // not before the commit
+            assert!(rx.try_recv().is_err());
             Ok(())
         })?;
-        assert_eq!(notices.len(), 1);
-        assert!(matches!(notices[0], (h, FileNotice::Deleted) if h == hash));
+        assert!(notices.is_empty(), "the entity deletes the files itself");
+        assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         Ok(())
     }
 
-    /// An absent entry still needs a commit notice to release its entity.
+    /// Deleting an absent entry is answered too, to release its entity.
     #[test]
     fn deleting_an_absent_entry_is_confirmed() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
         let hash = Hash::new(b"absent");
         let mut state = Bookkeeping::default();
         for _ in 0..2 {
+            let (tx, rx) = oneshot::channel();
+            let oneshot::Receiver::Tokio(mut rx) = rx;
             let notices = write_batch(&db, &mut state, |tables, state| {
-                let (tx, _rx) = oneshot::channel();
                 Actor::delete(
                     state,
                     tables,
@@ -1478,8 +1503,8 @@ mod tests {
                 )?;
                 Ok(())
             })?;
-            assert_eq!(notices.len(), 1);
-            assert!(matches!(notices[0], (h, FileNotice::Deleted) if h == hash));
+            assert!(notices.is_empty());
+            assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         }
         Ok(())
     }
@@ -1707,10 +1732,7 @@ mod tests {
             Ok(())
         })?;
         assert_eq!(notices.len(), 1);
-        let (_, FileNotice::Unreferenced(parts)) = &notices[0] else {
-            panic!("expected unreferenced files, got {notices:?}");
-        };
-        let mut parts = parts.clone();
+        let mut parts = notices[0].1 .0.clone();
         parts.sort();
         assert_eq!(
             parts.as_slice(),
