@@ -1,0 +1,827 @@
+//! Default storage backend using ordinary file I/O and inline bytes.
+
+use core::fmt;
+use std::{
+    fs::{self, File, OpenOptions},
+    io,
+    path::{Path, PathBuf},
+};
+
+use bao_tree::{
+    blake3,
+    io::{
+        fsm::BaoContentItem,
+        mixed::ReadBytesAt,
+        outboard::PreOrderOutboard,
+        sync::{ReadAt, WriteAt},
+    },
+    BaoTree, ChunkRanges,
+};
+use bytes::{Bytes, BytesMut};
+use derive_more::Debug;
+use tracing::{debug, error, info, trace};
+
+use super::{
+    entity_storage::{EntityStorage, StorageChange},
+    entry_state::{DataLocation, EntryState, OutboardLocation},
+    file_deletes::BaoFilePart,
+    import::{ImportEntry, ImportSource},
+    options::Options,
+};
+use crate::{
+    api::blobs::Bitfield,
+    store::{
+        fs::meta::raw_outboard_size,
+        util::{
+            read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
+            PartialMemStorage, DD,
+        },
+        IROH_BLOCK_SIZE,
+    },
+    Hash,
+};
+
+/// Storage for complete blobs. There is no longer any uncertainty about the
+/// size, so we don't need a sizes file.
+///
+/// Writing is not possible but also not needed, since the file is complete.
+/// This covers all combinations of data and outboard being in memory or on
+/// disk.
+///
+/// For the memory variant, it does reading in a zero copy way, since storage
+/// is already a `Bytes`.
+#[derive(Default)]
+pub struct CompleteStorage {
+    /// data part, which can be in memory or on disk.
+    pub data: MemOrFile<Bytes, FixedSize<File>>,
+    /// outboard part, which can be in memory or on disk.
+    pub outboard: MemOrFile<Bytes, File>,
+}
+
+impl fmt::Debug for CompleteStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompleteStorage")
+            .field("data", &DD(self.data.fmt_short()))
+            .field("outboard", &DD(self.outboard.fmt_short()))
+            .finish()
+    }
+}
+
+impl CompleteStorage {
+    /// The size of the data file.
+    pub fn size(&self) -> u64 {
+        match &self.data {
+            MemOrFile::Mem(mem) => mem.len() as u64,
+            MemOrFile::File(file) => file.size,
+        }
+    }
+
+    pub fn bitfield(&self) -> Bitfield {
+        Bitfield::complete(self.size())
+    }
+}
+
+/// Create a file for reading and writing, but *without* truncating the existing
+/// file.
+fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
+
+/// Opens the first external data file that can be opened.
+///
+/// Fails with `NotFound` only if all files are missing. Otherwise the first
+/// error that is not `NotFound` is returned, so real IO faults stay visible.
+/// An empty list never happens in normal use and is reported as corrupt metadata.
+fn open_external(paths: &[PathBuf]) -> io::Result<File> {
+    let mut error: Option<io::Error> = None;
+    for path in paths {
+        match File::open(path) {
+            Ok(file) => return Ok(file),
+            Err(cause) => {
+                debug!(
+                    "failed to open external data file {}: {cause}",
+                    path.display()
+                );
+                if error
+                    .as_ref()
+                    .is_none_or(|e| e.kind() == io::ErrorKind::NotFound)
+                {
+                    error = Some(cause);
+                }
+            }
+        }
+    }
+    Err(error.unwrap_or_else(|| io::Error::other("no external data path")))
+}
+
+/// Read from the given file at the given offset, until end of file or max bytes.
+fn read_to_end(file: impl ReadAt, offset: u64, max: usize) -> io::Result<Bytes> {
+    let mut res = BytesMut::new();
+    let mut buf = [0u8; 4096];
+    let mut remaining = max;
+    let mut offset = offset;
+    while remaining > 0 {
+        let end = buf.len().min(remaining);
+        let read = file.read_at(offset, &mut buf[..end])?;
+        if read == 0 {
+            // eof
+            break;
+        }
+        res.extend_from_slice(&buf[..read]);
+        offset += read as u64;
+        remaining -= read;
+    }
+    Ok(res.freeze())
+}
+
+fn max_offset(batch: &[BaoContentItem]) -> u64 {
+    batch
+        .iter()
+        .filter_map(|item| match item {
+            BaoContentItem::Leaf(leaf) => {
+                let len = leaf.data.len().try_into().unwrap();
+                let end = leaf
+                    .offset
+                    .checked_add(len)
+                    .expect("u64 overflow for leaf end");
+                Some(end)
+            }
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// A file storage for an incomplete bao file.
+#[derive(Debug)]
+pub struct PartialFileStorage {
+    data: std::fs::File,
+    outboard: std::fs::File,
+    sizes: std::fs::File,
+    bitfield: Bitfield,
+}
+
+impl PartialFileStorage {
+    pub fn bitfield(&self) -> &Bitfield {
+        &self.bitfield
+    }
+
+    /// Writes the bitfield, after the files it describes, syncing them first if `sync` is set.
+    pub(super) fn write_bitfield(&self, bitfield_path: &Path, sync: bool) -> io::Result<()> {
+        if sync {
+            self.data.sync_all()?;
+            self.outboard.sync_all()?;
+            self.sizes.sync_all()?;
+        }
+        // only write the bitfield if the syncs were successful
+        trace!(
+            "writing bitfield {:?} to {}",
+            self.bitfield,
+            bitfield_path.display()
+        );
+        // The bitfield itself is not synced, not even for PowerLoss. It is a cache
+        // of what valid_ranges computes from the files, so it only must never
+        // claim more than they hold, which the syncs above ensure. If it is lost
+        // or torn in a crash, it comes back empty or fails its checksum, and the
+        // next load rebuilds it from the files.
+        write_checksummed(bitfield_path, &self.bitfield)?;
+        Ok(())
+    }
+
+    fn load(hash: &Hash, options: &Options) -> io::Result<Self> {
+        let paths = &options.path;
+        let bitfield_path = paths.bitfield_path(hash);
+        let data = create_read_write(paths.data_path(hash))?;
+        let outboard = create_read_write(paths.outboard_path(hash))?;
+        let sizes = create_read_write(paths.sizes_path(hash))?;
+        let bitfield = match read_checksummed_and_truncate(&bitfield_path, options.syncs_files()) {
+            Ok(bitfield) => bitfield,
+            Err(cause) => {
+                trace!(
+                    "failed to read bitfield for {} at {}: {:?}",
+                    hash.to_hex(),
+                    bitfield_path.display(),
+                    cause
+                );
+                trace!("reconstructing bitfield from outboard");
+                let size = read_size(&sizes).ok().unwrap_or_default();
+                let outboard = PreOrderOutboard {
+                    data: &outboard,
+                    tree: BaoTree::new(size, IROH_BLOCK_SIZE),
+                    root: blake3::Hash::from(*hash),
+                };
+                let mut ranges = ChunkRanges::empty();
+                for range in bao_tree::io::sync::valid_ranges(outboard, &data, &ChunkRanges::all())
+                    .into_iter()
+                    .flatten()
+                {
+                    ranges |= ChunkRanges::from(range);
+                }
+                info!("reconstructed range is {:?}", ranges);
+                Bitfield::new(ranges, size)
+            }
+        };
+        Ok(Self {
+            data,
+            outboard,
+            sizes,
+            bitfield,
+        })
+    }
+
+    fn into_complete(
+        self,
+        size: u64,
+        options: &Options,
+    ) -> io::Result<(CompleteStorage, EntryState<Bytes>)> {
+        let outboard_size = raw_outboard_size(size);
+        let (data, data_location) = if options.is_inlined_data(size) {
+            let data = read_to_end(&self.data, 0, size as usize)?;
+            (MemOrFile::Mem(data.clone()), DataLocation::Inline(data))
+        } else {
+            if options.syncs_files() {
+                self.data.sync_all()?;
+            }
+            (
+                MemOrFile::File(FixedSize::new(self.data, size)),
+                DataLocation::Owned(size),
+            )
+        };
+        let (outboard, outboard_location) = if options.is_inlined_outboard(outboard_size) {
+            if outboard_size == 0 {
+                (MemOrFile::empty(), OutboardLocation::NotNeeded)
+            } else {
+                let outboard = read_to_end(&self.outboard, 0, outboard_size as usize)?;
+                trace!("read outboard from file: {:?}", outboard.len());
+                (
+                    MemOrFile::Mem(outboard.clone()),
+                    OutboardLocation::Inline(outboard),
+                )
+            }
+        } else {
+            if options.syncs_files() {
+                self.outboard.sync_all()?;
+            }
+            (MemOrFile::File(self.outboard), OutboardLocation::Owned)
+        };
+        // todo: notify the store that the state has changed to complete
+        Ok((
+            CompleteStorage { data, outboard },
+            EntryState::Complete {
+                data_location,
+                outboard_location,
+            },
+        ))
+    }
+
+    pub(super) fn current_size(&self) -> io::Result<u64> {
+        read_size(&self.sizes)
+    }
+
+    fn write_batch(&mut self, size: u64, batch: &[BaoContentItem]) -> io::Result<()> {
+        let tree = BaoTree::new(size, IROH_BLOCK_SIZE);
+        for item in batch {
+            match item {
+                BaoContentItem::Parent(parent) => {
+                    if let Some(offset) = tree.pre_order_offset(parent.node) {
+                        let o0 = offset * 64;
+                        self.outboard
+                            .write_all_at(o0, parent.pair.0.as_bytes().as_slice())?;
+                        self.outboard
+                            .write_all_at(o0 + 32, parent.pair.1.as_bytes().as_slice())?;
+                    }
+                }
+                BaoContentItem::Leaf(leaf) => {
+                    let o0 = leaf.offset;
+                    // one size slot per chunk group
+                    let index = size_slot(leaf.offset);
+                    trace!(
+                        "write_batch f={:?} o={} l={}",
+                        self.data,
+                        o0,
+                        leaf.data.len()
+                    );
+                    self.data.write_all_at(o0, leaf.data.as_ref())?;
+                    let size = tree.size();
+                    self.sizes.write_all_at(index, &size.to_le_bytes())?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn read_size(size_file: &File) -> io::Result<u64> {
+    let len = size_file.metadata()?.len();
+    if len < 8 {
+        Ok(0)
+    } else {
+        let len = len & !7;
+        let mut buf = [0u8; 8];
+        size_file.read_exact_at(len - 8, &mut buf)?;
+        Ok(u64::from_le_bytes(buf))
+    }
+}
+
+/// The default backend storage for one entry, using files or inline bytes.
+#[derive(derive_more::From)]
+pub(crate) enum FileStorage {
+    /// There is no entry for this hash in the metadata.
+    NonExisting,
+    /// The entry is incomplete and on disk.
+    Partial(PartialFileStorage),
+    /// The entry is complete. Outboard and data can come from different sources
+    /// (memory or file).
+    ///
+    /// Writing to this is a no-op, since it is already complete.
+    Complete(CompleteStorage),
+}
+
+impl fmt::Debug for FileStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileStorage::NonExisting => f.debug_struct("NonExisting").finish(),
+            FileStorage::Partial(x) => x.fmt(f),
+            FileStorage::Complete(x) => x.fmt(f),
+        }
+    }
+}
+
+impl PartialMemStorage {
+    /// Converts this storage into a complete storage, using the given hash for
+    /// path names and the given options for decisions about inlining.
+    fn into_complete(
+        self,
+        hash: &Hash,
+        options: &Options,
+    ) -> io::Result<(CompleteStorage, EntryState<Bytes>)> {
+        let size = self.current_size();
+        let outboard_size = raw_outboard_size(size);
+        let (data, data_location) = if options.is_inlined_data(size) {
+            let data: Bytes = self.data.to_vec().into();
+            (MemOrFile::Mem(data.clone()), DataLocation::Inline(data))
+        } else {
+            let data_path = options.path.data_path(hash);
+            let mut data_file = create_read_write(&data_path)?;
+            self.data.persist(&mut data_file)?;
+            if options.syncs_files() {
+                data_file.sync_all()?;
+            }
+            (
+                MemOrFile::File(FixedSize::new(data_file, size)),
+                DataLocation::Owned(size),
+            )
+        };
+        let (outboard, outboard_location) = if options.is_inlined_outboard(outboard_size) {
+            if outboard_size > 0 {
+                let outboard: Bytes = self.outboard.to_vec().into();
+                (
+                    MemOrFile::Mem(outboard.clone()),
+                    OutboardLocation::Inline(outboard),
+                )
+            } else {
+                (MemOrFile::empty(), OutboardLocation::NotNeeded)
+            }
+        } else {
+            let outboard_path = options.path.outboard_path(hash);
+            let mut outboard_file = create_read_write(&outboard_path)?;
+            self.outboard.persist(&mut outboard_file)?;
+            if options.syncs_files() {
+                outboard_file.sync_all()?;
+            }
+            let outboard_location = if outboard_size == 0 {
+                OutboardLocation::NotNeeded
+            } else {
+                OutboardLocation::Owned
+            };
+            (MemOrFile::File(outboard_file), outboard_location)
+        };
+        let created = matches!(data, MemOrFile::File(_)) || matches!(outboard, MemOrFile::File(_));
+        if options.syncs_files() && created {
+            sync_dir(&options.path.data_path)?;
+        }
+        Ok((
+            CompleteStorage { data, outboard },
+            EntryState::Complete {
+                data_location,
+                outboard_location,
+            },
+        ))
+    }
+}
+
+impl EntityStorage for FileStorage {
+    type Config = Options;
+
+    fn empty() -> Self {
+        Self::NonExisting
+    }
+
+    fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete(_))
+    }
+
+    fn finish_import(
+        options: &Options,
+        hash: &Hash,
+        import_data: ImportEntry,
+    ) -> io::Result<(Self, EntryState<Bytes>)> {
+        let ImportEntry {
+            source,
+            hash: import_hash,
+            outboard,
+            ..
+        } = import_data;
+        debug_assert_eq!(hash, &import_hash);
+        let sync = options.syncs_files();
+        match &source {
+            ImportSource::Memory(data) => {
+                debug_assert!(options.is_inlined_data(data.len() as u64));
+            }
+            ImportSource::External(_, _, size) => {
+                debug_assert!(!options.is_inlined_data(*size));
+            }
+            ImportSource::TempFile(_, _, size) => {
+                debug_assert!(!options.is_inlined_data(*size));
+            }
+        }
+        let data_location = match source {
+            ImportSource::Memory(data) => DataLocation::Inline(data),
+            ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
+            ImportSource::TempFile(path, _file, size) => {
+                if sync {
+                    sync_file(path.as_ref())?;
+                }
+                // this will always work on any unix, but on windows there might be an issue if the target file is open!
+                // possibly open with FILE_SHARE_DELETE on windows?
+                let target = options.path.data_path(hash);
+                trace!(
+                    "moving temp file to owned data location: {path:?} -> {}",
+                    target.display()
+                );
+                if let Err(cause) = path.persist(&target) {
+                    error!(
+                        "failed to move temp file to owned data location {}: {cause}",
+                        target.display()
+                    );
+                }
+                DataLocation::Owned(size)
+            }
+        };
+        let outboard_location = match outboard {
+            MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
+            MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
+            MemOrFile::File(path) => {
+                if sync {
+                    sync_file(path.as_ref())?;
+                }
+                // the same caveat as above applies here
+                let target = options.path.outboard_path(hash);
+                trace!(
+                    "moving temp file to owned outboard location: {path:?} -> {}",
+                    target.display()
+                );
+                if let Err(cause) = path.persist(&target) {
+                    error!(
+                        "failed to move temp file to owned outboard location {}: {cause}",
+                        target.display()
+                    );
+                }
+                OutboardLocation::Owned
+            }
+        };
+        let moved = matches!(data_location, DataLocation::Owned(_))
+            || matches!(outboard_location, OutboardLocation::Owned);
+        if sync && moved {
+            // A rename survives a crash only once its directory is synced.
+            sync_dir(&options.path.data_path)?;
+        }
+        let data = match &data_location {
+            DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
+            DataLocation::Owned(size) => {
+                let path = options.path.data_path(hash);
+                let file = File::open(&path)?;
+                MemOrFile::File(FixedSize::new(file, *size))
+            }
+            DataLocation::External(paths, size) => {
+                let Some(path) = paths.iter().next() else {
+                    return Err(io::Error::other("no external data path"));
+                };
+                let file = File::open(path)?;
+                MemOrFile::File(FixedSize::new(file, *size))
+            }
+        };
+        let outboard = match &outboard_location {
+            OutboardLocation::NotNeeded => MemOrFile::empty(),
+            OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
+            OutboardLocation::Owned => {
+                let path = options.path.outboard_path(hash);
+                let file = File::open(&path)?;
+                MemOrFile::File(file)
+            }
+        };
+        let state = EntryState::Complete {
+            data_location,
+            outboard_location,
+        };
+        Ok((Self::new_complete(data, outboard), state))
+    }
+
+    fn read_data_at(&self, offset: u64, len: usize) -> io::Result<Bytes> {
+        match self {
+            Self::Partial(x) => x.data.read_bytes_at(offset, len),
+            Self::Complete(x) => x.data.read_bytes_at(offset, len),
+            Self::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    fn read_outboard_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Partial(x) => x.outboard.read_at(offset, buf),
+            Self::Complete(x) => x.outboard.read_at(offset, buf),
+            Self::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    fn current_size(&self) -> io::Result<u64> {
+        match self {
+            Self::Complete(x) => Ok(x.size()),
+            Self::Partial(x) => x.current_size(),
+            Self::NonExisting => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    fn persist(&self, options: &Options, hash: &Hash) -> io::Result<()> {
+        if let Self::Partial(storage) = self {
+            storage.write_bitfield(&options.path.bitfield_path(hash), options.syncs_files())?;
+        }
+        Ok(())
+    }
+
+    fn delete_parts(options: &Options, hash: &Hash, parts: &[BaoFilePart]) {
+        super::file_deletes::delete_files(&options.path, hash, parts);
+    }
+
+    fn open(
+        options: &Options,
+        hash: &Hash,
+        state: Option<EntryState<Bytes>>,
+    ) -> io::Result<StorageChange<Self>> {
+        let storage = match state {
+            Some(EntryState::Complete {
+                data_location,
+                outboard_location,
+            }) => {
+                let data = match data_location {
+                    DataLocation::Inline(data) => MemOrFile::Mem(data),
+                    DataLocation::Owned(size) => {
+                        let path = options.path.data_path(hash);
+                        let file = std::fs::File::open(&path)?;
+                        MemOrFile::File(FixedSize::new(file, size))
+                    }
+                    DataLocation::External(paths, size) => {
+                        let file = open_external(&paths)?;
+                        MemOrFile::File(FixedSize::new(file, size))
+                    }
+                };
+                let outboard = match outboard_location {
+                    OutboardLocation::NotNeeded => MemOrFile::empty(),
+                    OutboardLocation::Inline(data) => MemOrFile::Mem(data),
+                    OutboardLocation::Owned => {
+                        let path = options.path.outboard_path(hash);
+                        let file = std::fs::File::open(&path)?;
+                        MemOrFile::File(file)
+                    }
+                };
+                Self::new_complete(data, outboard)
+            }
+            Some(EntryState::Partial { .. }) => {
+                let storage = PartialFileStorage::load(hash, options)?;
+                return if storage.bitfield.is_complete() {
+                    let size = storage.bitfield.size;
+                    let (storage, entry) = storage.into_complete(size, options)?;
+                    debug!("File was reconstructed as complete");
+                    Ok((storage.into(), Some(entry)))
+                } else {
+                    Ok((storage.into(), None))
+                };
+            }
+            None => Self::NonExisting,
+        };
+        Ok((storage, None))
+    }
+
+    fn bitfield(&self) -> io::Result<Bitfield> {
+        match self {
+            FileStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            FileStorage::Partial(x) => Ok(x.bitfield().clone()),
+            FileStorage::Complete(x) => Ok(x.bitfield()),
+        }
+    }
+
+    fn write_batch(
+        self,
+        batch: &[BaoContentItem],
+        bitfield: &Bitfield,
+        options: &Options,
+        hash: &Hash,
+    ) -> io::Result<StorageChange<Self>> {
+        Ok(match self {
+            // A new entry starts in memory, but never stays there: it leaves
+            // this call partial on disk, or complete.
+            FileStorage::NonExisting => {
+                write_new_entry(PartialMemStorage::default(), batch, bitfield, hash, options)?
+            }
+            FileStorage::Partial(mut fs) => {
+                fs.write_batch(bitfield.size(), batch)?;
+                let changes = fs.bitfield.update(bitfield);
+                let new = changes.new_state();
+                if new.complete {
+                    let size = new.validated_size.unwrap();
+                    let (cs, update) = fs.into_complete(size, options)?;
+                    (cs.into(), Some(update))
+                } else if changes.was_validated() {
+                    // we are still partial, but now we know the size
+                    let update = EntryState::Partial {
+                        size: new.validated_size,
+                    };
+                    (fs.into(), Some(update))
+                } else {
+                    (fs.into(), None)
+                }
+            }
+            FileStorage::Complete(_) => {
+                // we are complete, so just ignore the write
+                // unless there is a bug, this would just write the exact same data
+                (self, None)
+            }
+        })
+    }
+
+    /// Whether this state uses the given file of its entry.
+    fn references(&self, part: BaoFilePart) -> bool {
+        match self {
+            FileStorage::NonExisting => false,
+            FileStorage::Partial(_) => true,
+            FileStorage::Complete(x) => match part {
+                BaoFilePart::Data => matches!(x.data, MemOrFile::File(_)),
+                BaoFilePart::Outboard => matches!(x.outboard, MemOrFile::File(_)),
+                BaoFilePart::Sizes | BaoFilePart::Bitfield => false,
+            },
+        }
+    }
+}
+
+/// Writes the first batch of a new entry, which starts in memory.
+fn write_new_entry(
+    mut ms: PartialMemStorage,
+    batch: &[BaoContentItem],
+    bitfield: &Bitfield,
+    hash: &Hash,
+    options: &Options,
+) -> io::Result<StorageChange<FileStorage>> {
+    // check if we need to switch to file mode, otherwise write to memory
+    Ok(if max_offset(batch) <= options.inline.max_data_inlined {
+        ms.write_batch(bitfield.size(), batch)?;
+        let changes = ms.bitfield.update(bitfield);
+        let new = changes.new_state();
+        if new.complete {
+            let (cs, update) = ms.into_complete(hash, options)?;
+            (cs.into(), Some(update))
+        } else {
+            let fs = ms.persist(hash, options)?;
+            let update = EntryState::Partial {
+                size: new.validated_size,
+            };
+            (fs.into(), Some(update))
+        }
+    } else {
+        // *first* switch to file mode, *then* write the batch.
+        //
+        // otherwise we might allocate a lot of memory if we get
+        // a write at the end of a very large file.
+        //
+        // opt: we should check if we become complete to avoid going from mem to partial to complete
+        let mut fs = ms.persist(hash, options)?;
+        fs.write_batch(bitfield.size(), batch)?;
+        let changes = fs.bitfield.update(bitfield);
+        let new = changes.new_state();
+        if new.complete {
+            let size = new.validated_size.unwrap();
+            let (cs, update) = fs.into_complete(size, options)?;
+            (cs.into(), Some(update))
+        } else {
+            let update = EntryState::Partial {
+                size: new.validated_size,
+            };
+            (fs.into(), Some(update))
+        }
+    })
+}
+
+impl FileStorage {
+    /// Create a new complete bao file handle.
+    pub fn new_complete(
+        data: MemOrFile<Bytes, FixedSize<File>>,
+        outboard: MemOrFile<Bytes, File>,
+    ) -> Self {
+        CompleteStorage { data, outboard }.into()
+    }
+}
+
+impl PartialMemStorage {
+    /// Persist the batch to disk.
+    fn persist(self, hash: &Hash, config: &Options) -> io::Result<PartialFileStorage> {
+        let options = &config.path;
+        let sync = config.syncs_files();
+        let mut data = create_read_write(options.data_path(hash))?;
+        let mut outboard = create_read_write(options.outboard_path(hash))?;
+        let mut sizes = create_read_write(options.sizes_path(hash))?;
+        self.data.persist(&mut data)?;
+        self.outboard.persist(&mut outboard)?;
+        self.size.persist(&mut sizes)?;
+        if sync {
+            data.sync_all()?;
+            outboard.sync_all()?;
+            sizes.sync_all()?;
+            sync_dir(&options.data_path)?;
+        }
+        Ok(PartialFileStorage {
+            data,
+            outboard,
+            sizes,
+            bitfield: self.bitfield,
+        })
+    }
+}
+
+/// Syncs the contents of a file the store owns to disk.
+fn sync_file(path: &Path) -> io::Result<()> {
+    #[cfg(not(windows))]
+    let file = fs::File::open(path)?;
+    // windows only syncs handles with write access, and a copied
+    // read-only source keeps its read-only attribute
+    #[cfg(windows)]
+    let file = {
+        let mut perms = fs::metadata(path)?.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            fs::set_permissions(path, perms)?;
+        }
+        fs::OpenOptions::new().write(true).open(path)?
+    };
+    file.sync_data()
+}
+
+/// Syncs the directory at `path`, where the platform allows it.
+fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::fs::options::InlineOptions;
+
+    /// Recovery returns the correction without needing a database or actor.
+    #[test]
+    fn open_recovers_complete_storage_and_returns_metadata() -> testresult::TestResult<()> {
+        for inline in [InlineOptions::NO_INLINE, InlineOptions::ALWAYS_INLINE] {
+            let dir = tempfile::tempdir()?;
+            let mut options = Options::new(dir.path());
+            options.inline = inline;
+            std::fs::create_dir_all(&options.path.data_path)?;
+            // A single complete chunk needs no outboard. No bitfield cache:
+            // open must reconstruct it from the data and sizes files.
+            let data = Bytes::from(vec![42; 1024]);
+            let hash = Hash::new(&data);
+            std::fs::write(options.path.data_path(&hash), &data)?;
+            std::fs::write(options.path.sizes_path(&hash), 1024u64.to_le_bytes())?;
+            let (storage, correction) = FileStorage::open(
+                &options,
+                &hash,
+                Some(EntryState::Partial { size: Some(1024) }),
+            )?;
+            assert!(matches!(storage, FileStorage::Complete(_)));
+            assert_eq!(storage.read_data_at(0, data.len())?, data);
+            assert_eq!(storage.bitfield()?, Bitfield::complete(1024));
+            let correction = correction.expect("recovery must correct partial metadata");
+            assert!(matches!(correction, EntryState::Complete { .. }));
+            // The returned metadata is sufficient to open the recovered entry.
+            let (reopened, correction) = FileStorage::open(&options, &hash, Some(correction))?;
+            assert!(correction.is_none());
+            assert_eq!(reopened.read_data_at(0, data.len())?, data);
+        }
+        Ok(())
+    }
+}

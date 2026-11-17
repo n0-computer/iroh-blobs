@@ -43,7 +43,7 @@ use crate::{
         },
     },
     store::{
-        fs::reflink_or_copy_with_progress,
+        fs::export::reflink_or_copy_with_progress,
         util::{MemOrFile, DD},
         IROH_BLOCK_SIZE,
     },

@@ -305,6 +305,11 @@ pub struct EntryMeta<'a> {
 }
 
 impl EntryMeta<'_> {
+    /// The hash of the entry.
+    pub fn hash(&self) -> Hash {
+        self.hash
+    }
+
     /// Apply an unconditional delete, answered once it is committed.
     pub async fn delete(&self) -> io::Result<()> {
         self.db.delete(self.hash).await
@@ -1603,15 +1608,24 @@ mod tests {
             db: Db::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
         });
-        let mut actor = fs::Actor {
+        let mut actor = fs::Actor::<fs::FileStorage> {
             context: context.clone(),
+            storage_config: options.clone(),
             cmd_rx,
             fs_cmd_rx,
             unreferenced,
             metadata_task: Some(tokio::spawn(metadata.run())),
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: tokio::task::JoinSet::new(),
-            handles: EntityManagerState::new(context, 16, 32, 2),
+            handles: EntityManagerState::new(
+                Arc::new(fs::EntityContext {
+                    tasks: context,
+                    storage_config: options.clone(),
+                }),
+                16,
+                32,
+                2,
+            ),
             temp_tags: Default::default(),
             gc: None,
             deferred: Default::default(),

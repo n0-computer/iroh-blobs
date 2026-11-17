@@ -54,10 +54,18 @@
 //!
 //! # Entities
 //!
+//! `EntityStorage` contains the synchronous storage I/O hooks. Opening an entry
+//! returns storage and an optional metadata correction; writing a batch returns
+//! storage and an optional merge. The entity coordinator owns metadata access,
+//! loading, freezes, notifications, and the commit barrier before file deletion.
+//! Path export remains a separate operation because referencing an exported
+//! file couples asynchronous copying with a check for concurrent deletion.
+//!
 //! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
-//! transition, and otherwise a loaded `Settled` entry: `NonExisting`,
-//! `Partial`, `Complete` or `Invalid`. A settled entry is `ReadWrite`, or
-//! `ReadOnly` while a gc session freezes it.
+//! transition, and otherwise `ReadWrite` or `ReadOnly` while a gc session
+//! freezes it. Both hold an optional backend storage value; `None` means an
+//! operation failed and invalidated it. The default filesystem backend uses
+//! `FileStorage`: `NonExisting`, `Partial`, or `Complete`.
 //!
 //! An entity's tasks are futures polled by one actor, so they only interleave at
 //! `.await` points. Every change of an entity's state or files runs after
@@ -240,8 +248,6 @@ use std::{
     fmt::{self, Debug},
     fs,
     future::Future,
-    io::Write,
-    num::NonZeroU64,
     ops::Deref,
     path::{Path, PathBuf},
     sync::{
@@ -250,48 +256,29 @@ use std::{
     },
 };
 
-use bao_tree::{
-    blake3,
-    io::{
-        mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
-        outboard::PreOrderOutboard,
-        sync::ReadAt,
-        BaoContentItem, Leaf,
-    },
-    BaoTree, ChunkNum, ChunkRanges,
-};
+use bao_tree::io::mixed::EncodedItem;
 use entity_manager::{EntityManagerState, SpawnArg};
-use entry_state::{DataLocation, OutboardLocation};
-use import::{ImportEntry, ImportSource};
-use irpc::{channel::mpsc, RpcMessage};
 use n0_error::{Result, StdResultExt};
-use n0_future::{future::yield_now, io, stream, StreamExt};
+use n0_future::{io, stream, StreamExt};
 use nested_enum_utils::enum_conversions;
-use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
-use tracing::{error, instrument, trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{
     api::{
         proto::{
-            self, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, Command,
-            CreateTempTagMsg, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, HashSpecific, ImportBaoMsg,
-            ImportBaoRequest, ObserveMsg, Scope,
+            self, BatchMsg, BatchResponse, Command, CreateTempTagMsg, ExportBaoMsg, ExportPathMsg,
+            ExportRangesItem, ExportRangesMsg, HashSpecific, ImportBaoMsg, ObserveMsg, Scope,
         },
         ApiClient,
     },
-    protocol::ChunkRangesExt,
     store::{
         fs::{
-            bao_file::{
-                BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
-            },
-            util::entity_manager::{self, ActiveEntityState},
+            file_storage::FileStorage,
+            util::entity_manager::{self},
         },
         gc::run_gc,
-        util::{drain, BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
-        IROH_BLOCK_SIZE,
+        util::{drain, ValueOrPoisioned},
     },
     util::{
         channel::oneshot,
@@ -299,12 +286,15 @@ use crate::{
     },
     Hash,
 };
-mod bao_file;
-use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, UnreferencedParts, ALL_PARTS};
 mod boot_id;
+mod entity;
+mod entity_storage;
+#[cfg(test)]
+mod entity_storage_tests;
 mod entry_state;
+mod export;
 mod file_deletes;
+mod file_storage;
 mod import;
 #[cfg(test)]
 mod lazyfs_tests;
@@ -312,7 +302,10 @@ mod meta;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
-use entry_state::EntryState;
+
+use entity::{EmParams, EntityApi, EntityContext, HashContext};
+use entity_storage::EntityStorage;
+use file_deletes::UnreferencedParts;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::Options;
 use tracing::Instrument;
@@ -320,14 +313,11 @@ use tracing::Instrument;
 use crate::{
     api::{
         self,
-        blobs::{AddProgressItem, ExportMode, ExportProgressItem},
+        blobs::{AddProgressItem, ExportProgressItem},
         Store,
     },
     HashAndFormat,
 };
-
-/// Maximum number of external paths we track per blob.
-const MAX_EXTERNAL_PATHS: usize = 8;
 
 /// Create a 16 byte unique ID.
 fn new_uuid() -> [u8; 16] {
@@ -402,183 +392,6 @@ impl TaskContext {
     }
 }
 
-#[derive(Debug)]
-struct EmParams;
-
-impl entity_manager::Params for EmParams {
-    type EntityId = Hash;
-
-    type GlobalState = Arc<TaskContext>;
-
-    type EntityState = BaoFileHandle;
-
-    async fn on_shutdown(
-        state: entity_manager::ActiveEntityState<Self>,
-        cause: entity_manager::ShutdownCause,
-    ) {
-        trace!("persist {:?} due to {cause:?}", state.id);
-        state.persist().await;
-    }
-}
-
-/// Waits until the entity is neither loading nor deleting.
-///
-/// Loading may create files, and deleting resets the state, so both must be
-/// done before a task may look at the state or touch files.
-async fn wait_settled(ctx: &HashContext) {
-    // Checking and subscribing is one synchronous step, so no change can slip
-    // in between: tasks of an entity only interleave at awaits.
-    while matches!(
-        &ctx.state.borrow().storage,
-        BaoFileStorage::Loading | BaoFileStorage::Deleting
-    ) {
-        ctx.state.0.subscribe().changed().await.ok();
-    }
-}
-
-/// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
-async fn wait_writable(ctx: &HashContext) {
-    loop {
-        let mut changes = ctx.state.0.subscribe();
-        if !matches!(
-            &ctx.state.borrow().storage,
-            BaoFileStorage::Loading | BaoFileStorage::Deleting | BaoFileStorage::ReadOnly(_)
-        ) {
-            return;
-        }
-        changes.changed().await.ok();
-    }
-}
-
-/// Freezes the entry until the sender of `release` is dropped, then restores it.
-///
-/// The task is the only one that ends its freeze, and a freeze waits in
-/// `wait_writable` for an earlier one to end. So no two freezes overlap, and a
-/// freeze needs no owner id. The task keeps the entity alive while it holds the
-/// freeze. If the task is dropped instead, the entity is shutting down, and
-/// `persist` looks through the freeze.
-async fn freeze_entry(
-    ctx: &HashContext,
-    ack: tokio::sync::oneshot::Sender<()>,
-    mut release: tokio::sync::watch::Receiver<()>,
-) {
-    ctx.load().await;
-    wait_writable(ctx).await;
-    // Loaded, and not in a delete or another freeze, see above.
-    let frozen = ctx.state.send_if_modified(|state| match state.take() {
-        BaoFileStorage::ReadWrite(settled) => {
-            state.storage = BaoFileStorage::ReadOnly(settled);
-            true
-        }
-        other => {
-            state.storage = other;
-            false
-        }
-    });
-    if !frozen {
-        debug_assert!(false, "freeze of an entry that is not writable");
-        // Without an ack, the gc session fails instead of trusting the freeze.
-        return;
-    }
-    if ack.send(()).is_ok() {
-        // Nothing is ever sent, so this returns once the sender is dropped.
-        release.changed().await.ok();
-    }
-    unfreeze_entry(ctx);
-}
-
-fn unfreeze_entry(ctx: &HashContext) {
-    ctx.state.send_if_modified(|state| {
-        if !matches!(state.storage, BaoFileStorage::ReadOnly(_)) {
-            return false;
-        }
-        let BaoFileStorage::ReadOnly(settled) = state.take() else {
-            unreachable!()
-        };
-        state.storage = BaoFileStorage::ReadWrite(settled);
-        true
-    });
-}
-
-/// Loads the entity's state from the metadata, unless it is loaded already.
-async fn load_entity(ctx: &HashContext) {
-    wait_settled(ctx).await;
-    let mut load = false;
-    ctx.state.send_if_modified(|guard| {
-        if matches!(guard.storage, BaoFileStorage::Initial) {
-            guard.storage = BaoFileStorage::Loading;
-            load = true;
-        }
-        load
-    });
-    if !load {
-        return;
-    }
-    // we must assign a new state even in the error case, otherwise
-    // tasks waiting for loading would stall!
-    let state = match ctx.meta().get().await {
-        Ok(state) => match Settled::open(state, ctx).await {
-            Ok(settled) => settled,
-            Err(cause) => {
-                error!("failed to open {}, marking it invalid: {cause}", ctx.id);
-                Settled::Invalid
-            }
-        },
-        Err(cause) => {
-            error!(
-                "failed to get {} from db, marking it invalid: {cause}",
-                ctx.id
-            );
-            Settled::Invalid
-        }
-    };
-    ctx.state.set_storage(BaoFileStorage::ReadWrite(state));
-}
-
-/// Delete unconditionally, keeping writes suspended until committed cleanup.
-/// Metadata failure aborts the store, so there is no rollback state to retain.
-async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
-    wait_writable(ctx).await;
-    // A new generation ends observers, even if they next wake only after this
-    // hash was re-imported.
-    ctx.state.send_modify(|state| {
-        state.generation += 1;
-        state.storage = BaoFileStorage::Deleting;
-    });
-    // Answered once the delete is committed.
-    if let Err(cause) = ctx.meta().delete().await {
-        // Metadata failure aborts the store. A command racing a graceful
-        // shutdown can also be rejected, without a failure to trigger abort.
-        // Release waiters with an error instead of restoring the old state.
-        ctx.state
-            .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
-        return Err(cause);
-    }
-    // No durable state references the files anymore. Unlink every one, since
-    // the entity may have written files its entry did not reference yet.
-    delete_files(&ctx.global.options.path, &ctx.id, &ALL_PARTS);
-    ctx.state
-        .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
-    Ok(())
-}
-
-/// Deletes the parts a committed batch stopped referencing, unless the entity still uses them.
-async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
-    wait_writable(ctx).await;
-    // The committed state no longer references these parts, but this entity's
-    // state, which is never behind its entry, may use them again. Check each
-    // one against it before deleting.
-    let parts: Vec<_> = {
-        let state = ctx.state.borrow();
-        parts
-            .0
-            .into_iter()
-            .filter(|part| !state.references(*part))
-            .collect()
-    };
-    delete_files(&ctx.global.options.path, &ctx.id, &parts);
-}
-
 /// Waits for the deletes of one request, and reports the last error.
 async fn collect_deletes(
     results: Vec<tokio::sync::oneshot::Receiver<io::Result<()>>>,
@@ -645,9 +458,10 @@ enum Deferred {
 }
 
 #[derive(Debug)]
-struct Actor {
+struct Actor<S: EntityStorage = FileStorage> {
     // Context that can be cheaply shared with tasks.
     context: Arc<TaskContext>,
+    storage_config: Arc<S::Config>,
     // Receiver for incoming user commands.
     cmd_rx: tokio::sync::mpsc::Receiver<Command>,
     // Receiver for incoming file store specific commands.
@@ -661,7 +475,7 @@ struct Actor {
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
     // Entity manager that handles concurrency for entities.
-    handles: EntityManagerState<EmParams>,
+    handles: EntityManagerState<EmParams<S>>,
     // temp tags
     temp_tags: TempTags,
     gc: Option<GcSession>,
@@ -672,106 +486,7 @@ struct Actor {
     _rt: RtWrapper,
 }
 
-type HashContext = ActiveEntityState<EmParams>;
-
-impl SyncEntityApi for HashContext {
-    /// Load the state from the database.
-    ///
-    /// If the state is Initial, this will start the load.
-    /// If it is Loading, it will wait until loading is done.
-    /// If it is any other state, it will be a noop.
-    async fn load(&self) {
-        load_entity(self).await
-    }
-
-    /// Write a batch and notify the db
-    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
-        trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
-        // No await between this and the closure, so the closure never sees a
-        // delete in progress.
-        wait_writable(self).await;
-        let mut res = Ok(None);
-        self.state.send_if_modified(|state| {
-            // Imports load the entity first, and wait_writable leaves it
-            // loaded and writable.
-            let settled = match state.take() {
-                BaoFileStorage::ReadWrite(settled) => settled,
-                other => {
-                    debug_assert!(false, "write to an entry that is not writable");
-                    state.storage = other;
-                    return false;
-                }
-            };
-            let (settled, update) = match settled.write_batch(batch, bitfield, self) {
-                Ok(written) => written,
-                Err(cause) => {
-                    error!(
-                        "failed to write batch for {}, marking it invalid: {cause}",
-                        self.id
-                    );
-                    res = Err(cause);
-                    // the entry is invalid now, wake up observers so they can end
-                    return true;
-                }
-            };
-            res = Ok(update);
-            state.storage = BaoFileStorage::ReadWrite(settled);
-            true
-        });
-        if let Some(update) = res? {
-            self.meta().update(update).await?;
-        }
-        Ok(())
-    }
-
-    /// An AsyncSliceReader for the data file.
-    ///
-    /// Caution: this is a reader for the unvalidated data file. Reading this
-    /// can produce data that does not match the hash.
-    #[allow(refining_impl_trait_internal)]
-    fn data_reader(&self) -> DataReader {
-        DataReader(self.state.clone())
-    }
-
-    /// An AsyncSliceReader for the outboard file.
-    ///
-    /// The outboard file is used to validate the data file. It is not guaranteed
-    /// to be complete.
-    #[allow(refining_impl_trait_internal)]
-    fn outboard_reader(&self) -> OutboardReader {
-        OutboardReader(self.state.clone())
-    }
-
-    /// The most precise known total size of the data file.
-    fn current_size(&self) -> io::Result<u64> {
-        let state = self.state.borrow();
-        match state.try_settled()? {
-            Settled::Complete(mem) => Ok(mem.size()),
-            Settled::Partial(file) => file.current_size(),
-            Settled::Invalid => Err(io::Error::other("invalid storage")),
-            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
-    }
-
-    /// The most precise known total size of the data file.
-    fn bitfield(&self) -> io::Result<Bitfield> {
-        let state = self.state.borrow();
-        match state.try_settled()? {
-            Settled::Complete(mem) => Ok(mem.bitfield()),
-            Settled::Partial(file) => Ok(file.bitfield().clone()),
-            Settled::Invalid => Err(io::Error::other("invalid storage")),
-            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
-    }
-}
-
-impl HashContext {
-    pub fn options(&self) -> &Arc<Options> {
-        &self.global.options
-    }
-}
-
-impl Actor {
+impl<S: EntityStorage> Actor<S> {
     fn db(&self) -> &meta::Db {
         &self.context.db
     }
@@ -1245,7 +960,7 @@ impl Actor {
         // No entity exists anymore, so what the last batches left to do is
         // done here directly. No acknowledgement, the database is closed.
         while let Ok((hash, parts)) = self.unreferenced.try_recv() {
-            delete_files(&self.context.options.path, &hash, &parts.0);
+            S::delete_parts(&self.storage_config, &hash, &parts.0);
         }
     }
 
@@ -1275,7 +990,7 @@ impl Actor {
             // else touches these files, and no writes from before are in
             // flight: with no entity state to check against, the committed
             // state is the whole truth, and the parts are garbage.
-            delete_files(&self.context.options.path, &hash, &parts.0);
+            S::delete_parts(&self.storage_config, &hash, &parts.0);
         }
     }
 
@@ -1338,6 +1053,7 @@ impl Actor {
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
+        storage_config: Arc<S::Config>,
     ) -> Result<Self> {
         trace!(
             "creating data directory: {}",
@@ -1377,13 +1093,22 @@ impl Actor {
         let metadata_task = Some(tokio::spawn(db_actor.run()));
         Ok(Self {
             context: slot_context.clone(),
+            storage_config: storage_config.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
             unreferenced,
             metadata_task,
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
-            handles: EntityManagerState::new(slot_context, 1024, 32, 2),
+            handles: EntityManagerState::new(
+                Arc::new(EntityContext {
+                    tasks: slot_context,
+                    storage_config,
+                }),
+                1024,
+                32,
+                2,
+            ),
             temp_tags: Default::default(),
             gc: None,
             deferred: VecDeque::new(),
@@ -1434,14 +1159,17 @@ fn remove_all_files(dir: &Path) {
 
 trait HashSpecificCommand: HashSpecific + Send + 'static {
     /// Handle the command on success by spawning a task into the per-hash context.
-    fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
+    fn handle<S: EntityStorage>(
+        self,
+        ctx: HashContext<S>,
+    ) -> impl Future<Output = ()> + Send + 'static;
 
     /// Opportunity to send an error if the entity is dead (e.g. after a panic).
     fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
 
-    async fn spawn(
+    async fn spawn<S: EntityStorage>(
         self,
-        manager: &mut entity_manager::EntityManagerState<EmParams>,
+        manager: &mut entity_manager::EntityManagerState<EmParams<S>>,
         tasks: &mut JoinSet<()>,
     ) where
         Self: Sized,
@@ -1469,13 +1197,13 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 }
 
 impl HashSpecificCommand for ObserveMsg {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<S: EntityStorage>(self, ctx: HashContext<S>) {
         ctx.observe(self).await
     }
     async fn on_error(self) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<S: EntityStorage>(self, ctx: HashContext<S>) {
         ctx.export_path(self).await
     }
     async fn on_error(self) {
@@ -1487,7 +1215,7 @@ impl HashSpecificCommand for ExportPathMsg {
     }
 }
 impl HashSpecificCommand for ExportBaoMsg {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<S: EntityStorage>(self, ctx: HashContext<S>) {
         ctx.export_bao(self).await
     }
     async fn on_error(self) {
@@ -1499,7 +1227,7 @@ impl HashSpecificCommand for ExportBaoMsg {
     }
 }
 impl HashSpecificCommand for ExportRangesMsg {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<S: EntityStorage>(self, ctx: HashContext<S>) {
         ctx.export_ranges(self).await
     }
     async fn on_error(self) {
@@ -1511,7 +1239,7 @@ impl HashSpecificCommand for ExportRangesMsg {
     }
 }
 impl HashSpecificCommand for ImportBaoMsg {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<S: EntityStorage>(self, ctx: HashContext<S>) {
         ctx.import_bao(self).await
     }
     async fn on_error(self) {
@@ -1525,7 +1253,7 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
     }
 }
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<S: EntityStorage>(self, ctx: HashContext<S>) {
         let (tt, cmd) = self;
         ctx.finish_import(cmd, tt).await
     }
@@ -1590,635 +1318,6 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
-/// The minimal API you need to implement for an entity for a store to work.
-trait EntityApi {
-    /// The hash of the entry.
-    fn id(&self) -> Hash;
-    /// The metadata of the entry.
-    fn meta(&self) -> meta::EntryMeta<'_>;
-    /// Import from a stream of n0 bao encoded data.
-    async fn import_bao(&self, cmd: ImportBaoMsg);
-    /// Finish an import from a local file or memory.
-    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
-    /// Observe the bitfield of the entry.
-    async fn observe(&self, cmd: ObserveMsg);
-    /// Export byte ranges of the entry as data
-    async fn export_ranges(&self, cmd: ExportRangesMsg);
-    /// Export chunk ranges of the entry as a n0 bao encoded stream.
-    async fn export_bao(&self, cmd: ExportBaoMsg);
-    /// Export the entry to a local file.
-    async fn export_path(&self, cmd: ExportPathMsg);
-    /// Delete the entry, for a delete request or a gc sweep.
-    async fn delete(&self) -> io::Result<()>;
-    /// Hold off writes during a gc run, acknowledging through `ack`, until `release` ends.
-    async fn freeze(
-        &self,
-        ack: tokio::sync::oneshot::Sender<()>,
-        release: tokio::sync::watch::Receiver<()>,
-    );
-    /// Delete the parts a committed batch stopped referencing, after checking each against the entity's own state.
-    async fn delete_unreferenced(&self, parts: UnreferencedParts);
-    /// Persist the entry at the end of its lifecycle.
-    async fn persist(&self);
-}
-
-/// A more opinionated API that can be used as a helper to save implementation
-/// effort when implementing the EntityApi trait.
-trait SyncEntityApi: EntityApi {
-    /// Load the entry state from the database. This must make sure that it is
-    /// not run concurrently, so if load is called multiple times, all but one
-    /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
-    async fn load(&self);
-
-    /// Get a synchronous reader for the data file.
-    fn data_reader(&self) -> impl ReadBytesAt;
-
-    /// Get a synchronous reader for the outboard file.
-    fn outboard_reader(&self) -> impl ReadAt;
-
-    /// Get the best known size of the data file.
-    fn current_size(&self) -> io::Result<u64>;
-
-    /// Get the bitfield of the entry.
-    fn bitfield(&self) -> io::Result<Bitfield>;
-
-    /// Write a batch of content items to the entry.
-    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
-
-    /// The outboard for the entry.
-    fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id()),
-            tree,
-            data: outboard,
-        })
-    }
-}
-
-/// The high level entry point per entry.
-impl EntityApi for HashContext {
-    fn id(&self) -> Hash {
-        self.id
-    }
-
-    fn meta(&self) -> meta::EntryMeta<'_> {
-        self.global.db.entry(self.id)
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn import_bao(&self, cmd: ImportBaoMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ImportBaoMsg {
-            inner: ImportBaoRequest { size, .. },
-            mut rx,
-            tx,
-            ..
-        } = cmd;
-        let res = import_bao_impl(self, size, &mut rx).await;
-        trace!("{res:?}");
-        // Answer before dropping `rx`, so the sender sees our error rather
-        // than just a closed channel.
-        tx.send(res).await.ok();
-        drop(rx);
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn observe(&self, cmd: ObserveMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        BaoFileStorageSubscriber::new(&self.state)
-            .forward(cmd.tx)
-            .await
-            .ok();
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_ranges(&self, mut cmd: ExportRangesMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        if let Err(cause) = export_ranges_impl(self, cmd.inner, &mut cmd.tx).await {
-            cmd.tx
-                .send(ExportRangesItem::Error(cause.into()))
-                .await
-                .ok();
-        }
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_bao(&self, mut cmd: ExportBaoMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        if let Err(cause) = export_bao_impl(self, cmd.inner, &mut cmd.tx).await {
-            // if the entry is in state NonExisting, this will be an io error with
-            // kind NotFound. So we must not wrap this somehow but pass it on directly.
-            cmd.tx
-                .send(bao_tree::io::EncodeError::Io(cause).into())
-                .await
-                .ok();
-        }
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_path(&self, cmd: ExportPathMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ExportPathMsg { inner, mut tx, .. } = cmd;
-        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
-            tx.send(cause.into()).await.ok();
-        }
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let res = match finish_import_impl(self, cmd.inner).await {
-            Ok(()) => {
-                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-                // it will be cleaned up when either the process exits or scope ends
-                if cmd.tx.is_rpc() {
-                    trace!("leaking temp tag {}", tt.hash_and_format());
-                    tt.leak();
-                }
-                AddProgressItem::Done(tt)
-            }
-            Err(cause) => AddProgressItem::Error(cause),
-        };
-        cmd.tx.send(res).await.ok();
-    }
-
-    async fn delete(&self) -> io::Result<()> {
-        delete_entry(self).await
-    }
-
-    async fn freeze(
-        &self,
-        ack: tokio::sync::oneshot::Sender<()>,
-        release: tokio::sync::watch::Receiver<()>,
-    ) {
-        freeze_entry(self, ack, release).await
-    }
-
-    async fn delete_unreferenced(&self, parts: UnreferencedParts) {
-        delete_unreferenced(self, parts).await
-    }
-
-    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
-    async fn persist(&self) {
-        self.state.send_if_modified(|guard| {
-            let hash = &self.id;
-            // A freeze task dropped at shutdown leaves its freeze in place.
-            let (BaoFileStorage::ReadWrite(Settled::Partial(fs))
-            | BaoFileStorage::ReadOnly(Settled::Partial(fs))) = guard.take()
-            else {
-                return false;
-            };
-            let path = self.global.options.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.write_bitfield(&path, self.global.options.syncs_files()) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-            false
-        });
-    }
-}
-
-/// Syncs the contents of a file the store owns to disk.
-fn sync_file(path: &Path) -> io::Result<()> {
-    #[cfg(not(windows))]
-    let file = fs::File::open(path)?;
-    // windows only syncs handles with write access, and a copied
-    // read-only source keeps its read-only attribute
-    #[cfg(windows)]
-    let file = {
-        let mut perms = fs::metadata(path)?.permissions();
-        if perms.readonly() {
-            #[allow(clippy::permissions_set_readonly_false)]
-            perms.set_readonly(false);
-            fs::set_permissions(path, perms)?;
-        }
-        fs::OpenOptions::new().write(true).open(path)?
-    };
-    file.sync_data()
-}
-
-/// Syncs the directory at `path`, where the platform allows it.
-fn sync_dir(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    fs::File::open(path)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
-    let ImportEntry {
-        source,
-        hash,
-        outboard,
-        ..
-    } = import_data;
-    let options = ctx.options();
-    let sync = options.syncs_files();
-    match &source {
-        ImportSource::Memory(data) => {
-            debug_assert!(options.is_inlined_data(data.len() as u64));
-        }
-        ImportSource::External(_, _, size) => {
-            debug_assert!(!options.is_inlined_data(*size));
-        }
-        ImportSource::TempFile(_, _, size) => {
-            debug_assert!(!options.is_inlined_data(*size));
-        }
-    }
-    ctx.load().await;
-    wait_writable(ctx).await;
-    let handle = &ctx.state;
-    // if I do have an existing handle, I have to possibly deal with observers.
-    // if I don't have an existing handle, there are 2 cases:
-    //   the entry exists in the db, but we don't have a handle
-    //   the entry does not exist at all.
-    // convert the import source to a data location and drop the open files
-    let data_location = match source {
-        ImportSource::Memory(data) => DataLocation::Inline(data),
-        ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
-        ImportSource::TempFile(path, _file, size) => {
-            if sync {
-                sync_file(path.as_ref())?;
-            }
-            // this will always work on any unix, but on windows there might be an issue if the target file is open!
-            // possibly open with FILE_SHARE_DELETE on windows?
-            let target = ctx.options().path.data_path(&hash);
-            trace!(
-                "moving temp file to owned data location: {path:?} -> {}",
-                target.display()
-            );
-            if let Err(cause) = path.persist(&target) {
-                error!(
-                    "failed to move temp file to owned data location {}: {cause}",
-                    target.display()
-                );
-            }
-            DataLocation::Owned(size)
-        }
-    };
-    let outboard_location = match outboard {
-        MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
-        MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
-        MemOrFile::File(path) => {
-            if sync {
-                sync_file(path.as_ref())?;
-            }
-            // the same caveat as above applies here
-            let target = ctx.options().path.outboard_path(&hash);
-            trace!(
-                "moving temp file to owned outboard location: {path:?} -> {}",
-                target.display()
-            );
-            if let Err(cause) = path.persist(&target) {
-                error!(
-                    "failed to move temp file to owned outboard location {}: {cause}",
-                    target.display()
-                );
-            }
-            OutboardLocation::Owned
-        }
-    };
-    let moved = matches!(data_location, DataLocation::Owned(_))
-        || matches!(outboard_location, OutboardLocation::Owned);
-    if sync && moved {
-        // A rename survives a crash only once its directory is synced.
-        sync_dir(&options.path.data_path)?;
-    }
-    let data = match &data_location {
-        DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
-        DataLocation::Owned(size) => {
-            let path = ctx.options().path.data_path(&hash);
-            let file = fs::File::open(&path)?;
-            MemOrFile::File(FixedSize::new(file, *size))
-        }
-        DataLocation::External(paths, size) => {
-            let Some(path) = paths.iter().next() else {
-                return Err(io::Error::other("no external data path"));
-            };
-            let file = fs::File::open(path)?;
-            MemOrFile::File(FixedSize::new(file, *size))
-        }
-    };
-    let outboard = match &outboard_location {
-        OutboardLocation::NotNeeded => MemOrFile::empty(),
-        OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
-        OutboardLocation::Owned => {
-            let path = ctx.options().path.outboard_path(&hash);
-            let file = fs::File::open(&path)?;
-            MemOrFile::File(file)
-        }
-    };
-    handle.complete(data, outboard);
-    let state = EntryState::Complete {
-        data_location,
-        outboard_location,
-    };
-    ctx.meta().update_await(state).await?;
-    Ok(())
-}
-
-fn chunk_range(leaf: &Leaf) -> ChunkRanges {
-    let start = ChunkNum::chunks(leaf.offset);
-    let end = ChunkNum::chunks(leaf.offset + leaf.data.len() as u64);
-    (start..end).into()
-}
-
-async fn import_bao_impl(
-    ctx: &impl SyncEntityApi,
-    size: NonZeroU64,
-    rx: &mut mpsc::Receiver<BaoContentItem>,
-) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
-    let mut batch = Vec::<BaoContentItem>::new();
-    let mut ranges = ChunkRanges::empty();
-    while let Some(item) = rx.recv().await? {
-        // if the batch is not empty, the last item is a leaf and the current item is a parent, write the batch
-        if !batch.is_empty() && batch[batch.len() - 1].is_leaf() && item.is_parent() {
-            let bitfield = Bitfield::new_unchecked(ranges, size.into());
-            ctx.write_batch(&batch, &bitfield).await?;
-            batch.clear();
-            ranges = ChunkRanges::empty();
-        }
-        if let BaoContentItem::Leaf(leaf) = &item {
-            let leaf_range = chunk_range(leaf);
-            if is_validated(size, &leaf_range) && size.get() != leaf.offset + leaf.data.len() as u64
-            {
-                return Err(api::Error::io(io::ErrorKind::InvalidData, "invalid size"));
-            }
-            ranges |= leaf_range;
-        }
-        batch.push(item);
-    }
-    if !batch.is_empty() {
-        let bitfield = Bitfield::new_unchecked(ranges, size.into());
-        ctx.write_batch(&batch, &bitfield).await?;
-    }
-    Ok(())
-}
-
-async fn export_ranges_impl(
-    ctx: &impl SyncEntityApi,
-    cmd: ExportRangesRequest,
-    tx: &mut mpsc::Sender<ExportRangesItem>,
-) -> io::Result<()> {
-    let ExportRangesRequest { ranges, hash } = cmd;
-    trace!(
-        "exporting ranges: {hash} {ranges:?} size={}",
-        ctx.current_size()?
-    );
-    let bitfield = ctx.bitfield()?;
-    let data = ctx.data_reader();
-    let size = bitfield.size();
-    tx.send(ExportRangesItem::Size(size)).await?;
-    for range in ranges.iter() {
-        let range = match range {
-            RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
-            RangeSetRange::RangeFrom(range) => size.min(*range.start)..size,
-        };
-        let requested = ChunkRanges::bytes(range.start..range.end);
-        if !bitfield.ranges.is_superset(&requested) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("missing range: {requested:?}, present: {bitfield:?}"),
-            ));
-        }
-        let bs = 1024;
-        let mut offset = range.start;
-        loop {
-            let end: u64 = (offset + bs).min(range.end);
-            let size = (end - offset) as usize;
-            let res = data.read_bytes_at(offset, size);
-            tx.send(ExportRangesItem::Data(Leaf { offset, data: res? }))
-                .await?;
-            offset = end;
-            if offset >= range.end {
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn export_bao_impl(
-    ctx: &impl SyncEntityApi,
-    cmd: ExportBaoRequest,
-    tx: &mut mpsc::Sender<EncodedItem>,
-) -> io::Result<()> {
-    let ExportBaoRequest { ranges, hash, .. } = cmd;
-    let outboard = ctx.outboard()?;
-    let size = outboard.tree.size();
-    if size == 0 {
-        // we have no data whatsoever, so we stop here
-        return Ok(());
-    }
-    trace!("exporting bao: {hash} {ranges:?} size={size}",);
-    let data = ctx.data_reader();
-    let tx = BaoTreeSender::new(tx);
-    traverse_ranges_validated(data, outboard, &ranges, tx).await?;
-    Ok(())
-}
-
-async fn export_path_impl(
-    ctx: &HashContext,
-    cmd: ExportPathRequest,
-    tx: &mut mpsc::Sender<ExportProgressItem>,
-) -> api::Result<()> {
-    let ExportPathRequest { mode, target, .. } = cmd;
-    if !target.is_absolute() {
-        return Err(api::Error::io(
-            io::ErrorKind::InvalidInput,
-            "path is not absolute",
-        ));
-    }
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let state = ctx.meta().get().await?;
-    let (data_location, outboard_location) = match state {
-        Some(EntryState::Complete {
-            data_location,
-            outboard_location,
-        }) => (data_location, outboard_location),
-        Some(EntryState::Partial { .. }) => {
-            return Err(api::Error::io(
-                io::ErrorKind::InvalidInput,
-                "cannot export partial entry",
-            ));
-        }
-        None => {
-            return Err(api::Error::io(io::ErrorKind::NotFound, "no entry found"));
-        }
-    };
-    trace!("exporting {} to {}", cmd.hash.to_hex(), target.display());
-    let (data, mut external) = match data_location {
-        DataLocation::Inline(data) => (MemOrFile::Mem(data), vec![]),
-        DataLocation::Owned(size) => (
-            MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
-            vec![],
-        ),
-        DataLocation::External(paths, size) => (
-            MemOrFile::File((
-                paths.first().cloned().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "no external data path")
-                })?,
-                size,
-            )),
-            paths,
-        ),
-    };
-    let size = match &data {
-        MemOrFile::Mem(data) => data.len() as u64,
-        MemOrFile::File((_, size)) => *size,
-    };
-    tx.send(ExportProgressItem::Size(size)).await?;
-    match data {
-        MemOrFile::Mem(data) => {
-            let mut target = fs::File::create(&target)?;
-            target.write_all(&data)?;
-        }
-        MemOrFile::File((source_path, size)) => match mode {
-            ExportMode::Copy => {
-                let res = reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
-                trace!(
-                    "exported {} to {}, {res:?}",
-                    source_path.display(),
-                    target.display()
-                );
-            }
-            ExportMode::TryReference => {
-                wait_writable(ctx).await;
-                if !external.is_empty() {
-                    // the file already exists externally, so we need to copy it.
-                    // if the OS supports reflink, we might as well use that.
-                    let res =
-                        reflink_or_copy_with_progress(&source_path, &target, size, tx).await?;
-                    trace!(
-                        "exported {} also to {}, {res:?}",
-                        source_path.display(),
-                        target.display()
-                    );
-                    external.push(target);
-                    external.sort();
-                    external.dedup();
-                    external.truncate(MAX_EXTERNAL_PATHS);
-                } else {
-                    // the file was previously owned, so we can just move it.
-                    // if the target is on another file system or drive, we
-                    // fall back to copy: EXDEV on unix, ERROR_NOT_SAME_DEVICE
-                    // on windows.
-                    match std::fs::rename(&source_path, &target) {
-                        Ok(()) => {}
-                        Err(cause) => {
-                            if cause.kind() == io::ErrorKind::CrossesDevices {
-                                reflink_or_copy_with_progress(&source_path, &target, size, tx)
-                                    .await?;
-                            } else {
-                                return Err(cause.into());
-                            }
-                        }
-                    }
-                    external.push(target);
-                };
-                // The copy took a while, so the entry may have been deleted
-                // meanwhile. Then it stays deleted, and this was just a copy.
-                // No await between the check and sending the set.
-                wait_writable(ctx).await;
-                if matches!(
-                    &ctx.state.borrow().storage,
-                    BaoFileStorage::ReadWrite(Settled::Complete(_))
-                ) {
-                    // After the commit, the owned data file comes back as an
-                    // unreferenced part, and this entity deletes it unless its
-                    // state still uses it.
-                    // TODO: after a copy across file systems it does, so the
-                    // owned file leaks.
-                    ctx.meta()
-                        .set(EntryState::Complete {
-                            data_location: DataLocation::External(external, size),
-                            outboard_location,
-                        })
-                        .await?;
-                }
-            }
-        },
-    }
-    tx.send(ExportProgressItem::Done).await?;
-    Ok(())
-}
-
-trait CopyProgress: RpcMessage {
-    fn from_offset(offset: u64) -> Self;
-}
-
-impl CopyProgress for ExportProgressItem {
-    fn from_offset(offset: u64) -> Self {
-        ExportProgressItem::CopyProgress(offset)
-    }
-}
-
-impl CopyProgress for AddProgressItem {
-    fn from_offset(offset: u64) -> Self {
-        AddProgressItem::CopyProgress(offset)
-    }
-}
-
-#[derive(Debug)]
-enum CopyResult {
-    Reflinked,
-    Copied,
-}
-
-async fn reflink_or_copy_with_progress(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    size: u64,
-    tx: &mut mpsc::Sender<impl CopyProgress>,
-) -> io::Result<CopyResult> {
-    let from = from.as_ref();
-    let to = to.as_ref();
-    if reflink_copy::reflink(from, to).is_ok() {
-        return Ok(CopyResult::Reflinked);
-    }
-    let source = fs::File::open(from)?;
-    let mut target = fs::File::create(to)?;
-    copy_with_progress(source, size, &mut target, tx).await?;
-    Ok(CopyResult::Copied)
-}
-
-async fn copy_with_progress<T: CopyProgress>(
-    file: impl ReadAt,
-    size: u64,
-    target: &mut impl Write,
-    tx: &mut mpsc::Sender<T>,
-) -> io::Result<()> {
-    let mut offset = 0;
-    let mut buf = vec![0u8; 1024 * 1024];
-    while offset < size {
-        let remaining = buf.len().min((size - offset) as usize);
-        let buf: &mut [u8] = &mut buf[..remaining];
-        file.read_exact_at(offset, buf)?;
-        target.write_all(buf)?;
-        tx.try_send(T::from_offset(offset)).await?;
-        yield_now().await;
-        offset += buf.len() as u64;
-    }
-    Ok(())
-}
-
 impl FsStore {
     /// Load or create a new store.
     pub async fn load(root: impl AsRef<Path>) -> Result<Self> {
@@ -2230,6 +1329,17 @@ impl FsStore {
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
+        let storage_config = options.clone();
+        Self::load_with_storage::<FileStorage>(db_path, options, storage_config).await
+    }
+
+    /// Select a storage implementation while retaining the shared metadata and
+    /// entity actors. Backends use the filesystem metadata/location format.
+    async fn load_with_storage<S: EntityStorage>(
+        db_path: PathBuf,
+        options: Options,
+        storage_config: S::Config,
+    ) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
@@ -2264,12 +1374,13 @@ impl FsStore {
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let mut actor = handle
-            .spawn(Actor::new(
+            .spawn(Actor::<S>::new(
                 db_path,
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
                 Arc::new(options),
+                Arc::new(storage_config),
             ))
             .await
             .anyerr()??;
@@ -2362,7 +1473,9 @@ pub mod tests {
         time::Duration,
     };
 
-    use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
+    use crate::protocol::ChunkRangesExt;
+    use bao_tree::io::sync::ReadAt;
+    use bao_tree::{io::round_up_to_chunks_groups, ChunkNum, ChunkRanges};
     use bytes::Bytes;
     use n0_future::{stream, Stream, StreamExt};
     use n0_tracing_test::traced_test;
@@ -2447,11 +1560,12 @@ pub mod tests {
             let dir = tempfile::tempdir()?;
             let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
             let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
-            let mut actor = Actor::new(
+            let mut actor = Actor::<FileStorage>::new(
                 dir.path().join("blobs.db"),
                 cmd_rx,
                 fs_rx,
                 fs_tx,
+                Arc::new(Options::new(dir.path())),
                 Arc::new(Options::new(dir.path())),
             )
             .await?;
@@ -2509,11 +1623,12 @@ pub mod tests {
         let dir = tempfile::tempdir()?;
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
-        let mut actor = Actor::new(
+        let mut actor = Actor::<FileStorage>::new(
             dir.path().join("blobs.db"),
             cmd_rx,
             fs_rx,
             fs_tx.clone(),
+            Arc::new(Options::new(dir.path())),
             Arc::new(Options::new(dir.path())),
         )
         .await?;
