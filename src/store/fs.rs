@@ -453,12 +453,12 @@ async fn wait_writable(ctx: &HashContext) {
 /// freeze. If the task is dropped instead, the entity is shutting down, and
 /// `persist` looks through the freeze.
 async fn freeze_entry(
-    ctx: HashContext,
+    ctx: &HashContext,
     ack: tokio::sync::oneshot::Sender<()>,
     mut release: tokio::sync::watch::Receiver<()>,
 ) {
     ctx.load().await;
-    wait_writable(&ctx).await;
+    wait_writable(ctx).await;
     // Loaded, and not in a delete or another freeze, see above.
     let frozen = ctx.state.send_if_modified(|state| match state.take() {
         BaoFileStorage::ReadWrite(settled) => {
@@ -479,7 +479,7 @@ async fn freeze_entry(
         // Nothing is ever sent, so this returns once the sender is dropped.
         release.changed().await.ok();
     }
-    unfreeze_entry(&ctx);
+    unfreeze_entry(ctx);
 }
 
 fn unfreeze_entry(ctx: &HashContext) {
@@ -1054,7 +1054,7 @@ impl Actor {
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        freeze_entry(ctx, ack, release_rx).await;
+                        ctx.freeze(ack, release_rx).await;
                     }
                 })
                 .await
@@ -1260,7 +1260,7 @@ impl Actor {
                 .handles
                 .spawn(notice.hash, move |arg| async move {
                     match arg {
-                        SpawnArg::Active(ctx) => apply_notice(&ctx, notice).await,
+                        SpawnArg::Active(ctx) => ctx.apply_notice(notice).await,
                         SpawnArg::Dead => {
                             warn!("no entity for {}, its files stay", notice.hash);
                         }
@@ -1315,7 +1315,7 @@ impl Actor {
                 .spawn(hash, move |arg| async move {
                     let _running = running;
                     let res = match arg {
-                        SpawnArg::Active(ctx) => delete_entry(&ctx).await,
+                        SpawnArg::Active(ctx) => ctx.delete().await,
                         SpawnArg::Dead => Err(io::Error::other("no entity to delete through")),
                     };
                     res_tx.send(res).ok();
@@ -1608,6 +1608,16 @@ trait EntityApi {
     async fn export_bao(&self, cmd: ExportBaoMsg);
     /// Export the entry to a local file.
     async fn export_path(&self, cmd: ExportPathMsg);
+    /// Delete the entry, for a delete request or a gc sweep.
+    async fn delete(&self) -> io::Result<()>;
+    /// Hold off writes during a gc run, acknowledging through `ack`, until `release` ends.
+    async fn freeze(
+        &self,
+        ack: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::watch::Receiver<()>,
+    );
+    /// Act on what a committed metadata batch means for the entry's files.
+    async fn apply_notice(&self, notice: FileNotice);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);
 }
@@ -1738,6 +1748,22 @@ impl EntityApi for HashContext {
             Err(cause) => AddProgressItem::Error(cause),
         };
         cmd.tx.send(res).await.ok();
+    }
+
+    async fn delete(&self) -> io::Result<()> {
+        delete_entry(self).await
+    }
+
+    async fn freeze(
+        &self,
+        ack: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::watch::Receiver<()>,
+    ) {
+        freeze_entry(self, ack, release).await
+    }
+
+    async fn apply_notice(&self, notice: FileNotice) {
+        apply_notice(self, notice).await
     }
 
     #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
@@ -2436,7 +2462,7 @@ pub mod tests {
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        freeze_entry(ctx, ack, release_rx).await;
+                        ctx.freeze(ack, release_rx).await;
                     }
                 })
                 .await
