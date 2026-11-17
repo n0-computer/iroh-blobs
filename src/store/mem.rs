@@ -34,6 +34,7 @@ use irpc::channel::mpsc;
 use n0_error::{Result, StdResultExt};
 use n0_future::{
     future::yield_now,
+    stream,
     task::{JoinError, JoinSet},
     time::SystemTime,
 };
@@ -41,7 +42,7 @@ use range_collections::range_set::RangeSetRange;
 use tokio::sync::watch;
 use tracing::{error, info, instrument, trace, Instrument};
 
-use super::util::{BaoTreeSender, PartialMemStorage};
+use super::util::{drain, BaoTreeSender, PartialMemStorage};
 use crate::{
     api::{
         self,
@@ -358,15 +359,15 @@ impl Actor {
                         hash: value.hash,
                         format: value.format,
                     })
+                    .map(Ok)
                     .collect::<Vec<_>>();
-                self.spawn(async move {
-                    for tag in tags {
-                        if tx.send(ListTagsItem::Tag(tag)).await.is_err() {
-                            return;
-                        }
-                    }
-                    tx.send(ListTagsItem::Done).await.ok();
-                });
+                self.spawn(drain(
+                    stream::iter(tags),
+                    tx,
+                    ListTagsItem::Tag,
+                    ListTagsItem::Error,
+                    ListTagsItem::Done,
+                ));
             }
             Command::SetTag(SetTagMsg {
                 inner: SetTagRequest { name: tag, value },
@@ -391,27 +392,25 @@ impl Actor {
             }
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
-                let tts = self.temp_tags.list();
-                self.spawn(async move {
-                    for tt in tts {
-                        if cmd.tx.send(ListTempTagsItem::Tag(tt)).await.is_err() {
-                            return;
-                        }
-                    }
-                    cmd.tx.send(ListTempTagsItem::Done).await.ok();
-                });
+                let tts = self.temp_tags.list().into_iter().map(Ok);
+                self.spawn(drain(
+                    stream::iter(tts),
+                    cmd.tx,
+                    ListTempTagsItem::Tag,
+                    ListTempTagsItem::Error,
+                    ListTempTagsItem::Done,
+                ));
             }
             Command::ListBlobs(cmd) => {
                 let ListBlobsMsg { tx, .. } = cmd;
-                let blobs = self.state.data.keys().cloned().collect::<Vec<Hash>>();
-                self.spawn(async move {
-                    for blob in blobs {
-                        if tx.send(ListBlobsItem::Hash(blob)).await.is_err() {
-                            return;
-                        }
-                    }
-                    tx.send(ListBlobsItem::Done).await.ok();
-                });
+                let blobs = self.state.data.keys().cloned().map(Ok).collect::<Vec<_>>();
+                self.spawn(drain(
+                    stream::iter(blobs),
+                    tx,
+                    ListBlobsItem::Hash,
+                    ListBlobsItem::Error,
+                    ListBlobsItem::Done,
+                ));
             }
             Command::BlobStatus(cmd) => {
                 trace!("{cmd:?}");

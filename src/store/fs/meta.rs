@@ -11,8 +11,8 @@ use std::{
 
 use bao_tree::BaoTree;
 use bytes::Bytes;
-use irpc::channel::mpsc;
 use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
+use n0_future::{stream, Stream};
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -21,8 +21,7 @@ use crate::{
         self,
         blobs::BlobStatus,
         proto::{
-            BlobStatusMsg, BlobStatusRequest, CreateTagRequest, DeleteTagsRequest, ListBlobsItem,
-            ListBlobsMsg, ListRequest, ListTagsItem, ListTagsMsg, ListTagsRequest,
+            BlobStatusMsg, BlobStatusRequest, CreateTagRequest, DeleteTagsRequest, ListTagsRequest,
             RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
@@ -38,7 +37,7 @@ pub use proto::*;
 pub(crate) mod tables;
 use run::{LastShutdown, Run};
 use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
-use tracing::{debug, error, info, info_span, trace, warn, Span};
+use tracing::{debug, info, info_span, trace, warn, Span};
 
 use super::{
     boot_id,
@@ -112,13 +111,83 @@ impl Db {
         Self { sender }
     }
 
-    pub async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
+    /// Takes a read snapshot after all earlier commands.
+    async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
             .send(Snapshot { tx, span }.into())
             .await
             .map_err(|_| io::Error::other("send snapshot"))?;
         rx.await.map_err(|_| io::Error::other("receive snapshot"))
+    }
+
+    /// Lists the tags of a snapshot taken after all earlier commands.
+    ///
+    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
+    pub async fn list_tags(
+        &self,
+        span: tracing::Span,
+        request: ListTagsRequest,
+    ) -> io::Result<impl Stream<Item = api::Result<TagInfo>> + Send + 'static> {
+        let snapshot = self.snapshot(span).await?;
+        let ListTagsRequest {
+            from,
+            to,
+            raw,
+            hash_seq,
+        } = request;
+        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
+        let tags = rows.filter_map(move |row| {
+            let (name, value) = match row {
+                Ok(row) => row,
+                Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
+            };
+            let value = value.value();
+            let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
+            wanted.then(|| {
+                Ok(TagInfo {
+                    name: name.value(),
+                    hash: value.hash,
+                    format: value.format,
+                })
+            })
+        });
+        Ok(stream::iter(tags))
+    }
+
+    /// Lists the blobs of a snapshot taken after all earlier commands.
+    ///
+    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
+    pub async fn list_blobs(
+        &self,
+        span: tracing::Span,
+    ) -> io::Result<impl Stream<Item = api::Result<Hash>> + Send + 'static> {
+        let snapshot = self.snapshot(span).await?;
+        Ok(stream::iter(blob_hashes(&snapshot)?))
+    }
+
+    /// Reads the gc candidates (every blob) and the named tag roots from one
+    /// snapshot taken after all earlier commands.
+    pub async fn gc_snapshot(
+        &self,
+        span: tracing::Span,
+    ) -> io::Result<(
+        impl Stream<Item = api::Result<Hash>> + Send + 'static,
+        impl Stream<Item = api::Result<crate::HashAndFormat>> + Send + 'static,
+    )> {
+        let snapshot = self.snapshot(span).await?;
+        let candidates = blob_hashes(&snapshot)?;
+        let roots = snapshot
+            .tags
+            .range::<Tag>(..)
+            .map_err(io::Error::other)?
+            .map(|row| {
+                row.map(|(_, root)| root.value())
+                    .map_err(api_error_from_storage_error)
+            });
+        Ok((stream::iter(candidates), stream::iter(roots)))
     }
 
     pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
@@ -377,49 +446,6 @@ async fn handle_get_blob_status(
         None => BlobStatus::NotFound,
     };
     tx.send(res).await.ok();
-    Ok(())
-}
-
-/// Streams a snapshot without making the metadata actor wait for the reader.
-pub async fn list_tags(snapshot: ReadOnlyTables, cmd: ListTagsMsg) {
-    let ListTagsMsg { mut tx, inner, .. } = cmd;
-    if let Err(cause) = list_tags_impl(snapshot, inner, &mut tx).await {
-        tx.send(ListTagsItem::Error(cause)).await.ok();
-    }
-}
-
-async fn list_tags_impl(
-    snapshot: ReadOnlyTables,
-    request: ListTagsRequest,
-    tx: &mut mpsc::Sender<ListTagsItem>,
-) -> api::Result<()> {
-    let ListTagsRequest {
-        from,
-        to,
-        raw,
-        hash_seq,
-    } = request;
-    let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
-    let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    for item in snapshot
-        .tags()
-        .range((from, to))
-        .map_err(api_error_from_storage_error)?
-    {
-        let (k, v) = item.map_err(api_error_from_storage_error)?;
-        let v = v.value();
-        if raw && v.format.is_raw() || hash_seq && v.format.is_hash_seq() {
-            let info = TagInfo {
-                name: k.value(),
-                hash: v.hash,
-                format: v.format,
-            };
-            if tx.send(ListTagsItem::Tag(info)).await.is_err() {
-                return Ok(());
-            }
-        }
-    }
-    tx.send(ListTagsItem::Done).await.ok();
     Ok(())
 }
 
@@ -1125,31 +1151,15 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
     BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
 }
 
-pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
-    let ListBlobsMsg { mut tx, inner, .. } = cmd;
-    if let Err(cause) = list_blobs_impl(snapshot, inner, &mut tx).await {
-        error!("error listing blobs: {}", cause);
-        tx.send(ListBlobsItem::Error(cause)).await.ok();
-    }
-}
-
-async fn list_blobs_impl(
-    snapshot: ReadOnlyTables,
-    _cmd: ListRequest,
-    tx: &mut mpsc::Sender<ListBlobsItem>,
-) -> api::Result<()> {
-    for item in snapshot
-        .blobs
-        .iter()
-        .map_err(api_error_from_storage_error)?
-    {
-        let (k, _) = item.map_err(api_error_from_storage_error)?;
-        if tx.send(ListBlobsItem::Hash(k.value())).await.is_err() {
-            return Ok(());
-        }
-    }
-    tx.send(ListBlobsItem::Done).await.ok();
-    Ok(())
+/// The hashes of all blobs in a snapshot.
+fn blob_hashes(
+    snapshot: &ReadOnlyTables,
+) -> io::Result<impl Iterator<Item = api::Result<Hash>> + Send + 'static> {
+    let rows = snapshot.blobs.range::<Hash>(..).map_err(io::Error::other)?;
+    Ok(rows.map(|row| {
+        row.map(|(hash, _)| hash.value())
+            .map_err(api_error_from_storage_error)
+    }))
 }
 
 #[cfg(test)]

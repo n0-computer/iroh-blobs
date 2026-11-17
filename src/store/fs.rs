@@ -259,9 +259,8 @@ use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
-use meta::{list_blobs, list_tags};
 use n0_error::{Result, StdResultExt};
-use n0_future::{future::yield_now, io};
+use n0_future::{future::yield_now, io, stream, StreamExt};
 use nested_enum_utils::enum_conversions;
 use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
@@ -286,7 +285,7 @@ use crate::{
             util::entity_manager::{self, ActiveEntityState},
         },
         gc::run_gc,
-        util::{BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
+        util::{drain, BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
         IROH_BLOCK_SIZE,
     },
     util::{
@@ -859,8 +858,15 @@ impl Actor {
             }
             Command::ListTags(cmd) => {
                 trace!("{cmd:?}");
-                match self.db().snapshot(cmd.span.clone()).await {
-                    Ok(snapshot) => self.spawn(list_tags(snapshot, cmd)),
+                let request = cmd.inner.clone();
+                match self.db().list_tags(cmd.span.clone(), request).await {
+                    Ok(tags) => self.spawn(drain(
+                        tags,
+                        cmd.tx,
+                        proto::ListTagsItem::Tag,
+                        proto::ListTagsItem::Error,
+                        proto::ListTagsItem::Done,
+                    )),
                     Err(cause) => {
                         self.spawn(async move {
                             cmd.tx
@@ -890,8 +896,14 @@ impl Actor {
             }
             Command::ListBlobs(cmd) => {
                 trace!("{cmd:?}");
-                match self.db().snapshot(cmd.span.clone()).await {
-                    Ok(snapshot) => self.spawn(list_blobs(snapshot, cmd)),
+                match self.db().list_blobs(cmd.span.clone()).await {
+                    Ok(hashes) => self.spawn(drain(
+                        hashes,
+                        cmd.tx,
+                        proto::ListBlobsItem::Hash,
+                        proto::ListBlobsItem::Error,
+                        proto::ListBlobsItem::Done,
+                    )),
                     Err(cause) => {
                         self.spawn(async move {
                             cmd.tx
@@ -913,15 +925,14 @@ impl Actor {
             }
             Command::ListTempTags(cmd) => {
                 trace!("{cmd:?}");
-                let tts = self.temp_tags.list();
-                self.spawn(async move {
-                    for tt in tts {
-                        if cmd.tx.send(proto::ListTempTagsItem::Tag(tt)).await.is_err() {
-                            return;
-                        }
-                    }
-                    cmd.tx.send(proto::ListTempTagsItem::Done).await.ok();
-                });
+                let tts = self.temp_tags.list().into_iter().map(Ok);
+                self.spawn(drain(
+                    stream::iter(tts),
+                    cmd.tx,
+                    proto::ListTempTagsItem::Tag,
+                    proto::ListTempTagsItem::Error,
+                    proto::ListTempTagsItem::Done,
+                ));
             }
             Command::ImportBytes(cmd) => {
                 trace!("{cmd:?}");
@@ -1005,32 +1016,24 @@ impl Actor {
         }
     }
 
+    /// Collects the gc candidates, and the named tags plus the current and
+    /// retained temp tags as roots.
+    async fn gc_snapshot(&mut self, span: tracing::Span) -> api::Result<proto::GcSnapshot> {
+        let (candidates, tags) = self.db().gc_snapshot(span).await?;
+        let candidates = candidates.try_collect::<_, _, Vec<_>>().await?;
+        let mut roots = tags.try_collect::<_, _, HashSet<_>>().await?;
+        roots.extend(self.temp_tags.list_for_gc());
+        Ok(proto::GcSnapshot {
+            candidates,
+            roots: roots.into_iter().collect(),
+        })
+    }
+
     async fn enter_gc(&mut self, cmd: proto::GcRunMsg) {
-        use redb::ReadableTable;
         self.temp_tags.start_gc_run();
         // Snapshot is a top-level metadata command: earlier tag mutations have
         // committed before this returns. Main has not dispatched any later ones.
-        let tables = self.db().snapshot(cmd.span.clone()).await;
-        let snapshot = tables.map_err(api::Error::from).and_then(|tables| {
-            let candidates = tables
-                .blobs
-                .iter()
-                .map_err(api::Error::other)?
-                .map(|row| row.map(|(hash, _)| hash.value()).map_err(api::Error::other))
-                .collect::<api::Result<Vec<_>>>()?;
-            let mut roots = self
-                .temp_tags
-                .list_for_gc()
-                .into_iter()
-                .collect::<HashSet<_>>();
-            for row in tables.tags.iter().map_err(api::Error::other)? {
-                roots.insert(row.map_err(api::Error::other)?.1.value());
-            }
-            api::Result::Ok(proto::GcSnapshot {
-                candidates,
-                roots: roots.into_iter().collect(),
-            })
-        });
+        let snapshot = self.gc_snapshot(cmd.span.clone()).await;
         let snapshot = match snapshot {
             Ok(snapshot) => snapshot,
             Err(err) => {

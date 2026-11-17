@@ -199,15 +199,14 @@ impl Actor {
                     .ok();
             }
             Command::ListBlobs(cmd) => {
-                let hashes: Vec<Hash> = self.data.keys().cloned().collect();
-                self.tasks.spawn(async move {
-                    for hash in hashes {
-                        if cmd.tx.send(proto::ListBlobsItem::Hash(hash)).await.is_err() {
-                            return;
-                        }
-                    }
-                    cmd.tx.send(proto::ListBlobsItem::Done).await.ok();
-                });
+                let hashes: Vec<_> = self.data.keys().cloned().map(Ok).collect();
+                self.tasks.spawn(super::util::drain(
+                    n0_future::stream::iter(hashes),
+                    cmd.tx,
+                    proto::ListBlobsItem::Hash,
+                    proto::ListBlobsItem::Error,
+                    proto::ListBlobsItem::Done,
+                ));
             }
             Command::BlobStatus(cmd) => {
                 let hash = cmd.inner.hash;
