@@ -25,6 +25,29 @@ mod mem_or_file;
 #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub use mem_or_file::{FixedSize, MemOrFile};
 
+/// Sends the items of a listing to its client, then the end marker.
+///
+/// Stops at the first error, after sending it, or when the client goes away.
+pub(crate) async fn drain<T, I: irpc::RpcMessage>(
+    items: impl n0_future::Stream<Item = crate::api::Result<T>>,
+    tx: mpsc::Sender<I>,
+    item: impl Fn(T) -> I,
+    error: impl Fn(crate::api::Error) -> I,
+    done: I,
+) {
+    let mut items = std::pin::pin!(items);
+    while let Some(next) = n0_future::StreamExt::next(&mut items).await {
+        let (next, stop) = match next {
+            Ok(value) => (item(value), false),
+            Err(cause) => (error(cause), true),
+        };
+        if tx.send(next).await.is_err() || stop {
+            return;
+        }
+    }
+    tx.send(done).await.ok();
+}
+
 /// Exports the empty blob on the store's filesystem without creating a blob entry.
 pub(crate) async fn export_empty(cmd: crate::api::proto::ExportPathMsg) {
     use crate::api::proto::ExportProgressItem;

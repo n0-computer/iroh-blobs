@@ -1,17 +1,18 @@
 //! The metadata database
 #![allow(clippy::result_large_err)]
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     io,
     ops::{Bound, Deref, DerefMut},
     path::PathBuf,
+    sync::Arc,
     time::SystemTime,
 };
 
 use bao_tree::BaoTree;
 use bytes::Bytes;
-use irpc::channel::mpsc;
 use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
+use n0_future::{stream, Stream};
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -20,10 +21,8 @@ use crate::{
         self,
         blobs::BlobStatus,
         proto::{
-            BlobDeleteRequest, BlobStatusMsg, BlobStatusRequest, ClearProtectedMsg,
-            CreateTagRequest, DeleteBlobsMsg, DeleteTagsRequest, ListBlobsItem, ListBlobsMsg,
-            ListRequest, ListTagsItem, ListTagsMsg, ListTagsRequest, RenameTagRequest,
-            SetTagRequest, ShutdownMsg, SyncDbMsg,
+            BlobStatusMsg, BlobStatusRequest, CreateTagRequest, DeleteTagsRequest, ListTagsRequest,
+            RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
@@ -38,15 +37,14 @@ pub use proto::*;
 pub(crate) mod tables;
 use run::{LastShutdown, Run};
 use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
-use tracing::{debug, error, info, info_span, trace, warn, Span};
+use tracing::{debug, info, info_span, trace, warn, Span};
 
 use super::{
     boot_id,
-    delete_set::DeleteHandle,
     entry_state::{DataLocation, EntryState, OutboardLocation},
-    options::BatchOptions,
+    file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
+    options::{BatchOptions, PathOptions},
     util::PeekableReceiver,
-    BaoFilePart,
 };
 use crate::store::IROH_BLOCK_SIZE;
 
@@ -113,13 +111,83 @@ impl Db {
         Self { sender }
     }
 
-    pub async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
+    /// Takes a read snapshot after all earlier commands.
+    async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
             .send(Snapshot { tx, span }.into())
             .await
             .map_err(|_| io::Error::other("send snapshot"))?;
         rx.await.map_err(|_| io::Error::other("receive snapshot"))
+    }
+
+    /// Lists the tags of a snapshot taken after all earlier commands.
+    ///
+    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
+    pub async fn list_tags(
+        &self,
+        span: tracing::Span,
+        request: ListTagsRequest,
+    ) -> io::Result<impl Stream<Item = api::Result<TagInfo>> + Send + 'static> {
+        let snapshot = self.snapshot(span).await?;
+        let ListTagsRequest {
+            from,
+            to,
+            raw,
+            hash_seq,
+        } = request;
+        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
+        let tags = rows.filter_map(move |row| {
+            let (name, value) = match row {
+                Ok(row) => row,
+                Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
+            };
+            let value = value.value();
+            let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
+            wanted.then(|| {
+                Ok(TagInfo {
+                    name: name.value(),
+                    hash: value.hash,
+                    format: value.format,
+                })
+            })
+        });
+        Ok(stream::iter(tags))
+    }
+
+    /// Lists the blobs of a snapshot taken after all earlier commands.
+    ///
+    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
+    pub async fn list_blobs(
+        &self,
+        span: tracing::Span,
+    ) -> io::Result<impl Stream<Item = api::Result<Hash>> + Send + 'static> {
+        let snapshot = self.snapshot(span).await?;
+        Ok(stream::iter(blob_hashes(&snapshot)?))
+    }
+
+    /// Reads the gc candidates (every blob) and the named tag roots from one
+    /// snapshot taken after all earlier commands.
+    pub async fn gc_snapshot(
+        &self,
+        span: tracing::Span,
+    ) -> io::Result<(
+        impl Stream<Item = api::Result<Hash>> + Send + 'static,
+        impl Stream<Item = api::Result<crate::HashAndFormat>> + Send + 'static,
+    )> {
+        let snapshot = self.snapshot(span).await?;
+        let candidates = blob_hashes(&snapshot)?;
+        let roots = snapshot
+            .tags
+            .range::<Tag>(..)
+            .map_err(io::Error::other)?
+            .map(|row| {
+                row.map(|(_, root)| root.value())
+                    .map_err(api_error_from_storage_error)
+            });
+        Ok((stream::iter(candidates), stream::iter(roots)))
     }
 
     pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
@@ -194,6 +262,26 @@ impl Db {
         Ok(res.state?)
     }
 
+    /// Apply an unconditional delete, answered once it is committed, even if
+    /// there was no metadata entry.
+    ///
+    /// Only the hash's entity sends this, see [`Delete`].
+    pub async fn delete(&self, hash: Hash) -> io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let span = Span::current();
+        self.sender
+            .send(Delete { hash, tx, span }.into())
+            .await
+            .map_err(|_| io::Error::other("send delete"))?;
+        rx.await.map_err(|_| io::Error::other("receive delete"))??;
+        Ok(())
+    }
+
+    /// A view of this database scoped to a single entry.
+    pub fn entry(&self, hash: Hash) -> EntryMeta<'_> {
+        EntryMeta { db: self, hash }
+    }
+
     /// Send a command. This exists so the main actor can directly forward commands.
     ///
     /// This will fail only if the database actor is dead. In that case the main
@@ -204,6 +292,42 @@ impl Db {
             .await
             .map_err(|_e| io::Error::other("actor down"))?;
         Ok(())
+    }
+}
+
+/// The metadata of a single entry.
+///
+/// This is all an entity gets to see of the database.
+#[derive(Debug, Clone, Copy)]
+pub struct EntryMeta<'a> {
+    db: &'a Db,
+    hash: Hash,
+}
+
+impl EntryMeta<'_> {
+    /// Apply an unconditional delete, answered once it is committed.
+    pub async fn delete(&self) -> io::Result<()> {
+        self.db.delete(self.hash).await
+    }
+
+    /// Get the entry state.
+    pub async fn get(&self) -> io::Result<Option<EntryState<Bytes>>> {
+        self.db.get(self.hash).await
+    }
+
+    /// Replace the entry state, and wait for completion.
+    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db.set(self.hash, state).await
+    }
+
+    /// Merge into the entry state, without waiting for completion.
+    pub async fn update(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db.update(self.hash, state).await
+    }
+
+    /// Merge into the entry state, and wait for completion.
+    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
+        self.db.update_await(self.hash, state).await
     }
 }
 
@@ -282,16 +406,6 @@ fn handle_dump(cmd: Dump, tables: &impl ReadableTables) -> ActorResult<()> {
     Ok(())
 }
 
-async fn handle_clear_protected(
-    cmd: ClearProtectedMsg,
-    protected: &mut HashSet<Hash>,
-) -> ActorResult<()> {
-    trace!("{cmd:?}");
-    protected.clear();
-    cmd.tx.send(Ok(())).await.ok();
-    Ok(())
-}
-
 async fn handle_get_blob_status(
     msg: BlobStatusMsg,
     tables: &impl ReadableTables,
@@ -335,61 +449,18 @@ async fn handle_get_blob_status(
     Ok(())
 }
 
-/// Streams a snapshot without making the metadata actor wait for the reader.
-pub async fn list_tags(snapshot: ReadOnlyTables, cmd: ListTagsMsg) {
-    let ListTagsMsg { mut tx, inner, .. } = cmd;
-    if let Err(cause) = list_tags_impl(snapshot, inner, &mut tx).await {
-        tx.send(ListTagsItem::Error(cause)).await.ok();
-    }
-}
-
-async fn list_tags_impl(
-    snapshot: ReadOnlyTables,
-    request: ListTagsRequest,
-    tx: &mut mpsc::Sender<ListTagsItem>,
-) -> api::Result<()> {
-    let ListTagsRequest {
-        from,
-        to,
-        raw,
-        hash_seq,
-    } = request;
-    let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
-    let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-    for item in snapshot
-        .tags()
-        .range((from, to))
-        .map_err(api_error_from_storage_error)?
-    {
-        let (k, v) = item.map_err(api_error_from_storage_error)?;
-        let v = v.value();
-        if raw && v.format.is_raw() || hash_seq && v.format.is_hash_seq() {
-            let info = TagInfo {
-                name: k.value(),
-                hash: v.hash,
-                format: v.format,
-            };
-            if tx.send(ListTagsItem::Tag(info)).await.is_err() {
-                return Ok(());
-            }
-        }
-    }
-    tx.send(ListTagsItem::Done).await.ok();
-    Ok(())
-}
-
 fn handle_update(
     cmd: Update,
-    protected: &mut HashSet<Hash>,
+    bookkeeping: &mut Bookkeeping,
     tables: &mut Tables,
 ) -> ActorResult<()> {
     trace!("{cmd:?}");
     let Update {
         hash, state, tx, ..
     } = cmd;
-    protected.insert(hash);
     trace!("updating hash {} to {}", hash.to_hex(), state.fmt_short());
     let old_entry_opt = tables.blobs.get(hash)?.map(|e| e.value());
+    bookkeeping.written(hash, old_entry_opt.as_ref());
     let (state, data, outboard): (_, Option<Bytes>, Option<Bytes>) = match state {
         EntryState::Complete {
             data_location,
@@ -409,16 +480,10 @@ fn handle_update(
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
     let state = match old_entry_opt {
-        Some(old) => {
-            let was_partial = old.is_partial();
-            let res = EntryState::union(old, state)?;
-            if was_partial {
-                delete_partial_files(tables, hash, &res);
-            }
-            res
-        }
+        Some(old) => EntryState::union(old, state)?,
         None => state,
     };
+    bookkeeping.references(hash, &state);
     tables
         .blobs
         .insert(hash, state)
@@ -441,12 +506,13 @@ fn handle_update(
     Ok(())
 }
 
-fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> ActorResult<()> {
+fn handle_set(cmd: Set, bookkeeping: &mut Bookkeeping, tables: &mut Tables) -> ActorResult<()> {
     trace!("{cmd:?}");
     let Set {
         state, hash, tx, ..
     } = cmd;
-    protected.insert(hash);
+    let old = tables.blobs.get(hash)?.map(|e| e.value());
+    bookkeeping.written(hash, old.as_ref());
     let (state, data, outboard): (_, Option<Bytes>, Option<Bytes>) = match state {
         EntryState::Complete {
             data_location,
@@ -465,14 +531,11 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
         }
         EntryState::Partial { size } => (EntryState::Partial { size }, None, None),
     };
-    let was_partial = tables
+    bookkeeping.references(hash, &state);
+    tables
         .blobs
         .insert(hash, &state)
-        .map_err(|e| e!(ActorError::Storage, e))?
-        .is_some_and(|old| old.value().is_partial());
-    if was_partial {
-        delete_partial_files(tables, hash, &state);
-    }
+        .map_err(|e| e!(ActorError::Storage, e))?;
     if let Some(data) = data {
         tables
             .inline_data
@@ -489,27 +552,77 @@ fn handle_set(cmd: Set, protected: &mut HashSet<Hash>, tables: &mut Tables) -> A
     Ok(())
 }
 
-/// Removes the files of a partial entry that its complete state no longer uses.
-///
-/// Inlined data and outboards are safe to delete: whether they are inlined depends
-/// only on the size, so no concurrent import of the same hash writes those files.
-/// Owned data is never deleted, since a re-import can replace that file at any time.
-fn delete_partial_files<I>(tables: &Tables, hash: Hash, new: &EntryState<I>) {
-    let EntryState::Complete {
-        data_location,
-        outboard_location,
-    } = new
-    else {
-        return;
-    };
-    tables
-        .ftx
-        .delete(hash, [BaoFilePart::Sizes, BaoFilePart::Bitfield]);
-    if matches!(data_location, DataLocation::Inline(_)) {
-        tables.ftx.delete(hash, [BaoFilePart::Data]);
+/// In-memory bookkeeping of the metadata actor, next to the database.
+#[derive(Debug, Default)]
+struct Bookkeeping {
+    /// Hashes whose entry was written or removed in the current write batch,
+    /// with every file their entry referenced in it: before the batch, or in
+    /// any state the batch gave it. Files may exist for each of those.
+    written: HashMap<Hash, BaoFileParts>,
+    /// Deletes in the current write batch, answered once it is committed.
+    deleted: HashMap<Hash, Vec<oneshot::Sender<ActorResult<()>>>>,
+}
+
+impl Bookkeeping {
+    /// Note a write to the entry of a hash, whose state before the write was `before`.
+    fn written<I>(&mut self, hash: Hash, before: Option<&EntryState<I>>) {
+        self.written
+            .entry(hash)
+            .or_insert_with(|| referenced_parts(before));
     }
-    if !matches!(outboard_location, OutboardLocation::Owned) {
-        tables.ftx.delete(hash, [BaoFilePart::Outboard]);
+
+    /// Note the state a write in this batch gave the entry of a hash.
+    fn references<I>(&mut self, hash: Hash, state: &EntryState<I>) {
+        if let Some(parts) = self.written.get_mut(&hash) {
+            for part in referenced_parts(Some(state)) {
+                if !parts.contains(&part) {
+                    parts.push(part);
+                }
+            }
+        }
+    }
+
+    /// Note that the entry of a hash was deleted, to answer `tx` once that is committed.
+    fn deleted<I>(
+        &mut self,
+        hash: Hash,
+        before: Option<&EntryState<I>>,
+        tx: oneshot::Sender<ActorResult<()>>,
+    ) {
+        self.written(hash, before);
+        self.deleted.entry(hash).or_default().push(tx);
+    }
+
+    /// The deletes of the batch, to answer once it is committed.
+    fn take_deletes(&mut self) -> Vec<oneshot::Sender<ActorResult<()>>> {
+        self.deleted.drain().flat_map(|(_, txs)| txs).collect()
+    }
+
+    /// The parts the batch stopped referencing, to send once it is committed.
+    ///
+    /// For each hash written but not deleted in the batch: which files it
+    /// referenced in the batch and no longer does. The entity of a deleted
+    /// hash removes all its files itself, once its delete is answered.
+    fn unreferenced_parts(
+        &mut self,
+        tables: &impl ReadableTables,
+    ) -> ActorResult<Vec<(Hash, UnreferencedParts)>> {
+        let mut res = Vec::new();
+        for (hash, before) in self.written.drain() {
+            if self.deleted.contains_key(&hash) {
+                continue;
+            }
+            let after = tables.blobs().get(hash)?.map(|e| e.value());
+            let still = referenced_parts(after.as_ref());
+            let parts: BaoFileParts = before
+                .into_iter()
+                .filter(|part| !still.contains(part))
+                .collect();
+            if !parts.is_empty() {
+                res.push((hash, UnreferencedParts(parts)));
+            }
+        }
+        Ok(res)
     }
 }
 
@@ -530,20 +643,51 @@ impl std::fmt::Debug for TxnNum {
     }
 }
 
+/// Makes the next open of a closed store run the check it does after a reboot.
+///
+/// It marks the recorded run as from another boot, which is what an OS crash
+/// changes as far as the store can tell, so tests that lose unsynced writes
+/// (LazyFS) use it to stand in for the reboot. Returns false if no run was
+/// recorded, which means the store was shut down cleanly, or the record itself
+/// was lost.
+#[cfg(test)]
+pub(super) fn trigger_reboot_check(db: &std::path::Path) -> n0_error::Result<bool> {
+    let db = redb::Database::open(db).anyerr()?;
+    let tx = db.begin_write().anyerr()?;
+    let moved = {
+        let mut meta = tx.open_table(META_TABLE).anyerr()?;
+        match run::read(&meta) {
+            Some(run) => {
+                let run = Run {
+                    boot_id: Some("another boot".to_owned()),
+                    ..run
+                };
+                run::write(&mut meta, &run).anyerr()?;
+                true
+            }
+            None => false,
+        }
+    };
+    tx.commit().anyerr()?;
+    Ok(moved)
+}
+
 #[derive(Debug)]
 pub struct Actor {
-    db: redb::Database,
+    db: DbWrapper,
     cmds: PeekableReceiver<Command>,
-    ds: DeleteHandle,
+    /// Where the parts each committed batch stopped referencing go, see [`UnreferencedParts`].
+    unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
     options: BatchOptions,
-    protected: HashSet<Hash>,
+    state: Bookkeeping,
 }
 
 impl Actor {
     pub fn new(
         db_path: PathBuf,
         cmds: tokio::sync::mpsc::Receiver<Command>,
-        mut ds: DeleteHandle,
+        unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
+        paths: Arc<PathOptions>,
         options: BatchOptions,
         syncs_files: bool,
     ) -> Result<Self, ActorError> {
@@ -559,10 +703,8 @@ impl Actor {
             }
             Err(err) => return Err(err.into()),
         };
-        let paths = ds.paths().clone();
         let tx = db.begin_write()?;
-        let ftx = ds.begin_write();
-        let mut tables = Tables::new(&tx, &ftx)?;
+        let mut tables = Tables::new(&tx)?;
         let mut meta = tx.open_table(META_TABLE)?;
         let run = Run {
             boot_id: boot_id::current(),
@@ -598,19 +740,17 @@ impl Actor {
         drop(meta);
         drop(tables);
         tx.commit()?;
-        drop(ftx);
         let cmds = PeekableReceiver::new(cmds);
         Ok(Self {
-            db,
+            db: db.into(),
             cmds,
-            ds,
+            unreferenced,
             options,
-            protected: Default::default(),
+            state: Default::default(),
         })
     }
 
     async fn handle_readonly(
-        protected: &mut HashSet<Hash>,
         tables: &impl ReadableTables,
         cmd: ReadOnlyCommand,
         op: TxnNum,
@@ -624,69 +764,28 @@ impl Actor {
         match cmd {
             ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables),
             ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
-            ReadOnlyCommand::ClearProtected(cmd) => handle_clear_protected(cmd, protected).await,
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }
     }
 
-    async fn delete(
-        protected: &mut HashSet<Hash>,
-        tables: &mut Tables<'_>,
-        cmd: DeleteBlobsMsg,
-    ) -> ActorResult<()> {
-        let DeleteBlobsMsg {
-            inner: BlobDeleteRequest { hashes, force },
-            ..
-        } = cmd;
-        for hash in hashes {
-            if !force && protected.contains(&hash) {
-                trace!("delete {hash}: skip (protected)");
-                continue;
+    fn delete(state: &mut Bookkeeping, tables: &mut Tables<'_>, cmd: Delete) -> ActorResult<()> {
+        trace!("{cmd:?}");
+        let Delete { hash, tx, .. } = cmd;
+        let entry = tables.blobs.remove(hash)?.map(|entry| entry.value());
+        // answered after the commit, then the entity deletes the files
+        state.deleted(hash, entry.as_ref(), tx);
+        if let Some(EntryState::Complete {
+            data_location,
+            outboard_location,
+        }) = entry
+        {
+            if let DataLocation::Inline(_) = data_location {
+                tables.inline_data.remove(hash)?;
             }
-            if let Some(entry) = tables.blobs.remove(hash)? {
-                match entry.value() {
-                    EntryState::Complete {
-                        data_location,
-                        outboard_location,
-                    } => {
-                        trace!("delete {hash}: currently complete. will be deleted.");
-                        match data_location {
-                            DataLocation::Inline(_) => {
-                                tables.inline_data.remove(hash)?;
-                            }
-                            DataLocation::Owned(_) => {
-                                // mark the data for deletion
-                                tables.ftx.delete(hash, [BaoFilePart::Data]);
-                            }
-                            DataLocation::External(_, _) => {}
-                        }
-                        match outboard_location {
-                            OutboardLocation::Inline(_) => {
-                                tables.inline_outboard.remove(hash)?;
-                            }
-                            OutboardLocation::Owned => {
-                                // mark the outboard for deletion
-                                tables.ftx.delete(hash, [BaoFilePart::Outboard]);
-                            }
-                            OutboardLocation::NotNeeded => {}
-                        }
-                    }
-                    EntryState::Partial { .. } => {
-                        trace!("delete {hash}: currently partial. will be deleted.");
-                        tables.ftx.delete(
-                            hash,
-                            [
-                                BaoFilePart::Outboard,
-                                BaoFilePart::Data,
-                                BaoFilePart::Sizes,
-                                BaoFilePart::Bitfield,
-                            ],
-                        );
-                    }
-                }
+            if let OutboardLocation::Inline(_) = outboard_location {
+                tables.inline_outboard.remove(hash)?;
             }
         }
-        cmd.tx.send(Ok(())).await.ok();
         Ok(())
     }
 
@@ -769,7 +868,7 @@ impl Actor {
     }
 
     async fn handle_readwrite(
-        protected: &mut HashSet<Hash>,
+        state: &mut Bookkeeping,
         tables: &mut Tables<'_>,
         cmd: ReadWriteCommand,
         op: TxnNum,
@@ -781,9 +880,9 @@ impl Actor {
         );
         let _guard = span.enter();
         match cmd {
-            ReadWriteCommand::Update(cmd) => handle_update(cmd, protected, tables),
-            ReadWriteCommand::Set(cmd) => handle_set(cmd, protected, tables),
-            ReadWriteCommand::DeleteBlobw(cmd) => Self::delete(protected, tables, cmd).await,
+            ReadWriteCommand::Update(cmd) => handle_update(cmd, state, tables),
+            ReadWriteCommand::Set(cmd) => handle_set(cmd, state, tables),
+            ReadWriteCommand::Delete(cmd) => Self::delete(state, tables, cmd),
             ReadWriteCommand::SetTag(cmd) => Self::set_tag(tables, cmd).await,
             ReadWriteCommand::CreateTag(cmd) => Self::create_tag(tables, cmd).await,
             ReadWriteCommand::DeleteTags(cmd) => Self::delete_tags(tables, cmd).await,
@@ -792,22 +891,20 @@ impl Actor {
     }
 
     async fn handle_non_toplevel(
-        protected: &mut HashSet<Hash>,
+        state: &mut Bookkeeping,
         tables: &mut Tables<'_>,
         cmd: NonTopLevelCommand,
         op: TxnNum,
     ) -> ActorResult<()> {
         match cmd {
-            NonTopLevelCommand::ReadOnly(cmd) => {
-                Self::handle_readonly(protected, tables, cmd, op).await
-            }
+            NonTopLevelCommand::ReadOnly(cmd) => Self::handle_readonly(tables, cmd, op).await,
             NonTopLevelCommand::ReadWrite(cmd) => {
-                Self::handle_readwrite(protected, tables, cmd, op).await
+                Self::handle_readwrite(state, tables, cmd, op).await
             }
         }
     }
 
-    async fn sync_db(_db: &mut Database, cmd: SyncDbMsg) -> ActorResult<()> {
+    async fn sync_db(_db: &Database, cmd: SyncDbMsg) -> ActorResult<()> {
         trace!("{cmd:?}");
         let SyncDbMsg { tx, .. } = cmd;
         // nothing to do here, since for a toplevel cmd we are outside a write transaction
@@ -816,7 +913,7 @@ impl Actor {
     }
 
     async fn handle_toplevel(
-        db: &mut Database,
+        db: &Database,
         cmd: TopLevelCommand,
         op: TxnNum,
     ) -> ActorResult<Option<ShutdownMsg>> {
@@ -862,15 +959,24 @@ impl Actor {
         Ok(())
     }
 
-    pub async fn run(self) {
-        if let Err(error) = self.run_inner().await {
-            // Without this actor every store operation fails, so keep the cause.
-            error!("metadata db actor stopped: {error:#}");
+    pub(super) async fn run(mut self) -> Result<(), Failure> {
+        match self.run_inner().await {
+            Ok(shutdown) => {
+                drop(self);
+                if let Some(shutdown) = shutdown {
+                    shutdown.tx.send(()).await.ok();
+                }
+                Ok(())
+            }
+            Err(error) => Err(Failure {
+                error,
+                _db: self.db,
+            }),
         }
     }
 
-    async fn run_inner(mut self) -> ActorResult<()> {
-        let mut db = DbWrapper::from(self.db);
+    async fn run_inner(&mut self) -> ActorResult<Option<ShutdownMsg>> {
+        let db = &self.db;
         let options = &self.options;
         let mut op = 0u64;
         let shutdown = loop {
@@ -881,7 +987,7 @@ impl Actor {
             match cmd {
                 Command::TopLevel(cmd) => {
                     let op = TxnNum::TopLevel(op);
-                    if let Some(shutdown) = Self::handle_toplevel(&mut db, cmd, op).await? {
+                    if let Some(shutdown) = Self::handle_toplevel(db, cmd, op).await? {
                         break Some(shutdown);
                     }
                 }
@@ -897,7 +1003,7 @@ impl Actor {
                     let mut n = 0;
                     while let Some(cmd) = self.cmds.extract(Command::read_only, &mut timeout).await
                     {
-                        Self::handle_readonly(&mut self.protected, &tables, cmd, op).await?;
+                        Self::handle_readonly(&tables, cmd, op).await?;
                         n += 1;
                         if n >= options.max_read_batch {
                             break;
@@ -907,12 +1013,10 @@ impl Actor {
                 Command::ReadWrite(cmd) => {
                     let op = TxnNum::Write(op);
                     self.cmds.push_back(cmd.into()).ok();
-                    let ftx = self.ds.begin_write();
                     let tx = db
                         .begin_write()
                         .map_err(|e| e!(ActorError::Transaction, e))?;
-                    let mut tables =
-                        Tables::new(&tx, &ftx).map_err(|e| e!(ActorError::Table, e))?;
+                    let mut tables = Tables::new(&tx).map_err(|e| e!(ActorError::Table, e))?;
                     let timeout = n0_future::time::sleep(self.options.max_write_duration);
                     pin!(timeout);
                     let mut n = 0;
@@ -921,25 +1025,43 @@ impl Actor {
                         .extract(Command::non_top_level, &mut timeout)
                         .await
                     {
-                        Self::handle_non_toplevel(&mut self.protected, &mut tables, cmd, op)
-                            .await?;
+                        Self::handle_non_toplevel(&mut self.state, &mut tables, cmd, op).await?;
                         n += 1;
                         if n >= options.max_write_batch {
                             break;
                         }
                     }
+                    let unreferenced = self.state.unreferenced_parts(&tables)?;
+                    let deletes = self.state.take_deletes();
                     drop(tables);
                     tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
-                    ftx.commit();
+                    // Files are only touched once the commit that stops
+                    // referencing them is durable. A delete's entity removes
+                    // its files once its delete is answered. If the batch
+                    // fails, the answers are dropped and the deletes fail.
+                    for tx in deletes {
+                        tx.send(Ok(()));
+                    }
+                    // The main actor hands unreferenced parts to the hash's
+                    // entity, which checks them against its own state, or
+                    // deletes them itself if there is none. Unbounded, so this
+                    // actor never waits on the main actor, which waits on this
+                    // one.
+                    for parts in unreferenced {
+                        self.unreferenced.send(parts).ok();
+                    }
                 }
             }
         };
-        if let Some(shutdown) = shutdown {
-            drop(db);
-            shutdown.tx.send(()).await.ok();
-        }
-        Ok(())
+        Ok(shutdown)
     }
+}
+
+/// Keeps the database locked until the main actor has cancelled all workers.
+#[derive(Debug)]
+pub(super) struct Failure {
+    pub error: ActorError,
+    _db: DbWrapper,
 }
 
 /// Logs what recovery did.
@@ -1048,31 +1170,15 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
     BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
 }
 
-pub async fn list_blobs(snapshot: ReadOnlyTables, cmd: ListBlobsMsg) {
-    let ListBlobsMsg { mut tx, inner, .. } = cmd;
-    if let Err(cause) = list_blobs_impl(snapshot, inner, &mut tx).await {
-        error!("error listing blobs: {}", cause);
-        tx.send(ListBlobsItem::Error(cause)).await.ok();
-    }
-}
-
-async fn list_blobs_impl(
-    snapshot: ReadOnlyTables,
-    _cmd: ListRequest,
-    tx: &mut mpsc::Sender<ListBlobsItem>,
-) -> api::Result<()> {
-    for item in snapshot
-        .blobs
-        .iter()
-        .map_err(api_error_from_storage_error)?
-    {
-        let (k, _) = item.map_err(api_error_from_storage_error)?;
-        if tx.send(ListBlobsItem::Hash(k.value())).await.is_err() {
-            return Ok(());
-        }
-    }
-    tx.send(ListBlobsItem::Done).await.ok();
-    Ok(())
+/// The hashes of all blobs in a snapshot.
+fn blob_hashes(
+    snapshot: &ReadOnlyTables,
+) -> io::Result<impl Iterator<Item = api::Result<Hash>> + Send + 'static> {
+    let rows = snapshot.blobs.range::<Hash>(..).map_err(io::Error::other)?;
+    Ok(rows.map(|row| {
+        row.map(|(hash, _)| hash.value())
+            .map_err(api_error_from_storage_error)
+    }))
 }
 
 #[cfg(test)]
@@ -1081,7 +1187,7 @@ mod tests {
 
     use super::{
         super::{
-            delete_set,
+            file_deletes::BaoFilePart,
             options::{CrashConsistency, Options, PathOptions},
         },
         *,
@@ -1115,13 +1221,14 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let paths = Arc::new(PathOptions::new(dir.path()));
         let db = dir.path().join("db");
-        let (_protect, deletes) = delete_set::pair(paths);
         let (_tx, rx) = tokio::sync::mpsc::channel(1);
         // dropped without a shutdown, as in a crash
+        let (unreferenced, _) = tokio::sync::mpsc::unbounded_channel();
         drop(Actor::new(
             db.clone(),
             rx,
-            deletes,
+            unreferenced,
+            paths,
             BatchOptions::default(),
             false,
         )?);
@@ -1241,72 +1348,402 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {
+    fn setup() -> testresult::TestResult<(tempfile::TempDir, Arc<PathOptions>, Database)> {
         let dir = tempfile::tempdir()?;
         let paths = Arc::new(PathOptions::new(dir.path()));
         std::fs::create_dir_all(&paths.data_path)?;
-        let (protect, mut deletes) = delete_set::pair(paths.clone());
         let db = Database::create(dir.path().join("db"))?;
+        Ok((dir, paths, db))
+    }
+
+    /// Run one write batch the way the actor does, and return the parts it stopped referencing.
+    fn write_batch(
+        db: &Database,
+        state: &mut Bookkeeping,
+        f: impl FnOnce(&mut Tables, &mut Bookkeeping) -> testresult::TestResult<()>,
+    ) -> testresult::TestResult<Vec<(Hash, UnreferencedParts)>> {
+        let tx = db.begin_write()?;
+        let mut tables = Tables::new(&tx)?;
+        f(&mut tables, state)?;
+        let unreferenced = state.unreferenced_parts(&tables)?;
+        let deletes = state.take_deletes();
+        drop(tables);
+        tx.commit()?;
+        for tx in deletes {
+            tx.send(Ok(()));
+        }
+        Ok(unreferenced)
+    }
+
+    /// An update from an entity, without waiting for it to be applied.
+    fn update(hash: Hash, state: EntryState<Bytes>) -> Update {
+        Update {
+            hash,
+            state,
+            tx: None,
+            span: Span::none(),
+        }
+    }
+
+    fn owned_complete(size: u64) -> EntryState<Bytes> {
+        EntryState::Complete {
+            data_location: DataLocation::Owned(size),
+            outboard_location: OutboardLocation::Owned,
+        }
+    }
+
+    #[test]
+    fn export_then_reimport_before_metadata_runs() -> testresult::TestResult<()> {
+        let (dir, paths, db) = setup()?;
         let hash = Hash::new(b"content");
         let owned = paths.data_path(&hash);
         let external = dir.path().join("exported");
         std::fs::write(&owned, b"content")?;
-        let ftx = deletes.begin_write();
-        let tx = db.begin_write()?;
-        let mut tables = Tables::new(&tx, &ftx)?;
-        tables.blobs.insert(
-            hash,
-            EntryState::Complete {
-                data_location: DataLocation::Owned(7),
-                outboard_location: OutboardLocation::NotNeeded,
-            },
-        )?;
-        // Export queues Set; another import writes before the db handles it.
-        std::fs::rename(&owned, &external)?;
-        protect.protect(hash, [BaoFilePart::Data, BaoFilePart::Outboard]);
-        std::fs::write(&owned, b"content")?;
-        let mut protected = HashSet::new();
-        let (reply, _rx) = oneshot::channel();
-        handle_set(
-            Set {
+        let mut state = Bookkeeping::default();
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
+            tables.blobs.insert(
                 hash,
-                state: EntryState::Complete {
-                    data_location: DataLocation::External(vec![external], 7),
-                    outboard_location: OutboardLocation::NotNeeded,
-                },
-                tx: reply,
-                span: Span::none(),
-            },
-            &mut protected,
-            &mut tables,
-        )?;
-        handle_update(
-            Update {
-                hash,
-                state: EntryState::Complete {
+                EntryState::Complete {
                     data_location: DataLocation::Owned(7),
                     outboard_location: OutboardLocation::NotNeeded,
                 },
-                tx: None,
-                span: Span::none(),
-            },
-            &mut protected,
-            &mut tables,
-        )?;
-        assert!(matches!(
-            tables.blobs.get(hash)?.unwrap().value(),
-            EntryState::Complete {
-                data_location: DataLocation::Owned(_),
-                ..
-            }
-        ));
-        drop(tables);
-        tx.commit()?;
-        ftx.commit();
+            )?;
+            // Export queues Set; another import writes before the db handles it.
+            std::fs::rename(&owned, &external)?;
+            std::fs::write(&owned, b"content")?;
+            let (reply, _rx) = oneshot::channel();
+            handle_set(
+                Set {
+                    hash,
+                    state: EntryState::Complete {
+                        data_location: DataLocation::External(vec![external.clone()], 7),
+                        outboard_location: OutboardLocation::NotNeeded,
+                    },
+                    tx: reply,
+                    span: Span::none(),
+                },
+                state,
+                tables,
+            )?;
+            handle_update(
+                Update {
+                    hash,
+                    state: EntryState::Complete {
+                        data_location: DataLocation::Owned(7),
+                        outboard_location: OutboardLocation::NotNeeded,
+                    },
+                    tx: None,
+                    span: Span::none(),
+                },
+                state,
+                tables,
+            )?;
+            Ok(())
+        })?;
         assert!(
-            owned.exists(),
-            "committed metadata still refers to this file"
+            unreferenced
+                .iter()
+                .all(|(_, n)| !n.0.contains(&BaoFilePart::Data)),
+            "committed metadata still refers to this file: {unreferenced:?}"
+        );
+        Ok(())
+    }
+
+    /// A delete is answered once committed, and leaves its files to its entity.
+    #[test]
+    fn a_delete_is_answered_after_the_commit() -> testresult::TestResult<()> {
+        let (_dir, _paths, db) = setup()?;
+        let hash = Hash::new(b"partial");
+        let mut state = Bookkeeping::default();
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
+            handle_update(
+                update(
+                    hash,
+                    EntryState::Partial {
+                        size: Some(100_000),
+                    },
+                ),
+                state,
+                tables,
+            )?;
+            Ok(())
+        })?;
+        assert!(
+            unreferenced.is_empty(),
+            "a new entry leaves no files behind"
+        );
+        let (tx, rx) = oneshot::channel();
+        let oneshot::Receiver::Tokio(mut rx) = rx;
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
+            let entry = tables.blobs.remove(hash)?.expect("an entry").value();
+            state.deleted(hash, Some(&entry), tx);
+            // not before the commit
+            assert!(rx.try_recv().is_err());
+            Ok(())
+        })?;
+        assert!(
+            unreferenced.is_empty(),
+            "the entity deletes the files itself"
+        );
+        assert!(matches!(rx.try_recv(), Ok(Ok(()))));
+        Ok(())
+    }
+
+    /// Deleting an absent entry is answered too, to release its entity.
+    #[test]
+    fn deleting_an_absent_entry_is_confirmed() -> testresult::TestResult<()> {
+        let (_dir, _paths, db) = setup()?;
+        let hash = Hash::new(b"absent");
+        let mut state = Bookkeeping::default();
+        for _ in 0..2 {
+            let (tx, rx) = oneshot::channel();
+            let oneshot::Receiver::Tokio(mut rx) = rx;
+            let unreferenced = write_batch(&db, &mut state, |tables, state| {
+                Actor::delete(
+                    state,
+                    tables,
+                    Delete {
+                        hash,
+                        tx,
+                        span: Span::none(),
+                    },
+                )?;
+                Ok(())
+            })?;
+            assert!(unreferenced.is_empty());
+            assert!(matches!(rx.try_recv(), Ok(Ok(()))));
+        }
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct FailSync {
+        inner: redb::backends::FileBackend,
+        fail: Arc<std::sync::atomic::AtomicBool>,
+        closed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl redb::StorageBackend for FailSync {
+        fn len(&self) -> io::Result<u64> {
+            self.inner.len()
+        }
+        fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+            self.inner.read(offset, out)
+        }
+        fn set_len(&self, len: u64) -> io::Result<()> {
+            self.inner.set_len(len)
+        }
+        fn write(&self, offset: u64, data: &[u8]) -> io::Result<()> {
+            self.inner.write(offset, data)
+        }
+        fn sync_data(&self) -> io::Result<()> {
+            if self.fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(io::Error::other("injected commit sync failure"));
+            }
+            self.inner.sync_data()
+        }
+        fn close(&self) -> io::Result<()> {
+            self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.inner.close()
+        }
+    }
+
+    /// Exercise a real redb commit failure while a delete waits for its answer.
+    /// Cached observers and idle waiters must also stop, and old files must survive.
+    #[tokio::test]
+    async fn failed_commit_aborts_store_without_unlinking() -> testresult::TestResult<()> {
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            time::Duration,
+        };
+
+        use n0_future::StreamExt;
+
+        use crate::store::fs::{self, entity_manager::EntityManagerState};
+
+        let dir = tempfile::tempdir()?;
+        let options = Arc::new(Options::new(dir.path()));
+        std::fs::create_dir_all(&options.path.data_path)?;
+        std::fs::create_dir_all(&options.path.temp_path)?;
+        let db_path = dir.path().join("blobs.db");
+        let fail = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicBool::new(false));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&db_path)?;
+        let db = Database::builder().create_with_backend(FailSync {
+            inner: redb::backends::FileBackend::new(file)?,
+            fail: fail.clone(),
+            closed: closed.clone(),
+        })?;
+        // Initialize the same tables and unclean-run marker as normal startup.
+        let tx = db.begin_write()?;
+        drop(Tables::new(&tx)?);
+        run::record(
+            &mut tx.open_table(META_TABLE)?,
+            &a_run(boot_id::current().as_deref(), false),
+        )?;
+        tx.commit()?;
+
+        let (db_tx, db_rx) = tokio::sync::mpsc::channel(100);
+        let (unreferenced_tx, unreferenced) = tokio::sync::mpsc::unbounded_channel();
+        let metadata = Actor {
+            db: db.into(),
+            cmds: PeekableReceiver::new(db_rx),
+            unreferenced: unreferenced_tx,
+            options: options.batch.clone(),
+            state: Bookkeeping::default(),
+        };
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
+        let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
+        let context = Arc::new(fs::TaskContext {
+            options: options.clone(),
+            db: Db::new(db_tx),
+            internal_cmd_tx: fs_tx.clone(),
+        });
+        let mut actor = fs::Actor {
+            context: context.clone(),
+            cmd_rx,
+            fs_cmd_rx,
+            unreferenced,
+            metadata_task: Some(tokio::spawn(metadata.run())),
+            deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
+            tasks: tokio::task::JoinSet::new(),
+            handles: EntityManagerState::new(context, 16, 32, 2),
+            temp_tags: Default::default(),
+            gc: None,
+            deferred: Default::default(),
+            idle_waiters: Vec::new(),
+            _rt: fs::RtWrapper(None),
+        };
+        struct Worker {
+            closed: Arc<AtomicBool>,
+            stopped: Arc<AtomicBool>,
+        }
+        impl Drop for Worker {
+            fn drop(&mut self) {
+                assert!(
+                    !self.closed.load(Ordering::SeqCst),
+                    "database released before worker cancellation"
+                );
+                self.stopped.store(true, Ordering::SeqCst);
+            }
+        }
+        let stopped = Arc::new(AtomicBool::new(false));
+        let worker = Worker {
+            closed: closed.clone(),
+            stopped: stopped.clone(),
+        };
+        actor.spawn(async move {
+            let _worker = worker;
+            std::future::pending::<()>().await;
+        });
+        let task = tokio::spawn(actor.run());
+        let store = fs::FsStore::new(cmd_tx.into(), fs_tx);
+        let data = fs::tests::test_data(100_000);
+        let hash = store.add_bytes(data.clone()).await?.hash;
+        let other = store.add_slice("cached observer").await?.hash;
+        store.sync_db().await?;
+        let mut observer = Box::pin(store.observe(other).stream().await?);
+        assert!(observer.next().await.unwrap().is_complete());
+        // This waiter cannot complete while the observer keeps its entity busy.
+        let idle_store = store.clone();
+        let idle = tokio::spawn(async move { idle_store.wait_idle().await });
+
+        fail.store(true, Ordering::SeqCst);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            store
+                .blobs()
+                .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                    hashes: vec![hash],
+                    force: true,
+                }),
+        )
+        .await?;
+        assert!(
+            result.is_err(),
+            "failed commit must fail the pending delete"
+        );
+        tokio::time::timeout(Duration::from_secs(5), task).await??;
+        assert!(tokio::time::timeout(Duration::from_secs(5), idle)
+            .await??
+            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), observer.next())
+                .await?
+                .is_none()
+        );
+        assert!(
+            store.get_bytes(other).await.is_err(),
+            "cached reads must stop too"
+        );
+        assert!(
+            store.shutdown().await.is_err(),
+            "failure cannot become a clean shutdown"
+        );
+        assert!(!fail.load(Ordering::SeqCst), "the failure was injected");
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "database was eventually released"
+        );
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "worker must be cancelled before releasing the database"
+        );
+        assert!(
+            options.path.data_path(&hash).exists(),
+            "uncommitted cleanup must not run"
+        );
+        assert!(
+            recorded_run(&db_path)?.is_some(),
+            "unclean marker must survive"
+        );
+        let reopened = fs::FsStore::load(dir.path()).await?;
+        // A failed commit may have committed or rolled back. Any retained
+        // metadata must still refer to readable, intact files.
+        if reopened.has(hash).await? {
+            assert_eq!(reopened.get_bytes(hash).await?, data);
+        }
+        assert_eq!(
+            reopened.get_bytes(other).await?.as_ref(),
+            b"cached observer"
+        );
+        reopened.shutdown().await?;
+        Ok(())
+    }
+
+    /// Completing an entry names the files it no longer needs, and nothing else.
+    #[test]
+    fn completing_names_the_files_no_longer_needed() -> testresult::TestResult<()> {
+        let (_dir, _paths, db) = setup()?;
+        let hash = Hash::new(b"complete");
+        let mut state = Bookkeeping::default();
+        write_batch(&db, &mut state, |tables, state| {
+            handle_update(
+                update(
+                    hash,
+                    EntryState::Partial {
+                        size: Some(100_000),
+                    },
+                ),
+                state,
+                tables,
+            )?;
+            Ok(())
+        })?;
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
+            handle_update(update(hash, owned_complete(100_000)), state, tables)?;
+            Ok(())
+        })?;
+        assert_eq!(unreferenced.len(), 1);
+        let mut parts = unreferenced[0].1 .0.clone();
+        parts.sort();
+        assert_eq!(
+            parts.as_slice(),
+            [BaoFilePart::Sizes, BaoFilePart::Bitfield]
         );
         Ok(())
     }
