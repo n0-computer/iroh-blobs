@@ -324,7 +324,7 @@ use entity_api::{EmParams, EntityApi, EntityCtx, EntityGlobal};
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use metadata::{MetaChannels, MetaTask};
-use options::Options;
+use options::{FsConfig, Options, StoreOptions};
 use tracing::Instrument;
 
 use crate::{
@@ -395,8 +395,8 @@ impl InternalCommand {
 /// Context needed by most tasks
 #[derive(Debug)]
 struct TaskContext {
-    // Store options such as paths and inline thresholds, in an Arc to cheaply share with tasks.
-    pub options: Arc<Options>,
+    // The store's own options: inlining, the temp directory, gc.
+    pub options: Arc<StoreOptions>,
     // Metadata database, basically a mpsc sender with some extra functionality.
     pub db: meta::Db,
     // Handle to send internal commands
@@ -556,7 +556,7 @@ async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
         return Err(cause);
     }
     // No durable state references the files anymore.
-    delete_files(&ctx.global.options.path, &ctx.id, &parts);
+    delete_files(&ctx.config.path, &ctx.id, &parts);
     ctx.state
         .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
     Ok(())
@@ -577,7 +577,7 @@ async fn delete_unreferenced(ctx: &HashContext<'_>, parts: UnreferencedParts) {
         .into_iter()
         .filter(|part| !state.references(*part))
         .collect();
-    delete_files(&ctx.global.options.path, &ctx.id, &parts);
+    delete_files(&ctx.config.path, &ctx.id, &parts);
 }
 
 /// Waits for the deletes of one request, and reports the last error.
@@ -678,6 +678,7 @@ struct Actor<E: EntityApi = FsEntity> {
 struct HashContext<'a> {
     id: Hash,
     global: &'a TaskContext,
+    config: &'a FsConfig,
     state: &'a BaoFileHandle,
 }
 
@@ -690,10 +691,11 @@ struct FsEntity {
 
 impl FsEntity {
     /// The context its code runs in, for one request.
-    fn ctx<'a>(&'a self, global: &'a EntityGlobal<()>) -> HashContext<'a> {
+    fn ctx<'a>(&'a self, global: &'a EntityGlobal<FsConfig>) -> HashContext<'a> {
         HashContext {
             id: self.id,
             global: &global.store,
+            config: &global.config,
             state: &self.handle,
         }
     }
@@ -715,50 +717,55 @@ impl entity_manager::Reset<Hash> for FsEntity {
 }
 
 impl EntityApi for FsEntity {
-    type Config = ();
+    type Config = FsConfig;
 
-    async fn import_bao(&self, global: &EntityGlobal<()>, cmd: ImportBaoMsg) {
+    async fn import_bao(&self, global: &EntityGlobal<FsConfig>, cmd: ImportBaoMsg) {
         self.ctx(global).import_bao(cmd).await
     }
 
-    async fn finish_import(&self, global: &EntityGlobal<()>, cmd: ImportEntryMsg, tt: TempTag) {
+    async fn finish_import(
+        &self,
+        global: &EntityGlobal<FsConfig>,
+        cmd: ImportEntryMsg,
+        tt: TempTag,
+    ) {
         self.ctx(global).finish_import(cmd, tt).await
     }
 
-    async fn observe(&self, global: &EntityGlobal<()>, cmd: ObserveMsg) {
+    async fn observe(&self, global: &EntityGlobal<FsConfig>, cmd: ObserveMsg) {
         self.ctx(global).observe(cmd).await
     }
 
-    async fn export_ranges(&self, global: &EntityGlobal<()>, cmd: ExportRangesMsg) {
+    async fn export_ranges(&self, global: &EntityGlobal<FsConfig>, cmd: ExportRangesMsg) {
         self.ctx(global).export_ranges(cmd).await
     }
 
-    async fn export_bao(&self, global: &EntityGlobal<()>, cmd: ExportBaoMsg) {
+    async fn export_bao(&self, global: &EntityGlobal<FsConfig>, cmd: ExportBaoMsg) {
         self.ctx(global).export_bao(cmd).await
     }
 
-    async fn export_path(&self, global: &EntityGlobal<()>, cmd: ExportPathMsg) {
+    async fn export_path(&self, global: &EntityGlobal<FsConfig>, cmd: ExportPathMsg) {
         self.ctx(global).export_path(cmd).await
     }
 
-    async fn delete(&self, global: &EntityGlobal<()>) -> io::Result<()> {
+    async fn delete(&self, global: &EntityGlobal<FsConfig>) -> io::Result<()> {
         self.ctx(global).delete().await
     }
 
     async fn freeze(
         &self,
-        global: &EntityGlobal<()>,
+        global: &EntityGlobal<FsConfig>,
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     ) {
         self.ctx(global).freeze(ack, release).await
     }
 
-    async fn delete_unreferenced(&self, global: &EntityGlobal<()>, parts: UnreferencedParts) {
+    async fn delete_unreferenced(&self, global: &EntityGlobal<FsConfig>, parts: UnreferencedParts) {
         self.ctx(global).delete_unreferenced(parts).await
     }
 
-    async fn persist(&self, global: &EntityGlobal<()>) {
+    async fn persist(&self, global: &EntityGlobal<FsConfig>) {
         self.ctx(global).persist().await
     }
 }
@@ -855,7 +862,7 @@ impl SyncEntityApi for HashContext<'_> {
 }
 
 impl HashContext<'_> {
-    pub fn options(&self) -> &Arc<Options> {
+    pub fn options(&self) -> &StoreOptions {
         &self.global.options
     }
 }
@@ -1423,20 +1430,12 @@ impl<E: EntityApi> Actor<E> {
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
-        options: Arc<Options>,
+        options: Arc<StoreOptions>,
         meta: impl FnOnce(MetaChannels) -> Result<T>,
         config: E::Config,
     ) -> Result<Self> {
-        trace!(
-            "creating data directory: {}",
-            options.path.data_path.display()
-        );
-        fs::create_dir_all(&options.path.data_path)?;
-        trace!(
-            "creating temp directory: {}",
-            options.path.temp_path.display()
-        );
-        fs::create_dir_all(&options.path.temp_path)?;
+        trace!("creating temp directory: {}", options.temp_path.display());
+        fs::create_dir_all(&options.temp_path)?;
         let (db_send, requests) = tokio::sync::mpsc::channel(100);
         let (unreferenced_send, unreferenced) = tokio::sync::mpsc::unbounded_channel();
         let metadata = meta(MetaChannels {
@@ -1446,7 +1445,7 @@ impl<E: EntityApi> Actor<E> {
         // The metadata store holds its lock now, so no other store is importing
         // into the temp directory. Anything in it is left over from imports that
         // did not complete, for example because the process was killed.
-        remove_all_files(&options.path.temp_path);
+        remove_all_files(&options.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
@@ -1860,9 +1859,9 @@ impl EntityOps for HashContext<'_> {
             else {
                 return false;
             };
-            let path = self.global.options.path.bitfield_path(hash);
+            let path = self.config.path.bitfield_path(hash);
             trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.write_bitfield(&path, self.global.options.syncs_files()) {
+            if let Err(cause) = fs.write_bitfield(&path, self.config.syncs_files()) {
                 error!(
                     "failed to write bitfield for {} at {}: {:?}",
                     hash,
@@ -1911,7 +1910,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
         ..
     } = import_data;
     let options = ctx.options();
-    let sync = options.syncs_files();
+    let sync = ctx.config.syncs_files();
     match &source {
         ImportSource::Memory(data) => {
             debug_assert!(options.is_inlined_data(data.len() as u64));
@@ -1940,7 +1939,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
             }
             // this will always work on any unix, but on windows there might be an issue if the target file is open!
             // possibly open with FILE_SHARE_DELETE on windows?
-            let target = ctx.options().path.data_path(&hash);
+            let target = ctx.config.path.data_path(&hash);
             trace!(
                 "moving temp file to owned data location: {path:?} -> {}",
                 target.display()
@@ -1962,7 +1961,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
                 sync_file(path.as_ref())?;
             }
             // the same caveat as above applies here
-            let target = ctx.options().path.outboard_path(&hash);
+            let target = ctx.config.path.outboard_path(&hash);
             trace!(
                 "moving temp file to owned outboard location: {path:?} -> {}",
                 target.display()
@@ -1980,12 +1979,12 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
         || matches!(outboard_location, OutboardLocation::Owned);
     if sync && moved {
         // A rename survives a crash only once its directory is synced.
-        sync_dir(&options.path.data_path)?;
+        sync_dir(&ctx.config.path.data_path)?;
     }
     let data = match &data_location {
         DataLocation::Inline(data) => MemOrFile::Mem(data.clone()),
         DataLocation::Owned(size) => {
-            let path = ctx.options().path.data_path(&hash);
+            let path = ctx.config.path.data_path(&hash);
             let file = fs::File::open(&path)?;
             MemOrFile::File(FixedSize::new(file, *size))
         }
@@ -2001,7 +2000,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
         OutboardLocation::NotNeeded => MemOrFile::empty(),
         OutboardLocation::Inline(data) => MemOrFile::Mem(data.clone()),
         OutboardLocation::Owned => {
-            let path = ctx.options().path.outboard_path(&hash);
+            let path = ctx.config.path.outboard_path(&hash);
             let file = fs::File::open(&path)?;
             MemOrFile::File(file)
         }
@@ -2151,7 +2150,7 @@ async fn export_path_impl(
     let (data, mut external) = match data_location {
         DataLocation::Inline(data) => (MemOrFile::Mem(data), vec![]),
         DataLocation::Owned(size) => (
-            MemOrFile::File((ctx.options().path.data_path(&cmd.hash), size)),
+            MemOrFile::File((ctx.config.path.data_path(&cmd.hash), size)),
             vec![],
         ),
         DataLocation::External(paths, size) => (
@@ -2314,9 +2313,15 @@ impl FsStore {
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
-        let meta_options = options.clone();
-        let meta = move |channels| meta::redb(db_path, &meta_options, channels);
-        Self::from_parts::<FsEntity, _>(options, meta, ()).await
+        let config = FsConfig::from(&options);
+        trace!(
+            "creating data directory: {}",
+            config.path.data_path.display()
+        );
+        fs::create_dir_all(&config.path.data_path)?;
+        let store_options = StoreOptions::from(&options);
+        let meta = move |channels| meta::redb(db_path, &options, channels);
+        Self::from_parts::<FsEntity, _>(store_options, meta, config).await
     }
 
     /// Starts a store from a metadata store and an entity implementation.
@@ -2325,7 +2330,7 @@ impl FsStore {
     /// metadata store, and returns it running. `config` is shared by all
     /// entities.
     async fn from_parts<E: EntityApi, T: MetaTask>(
-        options: Options,
+        options: StoreOptions,
         meta: impl FnOnce(MetaChannels) -> Result<T> + Send + 'static,
         config: E::Config,
     ) -> Result<FsStore> {
@@ -2479,6 +2484,12 @@ pub mod tests {
         BlobFormat,
     };
 
+    /// The fs entity's config for a store built by hand, with its data directory created.
+    fn fs_config(options: &Options) -> io::Result<FsConfig> {
+        fs::create_dir_all(&options.path.data_path)?;
+        Ok(FsConfig::from(options))
+    }
+
     /// Interesting sizes for testing.
     pub const INTERESTING_SIZES: [usize; 8] = [
         0,               // annoying corner case - always present, handled by the api
@@ -2550,8 +2561,15 @@ pub mod tests {
             let options = Options::new(dir.path());
             let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
             let meta = move |channels| meta::redb(db_path, &meta_options, channels);
-            let mut actor =
-                Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx, Arc::new(options), meta, ()).await?;
+            let mut actor = Actor::<FsEntity>::new(
+                cmd_rx,
+                fs_rx,
+                fs_tx,
+                Arc::new(StoreOptions::from(&options)),
+                meta,
+                fs_config(&options)?,
+            )
+            .await?;
             let mut deletes = actor.deletes.subscribe();
             let hash = Hash::new("held deletion");
             let (ack, frozen) = tokio::sync::oneshot::channel();
@@ -2609,9 +2627,15 @@ pub mod tests {
         let options = Options::new(dir.path());
         let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
         let meta = move |channels| meta::redb(db_path, &meta_options, channels);
-        let mut actor =
-            Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx.clone(), Arc::new(options), meta, ())
-                .await?;
+        let mut actor = Actor::<FsEntity>::new(
+            cmd_rx,
+            fs_rx,
+            fs_tx.clone(),
+            Arc::new(StoreOptions::from(&options)),
+            meta,
+            fs_config(&options)?,
+        )
+        .await?;
         let (idle_tx, idle_rx) = irpc::channel::oneshot::channel();
         actor.idle_waiters.push(idle_tx);
         let (scope, _) = actor.temp_tags.create_scope();
@@ -3513,8 +3537,15 @@ pub mod tests {
         let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
         let meta = move |channels| meta::redb(db_path, &meta_options, channels);
         let options = Arc::new(options);
-        let mut actor =
-            Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx, options.clone(), meta, ()).await?;
+        let mut actor = Actor::<FsEntity>::new(
+            cmd_rx,
+            fs_rx,
+            fs_tx,
+            Arc::new(StoreOptions::from(&*options)),
+            meta,
+            fs_config(&options)?,
+        )
+        .await?;
         // Hold back the notices; metadata and entities run normally.
         let (deliver, delayed) = tokio::sync::mpsc::unbounded_channel();
         let mut notices = std::mem::replace(&mut actor.unreferenced, delayed);

@@ -33,7 +33,7 @@ use ref_cast::RefCast;
 use smallvec::SmallVec;
 use tracing::{instrument, trace};
 
-use super::{meta::raw_outboard_size, options::Options, TaskContext};
+use super::{meta::raw_outboard_size, options::StoreOptions, TaskContext};
 use crate::{
     api::{
         blobs::{AddProgressItem, ImportMode},
@@ -305,7 +305,7 @@ async fn import_byte_stream_impl(
     cmd: ImportByteStreamRequest,
     tx: &mut mpsc::Sender<AddProgressItem>,
     stream: impl Stream<Item = io::Result<Bytes>> + Unpin,
-    options: Arc<Options>,
+    options: Arc<StoreOptions>,
 ) -> io::Result<ImportEntry> {
     let ImportByteStreamRequest { format, scope } = cmd;
     let import_source = get_import_source(stream, tx, &options).await?;
@@ -317,7 +317,7 @@ async fn import_byte_stream_impl(
 async fn get_import_source(
     stream: impl Stream<Item = io::Result<Bytes>> + Unpin,
     tx: &mut mpsc::Sender<AddProgressItem>,
-    options: &Options,
+    options: &StoreOptions,
 ) -> io::Result<ImportSource> {
     let mut stream = stream.fuse();
     let mut peek = SmallVec::<[_; 2]>::new();
@@ -346,7 +346,7 @@ async fn get_import_source(
         let chunk = chunk?;
         size += chunk.len() as u64;
         if size > options.inline.max_data_inlined {
-            let temp_path = TempPath::new(options.path.temp_file_name());
+            let temp_path = TempPath::new(options.temp_file_name());
             trace!("writing to temp file: {:?}", temp_path);
             let mut file = fs::OpenOptions::new()
                 .read(true)
@@ -400,7 +400,7 @@ async fn compute_outboard(
     source: ImportSource,
     format: BlobFormat,
     scope: Scope,
-    options: Arc<Options>,
+    options: Arc<StoreOptions>,
     tx: &mut mpsc::Sender<AddProgressItem>,
 ) -> io::Result<ImportEntry> {
     let size = source.size();
@@ -413,7 +413,7 @@ async fn compute_outboard(
     let (hash, outboard) = if outboard_size > options.inline.max_outboard_inlined {
         // outboard will eventually be stored as a file, so compute it directly to a file
         // we don't know the hash yet, so we need to create a temp file
-        let outboard_path = TempPath::new(options.path.temp_file_name());
+        let outboard_path = TempPath::new(options.temp_file_name());
         trace!("Creating outboard file in {:?}", outboard_path);
         // we don't need to read from this file!
         let mut outboard_file = File::create(&outboard_path)?;
@@ -462,7 +462,7 @@ pub async fn import_path(mut cmd: ImportPathMsg, context: Arc<TaskContext>) {
 async fn import_path_impl(
     cmd: ImportPathRequest,
     tx: &mut mpsc::Sender<AddProgressItem>,
-    options: Arc<Options>,
+    options: Arc<StoreOptions>,
 ) -> io::Result<ImportEntry> {
     let ImportPathRequest {
         path,
@@ -496,7 +496,7 @@ async fn import_path_impl(
         let file = OpenOptions::new().read(true).open(&path)?;
         ImportSource::External(path, file, size)
     } else {
-        let temp_path = TempPath::new(options.path.temp_file_name());
+        let temp_path = TempPath::new(options.temp_file_name());
         // todo: if reflink works, we don't need progress.
         // But if it does not, it might take a while and we won't get progress.
         let res = reflink_or_copy_with_progress(&path, &temp_path, size, tx).await?;
@@ -520,7 +520,7 @@ mod tests {
     use super::*;
     use crate::{
         api::proto::BoxedByteStream,
-        store::fs::options::{CrashConsistency, InlineOptions, PathOptions},
+        store::fs::options::{CrashConsistency, InlineOptions, Options, PathOptions},
     };
 
     async fn drain<T: RpcMessage>(mut recv: mpsc::Receiver<T>) -> TestResult<Vec<T>> {
@@ -547,7 +547,10 @@ mod tests {
             .map(move |i| data.slice(i..std::cmp::min(i + chunk_size, data.len())))
     }
 
-    async fn test_import_byte_stream_task(data: Bytes, options: Arc<Options>) -> TestResult<()> {
+    async fn test_import_byte_stream_task(
+        data: Bytes,
+        options: Arc<StoreOptions>,
+    ) -> TestResult<()> {
         let stream: BoxedByteStream =
             Box::pin(stream::iter(chunk_bytes(data.clone(), 999).map(Ok)));
         let expected_outboard = PreOrderMemOutboard::create(data.as_ref(), IROH_BLOCK_SIZE);
@@ -576,8 +579,8 @@ mod tests {
         Ok(())
     }
 
-    async fn test_import_file_task(data: Bytes, options: Arc<Options>) -> TestResult<()> {
-        let path = options.path.temp_file_name();
+    async fn test_import_file_task(data: Bytes, options: Arc<StoreOptions>) -> TestResult<()> {
+        let path = options.temp_file_name();
         std::fs::write(&path, &data)?;
         let expected_outboard = PreOrderMemOutboard::create(data.as_ref(), IROH_BLOCK_SIZE);
         // make the channel absurdly large, so we don't have to drain it
@@ -609,7 +612,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         std::fs::create_dir_all(dir.path().join("data"))?;
         std::fs::create_dir_all(dir.path().join("temp"))?;
-        let options = Arc::new(Options {
+        let options = Arc::new(StoreOptions::from(&Options {
             inline: InlineOptions {
                 max_data_inlined: 1024 * 16,
                 max_outboard_inlined: 1024 * 16,
@@ -618,7 +621,7 @@ mod tests {
             path: PathOptions::new(dir.path()),
             gc: None,
             crash_consistency: CrashConsistency::PowerLoss,
-        });
+        }));
         // test different sizes, below, at, and above the inline threshold
         let sizes = [
             0,               // empty, no outboard
@@ -642,8 +645,8 @@ mod tests {
     #[tokio::test]
     async fn cancelled_import_removes_temp_file() -> TestResult<()> {
         let dir = tempfile::tempdir()?;
-        let options = Arc::new(Options::new(dir.path()));
-        std::fs::create_dir_all(&options.path.temp_path)?;
+        let options = Arc::new(StoreOptions::from(&Options::new(dir.path())));
+        std::fs::create_dir_all(&options.temp_path)?;
         let (mut tx, rx) = mpsc::channel(16);
         drop(rx);
         // a single chunk above the inline limit goes to a temp file before any progress
@@ -655,7 +658,7 @@ mod tests {
         let res =
             import_byte_stream_impl(cmd, &mut tx, stream::iter([Ok(data)]), options.clone()).await;
         assert!(res.is_err());
-        assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
+        assert_eq!(std::fs::read_dir(&options.temp_path)?.count(), 0);
         Ok(())
     }
 }

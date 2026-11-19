@@ -1256,7 +1256,7 @@ mod tests {
     use super::{
         super::{
             file_deletes::BaoFilePart,
-            options::{CrashConsistency, Options, PathOptions},
+            options::{CrashConsistency, FsConfig, Options, PathOptions, StoreOptions},
         },
         *,
     };
@@ -1692,7 +1692,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
         let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
         let context = Arc::new(fs::TaskContext {
-            options: options.clone(),
+            options: Arc::new(StoreOptions::from(&*options)),
             db: Db::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
         });
@@ -1709,7 +1709,7 @@ mod tests {
             handles: EntityManagerState::new(
                 Arc::new(fs::EntityGlobal {
                     store: context,
-                    config: (),
+                    config: FsConfig::from(&*options),
                 }),
                 16,
                 32,

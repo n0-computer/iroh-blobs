@@ -26,7 +26,7 @@ use tracing::{debug, info, trace};
 use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     file_deletes::BaoFilePart,
-    options::Options,
+    options::{FsConfig, StoreOptions},
 };
 use crate::{
     api::blobs::Bitfield,
@@ -193,13 +193,13 @@ impl PartialFileStorage {
         Ok(())
     }
 
-    fn load(hash: &Hash, options: &Options) -> io::Result<Self> {
-        let paths = &options.path;
+    fn load(hash: &Hash, config: &FsConfig) -> io::Result<Self> {
+        let paths = &config.path;
         let bitfield_path = paths.bitfield_path(hash);
         let data = create_read_write(paths.data_path(hash))?;
         let outboard = create_read_write(paths.outboard_path(hash))?;
         let sizes = create_read_write(paths.sizes_path(hash))?;
-        let bitfield = match read_checksummed_and_truncate(&bitfield_path, options.syncs_files()) {
+        let bitfield = match read_checksummed_and_truncate(&bitfield_path, config.syncs_files()) {
             Ok(bitfield) => bitfield,
             Err(cause) => {
                 trace!(
@@ -237,14 +237,15 @@ impl PartialFileStorage {
     fn into_complete(
         self,
         size: u64,
-        options: &Options,
+        options: &StoreOptions,
+        config: &FsConfig,
     ) -> io::Result<(CompleteStorage, EntryState<Bytes>)> {
         let outboard_size = raw_outboard_size(size);
         let (data, data_location) = if options.is_inlined_data(size) {
             let data = read_to_end(&self.data, 0, size as usize)?;
             (MemOrFile::Mem(data.clone()), DataLocation::Inline(data))
         } else {
-            if options.syncs_files() {
+            if config.syncs_files() {
                 self.data.sync_all()?;
             }
             (
@@ -264,7 +265,7 @@ impl PartialFileStorage {
                 )
             }
         } else {
-            if options.syncs_files() {
+            if config.syncs_files() {
                 self.outboard.sync_all()?;
             }
             (MemOrFile::File(self.outboard), OutboardLocation::Owned)
@@ -407,10 +408,10 @@ impl PartialMemStorage {
             let data: Bytes = self.data.to_vec().into();
             (MemOrFile::Mem(data.clone()), DataLocation::Inline(data))
         } else {
-            let data_path = options.path.data_path(hash);
+            let data_path = ctx.config.path.data_path(hash);
             let mut data_file = create_read_write(&data_path)?;
             self.data.persist(&mut data_file)?;
-            if options.syncs_files() {
+            if ctx.config.syncs_files() {
                 data_file.sync_all()?;
             }
             (
@@ -430,10 +431,10 @@ impl PartialMemStorage {
                 (MemOrFile::empty(), OutboardLocation::NotNeeded)
             }
         } else {
-            let outboard_path = ctx.global.options.path.outboard_path(hash);
+            let outboard_path = ctx.config.path.outboard_path(hash);
             let mut outboard_file = create_read_write(&outboard_path)?;
             self.outboard.persist(&mut outboard_file)?;
-            if options.syncs_files() {
+            if ctx.config.syncs_files() {
                 outboard_file.sync_all()?;
             }
             let outboard_location = if outboard_size == 0 {
@@ -444,8 +445,8 @@ impl PartialMemStorage {
             (MemOrFile::File(outboard_file), outboard_location)
         };
         let created = matches!(data, MemOrFile::File(_)) || matches!(outboard, MemOrFile::File(_));
-        if options.syncs_files() && created {
-            super::sync_dir(&options.path.data_path)?;
+        if ctx.config.syncs_files() && created {
+            super::sync_dir(&ctx.config.path.data_path)?;
         }
         Ok((
             CompleteStorage { data, outboard },
@@ -485,7 +486,7 @@ impl Settled {
                 let new = changes.new_state();
                 if new.complete {
                     let size = new.validated_size.unwrap();
-                    let (cs, update) = fs.into_complete(size, &ctx.global.options)?;
+                    let (cs, update) = fs.into_complete(size, &ctx.global.options, ctx.config)?;
                     (cs.into(), Some(update))
                 } else if changes.was_validated() {
                     // we are still partial, but now we know the size
@@ -558,7 +559,7 @@ fn write_new_entry(
             let new = changes.new_state();
             if new.complete {
                 let size = new.validated_size.unwrap();
-                let (cs, update) = fs.into_complete(size, &ctx.global.options)?;
+                let (cs, update) = fs.into_complete(size, &ctx.global.options, ctx.config)?;
                 (cs.into(), Some(update))
             } else {
                 let update = EntryState::Partial {
@@ -693,7 +694,6 @@ impl ReadAt for OutboardReader {
 impl Settled {
     pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext<'_>) -> io::Result<Self> {
         let hash = &ctx.id;
-        let options = &ctx.global.options;
         Ok(match state {
             Some(EntryState::Complete {
                 data_location,
@@ -702,7 +702,7 @@ impl Settled {
                 let data = match data_location {
                     DataLocation::Inline(data) => MemOrFile::Mem(data),
                     DataLocation::Owned(size) => {
-                        let path = options.path.data_path(hash);
+                        let path = ctx.config.path.data_path(hash);
                         let file = std::fs::File::open(&path)?;
                         MemOrFile::File(FixedSize::new(file, size))
                     }
@@ -715,7 +715,7 @@ impl Settled {
                     OutboardLocation::NotNeeded => MemOrFile::empty(),
                     OutboardLocation::Inline(data) => MemOrFile::Mem(data),
                     OutboardLocation::Owned => {
-                        let path = options.path.outboard_path(hash);
+                        let path = ctx.config.path.outboard_path(hash);
                         let file = std::fs::File::open(&path)?;
                         MemOrFile::File(file)
                     }
@@ -730,11 +730,11 @@ impl Settled {
     /// Create a new bao file handle with a partial file.
     pub(super) async fn new_partial_file(ctx: &HashContext<'_>) -> io::Result<Self> {
         let hash = &ctx.id;
-        let options = ctx.global.options.clone();
-        let storage = PartialFileStorage::load(hash, &options)?;
+        let storage = PartialFileStorage::load(hash, ctx.config)?;
         Ok(if storage.bitfield.is_complete() {
             let size = storage.bitfield.size;
-            let (storage, entry_state) = storage.into_complete(size, &options)?;
+            let (storage, entry_state) =
+                storage.into_complete(size, &ctx.global.options, ctx.config)?;
             debug!("File was reconstructed as complete");
             ctx.meta().set(entry_state).await?;
             storage.into()
@@ -783,8 +783,8 @@ impl BaoFileHandle {
 impl PartialMemStorage {
     /// Persist the batch to disk.
     fn persist(self, ctx: &HashContext<'_>) -> io::Result<PartialFileStorage> {
-        let options = &ctx.global.options.path;
-        let sync = ctx.global.options.syncs_files();
+        let options = &ctx.config.path;
+        let sync = ctx.config.syncs_files();
         let hash = &ctx.id;
         let mut data = create_read_write(options.data_path(hash))?;
         let mut outboard = create_read_write(options.outboard_path(hash))?;

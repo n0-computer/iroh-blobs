@@ -39,8 +39,6 @@ pub(super) struct EntityGlobal<C> {
     /// The store: options, and the client of the metadata store.
     pub store: Arc<TaskContext>,
     /// The implementation's own configuration.
-    // Not read by the fs entity, whose configuration is `()`.
-    #[allow(dead_code)]
     pub config: C,
 }
 

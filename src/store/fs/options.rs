@@ -188,3 +188,76 @@ impl Options {
         self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
     }
 }
+
+/// The part of [`Options`] the store itself uses.
+///
+/// The rest goes to the parts the store is built from: the fs entity gets its
+/// paths and sync mode as [`FsConfig`], and the redb metadata store gets the
+/// options it needs when it is created.
+#[derive(Debug, Clone)]
+pub(crate) struct StoreOptions {
+    /// Inlining, which every entity implementation shares.
+    pub inline: InlineOptions,
+    /// Where imports stage their files.
+    pub temp_path: PathBuf,
+    /// Gc configuration.
+    pub gc: Option<GcConfig>,
+}
+
+impl StoreOptions {
+    /// Check if the data will be inlined, based on the size of the data.
+    pub fn is_inlined_data(&self, data_size: u64) -> bool {
+        data_size <= self.inline.max_data_inlined
+    }
+
+    /// Check if the outboard will be inlined, based on the size of the *outboard*.
+    pub fn is_inlined_outboard(&self, outboard_size: u64) -> bool {
+        outboard_size <= self.inline.max_outboard_inlined
+    }
+
+    /// Check if both the data and outboard will be inlined, based on the size of the data.
+    pub fn is_inlined_all(&self, data_size: u64) -> bool {
+        let outboard_size = raw_outboard_size(data_size);
+        self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
+    }
+
+    /// A new, unique file name in the temp directory.
+    pub fn temp_file_name(&self) -> PathBuf {
+        self.temp_path.join(temp_name())
+    }
+}
+
+impl From<&Options> for StoreOptions {
+    fn from(options: &Options) -> Self {
+        Self {
+            inline: options.inline.clone(),
+            temp_path: options.path.temp_path.clone(),
+            gc: options.gc.clone(),
+        }
+    }
+}
+
+/// What the fs entity needs: where its files live, and whether to sync them.
+#[derive(Debug, Clone)]
+pub(crate) struct FsConfig {
+    /// Where the entries' files live.
+    pub path: PathOptions,
+    /// What kind of crash the store stays consistent through.
+    pub crash_consistency: CrashConsistency,
+}
+
+impl FsConfig {
+    /// True if files must reach the disk before metadata that depends on them is recorded.
+    pub fn syncs_files(&self) -> bool {
+        self.crash_consistency == CrashConsistency::PowerLoss
+    }
+}
+
+impl From<&Options> for FsConfig {
+    fn from(options: &Options) -> Self {
+        Self {
+            path: options.path.clone(),
+            crash_consistency: options.crash_consistency,
+        }
+    }
+}
