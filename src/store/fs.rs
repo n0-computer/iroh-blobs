@@ -72,11 +72,17 @@
 //! entity may use it again, since its state is never behind its entry. So the
 //! main actor hands the parts to the hash's entity, into its unbounded inbox,
 //! also while it shuts down, since its shutdown may write the bitfield. If
-//! there is no entity, one is woken for this. The entity checks each part
-//! against its own state, and only unlinks those it does not use. A woken
-//! entity is not loaded, so it references none of its files and unlinks all
-//! the parts. That keeps all file IO in entities, and waking one is cheap next
-//! to an unlink.
+//! there is no entity, one is woken for this, which keeps all file IO in
+//! entities. The entity checks each part against its own state, and only
+//! unlinks those it does not use.
+//!
+//! A notice is only as recent as its commit. By the time it arrives, the entry
+//! may have been deleted and created again, with new files, and its entity
+//! unloaded. An entity that is not loaded, like one woken for the notice,
+//! knows nothing about its files, so it first checks the parts against the
+//! current entry. The lookup is an `.await`, so it checks its state again after
+//! it: if the entity is still not loaded, nothing wrote meanwhile, and the
+//! entry is current.
 //!
 //! At shutdown, the main actor hands the parts of the last batch to the
 //! entities before they shut down. Parts that arrive after that stay, as after
@@ -302,7 +308,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, UnreferencedParts, ALL_PARTS};
+use file_deletes::{delete_files, referenced_parts, UnreferencedParts, ALL_PARTS};
 mod boot_id;
 mod entry_state;
 mod file_deletes;
@@ -563,24 +569,37 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     Ok(())
 }
 
-/// Deletes the parts a committed batch stopped referencing, unless the entity still uses them.
+/// Deletes the parts a committed batch stopped referencing, unless the entry still uses them.
 ///
-/// This must not load the entity: it is woken just for this, and loading would
-/// cost a metadata round trip and opening files. Not loaded, it references
-/// none of its files, so it deletes all the parts.
+/// The notice is only as recent as its commit: by the time it arrives, the
+/// entry may have been deleted and created again, and its entity unloaded. A
+/// loaded entity checks the parts against its own state, which is never behind
+/// its entry. An entity that is not loaded knows nothing about its files, so it
+/// checks them against the current entry, which costs a metadata lookup but
+/// opens no files.
 async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
+    let mut parts = parts.0;
     wait_writable(ctx).await;
-    // The committed state no longer references these parts, but this entity's
-    // state, which is never behind its entry, may use them again. Check each
-    // one against it before deleting.
-    let parts: Vec<_> = {
-        let state = ctx.state.borrow();
-        parts
-            .0
-            .into_iter()
-            .filter(|part| !state.references(*part))
-            .collect()
-    };
+    if matches!(ctx.state.borrow().storage, BaoFileStorage::Initial) {
+        let entry = match ctx.meta().get().await {
+            Ok(entry) => entry,
+            Err(cause) => {
+                warn!(
+                    "{}: no entry to check unreferenced parts against: {cause}",
+                    ctx.id
+                );
+                return;
+            }
+        };
+        let referenced = referenced_parts(entry.as_ref());
+        parts.retain(|part| !referenced.contains(part));
+        // Other tasks ran during the lookup, and may have loaded the entity and
+        // written files. If it is still not loaded, the entry is current, since
+        // only a loaded entity writes. Otherwise its state decides below.
+        wait_writable(ctx).await;
+    }
+    let state = ctx.state.borrow();
+    parts.retain(|part| !state.references(*part));
     delete_files(&ctx.global.options.path, &ctx.id, &parts);
 }
 
@@ -1259,9 +1278,8 @@ impl Actor {
 
     /// Hands unreferenced parts to the hash's entity, waking it if there is none.
     ///
-    /// All file IO happens in entities. Waking one is cheap next to the unlink
-    /// it does: `delete_unreferenced` does not load, and an entity that was not
-    /// loaded references none of its files, so it deletes all the parts.
+    /// All file IO happens in entities. A woken entity checks the parts against
+    /// the current entry, without loading.
     async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
         trace!("{} {parts:?}", hash.fmt_short());
         // Queued even while the entity is shutting down. The entity checks
@@ -1619,9 +1637,10 @@ trait EntityApi {
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     );
-    /// Delete the parts a committed batch stopped referencing, after checking each against the entity's own state.
+    /// Delete the parts a committed batch stopped referencing, after checking each against the current state.
     ///
-    /// The entity may be woken just for this, so this must not load it.
+    /// The notice may be stale. If the entity is not loaded, the current state
+    /// is the entry, and the entity must look it up before deleting.
     async fn delete_unreferenced(&self, parts: UnreferencedParts);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);
@@ -3408,6 +3427,75 @@ pub mod tests {
         let rest = tokio::time::timeout(Duration::from_secs(5), obs.collect::<Vec<_>>()).await?;
         assert!(rest.is_empty(), "the observer ends instead of seeing less");
         store.shutdown().await?;
+        Ok(())
+    }
+
+    /// Unreferenced parts that arrive after the entry was recreated and its entity unloaded do not delete the new files.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_stale_unreferenced_parts_keep_recreated_files() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
+        let mut options = Options::new(dir.path());
+        options.inline.max_data_inlined = 64 * 1024;
+        let options = Arc::new(options);
+        let mut actor = Actor::new(
+            dir.path().join("blobs.db"),
+            cmd_rx,
+            fs_rx,
+            fs_tx,
+            options.clone(),
+        )
+        .await?;
+        // Hold back the notices; metadata and entities run normally.
+        let (deliver, delayed) = tokio::sync::mpsc::unbounded_channel();
+        let mut notices = std::mem::replace(&mut actor.unreferenced, delayed);
+        let actor_task = tokio::spawn(actor.run());
+        let store = Store::from_client(cmd_tx);
+        let path = &options.path;
+        // Two chunk groups: partial on disk, inlined once complete. Whole
+        // groups, so the partial entry can be exported.
+        let data = test_data(32 * 1024);
+        let half = ChunkRanges::from(..ChunkNum(16));
+        let rest = ChunkRanges::from(ChunkNum(16)..);
+        let (hash, half_bao) = create_n0_bao(&data, &half)?;
+        let (_, rest_bao) = create_n0_bao(&data, &rest)?;
+        store
+            .import_bao_bytes(hash, half.clone(), half_bao.clone())
+            .await?;
+        store.sync_db().await?;
+        store.import_bao_bytes(hash, rest, rest_bao).await?;
+        store.sync_db().await?;
+        // Partial to complete and inline: the data file is no longer referenced.
+        let notice = notices.recv().await.expect("notice");
+        assert_eq!(notice.0, hash);
+        assert!(notice.1 .0.contains(&file_deletes::BaoFilePart::Data));
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        // Partial again, with a new data file, and no entity in memory.
+        store
+            .import_bao_bytes(hash, half.clone(), half_bao.clone())
+            .await?;
+        store.sync_db().await?;
+        store.wait_idle().await?;
+        assert!(path.data_path(&hash).exists());
+        // The notice from before the delete arrives now.
+        deliver.send(notice)?;
+        store.wait_idle().await?;
+        assert!(
+            path.data_path(&hash).exists(),
+            "a stale notice deleted the data of the recreated entry"
+        );
+        let exported = store.export_bao(hash, half).bao_to_vec().await?;
+        assert_eq!(exported, half_bao);
+        store.shutdown().await?;
+        actor_task.await?;
         Ok(())
     }
 
