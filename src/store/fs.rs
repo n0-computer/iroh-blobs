@@ -93,16 +93,19 @@
 //! is not forced skips content with a current or retained temp tag; that check
 //! happens in the main actor, before the fan-out. The entity:
 //!
-//! 1. Starts a new generation of the entry, which ends observers, and
-//!    switches to `Deleting`. The cached state is dropped: readers see no
-//!    entry, and changes wait from here on.
+//! 1. Notes the files its own state references, which may not be in the entry
+//!    yet. Not loaded, it wrote none. Then it starts a new generation of the
+//!    entry, which ends observers, and switches to `Deleting`. The cached state
+//!    is dropped: readers see no entry, and changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
 //! 3. Waits for the answer, which comes once the delete is committed, even if
-//!    there was no entry. Waiting keeps the entity alive, so it cannot unload
-//!    and come back with new files that the unlink would take.
-//! 4. Unlinks every file, also those its entry did not reference yet, and
-//!    switches to `NonExisting`. Waiting writes continue on an empty entry: a
+//!    there was no entry, with the files the entry referenced. Waiting keeps
+//!    the entity alive, so it cannot unload and come back with new files that
+//!    the unlink would take.
+//! 4. Unlinks the files of both, so an inline entry costs no unlink, and
+//!    switches to `NonExisting`. Files nothing references, left by a crash,
+//!    stay. Waiting writes continue on an empty entry: a
 //!    running download keeps going with the ranges that arrive from then on.
 //!
 //! The main actor answers `DeleteBlobs` once every entity is done, after its
@@ -541,26 +544,45 @@ async fn load_entity(ctx: &HashContext) {
 
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
+///
+/// Unlinks only the files the entry referenced, which the metadata reports,
+/// and those the entity's own state references, which may not be in the entry
+/// yet. An entity that is not loaded wrote none. So an inline entry costs no
+/// unlink at all.
 async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     wait_writable(ctx).await;
+    let mut parts = BaoFileParts::new();
     // A new generation ends observers, even if they next wake only after this
     // hash was re-imported.
     ctx.state.send_modify(|state| {
+        if !matches!(state.storage, BaoFileStorage::Initial) {
+            parts = ALL_PARTS
+                .into_iter()
+                .filter(|part| state.storage.references(*part))
+                .collect();
+        }
         state.generation += 1;
         state.storage = BaoFileStorage::Deleting;
     });
     // Answered once the delete is committed.
-    if let Err(cause) = ctx.meta().delete().await {
-        // Metadata failure aborts the store. A command racing a graceful
-        // shutdown can also be rejected, without a failure to trigger abort.
-        // Release waiters with an error instead of restoring the old state.
-        ctx.state
-            .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
-        return Err(cause);
+    let referenced = match ctx.meta().delete().await {
+        Ok(referenced) => referenced,
+        Err(cause) => {
+            // Metadata failure aborts the store. A command racing a graceful
+            // shutdown can also be rejected, without a failure to trigger abort.
+            // Release waiters with an error instead of restoring the old state.
+            ctx.state
+                .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
+            return Err(cause);
+        }
+    };
+    for part in referenced {
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
     }
-    // No durable state references the files anymore. Unlink every one, since
-    // the entity may have written files its entry did not reference yet.
-    delete_files(&ctx.global.options.path, &ctx.id, &ALL_PARTS);
+    // No durable state references the files anymore.
+    delete_files(&ctx.global.options.path, &ctx.id, &parts);
     ctx.state
         .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
     Ok(())
@@ -3478,6 +3500,32 @@ pub mod tests {
         Ok(())
     }
 
+    /// Deleting an entry whose entity is not loaded removes the files the entry referenced.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_delete_unloaded_entry_removes_files() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let options = Options::new(dir.path());
+        let store = FsStore::load_with_opts(dir.path().join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        // 1 MiB: an owned data file and an inlined outboard
+        let data = test_data(1024 * 1024);
+        let hash = store.add_bytes(data).await?.hash;
+        store.sync_db().await?;
+        store.wait_idle().await?;
+        assert!(path.data_path(&hash).exists());
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        assert!(!path.data_path(&hash).exists());
+        store.shutdown().await?;
+        Ok(())
+    }
+
     /// No metadata row is still a completed delete, including observer teardown.
     #[tokio::test]
     async fn test_delete_absent_entry_completes_and_can_be_reimported() -> TestResult<()> {
@@ -3488,14 +3536,11 @@ pub mod tests {
         let hash = Hash::new(&data);
         let mut observer = Box::pin(store.observe(hash).stream().await?);
         assert!(observer.next().await.is_some());
-        // A file left by an interrupted import need not have a metadata row.
-        std::fs::write(options.path.data_path(&hash), b"orphan")?;
         tokio::time::timeout(
             Duration::from_secs(5),
             store.blobs().delete(vec![hash, hash]),
         )
         .await??;
-        assert!(!options.path.data_path(&hash).exists());
         assert!(
             tokio::time::timeout(Duration::from_secs(5), observer.next())
                 .await?
