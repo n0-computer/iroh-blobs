@@ -395,7 +395,10 @@ impl fmt::Debug for Settled {
 impl PartialMemStorage {
     /// Converts this storage into a complete storage, using the given hash for
     /// path names and the given options for decisions about inlining.
-    fn into_complete(self, ctx: &HashContext) -> io::Result<(CompleteStorage, EntryState<Bytes>)> {
+    fn into_complete(
+        self,
+        ctx: &HashContext<'_>,
+    ) -> io::Result<(CompleteStorage, EntryState<Bytes>)> {
         let options = &ctx.global.options;
         let hash = &ctx.id;
         let size = self.current_size();
@@ -468,7 +471,7 @@ impl Settled {
         self,
         batch: &[BaoContentItem],
         bitfield: &Bitfield,
-        ctx: &HashContext,
+        ctx: &HashContext<'_>,
     ) -> io::Result<(Self, Option<EntryState<bytes::Bytes>>)> {
         Ok(match self {
             // A new entry starts in memory, but never stays there: it leaves
@@ -524,7 +527,7 @@ fn write_new_entry(
     mut ms: PartialMemStorage,
     batch: &[BaoContentItem],
     bitfield: &Bitfield,
-    ctx: &HashContext,
+    ctx: &HashContext<'_>,
 ) -> io::Result<(Settled, Option<EntryState<bytes::Bytes>>)> {
     // check if we need to switch to file mode, otherwise write to memory
     Ok(
@@ -688,7 +691,7 @@ impl ReadAt for OutboardReader {
 }
 
 impl Settled {
-    pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext) -> io::Result<Self> {
+    pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext<'_>) -> io::Result<Self> {
         let hash = &ctx.id;
         let options = &ctx.global.options;
         Ok(match state {
@@ -725,7 +728,7 @@ impl Settled {
     }
 
     /// Create a new bao file handle with a partial file.
-    pub(super) async fn new_partial_file(ctx: &HashContext) -> io::Result<Self> {
+    pub(super) async fn new_partial_file(ctx: &HashContext<'_>) -> io::Result<Self> {
         let hash = &ctx.id;
         let options = ctx.global.options.clone();
         let storage = PartialFileStorage::load(hash, &options)?;
@@ -779,7 +782,7 @@ impl BaoFileHandle {
 
 impl PartialMemStorage {
     /// Persist the batch to disk.
-    fn persist(self, ctx: &HashContext) -> io::Result<PartialFileStorage> {
+    fn persist(self, ctx: &HashContext<'_>) -> io::Result<PartialFileStorage> {
         let options = &ctx.global.options.path;
         let sync = ctx.global.options.syncs_files();
         let hash = &ctx.id;

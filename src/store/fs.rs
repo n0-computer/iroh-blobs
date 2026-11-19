@@ -416,7 +416,7 @@ impl TaskContext {
 ///
 /// Loading may create files, and deleting resets the state, so both must be
 /// done before a task may look at the state or touch files.
-async fn wait_settled(ctx: &HashContext) {
+async fn wait_settled(ctx: &HashContext<'_>) {
     // Checking and subscribing is one synchronous step, so no change can slip
     // in between: tasks of an entity only interleave at awaits.
     while matches!(
@@ -428,7 +428,7 @@ async fn wait_settled(ctx: &HashContext) {
 }
 
 /// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
-async fn wait_writable(ctx: &HashContext) {
+async fn wait_writable(ctx: &HashContext<'_>) {
     loop {
         let mut changes = ctx.state.0.subscribe();
         if !matches!(
@@ -449,7 +449,7 @@ async fn wait_writable(ctx: &HashContext) {
 /// freeze. If the task is dropped instead, the entity is shutting down, and
 /// `persist` looks through the freeze.
 async fn freeze_entry(
-    ctx: &HashContext,
+    ctx: &HashContext<'_>,
     ack: tokio::sync::oneshot::Sender<()>,
     mut release: tokio::sync::watch::Receiver<()>,
 ) {
@@ -478,7 +478,7 @@ async fn freeze_entry(
     unfreeze_entry(ctx);
 }
 
-fn unfreeze_entry(ctx: &HashContext) {
+fn unfreeze_entry(ctx: &HashContext<'_>) {
     ctx.state.send_if_modified(|state| {
         if !matches!(state.storage, BaoFileStorage::ReadOnly(_)) {
             return false;
@@ -492,7 +492,7 @@ fn unfreeze_entry(ctx: &HashContext) {
 }
 
 /// Loads the entity's state from the metadata, unless it is loaded already.
-async fn load_entity(ctx: &HashContext) {
+async fn load_entity(ctx: &HashContext<'_>) {
     wait_settled(ctx).await;
     let mut load = false;
     ctx.state.send_if_modified(|guard| {
@@ -528,7 +528,7 @@ async fn load_entity(ctx: &HashContext) {
 
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
-async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
+async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
     // Loaded, the entity's state knows all its files: those of its entry, and
     // those it wrote that the entry does not reference yet.
     ctx.load().await;
@@ -568,7 +568,7 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
 /// entry may have been deleted and created again, and its entity unloaded. So
 /// the parts are checked against the loaded state, which is never behind the
 /// entry. An entity woken just for this loads first.
-async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
+async fn delete_unreferenced(ctx: &HashContext<'_>, parts: UnreferencedParts) {
     ctx.load().await;
     wait_writable(ctx).await;
     let state = ctx.state.borrow();
@@ -674,11 +674,11 @@ struct Actor<E: EntityApi = FsEntity> {
 }
 
 /// What the fs entity's code works on: the hash, the store, and the entity's state.
-#[derive(Debug, Clone)]
-struct HashContext {
+#[derive(Debug, Clone, Copy)]
+struct HashContext<'a> {
     id: Hash,
-    global: Arc<TaskContext>,
-    state: BaoFileHandle,
+    global: &'a TaskContext,
+    state: &'a BaoFileHandle,
 }
 
 /// The fs store's entity: the state of a hash's files.
@@ -690,11 +690,11 @@ struct FsEntity {
 
 impl FsEntity {
     /// The context its code runs in, for one request.
-    fn ctx(&self, global: &EntityGlobal<()>) -> HashContext {
+    fn ctx<'a>(&'a self, global: &'a EntityGlobal<()>) -> HashContext<'a> {
         HashContext {
             id: self.id,
-            global: global.store.clone(),
-            state: self.handle.clone(),
+            global: &global.store,
+            state: &self.handle,
         }
     }
 }
@@ -717,92 +717,53 @@ impl entity_manager::Reset<Hash> for FsEntity {
 impl EntityApi for FsEntity {
     type Config = ();
 
-    fn import_bao(
-        &self,
-        global: &EntityGlobal<()>,
-        cmd: ImportBaoMsg,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.import_bao(cmd).await }
+    async fn import_bao(&self, global: &EntityGlobal<()>, cmd: ImportBaoMsg) {
+        self.ctx(global).import_bao(cmd).await
     }
 
-    fn finish_import(
-        &self,
-        global: &EntityGlobal<()>,
-        cmd: ImportEntryMsg,
-        tt: TempTag,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.finish_import(cmd, tt).await }
+    async fn finish_import(&self, global: &EntityGlobal<()>, cmd: ImportEntryMsg, tt: TempTag) {
+        self.ctx(global).finish_import(cmd, tt).await
     }
 
-    fn observe(
-        &self,
-        global: &EntityGlobal<()>,
-        cmd: ObserveMsg,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.observe(cmd).await }
+    async fn observe(&self, global: &EntityGlobal<()>, cmd: ObserveMsg) {
+        self.ctx(global).observe(cmd).await
     }
 
-    fn export_ranges(
-        &self,
-        global: &EntityGlobal<()>,
-        cmd: ExportRangesMsg,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.export_ranges(cmd).await }
+    async fn export_ranges(&self, global: &EntityGlobal<()>, cmd: ExportRangesMsg) {
+        self.ctx(global).export_ranges(cmd).await
     }
 
-    fn export_bao(
-        &self,
-        global: &EntityGlobal<()>,
-        cmd: ExportBaoMsg,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.export_bao(cmd).await }
+    async fn export_bao(&self, global: &EntityGlobal<()>, cmd: ExportBaoMsg) {
+        self.ctx(global).export_bao(cmd).await
     }
 
-    fn export_path(
-        &self,
-        global: &EntityGlobal<()>,
-        cmd: ExportPathMsg,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.export_path(cmd).await }
+    async fn export_path(&self, global: &EntityGlobal<()>, cmd: ExportPathMsg) {
+        self.ctx(global).export_path(cmd).await
     }
 
-    fn delete(&self, global: &EntityGlobal<()>) -> impl Future<Output = io::Result<()>> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.delete().await }
+    async fn delete(&self, global: &EntityGlobal<()>) -> io::Result<()> {
+        self.ctx(global).delete().await
     }
 
-    fn freeze(
+    async fn freeze(
         &self,
         global: &EntityGlobal<()>,
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.freeze(ack, release).await }
+    ) {
+        self.ctx(global).freeze(ack, release).await
     }
 
-    fn delete_unreferenced(
-        &self,
-        global: &EntityGlobal<()>,
-        parts: UnreferencedParts,
-    ) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.delete_unreferenced(parts).await }
+    async fn delete_unreferenced(&self, global: &EntityGlobal<()>, parts: UnreferencedParts) {
+        self.ctx(global).delete_unreferenced(parts).await
     }
 
-    fn persist(&self, global: &EntityGlobal<()>) -> impl Future<Output = ()> + Send {
-        let ctx = self.ctx(global);
-        async move { ctx.persist().await }
+    async fn persist(&self, global: &EntityGlobal<()>) {
+        self.ctx(global).persist().await
     }
 }
 
-impl SyncEntityApi for HashContext {
+impl SyncEntityApi for HashContext<'_> {
     /// Load the state from the database.
     ///
     /// If the state is Initial, this will start the load.
@@ -893,7 +854,7 @@ impl SyncEntityApi for HashContext {
     }
 }
 
-impl HashContext {
+impl HashContext<'_> {
     pub fn options(&self) -> &Arc<Options> {
         &self.global.options
     }
@@ -1781,7 +1742,7 @@ trait SyncEntityApi: EntityOps {
 }
 
 /// The high level entry point per entry.
-impl EntityOps for HashContext {
+impl EntityOps for HashContext<'_> {
     fn id(&self) -> Hash {
         self.id
     }
@@ -1812,7 +1773,7 @@ impl EntityOps for HashContext {
     async fn observe(&self, cmd: ObserveMsg) {
         trace!("{cmd:?}");
         self.load().await;
-        BaoFileStorageSubscriber::new(&self.state)
+        BaoFileStorageSubscriber::new(self.state)
             .forward(cmd.tx)
             .await
             .ok();
@@ -1942,7 +1903,7 @@ fn sync_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
+async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> io::Result<()> {
     let ImportEntry {
         source,
         hash,
@@ -2156,7 +2117,7 @@ async fn export_bao_impl(
 }
 
 async fn export_path_impl(
-    ctx: &HashContext,
+    ctx: &HashContext<'_>,
     cmd: ExportPathRequest,
     tx: &mut mpsc::Sender<ExportProgressItem>,
 ) -> api::Result<()> {
