@@ -315,6 +315,7 @@ mod import;
 #[cfg(test)]
 mod lazyfs_tests;
 mod meta;
+mod metadata;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
