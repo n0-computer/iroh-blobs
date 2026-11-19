@@ -117,7 +117,7 @@ mod tests {
     use redb::Database;
 
     use super::*;
-    use crate::store::fs::meta::tables::META_TABLE;
+    use crate::store::fs::redb::tables::META_TABLE;
 
     fn run(boot_id: Option<&str>, syncs_files: bool) -> Run {
         Run {

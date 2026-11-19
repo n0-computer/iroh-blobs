@@ -1,4 +1,4 @@
-//! The metadata database
+//! The redb metadata store: one actor that batches requests into redb transactions.
 #![allow(clippy::result_large_err)]
 use std::{
     collections::HashMap,
@@ -33,16 +33,16 @@ mod proto;
 mod recovery;
 mod run;
 pub use proto::*;
+mod boot_id;
+mod peekable;
+mod sync_fs;
 pub(crate) mod tables;
+use peekable::PeekableReceiver;
 use run::{LastShutdown, Run};
 use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
 use tracing::{debug, info, info_span, trace, warn};
 
-use super::{
-    boot_id,
-    options::{BatchOptions, FsConfig, PathOptions},
-    util::PeekableReceiver,
-};
+use super::options::{BatchOptions, FsConfig, PathOptions};
 use crate::store::engine::metadata::{
     self,
     entry_state::{DataLocation, EntryState, InconsistentEntry, OutboardLocation},
@@ -524,8 +524,7 @@ impl Actor {
         // Sync after recovery so its writes and bitfield deletions are included,
         // and before committing the new run so a failed sync leaves the old one.
         if syncs_files {
-            super::sync_fs::sync(&paths.data_path)
-                .std_context("syncing the data filesystem on open")?;
+            sync_fs::sync(&paths.data_path).std_context("syncing the data filesystem on open")?;
         }
         drop(meta);
         drop(tables);
@@ -877,7 +876,7 @@ impl From<Failure> for metadata::Failure {
 /// Creates the database's directory, opens or creates the database, and runs
 /// recovery if the last run did not shut down cleanly. Returns the store
 /// running, for [`super::FsStore`] to spawn.
-pub(super) fn redb(
+pub(super) fn start(
     db_path: &Path,
     config: &FsConfig,
     batch: &BatchOptions,

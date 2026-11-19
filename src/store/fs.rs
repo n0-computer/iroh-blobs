@@ -277,16 +277,13 @@ use crate::{
 mod bao_file;
 use bao_file::BaoFileHandle;
 use file_deletes::delete_files;
-mod boot_id;
 mod file_deletes;
 #[cfg(test)]
 mod lazyfs_tests;
 #[cfg(test)]
 pub(crate) mod mem_backend;
-mod meta;
 pub mod options;
-mod sync_fs;
-pub(crate) mod util;
+mod redb;
 use crate::store::engine::{
     actor::{self, InternalCommand, TaskContext},
     bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
@@ -514,7 +511,7 @@ impl Backend for FsBackend {
     type Entity = FsEntity;
 
     fn start_meta(&self, channels: MetaChannels) -> Result<impl MetaTask> {
-        meta::redb(&self.db_path, &self.config, &self.batch, channels)
+        redb::start(&self.db_path, &self.config, &self.batch, channels)
     }
 }
 
