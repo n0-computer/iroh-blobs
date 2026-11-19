@@ -1723,6 +1723,16 @@ mod tests {
 
     #[cfg(feature = "fs-store")]
     #[tokio::test]
+    async fn membackend_export_bao_end() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let store = crate::store::fs::mem_backend::store(testdir.path()).await?;
+        check_export_bao_end(&store).await?;
+        store.shutdown().await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "fs-store")]
+    #[tokio::test]
     async fn fs_export_bao_end() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
         let store = FsStore::load(testdir.path().join("db")).await?;

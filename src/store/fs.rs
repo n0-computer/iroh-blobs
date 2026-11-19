@@ -315,6 +315,8 @@ mod file_deletes;
 mod import;
 #[cfg(test)]
 mod lazyfs_tests;
+#[cfg(test)]
+pub(crate) mod mem_backend;
 mod meta;
 mod metadata;
 pub mod options;
@@ -804,6 +806,10 @@ impl EntityApi for FsEntity {
 }
 
 impl SyncEntityApi for HashContext<'_> {
+    fn id(&self) -> Hash {
+        self.id
+    }
+
     /// Load the state from the database.
     ///
     /// If the state is Initial, this will start the load.
@@ -1705,8 +1711,6 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 
 /// The requests the fs entity's code handles, for one hash.
 trait EntityOps {
-    /// The hash of the entry.
-    fn id(&self) -> Hash;
     /// The metadata of the entry.
     fn meta(&self) -> meta::EntryMeta<'_>;
     /// Import from a stream of n0 bao encoded data.
@@ -1737,9 +1741,14 @@ trait EntityOps {
     async fn persist(&self);
 }
 
-/// A more opinionated API that can be used as a helper to save implementation
-/// effort when implementing the EntityOps trait.
-trait SyncEntityApi: EntityOps {
+/// Synchronous access to one entry's data, which the bao import and export code is generic over.
+///
+/// Not tied to files: the fs entity implements it on its files, a memory
+/// backed entity on its buffers.
+trait SyncEntityApi {
+    /// The hash of the entry.
+    fn id(&self) -> Hash;
+
     /// Load the entry state from the database. This must make sure that it is
     /// not run concurrently, so if load is called multiple times, all but one
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
@@ -1774,10 +1783,6 @@ trait SyncEntityApi: EntityOps {
 
 /// The high level entry point per entry.
 impl EntityOps for HashContext<'_> {
-    fn id(&self) -> Hash {
-        self.id
-    }
-
     fn meta(&self) -> meta::EntryMeta<'_> {
         self.global.db.entry(self.id)
     }
