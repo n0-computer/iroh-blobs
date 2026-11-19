@@ -655,8 +655,12 @@ impl BaoFileHandle {
     }
 }
 
-impl entity_manager::Reset for BaoFileHandle {
-    fn reset(&mut self) {
+impl entity_manager::Reset<Hash> for BaoFileHandle {
+    fn new(_id: &Hash) -> Self {
+        Self::default()
+    }
+
+    fn reset(&mut self, _id: &Hash) {
         // Keeps the generation.
         self.send_modify(|state| state.storage = BaoFileStorage::Initial);
     }
