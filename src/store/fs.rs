@@ -305,7 +305,7 @@ mod bao_file;
 use bao_file::BaoFileHandle;
 use file_deletes::{delete_files, BaoFileParts, UnreferencedParts, ALL_PARTS};
 mod boot_id;
-mod entry_state;
+pub(crate) mod entry_state;
 pub(crate) mod file_deletes;
 pub(crate) mod import;
 #[cfg(test)]
@@ -313,17 +313,16 @@ mod lazyfs_tests;
 #[cfg(test)]
 pub(crate) mod mem_backend;
 mod meta;
-pub(crate) mod metadata;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
 use crate::store::engine::{
     entity::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal},
     entity_manager::{self, EntityManagerState, SpawnArg},
+    metadata::{self, MetaChannels, MetaTask},
 };
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
-use metadata::{MetaChannels, MetaTask};
 use options::{BatchOptions, FsConfig, Options, StoreOptions};
 use tracing::Instrument;
 
@@ -356,7 +355,7 @@ fn temp_name() -> String {
 #[derive(Debug)]
 #[enum_conversions()]
 pub(crate) enum InternalCommand {
-    Dump(meta::Dump),
+    Dump(metadata::proto::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
     EndGcRun(EndGcRun),
@@ -398,7 +397,7 @@ pub(crate) struct TaskContext {
     // The store's own options: inlining, the temp directory, gc.
     pub options: Arc<StoreOptions>,
     // Metadata database, basically a mpsc sender with some extra functionality.
-    pub db: meta::Db,
+    pub db: metadata::Db,
     // Handle to send internal commands
     pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
 }
@@ -905,7 +904,7 @@ impl HashContext<'_> {
 }
 
 impl<B: Backend> Actor<B> {
-    fn db(&self) -> &meta::Db {
+    fn db(&self) -> &metadata::Db {
         &self.context.db
     }
 
@@ -1484,7 +1483,7 @@ impl<B: Backend> Actor<B> {
         remove_all_files(&options.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
-            db: meta::Db::new(db_send),
+            db: metadata::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
         });
         let metadata_task = Some(tokio::spawn(metadata));
@@ -1710,7 +1709,7 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 /// The requests the fs entity's code handles, for one hash.
 trait EntityOps {
     /// The metadata of the entry.
-    fn meta(&self) -> meta::EntryMeta<'_>;
+    fn meta(&self) -> metadata::EntryMeta<'_>;
     /// Import from a stream of n0 bao encoded data.
     async fn import_bao(&self, cmd: ImportBaoMsg);
     /// Finish an import from a local file or memory.
@@ -1781,7 +1780,7 @@ trait SyncEntityApi {
 
 /// The high level entry point per entry.
 impl EntityOps for HashContext<'_> {
-    fn meta(&self) -> meta::EntryMeta<'_> {
+    fn meta(&self) -> metadata::EntryMeta<'_> {
         self.global.db.entry(self.id)
     }
 
@@ -2471,7 +2470,7 @@ impl FsStore {
         let (tx, rx) = oneshot::channel();
         self.db
             .send(
-                meta::Dump {
+                metadata::proto::Dump {
                     tx,
                     span: tracing::Span::current(),
                 }

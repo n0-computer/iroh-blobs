@@ -29,11 +29,6 @@ use super::{
     file_deletes::UnreferencedParts,
     import::{ImportEntry, ImportEntryMsg, ImportSource},
     import_bao_impl,
-    meta::{
-        CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, GetResult, ListBlobs, ListTags,
-        Listing, RenameTagMsg, Set, SetTagMsg, Update, UpdateAwait,
-    },
-    metadata::{Failure, MetaChannels, MetaTask, Request},
     options::StoreOptions,
     FsStore, SyncEntityApi,
 };
@@ -53,6 +48,13 @@ use crate::{
     store::engine::{
         entity::{Backend, EntityApi, EntityGlobal},
         entity_manager::Reset,
+        metadata::{
+            proto::{
+                CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, GetResult, ListBlobs,
+                ListTags, Listing, RenameTagMsg, Set, SetTagMsg, Update, UpdateAwait,
+            },
+            Failure, MetaChannels, MetaTask, Request,
+        },
     },
     store::util::{MemOrFile, PartialMemStorage},
     util::temp_tag::TempTag,

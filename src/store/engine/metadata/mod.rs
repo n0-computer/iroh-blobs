@@ -7,8 +7,8 @@
 //! error.
 //!
 //! How the actor batches requests into transactions is up to it. The fs store's
-//! redb actor converts each request into its own [`Command`] as it receives it,
-//! and groups them by that.
+//! redb actor converts each request into its own command grouping as it
+//! receives it, and groups them by that.
 //!
 //! # Contract
 //!
@@ -34,16 +34,18 @@ use std::{any::Any, fmt, future::Future};
 use nested_enum_utils::enum_conversions;
 use tokio::sync::mpsc;
 
-use super::{
-    file_deletes::UnreferencedParts,
-    meta::{
-        Command, CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, ListBlobs, ListTags,
-        ReadOnlyCommand, ReadWriteCommand, RenameTagMsg, Set, SetTagMsg, TopLevelCommand, Update,
-        UpdateAwait,
-    },
+mod client;
+pub(crate) mod proto;
+
+pub(crate) use client::{Db, EntryMeta};
+use proto::{
+    CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, ListBlobs, ListTags, RenameTagMsg,
+    Set, SetTagMsg, Update, UpdateAwait,
 };
+
 use crate::{
     api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
+    store::fs::file_deletes::UnreferencedParts,
     Hash,
 };
 
@@ -125,27 +127,4 @@ pub(crate) enum Request {
     SyncDb(SyncDbMsg),
     /// Commit, record the clean shutdown, reply, and end.
     Shutdown(ShutdownMsg),
-}
-
-impl From<Request> for Command {
-    fn from(request: Request) -> Self {
-        match request {
-            Request::Get(x) => ReadOnlyCommand::Get(x).into(),
-            Request::Set(x) => ReadWriteCommand::Set(x).into(),
-            Request::Update(x) => ReadWriteCommand::Update(x).into(),
-            Request::UpdateAwait(x) => ReadWriteCommand::UpdateAwait(x).into(),
-            Request::Delete(x) => ReadWriteCommand::Delete(x).into(),
-            Request::SetTag(x) => ReadWriteCommand::SetTag(x).into(),
-            Request::CreateTag(x) => ReadWriteCommand::CreateTag(x).into(),
-            Request::DeleteTags(x) => ReadWriteCommand::DeleteTags(x).into(),
-            Request::RenameTag(x) => ReadWriteCommand::RenameTag(x).into(),
-            Request::ListTags(x) => TopLevelCommand::ListTags(x).into(),
-            Request::BlobStatus(x) => ReadOnlyCommand::GetBlobStatus(x).into(),
-            Request::ListBlobs(x) => TopLevelCommand::ListBlobs(x).into(),
-            Request::Dump(x) => ReadOnlyCommand::Dump(x).into(),
-            Request::GcSnapshot(x) => TopLevelCommand::GcSnapshot(x).into(),
-            Request::SyncDb(x) => TopLevelCommand::SyncDb(x).into(),
-            Request::Shutdown(x) => TopLevelCommand::Shutdown(x).into(),
-        }
-    }
 }

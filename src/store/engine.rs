@@ -10,3 +10,4 @@
 //! generic parts still live there.
 pub(crate) mod entity;
 pub(crate) mod entity_manager;
+pub(crate) mod metadata;
