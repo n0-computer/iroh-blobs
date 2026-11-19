@@ -1,4 +1,11 @@
 //! The redb metadata store: one actor that batches requests into redb transactions.
+//!
+//! It owns the redb database with the entry of each hash, inlined data and
+//! outboards of small blobs, and the tags. It groups queued requests into read
+//! or write transactions. Commits are durable (redb's default
+//! `Durability::Immediate`). It never touches data files, except for recovery
+//! when the store opens after an unclean shutdown, before any entity exists.
+//! A failed batch fails the actor without clearing the unclean-run marker.
 #![allow(clippy::result_large_err)]
 use std::{
     collections::HashMap,

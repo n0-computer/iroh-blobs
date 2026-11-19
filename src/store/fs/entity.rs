@@ -1,7 +1,52 @@
 //! The fs store's entity: an entry's data and outboard in files, read and written through file descriptors.
 //!
-//! See the fs store's module docs for how entities, the metadata store and
-//! the store actor work together.
+//! See the store engine's docs for how entities, the metadata store and the
+//! store actor work together.
+//!
+//! # States
+//!
+//! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
+//! transition, and otherwise a loaded `Settled` entry: `NonExisting`,
+//! `Partial`, `Complete` or `Invalid`. A settled entry is `ReadWrite`, or
+//! `ReadOnly` while a gc session freezes it.
+//!
+//! An entity's tasks are futures polled by one actor, so they only interleave at
+//! `.await` points. Every change of an entity's state or files runs after
+//! `wait_writable`, which waits while the state is `Loading`, `Deleting` or
+//! `ReadOnly`, with no `.await` between the check and the change. Readers use
+//! `wait_settled`, which only waits for `Loading` and `Deleting`. Both wait on
+//! the entity's state `watch`.
+//!
+//! # Unreferenced parts
+//!
+//! The entity checks each part against its own state, and only unlinks those
+//! it does not use. An entity that is not loaded, like one woken for the
+//! notice, loads first. It is also told about parts while it shuts down,
+//! since its shutdown may write the bitfield.
+//!
+//! # Deletes
+//!
+//! 1. Loads, and notes the files its state references: those of its entry, and
+//!    those it wrote that the entry does not reference yet. Then it starts a
+//!    new generation of the entry, which ends observers, and switches to
+//!    `Deleting`. The cached state is dropped: readers see no entry, and
+//!    changes wait from here on.
+//! 2. Sends `delete` to the metadata store. Deletes that arrive together still
+//!    land in one transaction.
+//! 3. Waits for the answer, which comes once the delete is committed, even if
+//!    there was no entry. Waiting keeps the entity alive, so it cannot unload
+//!    and come back with new files that the unlink would take.
+//! 4. Unlinks the files it noted, so an inline entry costs no unlink, and
+//!    switches to `NonExisting`. Waiting writes continue on an empty entry: a
+//!    running download keeps going with the ranges that arrive from then on.
+//!
+//! Unlink failures are logged. A delete in a failed metadata batch fails
+//! instead of unlinking.
+//!
+//! # Context
+//!
+//! For one request, a `HashContext` combines the store's context, the fs
+//! entity's configuration, and the entity's state.
 use std::{fmt::Debug, fs, io::Write, path::Path};
 
 use bao_tree::io::BaoContentItem;
