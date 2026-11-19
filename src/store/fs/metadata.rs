@@ -29,7 +29,7 @@
 //!   store.
 //! - **Shutdown** commits everything, records the clean shutdown so the next
 //!   open needs no recovery, and replies. Then the actor ends.
-use std::{any::Any, fmt, future::Future, pin::Pin};
+use std::{any::Any, fmt, future::Future};
 
 use nested_enum_utils::enum_conversions;
 use tokio::sync::mpsc;
@@ -56,7 +56,9 @@ pub(crate) struct MetaChannels {
 }
 
 /// The running metadata store. It ends with an error to fail the store.
-pub(crate) type MetaTask = Pin<Box<dyn Future<Output = Result<(), Failure>> + Send + 'static>>;
+pub(crate) trait MetaTask: Future<Output = Result<(), Failure>> + Send + 'static {}
+
+impl<T: Future<Output = Result<(), Failure>> + Send + 'static> MetaTask for T {}
 
 /// Why a metadata store ended, and what it keeps alive until the store has stopped its workers.
 ///

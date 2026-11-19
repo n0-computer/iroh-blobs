@@ -1419,12 +1419,12 @@ impl<E: EntityApi> Actor<E> {
     ///
     /// This must only be called in the context of the store runtime, since the
     /// database actor is spawned on the current runtime and does blocking IO.
-    async fn new(
+    async fn new<T: MetaTask>(
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
-        meta: impl FnOnce(MetaChannels) -> Result<MetaTask>,
+        meta: impl FnOnce(MetaChannels) -> Result<T>,
         config: E::Config,
     ) -> Result<Self> {
         trace!(
@@ -2314,8 +2314,9 @@ impl FsStore {
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
-        let meta = meta::redb(db_path, &options);
-        Self::from_parts::<FsEntity>(options, meta, ()).await
+        let meta_options = options.clone();
+        let meta = move |channels| meta::redb(db_path, &meta_options, channels);
+        Self::from_parts::<FsEntity, _>(options, meta, ()).await
     }
 
     /// Starts a store from a metadata store and an entity implementation.
@@ -2323,9 +2324,9 @@ impl FsStore {
     /// `meta` is called on the store's runtime with the channels of the
     /// metadata store, and returns it running. `config` is shared by all
     /// entities.
-    async fn from_parts<E: EntityApi>(
+    async fn from_parts<E: EntityApi, T: MetaTask>(
         options: Options,
-        meta: impl FnOnce(MetaChannels) -> Result<MetaTask> + Send + 'static,
+        meta: impl FnOnce(MetaChannels) -> Result<T> + Send + 'static,
         config: E::Config,
     ) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
@@ -2547,7 +2548,8 @@ pub mod tests {
             let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
             let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
             let options = Options::new(dir.path());
-            let meta = meta::redb(dir.path().join("blobs.db"), &options);
+            let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
+            let meta = move |channels| meta::redb(db_path, &meta_options, channels);
             let mut actor =
                 Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx, Arc::new(options), meta, ()).await?;
             let mut deletes = actor.deletes.subscribe();
@@ -2605,7 +2607,8 @@ pub mod tests {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
         let options = Options::new(dir.path());
-        let meta = meta::redb(dir.path().join("blobs.db"), &options);
+        let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
+        let meta = move |channels| meta::redb(db_path, &meta_options, channels);
         let mut actor =
             Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx.clone(), Arc::new(options), meta, ())
                 .await?;
@@ -3507,7 +3510,8 @@ pub mod tests {
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
         let mut options = Options::new(dir.path());
         options.inline.max_data_inlined = 64 * 1024;
-        let meta = meta::redb(dir.path().join("blobs.db"), &options);
+        let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
+        let meta = move |channels| meta::redb(db_path, &meta_options, channels);
         let options = Arc::new(options);
         let mut actor =
             Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx, options.clone(), meta, ()).await?;

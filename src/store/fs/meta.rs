@@ -1053,34 +1053,29 @@ impl From<Failure> for metadata::Failure {
     }
 }
 
-/// Starts the redb metadata store at `db_path` on the store's runtime.
+/// Starts the redb metadata store at `db_path`, on the store's runtime.
 ///
 /// Creates the database's directory, opens or creates the database, and runs
-/// recovery if the last run did not shut down cleanly.
+/// recovery if the last run did not shut down cleanly. Returns the store
+/// running, for [`super::FsStore`] to spawn.
 pub(super) fn redb(
     db_path: PathBuf,
     options: &Options,
-) -> impl FnOnce(MetaChannels) -> n0_error::Result<MetaTask> + Send + 'static {
-    let paths = Arc::new(options.path.clone());
-    let batch = options.batch.clone();
-    let syncs_files = options.syncs_files();
-    move |channels| {
-        if let Some(parent) = db_path.parent() {
-            trace!("creating parent directory for db file {}", parent.display());
-            std::fs::create_dir_all(parent)?;
-        }
-        let actor = Actor::new(
-            db_path,
-            channels.requests,
-            channels.unreferenced,
-            paths,
-            batch,
-            syncs_files,
-        )?;
-        Ok(Box::pin(
-            async move { actor.run().await.map_err(Into::into) },
-        ))
+    channels: MetaChannels,
+) -> n0_error::Result<impl MetaTask> {
+    if let Some(parent) = db_path.parent() {
+        trace!("creating parent directory for db file {}", parent.display());
+        std::fs::create_dir_all(parent)?;
     }
+    let actor = Actor::new(
+        db_path,
+        channels.requests,
+        channels.unreferenced,
+        Arc::new(options.path.clone()),
+        options.batch.clone(),
+        options.syncs_files(),
+    )?;
+    Ok(async move { actor.run().await.map_err(Into::into) })
 }
 
 /// Logs what recovery did.
