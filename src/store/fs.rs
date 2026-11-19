@@ -78,11 +78,8 @@
 //!
 //! A notice is only as recent as its commit. By the time it arrives, the entry
 //! may have been deleted and created again, with new files, and its entity
-//! unloaded. An entity that is not loaded, like one woken for the notice,
-//! knows nothing about its files, so it first checks the parts against the
-//! current entry. The lookup is an `.await`, so it checks its state again after
-//! it: if the entity is still not loaded, nothing wrote meanwhile, and the
-//! entry is current.
+//! unloaded. So an entity that is not loaded, like one woken for the notice,
+//! loads before it checks the parts.
 //!
 //! At shutdown, the main actor hands the parts of the last batch to the
 //! entities before they shut down. Parts that arrive after that stay, as after
@@ -308,7 +305,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, referenced_parts, UnreferencedParts, ALL_PARTS};
+use file_deletes::{delete_files, BaoFileParts, UnreferencedParts, ALL_PARTS};
 mod boot_id;
 mod entry_state;
 mod file_deletes;
@@ -572,34 +569,18 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
 /// Deletes the parts a committed batch stopped referencing, unless the entry still uses them.
 ///
 /// The notice is only as recent as its commit: by the time it arrives, the
-/// entry may have been deleted and created again, and its entity unloaded. A
-/// loaded entity checks the parts against its own state, which is never behind
-/// its entry. An entity that is not loaded knows nothing about its files, so it
-/// checks them against the current entry, which costs a metadata lookup but
-/// opens no files.
+/// entry may have been deleted and created again, and its entity unloaded. So
+/// the parts are checked against the loaded state, which is never behind the
+/// entry. An entity woken just for this loads first.
 async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
-    let mut parts = parts.0;
+    ctx.load().await;
     wait_writable(ctx).await;
-    if matches!(ctx.state.borrow().storage, BaoFileStorage::Initial) {
-        let entry = match ctx.meta().get().await {
-            Ok(entry) => entry,
-            Err(cause) => {
-                warn!(
-                    "{}: no entry to check unreferenced parts against: {cause}",
-                    ctx.id
-                );
-                return;
-            }
-        };
-        let referenced = referenced_parts(entry.as_ref());
-        parts.retain(|part| !referenced.contains(part));
-        // Other tasks ran during the lookup, and may have loaded the entity and
-        // written files. If it is still not loaded, the entry is current, since
-        // only a loaded entity writes. Otherwise its state decides below.
-        wait_writable(ctx).await;
-    }
     let state = ctx.state.borrow();
-    parts.retain(|part| !state.references(*part));
+    let parts: BaoFileParts = parts
+        .0
+        .into_iter()
+        .filter(|part| !state.references(*part))
+        .collect();
     delete_files(&ctx.global.options.path, &ctx.id, &parts);
 }
 
@@ -1278,8 +1259,7 @@ impl Actor {
 
     /// Hands unreferenced parts to the hash's entity, waking it if there is none.
     ///
-    /// All file IO happens in entities. A woken entity checks the parts against
-    /// the current entry, without loading.
+    /// All file IO happens in entities. A woken entity loads before it checks the parts.
     async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
         trace!("{} {parts:?}", hash.fmt_short());
         // Queued even while the entity is shutting down. The entity checks
@@ -1637,10 +1617,9 @@ trait EntityApi {
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     );
-    /// Delete the parts a committed batch stopped referencing, after checking each against the current state.
+    /// Delete the parts a committed batch stopped referencing, after checking each against the loaded state.
     ///
-    /// The notice may be stale. If the entity is not loaded, the current state
-    /// is the entry, and the entity must look it up before deleting.
+    /// The notice may be stale, so the entity must load before deciding.
     async fn delete_unreferenced(&self, parts: UnreferencedParts);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);

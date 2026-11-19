@@ -602,10 +602,8 @@ impl BaoFileStorage {
     /// while a file deleted too early loses data.
     pub(super) fn references(&self, part: BaoFilePart) -> bool {
         match self {
-            // Not loaded: the entity knows nothing about its files, so the
-            // caller must check the current entry first.
-            Self::Initial => false,
-            Self::Loading | Self::Deleting => true,
+            // Not loaded: the entity knows nothing about its files.
+            Self::Initial | Self::Loading | Self::Deleting => true,
             Self::ReadWrite(s) | Self::ReadOnly(s) => s.references(part),
         }
     }
