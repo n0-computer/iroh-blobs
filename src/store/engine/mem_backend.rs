@@ -23,7 +23,6 @@ use bytes::Bytes;
 use n0_future::stream;
 use tokio::sync::watch;
 
-use super::FsStore;
 use crate::{
     api::{
         self,
@@ -57,13 +56,14 @@ use crate::{
 };
 
 /// A store on the memory backend, staging imports in `temp_dir`.
-pub(crate) async fn store(temp_dir: &Path) -> n0_error::Result<FsStore> {
+pub(crate) async fn store(temp_dir: &Path) -> n0_error::Result<api::Store> {
     let options = StoreOptions {
         inline: Default::default(),
         temp_path: temp_dir.to_path_buf(),
         gc: None,
     };
-    FsStore::from_parts(options, MemBackend::default()).await
+    let started = super::start(options, MemBackend::default()).await?;
+    Ok(api::Store::from_client(started.commands))
 }
 
 /// One blob in the shared storage.

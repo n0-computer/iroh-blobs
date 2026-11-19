@@ -957,10 +957,10 @@ mod tests {
         Ok(())
     }
 
-    /// The fs store's actor on the memory backend, see `store::fs::mem_backend`.
+    /// The store engine on the memory backend, see `store::engine::mem_backend`.
     #[cfg(feature = "fs-store")]
-    async fn membackend_store(dir: &std::path::Path) -> TestResult<crate::store::fs::FsStore> {
-        Ok(crate::store::fs::mem_backend::store(dir).await?)
+    async fn membackend_store(dir: &std::path::Path) -> TestResult<Store> {
+        Ok(crate::store::engine::mem_backend::store(dir).await?)
     }
 
     #[tokio::test]

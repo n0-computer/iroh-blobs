@@ -258,8 +258,6 @@ mod entity;
 use entity::FsEntity;
 #[cfg(test)]
 mod lazyfs_tests;
-#[cfg(test)]
-pub(crate) mod mem_backend;
 pub mod options;
 mod redb;
 use crate::store::engine::{

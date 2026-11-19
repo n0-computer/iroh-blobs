@@ -16,6 +16,8 @@ pub(crate) mod bao;
 mod entity;
 mod entity_manager;
 mod import;
+#[cfg(test)]
+pub(crate) mod mem_backend;
 pub(crate) mod metadata;
 mod options;
 
