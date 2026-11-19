@@ -3,9 +3,16 @@ use std::path::{Path, PathBuf};
 
 use n0_future::time::Duration;
 
-use super::meta::raw_outboard_size;
-use crate::store::engine::actor::temp_name;
-use crate::{store::gc::GcConfig, Hash};
+use crate::{
+    store::{
+        engine::{
+            bao::raw_outboard_size,
+            options::{temp_name, StoreOptions},
+        },
+        gc::GcConfig,
+    },
+    Hash,
+};
 
 /// Options for directories used by the file store.
 #[derive(Debug, Clone)]
@@ -182,50 +189,6 @@ impl Options {
     pub fn is_inlined_all(&self, data_size: u64) -> bool {
         let outboard_size = raw_outboard_size(data_size);
         self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
-    }
-}
-
-/// The part of [`Options`] the store itself uses.
-///
-/// The rest goes to the parts the store is built from: the fs entity gets its
-/// paths and sync mode as [`FsConfig`], and the redb metadata store gets the
-/// options it needs when it is created.
-#[derive(Debug, Clone)]
-pub(crate) struct StoreOptions {
-    /// Inlining, which every entity implementation shares.
-    pub inline: InlineOptions,
-    /// Where imports stage their files.
-    ///
-    /// Imports stage and hash their data before the hash is known, so outside
-    /// any entity, and the fs entity then renames the files into place. So
-    /// this belongs to the fs entity really, and must be on the same device as
-    /// its data directory. It moves there once import staging is part of the
-    /// entity implementation.
-    pub temp_path: PathBuf,
-    /// Gc configuration.
-    pub gc: Option<GcConfig>,
-}
-
-impl StoreOptions {
-    /// Check if the data will be inlined, based on the size of the data.
-    pub fn is_inlined_data(&self, data_size: u64) -> bool {
-        data_size <= self.inline.max_data_inlined
-    }
-
-    /// Check if the outboard will be inlined, based on the size of the *outboard*.
-    pub fn is_inlined_outboard(&self, outboard_size: u64) -> bool {
-        outboard_size <= self.inline.max_outboard_inlined
-    }
-
-    /// Check if both the data and outboard will be inlined, based on the size of the data.
-    pub fn is_inlined_all(&self, data_size: u64) -> bool {
-        let outboard_size = raw_outboard_size(data_size);
-        self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
-    }
-
-    /// A new, unique file name in the temp directory.
-    pub fn temp_file_name(&self) -> PathBuf {
-        self.temp_path.join(temp_name())
     }
 }
 

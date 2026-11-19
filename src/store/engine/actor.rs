@@ -26,7 +26,9 @@ use tracing::{error, trace, warn, Instrument};
 use super::{
     entity::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal},
     entity_manager::{self, EntityManagerState, SpawnArg},
+    import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg},
     metadata::{self, parts::UnreferencedParts, MetaChannels},
+    options::StoreOptions,
 };
 use crate::{
     api::{
@@ -38,30 +40,12 @@ use crate::{
         },
     },
     store::{
-        fs::{
-            import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg},
-            options::StoreOptions,
-        },
         gc::run_gc,
         util::{drain, ValueOrPoisioned},
     },
     util::temp_tag::{TagDrop, TempTag, TempTagScope, TempTags},
     Hash, HashAndFormat,
 };
-
-/// Create a 16 byte unique ID.
-fn new_uuid() -> [u8; 16] {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let mut bytes = [0u8; 16];
-    rng.fill_bytes(&mut bytes);
-    bytes
-}
-
-/// Create temp file name based on a 16 byte UUID.
-pub(crate) fn temp_name() -> String {
-    format!("{}.temp", hex::encode(new_uuid()))
-}
 
 #[derive(Debug)]
 #[enum_conversions()]

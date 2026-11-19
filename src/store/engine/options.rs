@@ -1,0 +1,63 @@
+//! The options of the store itself, apart from its backend.
+use std::path::PathBuf;
+
+use super::bao::raw_outboard_size;
+use crate::store::{fs::options::InlineOptions, gc::GcConfig};
+
+/// The part of the fs store's `Options` the store itself uses.
+///
+/// The rest goes to the parts the store is built from: the fs entity gets its
+/// paths and sync mode as `FsConfig`, and the redb metadata store gets the
+/// options it needs when it is created.
+#[derive(Debug, Clone)]
+pub(crate) struct StoreOptions {
+    /// Inlining, which every entity implementation shares.
+    pub inline: InlineOptions,
+    /// Where imports stage their files.
+    ///
+    /// Imports stage and hash their data before the hash is known, so outside
+    /// any entity, and the fs entity then renames the files into place. So
+    /// this belongs to the fs entity really, and must be on the same device as
+    /// its data directory. It moves there once import staging is part of the
+    /// entity implementation.
+    pub temp_path: PathBuf,
+    /// Gc configuration.
+    pub gc: Option<GcConfig>,
+}
+
+impl StoreOptions {
+    /// Check if the data will be inlined, based on the size of the data.
+    pub fn is_inlined_data(&self, data_size: u64) -> bool {
+        data_size <= self.inline.max_data_inlined
+    }
+
+    /// Check if the outboard will be inlined, based on the size of the *outboard*.
+    pub fn is_inlined_outboard(&self, outboard_size: u64) -> bool {
+        outboard_size <= self.inline.max_outboard_inlined
+    }
+
+    /// Check if both the data and outboard will be inlined, based on the size of the data.
+    pub fn is_inlined_all(&self, data_size: u64) -> bool {
+        let outboard_size = raw_outboard_size(data_size);
+        self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
+    }
+
+    /// A new, unique file name in the temp directory.
+    pub fn temp_file_name(&self) -> PathBuf {
+        self.temp_path.join(temp_name())
+    }
+}
+
+/// Create a 16 byte unique ID.
+fn new_uuid() -> [u8; 16] {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    let mut bytes = [0u8; 16];
+    rng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Create temp file name based on a 16 byte UUID.
+pub(crate) fn temp_name() -> String {
+    format!("{}.temp", hex::encode(new_uuid()))
+}

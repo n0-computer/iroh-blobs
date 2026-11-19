@@ -12,4 +12,6 @@ pub(crate) mod actor;
 pub(crate) mod bao;
 pub(crate) mod entity;
 pub(crate) mod entity_manager;
+pub(crate) mod import;
 pub(crate) mod metadata;
+pub(crate) mod options;

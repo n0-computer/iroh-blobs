@@ -23,11 +23,7 @@ use bytes::Bytes;
 use n0_future::stream;
 use tokio::sync::watch;
 
-use super::{
-    import::{ImportEntry, ImportEntryMsg, ImportSource},
-    options::StoreOptions,
-    FsStore,
-};
+use super::FsStore;
 use crate::{
     api::{
         self,
@@ -45,6 +41,7 @@ use crate::{
         bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
         entity::{Backend, EntityApi, EntityGlobal},
         entity_manager::Reset,
+        import::{ImportEntry, ImportEntryMsg, ImportSource},
         metadata::{
             entry_state::{DataLocation, EntryState, OutboardLocation},
             parts::UnreferencedParts,
@@ -54,6 +51,7 @@ use crate::{
             },
             Failure, MetaChannels, MetaTask, Request,
         },
+        options::StoreOptions,
     },
     store::util::{MemOrFile, PartialMemStorage},
     util::temp_tag::TempTag,

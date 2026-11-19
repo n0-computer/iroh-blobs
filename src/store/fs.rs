@@ -251,11 +251,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bao_tree::io::{sync::ReadAt, BaoContentItem};
-use import::{ImportEntry, ImportSource};
-use irpc::{channel::mpsc, RpcMessage};
+use bao_tree::io::BaoContentItem;
+use irpc::channel::mpsc;
 use n0_error::{Result, StdResultExt};
-use n0_future::{future::yield_now, io};
+use n0_future::io;
 use tracing::{error, instrument, trace};
 
 use crate::{
@@ -280,7 +279,6 @@ use bao_file::BaoFileHandle;
 use file_deletes::delete_files;
 mod boot_id;
 mod file_deletes;
-pub(crate) mod import;
 #[cfg(test)]
 mod lazyfs_tests;
 #[cfg(test)]
@@ -294,15 +292,16 @@ use crate::store::engine::{
     bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
     entity::{Backend, EntityApi, EntityGlobal},
     entity_manager::{self},
+    import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource},
     metadata::{
         self,
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
         MetaChannels, MetaTask,
     },
+    options::StoreOptions,
 };
-use import::ImportEntryMsg;
-use options::{BatchOptions, FsConfig, Options, StoreOptions};
+use options::{BatchOptions, FsConfig, Options};
 
 use crate::api::{
     self,
@@ -1142,65 +1141,6 @@ async fn export_path_impl(
     Ok(())
 }
 
-trait CopyProgress: RpcMessage {
-    fn from_offset(offset: u64) -> Self;
-}
-
-impl CopyProgress for ExportProgressItem {
-    fn from_offset(offset: u64) -> Self {
-        ExportProgressItem::CopyProgress(offset)
-    }
-}
-
-impl CopyProgress for AddProgressItem {
-    fn from_offset(offset: u64) -> Self {
-        AddProgressItem::CopyProgress(offset)
-    }
-}
-
-#[derive(Debug)]
-enum CopyResult {
-    Reflinked,
-    Copied,
-}
-
-async fn reflink_or_copy_with_progress(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    size: u64,
-    tx: &mut mpsc::Sender<impl CopyProgress>,
-) -> io::Result<CopyResult> {
-    let from = from.as_ref();
-    let to = to.as_ref();
-    if reflink_copy::reflink(from, to).is_ok() {
-        return Ok(CopyResult::Reflinked);
-    }
-    let source = fs::File::open(from)?;
-    let mut target = fs::File::create(to)?;
-    copy_with_progress(source, size, &mut target, tx).await?;
-    Ok(CopyResult::Copied)
-}
-
-async fn copy_with_progress<T: CopyProgress>(
-    file: impl ReadAt,
-    size: u64,
-    target: &mut impl Write,
-    tx: &mut mpsc::Sender<T>,
-) -> io::Result<()> {
-    let mut offset = 0;
-    let mut buf = vec![0u8; 1024 * 1024];
-    while offset < size {
-        let remaining = buf.len().min((size - offset) as usize);
-        let buf: &mut [u8] = &mut buf[..remaining];
-        file.read_exact_at(offset, buf)?;
-        target.write_all(buf)?;
-        tx.try_send(T::from_offset(offset)).await?;
-        yield_now().await;
-        offset += buf.len() as u64;
-    }
-    Ok(())
-}
-
 impl FsStore {
     /// Load or create a new store.
     pub async fn load(root: impl AsRef<Path>) -> Result<Self> {
@@ -1319,6 +1259,8 @@ pub mod tests {
 
     use super::*;
     use std::sync::atomic::Ordering;
+
+    use bao_tree::io::sync::ReadAt;
 
     use tokio::task::JoinSet;
 

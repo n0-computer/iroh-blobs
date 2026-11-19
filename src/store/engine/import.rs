@@ -18,32 +18,34 @@ use std::{
     sync::Arc,
 };
 
+use bao_tree::io::sync::ReadAt;
 use bao_tree::{
     io::outboard::{PreOrderMemOutboard, PreOrderOutboard},
     BaoTree, ChunkNum,
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
+use irpc::RpcMessage;
 use irpc::{
     channel::{mpsc, none::NoReceiver},
     Channels, WithChannels,
 };
+use n0_future::future::yield_now;
 use n0_future::{stream, Stream, StreamExt};
 use ref_cast::RefCast;
 use smallvec::SmallVec;
 use tracing::{instrument, trace};
 
-use super::{meta::raw_outboard_size, options::StoreOptions, TaskContext};
+use super::{actor::TaskContext, bao::raw_outboard_size, options::StoreOptions};
 use crate::{
     api::{
-        blobs::{AddProgressItem, ImportMode},
+        blobs::{AddProgressItem, ExportProgressItem, ImportMode},
         proto::{
             HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest, ImportByteStreamUpdate,
             ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, Request, Scope,
         },
     },
     store::{
-        fs::reflink_or_copy_with_progress,
         util::{MemOrFile, DD},
         IROH_BLOCK_SIZE,
     },
@@ -507,6 +509,65 @@ async fn import_path_impl(
         ImportSource::TempFile(temp_path, file, size)
     };
     compute_outboard(import_source, format, batch, options, tx).await
+}
+
+pub(crate) trait CopyProgress: RpcMessage {
+    fn from_offset(offset: u64) -> Self;
+}
+
+impl CopyProgress for ExportProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        ExportProgressItem::CopyProgress(offset)
+    }
+}
+
+impl CopyProgress for AddProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        AddProgressItem::CopyProgress(offset)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum CopyResult {
+    Reflinked,
+    Copied,
+}
+
+pub(crate) async fn reflink_or_copy_with_progress(
+    from: impl AsRef<Path>,
+    to: impl AsRef<Path>,
+    size: u64,
+    tx: &mut mpsc::Sender<impl CopyProgress>,
+) -> io::Result<CopyResult> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+    if reflink_copy::reflink(from, to).is_ok() {
+        return Ok(CopyResult::Reflinked);
+    }
+    let source = fs::File::open(from)?;
+    let mut target = fs::File::create(to)?;
+    copy_with_progress(source, size, &mut target, tx).await?;
+    Ok(CopyResult::Copied)
+}
+
+async fn copy_with_progress<T: CopyProgress>(
+    file: impl ReadAt,
+    size: u64,
+    target: &mut impl Write,
+    tx: &mut mpsc::Sender<T>,
+) -> io::Result<()> {
+    let mut offset = 0;
+    let mut buf = vec![0u8; 1024 * 1024];
+    while offset < size {
+        let remaining = buf.len().min((size - offset) as usize);
+        let buf: &mut [u8] = &mut buf[..remaining];
+        file.read_exact_at(offset, buf)?;
+        target.write_all(buf)?;
+        tx.try_send(T::from_offset(offset)).await?;
+        yield_now().await;
+        offset += buf.len() as u64;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

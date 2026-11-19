@@ -170,3 +170,8 @@ pub(crate) async fn export_bao_impl(
     traverse_ranges_validated(data, outboard, &ranges, tx).await?;
     Ok(())
 }
+
+/// The size of the outboard of a blob of `size` bytes.
+pub(crate) fn raw_outboard_size(size: u64) -> u64 {
+    BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
+}

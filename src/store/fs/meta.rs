@@ -9,7 +9,6 @@ use std::{
     time::SystemTime,
 };
 
-use bao_tree::BaoTree;
 use bytes::Bytes;
 use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
 use n0_future::stream;
@@ -44,14 +43,11 @@ use super::{
     options::{BatchOptions, FsConfig, PathOptions},
     util::PeekableReceiver,
 };
-use crate::store::{
-    engine::metadata::{
-        self,
-        entry_state::{DataLocation, EntryState, InconsistentEntry, OutboardLocation},
-        parts::{referenced_parts, BaoFileParts, UnreferencedParts},
-        MetaChannels, MetaTask, Request,
-    },
-    IROH_BLOCK_SIZE,
+use crate::store::engine::metadata::{
+    self,
+    entry_state::{DataLocation, EntryState, InconsistentEntry, OutboardLocation},
+    parts::{referenced_parts, BaoFileParts, UnreferencedParts},
+    MetaChannels, MetaTask, Request,
 };
 
 /// Error type for message handler functions of the redb actor.
@@ -1004,10 +1000,6 @@ fn load_outboard(
     })
 }
 
-pub(crate) fn raw_outboard_size(size: u64) -> u64 {
-    BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
-}
-
 /// The hashes of all blobs in a snapshot.
 /// Opens a read snapshot of the tables.
 fn read_tables(db: &Database) -> ActorResult<ReadOnlyTables> {
@@ -1080,10 +1072,13 @@ mod tests {
     use tracing::Span;
 
     use super::{
-        super::options::{CrashConsistency, Options, PathOptions, StoreOptions},
+        super::options::{CrashConsistency, Options, PathOptions},
         *,
     };
-    use crate::store::engine::metadata::{parts::BaoFilePart, Db};
+    use crate::store::engine::{
+        metadata::{parts::BaoFilePart, Db},
+        options::StoreOptions,
+    };
 
     fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
         Run {
