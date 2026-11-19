@@ -56,19 +56,19 @@ pub(super) fn referenced_parts<I>(state: Option<&EntryState<I>>) -> BaoFileParts
         .collect()
 }
 
-/// What a committed write batch means for the files of one hash.
+/// Files of an entry that a committed write batch stopped referencing.
 ///
-/// The metadata actor sends this after the commit, so the files it names are
-/// no longer referenced by any durable state. Files are only touched by the
+/// The metadata actor sends these with the entry's hash after the commit, so
+/// no durable state references them anymore. That does not make them garbage:
+/// the entry's entity may still use them, since its state is never behind its
+/// entry. So before deleting, the entity must check each part against its own
+/// state, and only delete those it does not use. Files are only touched by the
 /// hash's entity, or by the main actor while no entity exists for the hash.
+///
+/// Deletes do not come through here: the entity removes its files once its
+/// delete is answered, after the commit.
 #[derive(Debug)]
-pub(crate) struct FileNotice {
-    pub hash: Hash,
-    /// A delete committed, even if no entry existed. The entity must finish cleanup.
-    pub deleted: bool,
-    /// Files the entry referenced before or during the batch, and no longer does.
-    pub parts: BaoFileParts,
-}
+pub(crate) struct UnreferencedParts(pub BaoFileParts);
 
 /// Delete the given files of an entry, ignoring files that do not exist.
 pub(super) fn delete_files(storage: &impl Storage, hash: &Hash, parts: &[BaoFilePart]) {

@@ -15,7 +15,8 @@
 //!
 //! - **Main actor**: handles user commands, runs the entity manager, holds the
 //!   temp tags, forwards tag, status, listing and lifecycle commands to the
-//!   metadata actor, fans deletes out to the entities, and routes file notices.
+//!   metadata actor, fans deletes out to the entities, and routes unreferenced
+//!   parts.
 //! - **Entity actors**, one per hash that is currently being worked on: run the
 //!   per-hash tasks (import, export, observe, persist, delete). While an entity
 //!   exists, it is the only one that writes and deletes the files of its hash.
@@ -38,17 +39,18 @@
 //! | `set(state)` | until applied | replace the entry state |
 //! | `update(state)` | no | merge into the entry state |
 //! | `update_await(state)` | until applied | merge into the entry state |
-//! | `delete()` | until applied | ensure the entry is absent; a notice confirms the commit |
+//! | `delete()` | until committed | ensure the entry is absent |
 //!
 //! "Applied" means visible to later commands, not durable. Durability comes with
 //! the commit of the batch, and commits are durable (redb's default
-//! `Durability::Immediate`).
+//! `Durability::Immediate`). Only `delete()` is answered after the commit, since
+//! its entity unlinks the files right after.
 //!
-//! After each commit, the metadata actor sends a `FileNotice` to the main actor
-//! for each hash that was deleted, or no longer references some of its files:
-//! whether the entry was deleted, and which files it referenced before or during
-//! the batch and no longer does. The channel is unbounded, so the metadata actor
-//! never waits on the main actor, which waits on it.
+//! After each commit, the metadata actor sends `UnreferencedParts` to the main
+//! actor for each hash that is not deleted and no longer references some of its
+//! files: the files it referenced before or during the batch and no longer does.
+//! The channel is unbounded, so the metadata actor never waits on the main
+//! actor, which waits on it.
 //!
 //! # Entities
 //!
@@ -64,37 +66,46 @@
 //! `wait_settled`, which only waits for `Loading` and `Deleting`. Both wait on
 //! the entity's state `watch`.
 //!
-//! # File notices
+//! # Unreferenced parts
 //!
-//! The main actor routes each notice:
+//! A committed state no longer referencing a file does not make it garbage: the
+//! entity may use it again, since its state is never behind its entry. So the
+//! main actor hands the parts to the hash's entity, into its unbounded inbox,
+//! also while it shuts down, since its shutdown may write the bitfield. If
+//! there is no entity, one is woken for this, which keeps all file IO in
+//! entities. The entity checks each part against its own state, and only
+//! unlinks those it does not use.
 //!
-//! - **An entity exists** for the hash, running or still shutting down, since
-//!   its shutdown may write the bitfield: the notice goes into its unbounded
-//!   inbox. The entity unlinks the files its own state does not use. Its state
-//!   is never behind its entry.
-//! - **No entity exists**: the main actor unlinks the files itself. Only it
-//!   creates entities, so none can appear in between, and none has writes in
-//!   flight. This also covers notices that arrive after the entities shut down.
+//! A notice is only as recent as its commit. By the time it arrives, the entry
+//! may have been deleted and created again, with new files, and its entity
+//! unloaded. So an entity that is not loaded, like one woken for the notice,
+//! loads before it checks the parts.
+//!
+//! At shutdown, the main actor hands the parts of the last batch to the
+//! entities before they shut down. Parts that arrive after that stay, as after
+//! a crash.
 //!
 //! # Deletes
 //!
 //! The main actor fans `DeleteBlobs` out to the entity of each hash, creating it
-//! without loading if needed, also for inline entries. That orders a delete with
+//! if needed, also for inline entries. That orders a delete with
 //! concurrent requests even if no entity existed when it arrived. A delete that
 //! is not forced skips content with a current or retained temp tag; that check
 //! happens in the main actor, before the fan-out. The entity:
 //!
-//! 1. Starts a new generation of the entry, which ends observers, and
-//!    switches to `Deleting`. The cached state is dropped: readers see no
-//!    entry, and changes wait from here on.
+//! 1. Loads, and notes the files its state references: those of its entry, and
+//!    those it wrote that the entry does not reference yet. Then it starts a
+//!    new generation of the entry, which ends observers, and switches to
+//!    `Deleting`. The cached state is dropped: readers see no entry, and
+//!    changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
-//! 3. Waits for the notice of the commit, which comes even if there was no
-//!    entry. Waiting keeps the entity alive, so it cannot unload and come back
-//!    with new files that the unlink would take.
-//! 4. The notice unlinks every file and switches to `NonExisting`. Waiting
-//!    writes continue on an empty entry: a running download keeps going with
-//!    the ranges that arrive from then on.
+//! 3. Waits for the answer, which comes once the delete is committed, even if
+//!    there was no entry. Waiting keeps the entity alive, so it cannot unload
+//!    and come back with new files that the unlink would take.
+//! 4. Unlinks the files it noted, so an inline entry costs no unlink, and
+//!    switches to `NonExisting`. Waiting writes continue on an empty entry: a running
+//!    download keeps going with the ranges that arrive from then on.
 //!
 //! The main actor answers `DeleteBlobs` once every entity is done, after its
 //! unlink attempts. Unlink failures are logged. Shutdown waits for running
@@ -102,8 +113,8 @@
 //! no new tasks.
 //!
 //! A metadata error aborts the whole store. The main actor cancels the workers
-//! and releases pending callers instead of leaving entities waiting for notices
-//! that will never come. There is no per-entity rollback, and the abort does not
+//! and releases pending callers. A delete in a failed batch gets no answer, and
+//! fails instead of unlinking. There is no per-entity rollback, and the abort does not
 //! persist entity state or clear the unclean-run marker.
 //!
 //! # GC sessions
@@ -127,7 +138,7 @@
 //! all blobs as candidates, and the named tags plus current and retained temp
 //! tags as roots. Then it freezes each HashSeq root through its entity, and
 //! sends the snapshot only once every freeze is acknowledged. It keeps running
-//! meanwhile, handling entity restarts and notices. The mem store takes the same
+//! meanwhile, handling entity restarts and unreferenced parts. The mem store takes the same
 //! view and freezes its handles in place.
 //!
 //! A freeze turns `ReadWrite` into `ReadOnly` with the same settled entry: reads
@@ -222,11 +233,11 @@
 //!
 //! # Limitations
 //!
-//! - A crash between a commit and the unlink of its notice leaves files that
+//! - A crash between a commit and the unlink that follows it leaves files that
 //!   nothing references.
 //! - After `export_path` with `TryReference` copies across file systems, the
-//!   entity still uses the owned data file, so the notice keeps it and it
-//!   leaks.
+//!   entity still uses the owned data file, so its check keeps the file when
+//!   it comes back unreferenced, and it leaks.
 //! - A same-file-system `TryReference` export renames the file before it
 //!   commits the external location. If that commit fails, the metadata can
 //!   still refer to the old path.
@@ -296,7 +307,7 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, BaoFilePart, FileNotice, ALL_PARTS};
+use file_deletes::{delete_files, BaoFilePart, BaoFileParts, UnreferencedParts, ALL_PARTS};
 mod boot_id;
 mod entry_state;
 mod file_deletes;
@@ -455,12 +466,12 @@ async fn wait_writable(ctx: &HashContext) {
 /// freeze. If the task is dropped instead, the entity is shutting down, and
 /// `persist` looks through the freeze.
 async fn freeze_entry(
-    ctx: HashContext,
+    ctx: &HashContext,
     ack: tokio::sync::oneshot::Sender<()>,
     mut release: tokio::sync::watch::Receiver<()>,
 ) {
     ctx.load().await;
-    wait_writable(&ctx).await;
+    wait_writable(ctx).await;
     // Loaded, and not in a delete or another freeze, see above.
     let frozen = ctx.state.send_if_modified(|state| match state.take() {
         BaoFileStorage::ReadWrite(settled) => {
@@ -481,7 +492,7 @@ async fn freeze_entry(
         // Nothing is ever sent, so this returns once the sender is dropped.
         release.changed().await.ok();
     }
-    unfreeze_entry(&ctx);
+    unfreeze_entry(ctx);
 }
 
 fn unfreeze_entry(ctx: &HashContext) {
@@ -535,13 +546,24 @@ async fn load_entity(ctx: &HashContext) {
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
 async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
+    // Loaded, the entity's state knows all its files: those of its entry, and
+    // those it wrote that the entry does not reference yet.
+    ctx.load().await;
     wait_writable(ctx).await;
+    let parts: BaoFileParts = {
+        let state = ctx.state.borrow();
+        ALL_PARTS
+            .into_iter()
+            .filter(|part| state.references(*part))
+            .collect()
+    };
     // A new generation ends observers, even if they next wake only after this
     // hash was re-imported.
     ctx.state.send_modify(|state| {
         state.generation += 1;
         state.storage = BaoFileStorage::Deleting;
     });
+    // Answered once the delete is committed.
     if let Err(cause) = ctx.meta().delete().await {
         // Metadata failure aborts the store. A command racing a graceful
         // shutdown can also be rejected, without a failure to trigger abort.
@@ -550,38 +572,29 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
             .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
         return Err(cause);
     }
-    // The notice after the commit unlinks the files and ends Deleting.
-    wait_settled(ctx).await;
+    // No durable state references the files anymore.
+    delete_files(&ctx.global.options.path, &ctx.id, &parts);
+    ctx.state
+        .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
     Ok(())
 }
 
-/// Acts on what a committed batch means for this entity's files, see [`FileNotice`].
-async fn apply_notice(ctx: &HashContext, notice: FileNotice) {
-    let paths = &ctx.global.options.path;
-    if notice.deleted {
-        // delete_entry holds Deleting until this. Unlink every file, since the
-        // entity may have written files its entry did not reference yet.
-        debug_assert!(matches!(
-            &ctx.state.borrow().storage,
-            BaoFileStorage::Deleting
-        ));
-        delete_files(paths, &ctx.id, &ALL_PARTS);
-        ctx.state
-            .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
-        return;
-    }
+/// Deletes the parts a committed batch stopped referencing, unless the entry still uses them.
+///
+/// The notice is only as recent as its commit: by the time it arrives, the
+/// entry may have been deleted and created again, and its entity unloaded. So
+/// the parts are checked against the loaded state, which is never behind the
+/// entry. An entity woken just for this loads first.
+async fn delete_unreferenced(ctx: &HashContext, parts: UnreferencedParts) {
+    ctx.load().await;
     wait_writable(ctx).await;
-    // Files the committed state no longer references, unless this entity's
-    // state, which is never behind its entry, uses them again.
-    let parts: Vec<_> = {
-        let state = ctx.state.borrow();
-        notice
-            .parts
-            .into_iter()
-            .filter(|part| !state.references(*part))
-            .collect()
-    };
-    delete_files(paths, &ctx.id, &parts);
+    let state = ctx.state.borrow();
+    let parts: BaoFileParts = parts
+        .0
+        .into_iter()
+        .filter(|part| !state.references(*part))
+        .collect();
+    delete_files(&ctx.global.options.path, &ctx.id, &parts);
 }
 
 /// Waits for the deletes of one request, and reports the last error.
@@ -657,9 +670,9 @@ struct Actor {
     cmd_rx: tokio::sync::mpsc::Receiver<Command>,
     // Receiver for incoming file store specific commands.
     fs_cmd_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
-    // What committed metadata batches mean for files, from the database actor.
-    notices: tokio::sync::mpsc::UnboundedReceiver<FileNotice>,
-    // A failed metadata task must abort the workers, including notice waiters.
+    // Parts committed metadata batches stopped referencing, from the database actor.
+    unreferenced: tokio::sync::mpsc::UnboundedReceiver<(Hash, UnreferencedParts)>,
+    // A failed metadata task must abort the workers, including waiting deletes.
     metadata_task: Option<tokio::task::JoinHandle<Result<(), meta::Failure>>>,
     // How many deletes are running, so shutdown can let them finish.
     deletes: Arc<tokio::sync::watch::Sender<usize>>,
@@ -1056,7 +1069,7 @@ impl Actor {
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        freeze_entry(ctx, ack, release_rx).await;
+                        ctx.freeze(ack, release_rx).await;
                     }
                 })
                 .await
@@ -1152,8 +1165,8 @@ impl Actor {
                 Some(cmd) = self.fs_cmd_rx.recv() => {
                     self.handle_fs_command(cmd).await;
                 }
-                Some(notice) = self.notices.recv() => {
-                    self.handle_notice(notice).await;
+                Some((hash, parts)) = self.unreferenced.recv() => {
+                    self.route_unreferenced(hash, parts).await;
                 }
                 cmd = self.cmd_rx.recv(), if !closing => {
                     let Some(cmd) = cmd else {
@@ -1189,7 +1202,7 @@ impl Actor {
             if !self.idle_waiters.is_empty()
                 && self.tasks.is_empty()
                 && self.fs_cmd_rx.is_empty()
-                && self.notices.is_empty()
+                && self.unreferenced.is_empty()
                 && !self.handles.has_pending()
             {
                 for tx in self.idle_waiters.drain(..) {
@@ -1197,8 +1210,9 @@ impl Actor {
                 }
             }
         }
-        // A delete waits for the notice of its commit, and an entity in
-        // shutdown takes no new tasks, so let running deletes finish first.
+        // A delete waits for the metadata actor to answer once it is
+        // committed, and then unlinks the files, so let running deletes
+        // finish before the entities and the metadata actor shut down.
         let mut deletes = self.deletes.subscribe();
         while *deletes.borrow_and_update() > 0 {
             tokio::select! {
@@ -1209,8 +1223,8 @@ impl Actor {
                         return;
                     }
                 }
-                Some(notice) = self.notices.recv() => {
-                    self.handle_notice(notice).await;
+                Some((hash, parts)) = self.unreferenced.recv() => {
+                    self.route_unreferenced(hash, parts).await;
                 }
                 _ = deletes.changed() => {}
                 task = self.handles.tick() => {
@@ -1233,6 +1247,12 @@ impl Actor {
                 }
             }
         }
+        // The metadata actor committed its last batch. Hand what that left to
+        // do to the entities while they still take tasks, since only they
+        // touch files.
+        while let Ok((hash, parts)) = self.unreferenced.try_recv() {
+            self.route_unreferenced(hash, parts).await;
+        }
         self.handles.shutdown().await;
         while !self.tasks.is_empty() {
             tokio::select! {
@@ -1246,38 +1266,30 @@ impl Actor {
                 Some(res) = self.tasks.join_next() => Self::log_task_result(res),
             }
         }
-        // No entity exists anymore, so what the last batches left to do is
-        // done here directly. No acknowledgement, the database is closed.
-        while let Ok(notice) = self.notices.try_recv() {
-            delete_files(&self.context.options.path, &notice.hash, &notice.parts);
-        }
+        // Parts that still arrive now stay, as after a crash: nothing
+        // references them, and only entities touch files.
     }
 
-    /// Hands a notice to the hash's entity, or acts on it directly if there is none.
-    async fn handle_notice(&mut self, notice: FileNotice) {
-        trace!("{notice:?}");
-        if self.handles.contains(&notice.hash) {
-            // Queue the notice even while the entity is shutting down.
-            let task = self
-                .handles
-                .spawn(notice.hash, move |arg| async move {
-                    match arg {
-                        SpawnArg::Active(ctx) => apply_notice(&ctx, notice).await,
-                        SpawnArg::Dead => {
-                            warn!("no entity for {}, its files stay", notice.hash);
-                        }
+    /// Hands unreferenced parts to the hash's entity, waking it if there is none.
+    ///
+    /// All file IO happens in entities. A woken entity loads before it checks the parts.
+    async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
+        trace!("{} {parts:?}", hash.fmt_short());
+        // Queued even while the entity is shutting down. The entity checks
+        // the parts against its own state before deleting.
+        let task = self
+            .handles
+            .spawn(hash, move |arg| async move {
+                match arg {
+                    SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
+                    SpawnArg::Dead => {
+                        warn!("no entity for {}, its files stay", hash);
                     }
-                })
-                .await;
-            if let Some(task) = task {
-                self.spawn(task);
-            }
-        } else {
-            // No entity exists for the hash, and none can be created before
-            // this is done, since only this actor creates them. So nothing
-            // else touches these files, and no writes from before are in
-            // flight.
-            delete_files(&self.context.options.path, &notice.hash, &notice.parts);
+                }
+            })
+            .await;
+        if let Some(task) = task {
+            self.spawn(task);
         }
     }
 
@@ -1317,7 +1329,7 @@ impl Actor {
                 .spawn(hash, move |arg| async move {
                     let _running = running;
                     let res = match arg {
-                        SpawnArg::Active(ctx) => delete_entry(&ctx).await,
+                        SpawnArg::Active(ctx) => ctx.delete().await,
                         SpawnArg::Dead => Err(io::Error::other("no entity to delete through")),
                     };
                     res_tx.send(res).ok();
@@ -1357,12 +1369,12 @@ impl Actor {
         );
         fs::create_dir_all(db_path.parent().unwrap())?;
         let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
-        let (notices_send, notices) = tokio::sync::mpsc::unbounded_channel();
+        let (unreferenced_send, unreferenced) = tokio::sync::mpsc::unbounded_channel();
         let paths = Arc::new(options.path.clone());
         let db_actor = meta::Actor::new(
             db_path,
             db_recv,
-            notices_send,
+            unreferenced_send,
             paths,
             options.batch.clone(),
             options.syncs_files(),
@@ -1381,7 +1393,7 @@ impl Actor {
             context: slot_context.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
-            notices,
+            unreferenced,
             metadata_task,
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
@@ -1610,6 +1622,18 @@ trait EntityApi {
     async fn export_bao(&self, cmd: ExportBaoMsg);
     /// Export the entry to a local file.
     async fn export_path(&self, cmd: ExportPathMsg);
+    /// Delete the entry, for a delete request or a gc sweep.
+    async fn delete(&self) -> io::Result<()>;
+    /// Hold off writes during a gc run, acknowledging through `ack`, until `release` ends.
+    async fn freeze(
+        &self,
+        ack: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::watch::Receiver<()>,
+    );
+    /// Delete the parts a committed batch stopped referencing, after checking each against the loaded state.
+    ///
+    /// The notice may be stale, so the entity must load before deciding.
+    async fn delete_unreferenced(&self, parts: UnreferencedParts);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);
 }
@@ -1740,6 +1764,22 @@ impl EntityApi for HashContext {
             Err(cause) => AddProgressItem::Error(cause),
         };
         cmd.tx.send(res).await.ok();
+    }
+
+    async fn delete(&self) -> io::Result<()> {
+        delete_entry(self).await
+    }
+
+    async fn freeze(
+        &self,
+        ack: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::watch::Receiver<()>,
+    ) {
+        freeze_entry(self, ack, release).await
+    }
+
+    async fn delete_unreferenced(&self, parts: UnreferencedParts) {
+        delete_unreferenced(self, parts).await
     }
 
     #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
@@ -2121,8 +2161,9 @@ async fn export_path_impl(
                     &ctx.state.borrow().storage,
                     BaoFileStorage::ReadWrite(Settled::Complete(_))
                 ) {
-                    // The notice after the commit deletes the owned data file,
-                    // unless this entity's state still uses it.
+                    // After the commit, the owned data file comes back as an
+                    // unreferenced part, and this entity deletes it unless its
+                    // state still uses it.
                     // TODO: after a copy across file systems it does, so the
                     // owned file leaks.
                     ctx.meta()
@@ -2442,7 +2483,7 @@ pub mod tests {
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        freeze_entry(ctx, ack, release_rx).await;
+                        ctx.freeze(ack, release_rx).await;
                     }
                 })
                 .await
@@ -3331,7 +3372,7 @@ pub mod tests {
                 let (_, bao) = create_n0_bao(&data, &rest)?;
                 store.import_bao_bytes(hash, rest, bao).await?;
             }
-            // The files go after the commit, through a notice to the entity.
+            // The files go after the commit, as unreferenced parts the entity deletes.
             store.sync_db().await?;
             store.wait_idle().await?;
             let inlined = size <= options.inline.max_data_inlined as usize;
@@ -3385,6 +3426,101 @@ pub mod tests {
         Ok(())
     }
 
+    /// Unreferenced parts that arrive after the entry was recreated and its entity unloaded do not delete the new files.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_stale_unreferenced_parts_keep_recreated_files() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
+        let mut options = Options::new(dir.path());
+        options.inline.max_data_inlined = 64 * 1024;
+        let options = Arc::new(options);
+        let mut actor = Actor::new(
+            dir.path().join("blobs.db"),
+            cmd_rx,
+            fs_rx,
+            fs_tx,
+            options.clone(),
+        )
+        .await?;
+        // Hold back the notices; metadata and entities run normally.
+        let (deliver, delayed) = tokio::sync::mpsc::unbounded_channel();
+        let mut notices = std::mem::replace(&mut actor.unreferenced, delayed);
+        let actor_task = tokio::spawn(actor.run());
+        let store = Store::from_client(cmd_tx);
+        let path = &options.path;
+        // Two chunk groups: partial on disk, inlined once complete. Whole
+        // groups, so the partial entry can be exported.
+        let data = test_data(32 * 1024);
+        let half = ChunkRanges::from(..ChunkNum(16));
+        let rest = ChunkRanges::from(ChunkNum(16)..);
+        let (hash, half_bao) = create_n0_bao(&data, &half)?;
+        let (_, rest_bao) = create_n0_bao(&data, &rest)?;
+        store
+            .import_bao_bytes(hash, half.clone(), half_bao.clone())
+            .await?;
+        store.sync_db().await?;
+        store.import_bao_bytes(hash, rest, rest_bao).await?;
+        store.sync_db().await?;
+        // Partial to complete and inline: the data file is no longer referenced.
+        let notice = notices.recv().await.expect("notice");
+        assert_eq!(notice.0, hash);
+        assert!(notice.1 .0.contains(&file_deletes::BaoFilePart::Data));
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        // Partial again, with a new data file, and no entity in memory.
+        store
+            .import_bao_bytes(hash, half.clone(), half_bao.clone())
+            .await?;
+        store.sync_db().await?;
+        store.wait_idle().await?;
+        assert!(path.data_path(&hash).exists());
+        // The notice from before the delete arrives now.
+        deliver.send(notice)?;
+        store.wait_idle().await?;
+        assert!(
+            path.data_path(&hash).exists(),
+            "a stale notice deleted the data of the recreated entry"
+        );
+        let exported = store.export_bao(hash, half).bao_to_vec().await?;
+        assert_eq!(exported, half_bao);
+        store.shutdown().await?;
+        actor_task.await?;
+        Ok(())
+    }
+
+    /// Deleting an entry whose entity is not loaded removes the files the entry referenced.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_delete_unloaded_entry_removes_files() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let options = Options::new(dir.path());
+        let store = FsStore::load_with_opts(dir.path().join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        // 1 MiB: an owned data file and an inlined outboard
+        let data = test_data(1024 * 1024);
+        let hash = store.add_bytes(data).await?.hash;
+        store.sync_db().await?;
+        store.wait_idle().await?;
+        assert!(path.data_path(&hash).exists());
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        assert!(!path.data_path(&hash).exists());
+        store.shutdown().await?;
+        Ok(())
+    }
+
     /// No metadata row is still a completed delete, including observer teardown.
     #[tokio::test]
     async fn test_delete_absent_entry_completes_and_can_be_reimported() -> TestResult<()> {
@@ -3395,14 +3531,11 @@ pub mod tests {
         let hash = Hash::new(&data);
         let mut observer = Box::pin(store.observe(hash).stream().await?);
         assert!(observer.next().await.is_some());
-        // A file left by an interrupted import need not have a metadata row.
-        std::fs::write(options.path.data_path(&hash), b"orphan")?;
         tokio::time::timeout(
             Duration::from_secs(5),
             store.blobs().delete(vec![hash, hash]),
         )
         .await??;
-        assert!(!options.path.data_path(&hash).exists());
         assert!(
             tokio::time::timeout(Duration::from_secs(5), observer.next())
                 .await?

@@ -1,7 +1,7 @@
 //! The metadata database
 #![allow(clippy::result_large_err)]
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io,
     ops::{Bound, Deref, DerefMut},
     path::PathBuf,
@@ -42,7 +42,7 @@ use tracing::{debug, info, info_span, trace, warn, Span};
 use super::{
     boot_id,
     entry_state::{DataLocation, EntryState, OutboardLocation},
-    file_deletes::{referenced_parts, BaoFileParts, FileNotice},
+    file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
     options::{BatchOptions, PathOptions},
     util::PeekableReceiver,
 };
@@ -262,8 +262,8 @@ impl Db {
         Ok(res.state?)
     }
 
-    /// Apply an unconditional delete. A file notice confirms the commit,
-    /// even if there was no metadata entry.
+    /// Apply an unconditional delete, answered once it is committed, even if
+    /// there was no metadata entry.
     ///
     /// Only the hash's entity sends this, see [`Delete`].
     pub async fn delete(&self, hash: Hash) -> io::Result<()> {
@@ -305,7 +305,7 @@ pub struct EntryMeta<'a> {
 }
 
 impl EntryMeta<'_> {
-    /// Apply an unconditional delete; a file notice confirms its commit.
+    /// Apply an unconditional delete, answered once it is committed.
     pub async fn delete(&self) -> io::Result<()> {
         self.db.delete(self.hash).await
     }
@@ -559,8 +559,8 @@ struct Bookkeeping {
     /// with every file their entry referenced in it: before the batch, or in
     /// any state the batch gave it. Files may exist for each of those.
     written: HashMap<Hash, BaoFileParts>,
-    /// Hashes whose entry was deleted in the current write batch.
-    deleted: HashSet<Hash>,
+    /// Deletes in the current write batch, answered once it is committed.
+    deleted: HashMap<Hash, Vec<oneshot::Sender<ActorResult<()>>>>,
 }
 
 impl Bookkeeping {
@@ -582,32 +582,44 @@ impl Bookkeeping {
         }
     }
 
-    /// Note that the entry of a hash was deleted.
-    fn deleted<I>(&mut self, hash: Hash, before: Option<&EntryState<I>>) {
+    /// Note that the entry of a hash was deleted, to answer `tx` once that is committed.
+    fn deleted<I>(
+        &mut self,
+        hash: Hash,
+        before: Option<&EntryState<I>>,
+        tx: oneshot::Sender<ActorResult<()>>,
+    ) {
         self.written(hash, before);
-        self.deleted.insert(hash);
+        self.deleted.entry(hash).or_default().push(tx);
     }
 
-    /// What the batch means for files, once it is committed.
+    /// The deletes of the batch, to answer once it is committed.
+    fn take_deletes(&mut self) -> Vec<oneshot::Sender<ActorResult<()>>> {
+        self.deleted.drain().flat_map(|(_, txs)| txs).collect()
+    }
+
+    /// The parts the batch stopped referencing, to send once it is committed.
     ///
-    /// For each hash written in the batch: whether its entry was deleted, and
-    /// which files it referenced in the batch and no longer does.
-    fn file_notices(&mut self, tables: &impl ReadableTables) -> ActorResult<Vec<FileNotice>> {
+    /// For each hash written but not deleted in the batch: which files it
+    /// referenced in the batch and no longer does. The entity of a deleted
+    /// hash removes all its files itself, once its delete is answered.
+    fn unreferenced_parts(
+        &mut self,
+        tables: &impl ReadableTables,
+    ) -> ActorResult<Vec<(Hash, UnreferencedParts)>> {
         let mut res = Vec::new();
         for (hash, before) in self.written.drain() {
-            let deleted = self.deleted.remove(&hash);
+            if self.deleted.contains_key(&hash) {
+                continue;
+            }
             let after = tables.blobs().get(hash)?.map(|e| e.value());
             let still = referenced_parts(after.as_ref());
             let parts: BaoFileParts = before
                 .into_iter()
                 .filter(|part| !still.contains(part))
                 .collect();
-            if deleted || !parts.is_empty() {
-                res.push(FileNotice {
-                    hash,
-                    deleted,
-                    parts,
-                });
+            if !parts.is_empty() {
+                res.push((hash, UnreferencedParts(parts)));
             }
         }
         Ok(res)
@@ -664,8 +676,8 @@ pub(super) fn trigger_reboot_check(db: &std::path::Path) -> n0_error::Result<boo
 pub struct Actor {
     db: DbWrapper,
     cmds: PeekableReceiver<Command>,
-    /// Where the file consequences of each committed batch go, see [`FileNotice`].
-    notices: tokio::sync::mpsc::UnboundedSender<FileNotice>,
+    /// Where the parts each committed batch stopped referencing go, see [`UnreferencedParts`].
+    unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
     options: BatchOptions,
     state: Bookkeeping,
 }
@@ -674,7 +686,7 @@ impl Actor {
     pub fn new(
         db_path: PathBuf,
         cmds: tokio::sync::mpsc::Receiver<Command>,
-        notices: tokio::sync::mpsc::UnboundedSender<FileNotice>,
+        unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
         paths: Arc<PathOptions>,
         options: BatchOptions,
         syncs_files: bool,
@@ -732,7 +744,7 @@ impl Actor {
         Ok(Self {
             db: db.into(),
             cmds,
-            notices,
+            unreferenced,
             options,
             state: Default::default(),
         })
@@ -760,8 +772,8 @@ impl Actor {
         trace!("{cmd:?}");
         let Delete { hash, tx, .. } = cmd;
         let entry = tables.blobs.remove(hash)?.map(|entry| entry.value());
-        // files are deleted after the commit, see Bookkeeping::file_notices
-        state.deleted(hash, entry.as_ref());
+        // answered after the commit, then the entity deletes the files
+        state.deleted(hash, entry.as_ref(), tx);
         if let Some(EntryState::Complete {
             data_location,
             outboard_location,
@@ -774,7 +786,6 @@ impl Actor {
                 tables.inline_outboard.remove(hash)?;
             }
         }
-        tx.send(Ok(()));
         Ok(())
     }
 
@@ -1020,16 +1031,24 @@ impl Actor {
                             break;
                         }
                     }
-                    let notices = self.state.file_notices(&tables)?;
+                    let unreferenced = self.state.unreferenced_parts(&tables)?;
+                    let deletes = self.state.take_deletes();
                     drop(tables);
                     tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
                     // Files are only touched once the commit that stops
-                    // referencing them is durable. The main actor hands each
-                    // notice to the hash's entity, or acts on it itself if
-                    // there is none. Unbounded, so this actor never waits on
-                    // the main actor, which waits on this one.
-                    for notice in notices {
-                        self.notices.send(notice).ok();
+                    // referencing them is durable. A delete's entity removes
+                    // its files once its delete is answered. If the batch
+                    // fails, the answers are dropped and the deletes fail.
+                    for tx in deletes {
+                        tx.send(Ok(()));
+                    }
+                    // The main actor hands unreferenced parts to the hash's
+                    // entity, which checks them against its own state, or
+                    // deletes them itself if there is none. Unbounded, so this
+                    // actor never waits on the main actor, which waits on this
+                    // one.
+                    for parts in unreferenced {
+                        self.unreferenced.send(parts).ok();
                     }
                 }
             }
@@ -1204,11 +1223,11 @@ mod tests {
         let db = dir.path().join("db");
         let (_tx, rx) = tokio::sync::mpsc::channel(1);
         // dropped without a shutdown, as in a crash
-        let (notices, _) = tokio::sync::mpsc::unbounded_channel();
+        let (unreferenced, _) = tokio::sync::mpsc::unbounded_channel();
         drop(Actor::new(
             db.clone(),
             rx,
-            notices,
+            unreferenced,
             paths,
             BatchOptions::default(),
             false,
@@ -1337,19 +1356,23 @@ mod tests {
         Ok((dir, paths, db))
     }
 
-    /// Run one write batch the way the actor does, and return its file notices.
+    /// Run one write batch the way the actor does, and return the parts it stopped referencing.
     fn write_batch(
         db: &Database,
         state: &mut Bookkeeping,
         f: impl FnOnce(&mut Tables, &mut Bookkeeping) -> testresult::TestResult<()>,
-    ) -> testresult::TestResult<Vec<FileNotice>> {
+    ) -> testresult::TestResult<Vec<(Hash, UnreferencedParts)>> {
         let tx = db.begin_write()?;
         let mut tables = Tables::new(&tx)?;
         f(&mut tables, state)?;
-        let notices = state.file_notices(&tables)?;
+        let unreferenced = state.unreferenced_parts(&tables)?;
+        let deletes = state.take_deletes();
         drop(tables);
         tx.commit()?;
-        Ok(notices)
+        for tx in deletes {
+            tx.send(Ok(()));
+        }
+        Ok(unreferenced)
     }
 
     /// An update from an entity, without waiting for it to be applied.
@@ -1377,7 +1400,7 @@ mod tests {
         let external = dir.path().join("exported");
         std::fs::write(&owned, b"content")?;
         let mut state = Bookkeeping::default();
-        let notices = write_batch(&db, &mut state, |tables, state| {
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
             tables.blobs.insert(
                 hash,
                 EntryState::Complete {
@@ -1418,21 +1441,21 @@ mod tests {
             Ok(())
         })?;
         assert!(
-            notices
+            unreferenced
                 .iter()
-                .all(|n| !n.parts.contains(&BaoFilePart::Data)),
-            "committed metadata still refers to this file: {notices:?}"
+                .all(|(_, n)| !n.0.contains(&BaoFilePart::Data)),
+            "committed metadata still refers to this file: {unreferenced:?}"
         );
         Ok(())
     }
 
-    /// A delete names every file its entry used.
+    /// A delete is answered once committed, and leaves its files to its entity.
     #[test]
-    fn a_delete_names_the_files_of_the_entry() -> testresult::TestResult<()> {
+    fn a_delete_is_answered_after_the_commit() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
         let hash = Hash::new(b"partial");
         let mut state = Bookkeeping::default();
-        let notices = write_batch(&db, &mut state, |tables, state| {
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
             handle_update(
                 update(
                     hash,
@@ -1445,27 +1468,37 @@ mod tests {
             )?;
             Ok(())
         })?;
-        assert!(notices.is_empty(), "a new entry leaves no files behind");
-        let notices = write_batch(&db, &mut state, |tables, state| {
+        assert!(
+            unreferenced.is_empty(),
+            "a new entry leaves no files behind"
+        );
+        let (tx, rx) = oneshot::channel();
+        let oneshot::Receiver::Tokio(mut rx) = rx;
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
             let entry = tables.blobs.remove(hash)?.expect("an entry").value();
-            state.deleted(hash, Some(&entry));
+            state.deleted(hash, Some(&entry), tx);
+            // not before the commit
+            assert!(rx.try_recv().is_err());
             Ok(())
         })?;
-        assert_eq!(notices.len(), 1);
-        assert!(notices[0].deleted);
-        assert_eq!(notices[0].parts.len(), 4, "a partial entry uses every file");
+        assert!(
+            unreferenced.is_empty(),
+            "the entity deletes the files itself"
+        );
+        assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         Ok(())
     }
 
-    /// An absent entry still needs a commit notice to release its entity.
+    /// Deleting an absent entry is answered too, to release its entity.
     #[test]
     fn deleting_an_absent_entry_is_confirmed() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
         let hash = Hash::new(b"absent");
         let mut state = Bookkeeping::default();
         for _ in 0..2 {
-            let notices = write_batch(&db, &mut state, |tables, state| {
-                let (tx, _rx) = oneshot::channel();
+            let (tx, rx) = oneshot::channel();
+            let oneshot::Receiver::Tokio(mut rx) = rx;
+            let unreferenced = write_batch(&db, &mut state, |tables, state| {
                 Actor::delete(
                     state,
                     tables,
@@ -1477,9 +1510,8 @@ mod tests {
                 )?;
                 Ok(())
             })?;
-            assert_eq!(notices.len(), 1);
-            assert_eq!(notices[0].hash, hash);
-            assert!(notices[0].deleted);
+            assert!(unreferenced.is_empty());
+            assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         }
         Ok(())
     }
@@ -1516,7 +1548,7 @@ mod tests {
         }
     }
 
-    /// Exercise a real redb commit failure while a delete waits for its notice.
+    /// Exercise a real redb commit failure while a delete waits for its answer.
     /// Cached observers and idle waiters must also stop, and old files must survive.
     #[tokio::test]
     async fn failed_commit_aborts_store_without_unlinking() -> testresult::TestResult<()> {
@@ -1556,11 +1588,11 @@ mod tests {
         tx.commit()?;
 
         let (db_tx, db_rx) = tokio::sync::mpsc::channel(100);
-        let (notice_tx, notices) = tokio::sync::mpsc::unbounded_channel();
+        let (unreferenced_tx, unreferenced) = tokio::sync::mpsc::unbounded_channel();
         let metadata = Actor {
             db: db.into(),
             cmds: PeekableReceiver::new(db_rx),
-            notices: notice_tx,
+            unreferenced: unreferenced_tx,
             options: options.batch.clone(),
             state: Bookkeeping::default(),
         };
@@ -1575,7 +1607,7 @@ mod tests {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
-            notices,
+            unreferenced,
             metadata_task: Some(tokio::spawn(metadata.run())),
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: tokio::task::JoinSet::new(),
@@ -1702,13 +1734,12 @@ mod tests {
             )?;
             Ok(())
         })?;
-        let notices = write_batch(&db, &mut state, |tables, state| {
+        let unreferenced = write_batch(&db, &mut state, |tables, state| {
             handle_update(update(hash, owned_complete(100_000)), state, tables)?;
             Ok(())
         })?;
-        assert_eq!(notices.len(), 1);
-        assert!(!notices[0].deleted);
-        let mut parts = notices[0].parts.clone();
+        assert_eq!(unreferenced.len(), 1);
+        let mut parts = unreferenced[0].1 .0.clone();
         parts.sort();
         assert_eq!(
             parts.as_slice(),

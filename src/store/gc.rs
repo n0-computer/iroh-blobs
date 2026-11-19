@@ -312,6 +312,19 @@ mod tests {
         BlobFormat,
     };
 
+    #[tokio::test]
+    async fn gc_readonly_rejects_without_blocking_store() -> TestResult<()> {
+        let store = crate::store::readonly_mem::ReadonlyMemStore::new([b"hello"]);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            gc_run_once(&store, &mut HashSet::new(), None),
+        )
+        .await?;
+        assert!(result.is_err());
+        tokio::time::timeout(Duration::from_secs(1), store.sync_db()).await??;
+        Ok(())
+    }
+
     async fn gc_smoke(store: &Store) -> TestResult<()> {
         let blobs = store.blobs();
         let at = blobs.add_slice("a").temp_tag().await?;
