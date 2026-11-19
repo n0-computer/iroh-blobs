@@ -38,7 +38,7 @@ use crate::{
         Tag,
     },
     store::engine::{
-        bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
+        bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
         entity::{Backend, EntityApi, EntityGlobal},
         entity_manager::Reset,
         import::{ImportEntry, ImportEntryMsg, ImportSource},
@@ -402,12 +402,10 @@ impl Size for MemReader {
     }
 }
 
-impl SyncEntityApi for MemCtx<'_> {
+impl BaoAccess for MemCtx<'_> {
     fn id(&self) -> Hash {
         self.entity.id
     }
-
-    async fn load(&self) {}
 
     fn data_reader(&self) -> impl ReadBytesAt {
         MemReader {

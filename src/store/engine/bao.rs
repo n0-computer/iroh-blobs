@@ -1,6 +1,6 @@
 //! Bao import and export over synchronous access to an entry's data.
 //!
-//! Any entity implementation can use these: it implements [`SyncEntityApi`]
+//! Any entity implementation can use these: it implements [`BaoAccess`]
 //! for the duration of a request, and gets validated bao import, range export
 //! and bao export.
 use std::{io, num::NonZeroU64};
@@ -34,22 +34,21 @@ use crate::{
 ///
 /// Not tied to files: the fs entity implements it on its files, a memory
 /// backed entity on its buffers.
-pub(crate) trait SyncEntityApi {
+pub(crate) trait BaoAccess {
     /// The hash of the entry.
     fn id(&self) -> Hash;
 
-    /// Load the entry state from the database. This must make sure that it is
-    /// not run concurrently, so if load is called multiple times, all but one
-    /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
-    async fn load(&self);
-
-    /// Get a synchronous reader for the data file.
+    /// Get a synchronous reader for the data.
+    ///
+    /// A read must fail if not all of the range is there, like reading a file
+    /// past its end. Returning fewer bytes makes the bao code hash a partial
+    /// chunk, which panics.
     fn data_reader(&self) -> impl ReadBytesAt;
 
-    /// Get a synchronous reader for the outboard file.
+    /// Get a synchronous reader for the outboard.
     fn outboard_reader(&self) -> impl ReadAt;
 
-    /// Get the best known size of the data file.
+    /// Get the best known size of the data.
     fn current_size(&self) -> io::Result<u64>;
 
     /// Get the bitfield of the entry.
@@ -77,7 +76,7 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
 }
 
 pub(crate) async fn import_bao_impl(
-    ctx: &impl SyncEntityApi,
+    ctx: &impl BaoAccess,
     size: NonZeroU64,
     rx: &mut mpsc::Receiver<BaoContentItem>,
 ) -> api::Result<()> {
@@ -110,7 +109,7 @@ pub(crate) async fn import_bao_impl(
 }
 
 pub(crate) async fn export_ranges_impl(
-    ctx: &impl SyncEntityApi,
+    ctx: &impl BaoAccess,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
 ) -> io::Result<()> {
@@ -153,7 +152,7 @@ pub(crate) async fn export_ranges_impl(
 }
 
 pub(crate) async fn export_bao_impl(
-    ctx: &impl SyncEntityApi,
+    ctx: &impl BaoAccess,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,
 ) -> io::Result<()> {

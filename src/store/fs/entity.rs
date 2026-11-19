@@ -12,7 +12,7 @@ use tracing::{error, instrument, trace};
 use super::options::FsConfig;
 use crate::store::engine::{
     actor::TaskContext,
-    bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
+    bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
     entity::{EntityApi, EntityGlobal},
     entity_manager::{self},
     import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource},
@@ -319,18 +319,9 @@ impl EntityApi for FsEntity {
     }
 }
 
-impl SyncEntityApi for HashContext<'_> {
+impl BaoAccess for HashContext<'_> {
     fn id(&self) -> Hash {
         self.id
-    }
-
-    /// Load the state from the database.
-    ///
-    /// If the state is Initial, this will start the load.
-    /// If it is Loading, it will wait until loading is done.
-    /// If it is any other state, it will be a noop.
-    async fn load(&self) {
-        load_entity(self).await
     }
 
     /// Write a batch and notify the db
@@ -417,6 +408,15 @@ impl SyncEntityApi for HashContext<'_> {
 impl HashContext<'_> {
     pub fn options(&self) -> &StoreOptions {
         &self.global.options
+    }
+
+    /// Load the state from the database.
+    ///
+    /// If the state is Initial, this will start the load.
+    /// If it is Loading, it will wait until loading is done.
+    /// If it is any other state, it will be a noop.
+    async fn load(&self) {
+        load_entity(self).await
     }
 }
 
