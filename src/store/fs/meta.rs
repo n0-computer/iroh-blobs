@@ -266,14 +266,15 @@ impl Db {
     /// there was no metadata entry.
     ///
     /// Only the hash's entity sends this, see [`Delete`].
-    pub async fn delete(&self, hash: Hash) -> io::Result<BaoFileParts> {
+    pub async fn delete(&self, hash: Hash) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         let span = Span::current();
         self.sender
             .send(Delete { hash, tx, span }.into())
             .await
             .map_err(|_| io::Error::other("send delete"))?;
-        Ok(rx.await.map_err(|_| io::Error::other("receive delete"))??)
+        rx.await.map_err(|_| io::Error::other("receive delete"))??;
+        Ok(())
     }
 
     /// A view of this database scoped to a single entry.
@@ -304,8 +305,8 @@ pub struct EntryMeta<'a> {
 }
 
 impl EntryMeta<'_> {
-    /// Apply an unconditional delete, answered once it is committed, with the files the entry referenced.
-    pub async fn delete(&self) -> io::Result<BaoFileParts> {
+    /// Apply an unconditional delete, answered once it is committed.
+    pub async fn delete(&self) -> io::Result<()> {
         self.db.delete(self.hash).await
     }
 
@@ -558,13 +559,9 @@ struct Bookkeeping {
     /// with every file their entry referenced in it: before the batch, or in
     /// any state the batch gave it. Files may exist for each of those.
     written: HashMap<Hash, BaoFileParts>,
-    /// Deletes in the current write batch, answered once it is committed with
-    /// the files the entry referenced.
-    deleted: HashMap<Hash, Vec<DeleteAnswer>>,
+    /// Deletes in the current write batch, answered once it is committed.
+    deleted: HashMap<Hash, Vec<oneshot::Sender<ActorResult<()>>>>,
 }
-
-/// A delete's reply channel, with the files its entry referenced.
-type DeleteAnswer = (oneshot::Sender<ActorResult<BaoFileParts>>, BaoFileParts);
 
 impl Bookkeeping {
     /// Note a write to the entry of a hash, whose state before the write was `before`.
@@ -590,16 +587,14 @@ impl Bookkeeping {
         &mut self,
         hash: Hash,
         before: Option<&EntryState<I>>,
-        tx: oneshot::Sender<ActorResult<BaoFileParts>>,
+        tx: oneshot::Sender<ActorResult<()>>,
     ) {
         self.written(hash, before);
-        // Complete: the entity writes nothing after its delete.
-        let parts = self.written[&hash].clone();
-        self.deleted.entry(hash).or_default().push((tx, parts));
+        self.deleted.entry(hash).or_default().push(tx);
     }
 
     /// The deletes of the batch, to answer once it is committed.
-    fn take_deletes(&mut self) -> Vec<DeleteAnswer> {
+    fn take_deletes(&mut self) -> Vec<oneshot::Sender<ActorResult<()>>> {
         self.deleted.drain().flat_map(|(_, txs)| txs).collect()
     }
 
@@ -607,7 +602,7 @@ impl Bookkeeping {
     ///
     /// For each hash written but not deleted in the batch: which files it
     /// referenced in the batch and no longer does. The entity of a deleted
-    /// hash removes its files itself, once its delete is answered.
+    /// hash removes all its files itself, once its delete is answered.
     fn unreferenced_parts(
         &mut self,
         tables: &impl ReadableTables,
@@ -1044,8 +1039,8 @@ impl Actor {
                     // referencing them is durable. A delete's entity removes
                     // its files once its delete is answered. If the batch
                     // fails, the answers are dropped and the deletes fail.
-                    for (tx, parts) in deletes {
-                        tx.send(Ok(parts));
+                    for tx in deletes {
+                        tx.send(Ok(()));
                     }
                     // The main actor hands unreferenced parts to the hash's
                     // entity, which checks them against its own state, or
@@ -1192,7 +1187,7 @@ mod tests {
 
     use super::{
         super::{
-            file_deletes::{BaoFilePart, ALL_PARTS},
+            file_deletes::BaoFilePart,
             options::{CrashConsistency, Options, PathOptions},
         },
         *,
@@ -1374,8 +1369,8 @@ mod tests {
         let deletes = state.take_deletes();
         drop(tables);
         tx.commit()?;
-        for (tx, parts) in deletes {
-            tx.send(Ok(parts));
+        for tx in deletes {
+            tx.send(Ok(()));
         }
         Ok(unreferenced)
     }
@@ -1490,10 +1485,7 @@ mod tests {
             unreferenced.is_empty(),
             "the entity deletes the files itself"
         );
-        assert!(
-            matches!(rx.try_recv(), Ok(Ok(parts)) if parts.as_slice() == ALL_PARTS),
-            "a partial entry may have every file"
-        );
+        assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         Ok(())
     }
 
@@ -1519,7 +1511,7 @@ mod tests {
                 Ok(())
             })?;
             assert!(unreferenced.is_empty());
-            assert!(matches!(rx.try_recv(), Ok(Ok(parts)) if parts.is_empty()));
+            assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         }
         Ok(())
     }

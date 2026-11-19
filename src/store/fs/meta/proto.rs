@@ -8,10 +8,7 @@ use tracing::Span;
 use super::{ActorResult, ReadOnlyTables};
 use crate::{
     api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
-    store::{
-        fs::{entry_state::EntryState, file_deletes::BaoFileParts},
-        util::DD,
-    },
+    store::{fs::entry_state::EntryState, util::DD},
     util::channel::oneshot,
     Hash,
 };
@@ -39,14 +36,13 @@ impl fmt::Debug for Get {
 /// The entity sends this from its `Deleting` state, so none of its writes can
 /// follow. The reply comes once the delete is committed, even if no entry
 /// existed, and it also detects commands dropped during shutdown or a failed
-/// batch, since then it is dropped. It holds the files the entry referenced,
-/// before or during the batch, which the entity then deletes.
+/// batch, since then it is dropped.
 /// Whether the entry may be deleted is decided before, by the main actor's
 /// temp tag check. A metadata error fails the store instead of undoing a delete.
 #[derive(Debug)]
 pub struct Delete {
     pub hash: Hash,
-    pub tx: oneshot::Sender<ActorResult<BaoFileParts>>,
+    pub tx: oneshot::Sender<ActorResult<()>>,
     pub span: Span,
 }
 

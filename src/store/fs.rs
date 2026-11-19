@@ -88,22 +88,23 @@
 //! # Deletes
 //!
 //! The main actor fans `DeleteBlobs` out to the entity of each hash, creating it
-//! without loading if needed, also for inline entries. That orders a delete with
+//! if needed, also for inline entries. That orders a delete with
 //! concurrent requests even if no entity existed when it arrived. A delete that
 //! is not forced skips content with a current or retained temp tag; that check
 //! happens in the main actor, before the fan-out. The entity:
 //!
-//! 1. Starts a new generation of the entry, which ends observers, and
-//!    switches to `Deleting`. The cached state is dropped: readers see no
-//!    entry, and changes wait from here on.
+//! 1. Loads, and notes the files its state references: those of its entry, and
+//!    those it wrote that the entry does not reference yet. Then it starts a
+//!    new generation of the entry, which ends observers, and switches to
+//!    `Deleting`. The cached state is dropped: readers see no entry, and
+//!    changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
 //! 3. Waits for the answer, which comes once the delete is committed, even if
 //!    there was no entry. Waiting keeps the entity alive, so it cannot unload
 //!    and come back with new files that the unlink would take.
-//! 4. Unlinks the files the entry referenced, which the answer lists, and those
-//!    its state referenced, which may not be in the entry yet, and switches to
-//!    `NonExisting`. Waiting writes continue on an empty entry: a running
+//! 4. Unlinks the files it noted, so an inline entry costs no unlink, and
+//!    switches to `NonExisting`. Waiting writes continue on an empty entry: a running
 //!    download keeps going with the ranges that arrive from then on.
 //!
 //! The main actor answers `DeleteBlobs` once every entity is done, after its
@@ -543,15 +544,16 @@ async fn load_entity(ctx: &HashContext) {
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
 async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
+    // Loaded, the entity's state knows all its files: those of its entry, and
+    // those it wrote that the entry does not reference yet.
+    ctx.load().await;
     wait_writable(ctx).await;
-    // Files the entity wrote that its entry may not reference yet. Not loaded,
-    // it wrote none.
-    let own: BaoFileParts = match &ctx.state.borrow().storage {
-        BaoFileStorage::Initial => BaoFileParts::new(),
-        storage => ALL_PARTS
+    let parts: BaoFileParts = {
+        let state = ctx.state.borrow();
+        ALL_PARTS
             .into_iter()
-            .filter(|part| storage.references(*part))
-            .collect(),
+            .filter(|part| state.references(*part))
+            .collect()
     };
     // A new generation ends observers, even if they next wake only after this
     // hash was re-imported.
@@ -559,22 +561,14 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
         state.generation += 1;
         state.storage = BaoFileStorage::Deleting;
     });
-    // Answered once the delete is committed, with the files the entry referenced.
-    let mut parts = match ctx.meta().delete().await {
-        Ok(parts) => parts,
-        Err(cause) => {
-            // Metadata failure aborts the store. A command racing a graceful
-            // shutdown can also be rejected, without a failure to trigger abort.
-            // Release waiters with an error instead of restoring the old state.
-            ctx.state
-                .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
-            return Err(cause);
-        }
-    };
-    for part in own {
-        if !parts.contains(&part) {
-            parts.push(part);
-        }
+    // Answered once the delete is committed.
+    if let Err(cause) = ctx.meta().delete().await {
+        // Metadata failure aborts the store. A command racing a graceful
+        // shutdown can also be rejected, without a failure to trigger abort.
+        // Release waiters with an error instead of restoring the old state.
+        ctx.state
+            .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
+        return Err(cause);
     }
     // No durable state references the files anymore.
     delete_files(&ctx.global.options.path, &ctx.id, &parts);

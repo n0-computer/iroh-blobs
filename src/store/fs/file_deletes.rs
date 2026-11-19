@@ -7,7 +7,7 @@ use super::{
 use crate::Hash;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BaoFilePart {
+pub(crate) enum BaoFilePart {
     Outboard,
     Data,
     Sizes,
