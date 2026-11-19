@@ -24,11 +24,9 @@ use n0_future::stream;
 use tokio::sync::watch;
 
 use super::{
-    export_bao_impl, export_ranges_impl,
     import::{ImportEntry, ImportEntryMsg, ImportSource},
-    import_bao_impl,
     options::StoreOptions,
-    FsStore, SyncEntityApi,
+    FsStore,
 };
 use crate::{
     api::{
@@ -44,6 +42,7 @@ use crate::{
         Tag,
     },
     store::engine::{
+        bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
         entity::{Backend, EntityApi, EntityGlobal},
         entity_manager::Reset,
         metadata::{

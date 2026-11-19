@@ -8,6 +8,7 @@
 //!
 //! This module is being assembled from the fs store; for now some of the
 //! generic parts still live there.
+pub(crate) mod bao;
 pub(crate) mod entity;
 pub(crate) mod entity_manager;
 pub(crate) mod metadata;

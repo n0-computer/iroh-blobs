@@ -247,7 +247,6 @@ use std::{
     fs,
     future::Future,
     io::Write,
-    num::NonZeroU64,
     ops::Deref,
     path::{Path, PathBuf},
     sync::{
@@ -256,43 +255,30 @@ use std::{
     },
 };
 
-use bao_tree::{
-    blake3,
-    io::{
-        mixed::{traverse_ranges_validated, EncodedItem, ReadBytesAt},
-        outboard::PreOrderOutboard,
-        sync::ReadAt,
-        BaoContentItem, Leaf,
-    },
-    BaoTree, ChunkNum, ChunkRanges,
-};
+use bao_tree::io::{mixed::EncodedItem, sync::ReadAt, BaoContentItem};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use n0_error::{Result, StdResultExt};
 use n0_future::{future::yield_now, io, stream, StreamExt};
 use nested_enum_utils::enum_conversions;
-use range_collections::range_set::RangeSetRange;
 use tokio::task::{JoinError, JoinSet};
 use tracing::{error, instrument, trace, warn};
 
 use crate::{
     api::{
         proto::{
-            self, bitfield::is_validated, BatchMsg, BatchResponse, Bitfield, Command,
-            CreateTempTagMsg, ExportBaoMsg, ExportBaoRequest, ExportPathMsg, ExportPathRequest,
-            ExportRangesItem, ExportRangesMsg, ExportRangesRequest, HashSpecific, ImportBaoMsg,
-            ImportBaoRequest, ObserveMsg, Scope,
+            self, BatchMsg, BatchResponse, Bitfield, Command, CreateTempTagMsg, ExportBaoMsg,
+            ExportPathMsg, ExportPathRequest, ExportRangesItem, ExportRangesMsg, HashSpecific,
+            ImportBaoMsg, ImportBaoRequest, ObserveMsg, Scope,
         },
         ApiClient,
     },
-    protocol::ChunkRangesExt,
     store::{
         fs::bao_file::{
             BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
         },
         gc::run_gc,
-        util::{drain, BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
-        IROH_BLOCK_SIZE,
+        util::{drain, FixedSize, MemOrFile, ValueOrPoisioned},
     },
     util::{
         channel::oneshot,
@@ -315,6 +301,7 @@ pub mod options;
 mod sync_fs;
 pub(crate) mod util;
 use crate::store::engine::{
+    bao::{export_bao_impl, export_ranges_impl, import_bao_impl, SyncEntityApi},
     entity::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal},
     entity_manager::{self, EntityManagerState, SpawnArg},
     metadata::{
@@ -1740,46 +1727,6 @@ trait EntityOps {
     async fn persist(&self);
 }
 
-/// Synchronous access to one entry's data, which the bao import and export code is generic over.
-///
-/// Not tied to files: the fs entity implements it on its files, a memory
-/// backed entity on its buffers.
-trait SyncEntityApi {
-    /// The hash of the entry.
-    fn id(&self) -> Hash;
-
-    /// Load the entry state from the database. This must make sure that it is
-    /// not run concurrently, so if load is called multiple times, all but one
-    /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
-    async fn load(&self);
-
-    /// Get a synchronous reader for the data file.
-    fn data_reader(&self) -> impl ReadBytesAt;
-
-    /// Get a synchronous reader for the outboard file.
-    fn outboard_reader(&self) -> impl ReadAt;
-
-    /// Get the best known size of the data file.
-    fn current_size(&self) -> io::Result<u64>;
-
-    /// Get the bitfield of the entry.
-    fn bitfield(&self) -> io::Result<Bitfield>;
-
-    /// Write a batch of content items to the entry.
-    async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()>;
-
-    /// The outboard for the entry.
-    fn outboard(&self) -> io::Result<PreOrderOutboard<impl ReadAt>> {
-        let tree = BaoTree::new(self.current_size()?, IROH_BLOCK_SIZE);
-        let outboard = self.outboard_reader();
-        Ok(PreOrderOutboard {
-            root: blake3::Hash::from(self.id()),
-            tree,
-            data: outboard,
-        })
-    }
-}
-
 /// The high level entry point per entry.
 impl EntityOps for HashContext<'_> {
     fn meta(&self) -> metadata::EntryMeta<'_> {
@@ -2047,107 +1994,6 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
         outboard_location,
     };
     ctx.meta().update_await(state).await?;
-    Ok(())
-}
-
-fn chunk_range(leaf: &Leaf) -> ChunkRanges {
-    let start = ChunkNum::chunks(leaf.offset);
-    let end = ChunkNum::chunks(leaf.offset + leaf.data.len() as u64);
-    (start..end).into()
-}
-
-async fn import_bao_impl(
-    ctx: &impl SyncEntityApi,
-    size: NonZeroU64,
-    rx: &mut mpsc::Receiver<BaoContentItem>,
-) -> api::Result<()> {
-    trace!("importing bao: {} {} bytes", ctx.id().fmt_short(), size);
-    let mut batch = Vec::<BaoContentItem>::new();
-    let mut ranges = ChunkRanges::empty();
-    while let Some(item) = rx.recv().await? {
-        // if the batch is not empty, the last item is a leaf and the current item is a parent, write the batch
-        if !batch.is_empty() && batch[batch.len() - 1].is_leaf() && item.is_parent() {
-            let bitfield = Bitfield::new_unchecked(ranges, size.into());
-            ctx.write_batch(&batch, &bitfield).await?;
-            batch.clear();
-            ranges = ChunkRanges::empty();
-        }
-        if let BaoContentItem::Leaf(leaf) = &item {
-            let leaf_range = chunk_range(leaf);
-            if is_validated(size, &leaf_range) && size.get() != leaf.offset + leaf.data.len() as u64
-            {
-                return Err(api::Error::io(io::ErrorKind::InvalidData, "invalid size"));
-            }
-            ranges |= leaf_range;
-        }
-        batch.push(item);
-    }
-    if !batch.is_empty() {
-        let bitfield = Bitfield::new_unchecked(ranges, size.into());
-        ctx.write_batch(&batch, &bitfield).await?;
-    }
-    Ok(())
-}
-
-async fn export_ranges_impl(
-    ctx: &impl SyncEntityApi,
-    cmd: ExportRangesRequest,
-    tx: &mut mpsc::Sender<ExportRangesItem>,
-) -> io::Result<()> {
-    let ExportRangesRequest { ranges, hash } = cmd;
-    trace!(
-        "exporting ranges: {hash} {ranges:?} size={}",
-        ctx.current_size()?
-    );
-    let bitfield = ctx.bitfield()?;
-    let data = ctx.data_reader();
-    let size = bitfield.size();
-    tx.send(ExportRangesItem::Size(size)).await?;
-    for range in ranges.iter() {
-        let range = match range {
-            RangeSetRange::Range(range) => size.min(*range.start)..size.min(*range.end),
-            RangeSetRange::RangeFrom(range) => size.min(*range.start)..size,
-        };
-        let requested = ChunkRanges::bytes(range.start..range.end);
-        if !bitfield.ranges.is_superset(&requested) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("missing range: {requested:?}, present: {bitfield:?}"),
-            ));
-        }
-        let bs = 1024;
-        let mut offset = range.start;
-        loop {
-            let end: u64 = (offset + bs).min(range.end);
-            let size = (end - offset) as usize;
-            let res = data.read_bytes_at(offset, size);
-            tx.send(ExportRangesItem::Data(Leaf { offset, data: res? }))
-                .await?;
-            offset = end;
-            if offset >= range.end {
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn export_bao_impl(
-    ctx: &impl SyncEntityApi,
-    cmd: ExportBaoRequest,
-    tx: &mut mpsc::Sender<EncodedItem>,
-) -> io::Result<()> {
-    let ExportBaoRequest { ranges, hash, .. } = cmd;
-    let outboard = ctx.outboard()?;
-    let size = outboard.tree.size();
-    if size == 0 {
-        // we have no data whatsoever, so we stop here
-        return Ok(());
-    }
-    trace!("exporting bao: {hash} {ranges:?} size={size}",);
-    let data = ctx.data_reader();
-    let tx = BaoTreeSender::new(tx);
-    traverse_ranges_validated(data, outboard, &ranges, tx).await?;
     Ok(())
 }
 
@@ -2493,7 +2339,9 @@ pub mod tests {
         time::Duration,
     };
 
-    use bao_tree::{io::round_up_to_chunks_groups, ChunkRanges};
+    use bao_tree::{io::round_up_to_chunks_groups, ChunkNum, ChunkRanges};
+
+    use crate::protocol::ChunkRangesExt;
     use bytes::Bytes;
     use n0_future::{stream, Stream, StreamExt};
     use n0_tracing_test::traced_test;
