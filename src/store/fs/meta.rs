@@ -12,7 +12,7 @@ use std::{
 use bao_tree::BaoTree;
 use bytes::Bytes;
 use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
-use n0_future::{stream, Stream};
+use n0_future::stream;
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -111,83 +111,42 @@ impl Db {
         Self { sender }
     }
 
-    /// Takes a read snapshot after all earlier commands.
-    async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(Snapshot { tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send snapshot"))?;
-        rx.await.map_err(|_| io::Error::other("receive snapshot"))
-    }
-
-    /// Lists the tags of a snapshot taken after all earlier commands.
-    ///
-    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
+    /// Lists tags, from a snapshot taken after all earlier commands.
     pub async fn list_tags(
         &self,
         span: tracing::Span,
         request: ListTagsRequest,
-    ) -> io::Result<impl Stream<Item = api::Result<TagInfo>> + Send + 'static> {
-        let snapshot = self.snapshot(span).await?;
-        let ListTagsRequest {
-            from,
-            to,
-            raw,
-            hash_seq,
-        } = request;
-        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
-        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-        let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
-        let tags = rows.filter_map(move |row| {
-            let (name, value) = match row {
-                Ok(row) => row,
-                Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
-            };
-            let value = value.value();
-            let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
-            wanted.then(|| {
-                Ok(TagInfo {
-                    name: name.value(),
-                    hash: value.hash,
-                    format: value.format,
-                })
-            })
-        });
-        Ok(stream::iter(tags))
+    ) -> io::Result<Listing<TagInfo>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(ListTags { request, tx, span }.into())
+            .await
+            .map_err(|_| io::Error::other("send list tags"))?;
+        rx.await
+            .map_err(|_| io::Error::other("receive list tags"))?
     }
 
-    /// Lists the blobs of a snapshot taken after all earlier commands.
-    ///
-    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
-    pub async fn list_blobs(
-        &self,
-        span: tracing::Span,
-    ) -> io::Result<impl Stream<Item = api::Result<Hash>> + Send + 'static> {
-        let snapshot = self.snapshot(span).await?;
-        Ok(stream::iter(blob_hashes(&snapshot)?))
+    /// Lists the hashes of all blobs, from a snapshot taken after all earlier commands.
+    pub async fn list_blobs(&self, span: tracing::Span) -> io::Result<Listing<Hash>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(ListBlobs { tx, span }.into())
+            .await
+            .map_err(|_| io::Error::other("send list blobs"))?;
+        rx.await
+            .map_err(|_| io::Error::other("receive list blobs"))?
     }
 
     /// Reads the gc candidates (every blob) and the named tag roots from one
     /// snapshot taken after all earlier commands.
-    pub async fn gc_snapshot(
-        &self,
-        span: tracing::Span,
-    ) -> io::Result<(
-        impl Stream<Item = api::Result<Hash>> + Send + 'static,
-        impl Stream<Item = api::Result<crate::HashAndFormat>> + Send + 'static,
-    )> {
-        let snapshot = self.snapshot(span).await?;
-        let candidates = blob_hashes(&snapshot)?;
-        let roots = snapshot
-            .tags
-            .range::<Tag>(..)
-            .map_err(io::Error::other)?
-            .map(|row| {
-                row.map(|(_, root)| root.value())
-                    .map_err(api_error_from_storage_error)
-            });
-        Ok((stream::iter(candidates), stream::iter(roots)))
+    pub async fn gc_snapshot(&self, span: tracing::Span) -> io::Result<GcSnapshotReply> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(GcSnapshot { tx, span }.into())
+            .await
+            .map_err(|_| io::Error::other("send gc snapshot"))?;
+        rx.await
+            .map_err(|_| io::Error::other("receive gc snapshot"))?
     }
 
     pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
@@ -945,13 +904,24 @@ impl Actor {
                 Self::clear_run(db)?;
                 Some(cmd)
             }
-            TopLevelCommand::Snapshot(cmd) => {
+            TopLevelCommand::ListTags(cmd) => {
                 trace!("{cmd:?}");
-                let txn = db
-                    .begin_read()
-                    .map_err(|e| e!(ActorError::Transaction, e))?;
-                let snapshot = ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))?;
-                cmd.tx.send(snapshot).ok();
+                let snapshot = read_tables(db)?;
+                cmd.tx.send(list_tags(snapshot, cmd.request)).ok();
+                None
+            }
+            TopLevelCommand::ListBlobs(cmd) => {
+                trace!("{cmd:?}");
+                let snapshot = read_tables(db)?;
+                let blobs =
+                    blob_hashes(&snapshot).map(|rows| Box::pin(stream::iter(rows)) as Listing<_>);
+                cmd.tx.send(blobs).ok();
+                None
+            }
+            TopLevelCommand::GcSnapshot(cmd) => {
+                trace!("{cmd:?}");
+                let snapshot = read_tables(db)?;
+                cmd.tx.send(gc_snapshot(snapshot)).ok();
                 None
             }
         })
@@ -1183,6 +1153,60 @@ pub(crate) fn raw_outboard_size(size: u64) -> u64 {
 }
 
 /// The hashes of all blobs in a snapshot.
+/// Opens a read snapshot of the tables.
+fn read_tables(db: &Database) -> ActorResult<ReadOnlyTables> {
+    let txn = db
+        .begin_read()
+        .map_err(|e| e!(ActorError::Transaction, e))?;
+    ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))
+}
+
+/// The tags of a snapshot that the request asks for. The stream owns the snapshot.
+fn list_tags(snapshot: ReadOnlyTables, request: ListTagsRequest) -> io::Result<Listing<TagInfo>> {
+    let ListTagsRequest {
+        from,
+        to,
+        raw,
+        hash_seq,
+    } = request;
+    let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+    let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+    let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
+    let tags = rows.filter_map(move |row| {
+        let (name, value) = match row {
+            Ok(row) => row,
+            Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
+        };
+        let value = value.value();
+        let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
+        wanted.then(|| {
+            Ok(TagInfo {
+                name: name.value(),
+                hash: value.hash,
+                format: value.format,
+            })
+        })
+    });
+    Ok(Box::pin(stream::iter(tags)))
+}
+
+/// The gc candidates (every blob) and the named tag roots of one snapshot.
+fn gc_snapshot(snapshot: ReadOnlyTables) -> io::Result<GcSnapshotReply> {
+    let candidates = blob_hashes(&snapshot)?;
+    let roots = snapshot
+        .tags
+        .range::<Tag>(..)
+        .map_err(io::Error::other)?
+        .map(|row| {
+            row.map(|(_, root)| root.value())
+                .map_err(api_error_from_storage_error)
+        });
+    Ok((
+        Box::pin(stream::iter(candidates)),
+        Box::pin(stream::iter(roots)),
+    ))
+}
+
 fn blob_hashes(
     snapshot: &ReadOnlyTables,
 ) -> io::Result<impl Iterator<Item = api::Result<Hash>> + Send + 'static> {

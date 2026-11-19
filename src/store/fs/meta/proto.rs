@@ -1,16 +1,21 @@
 //! Protocol for the metadata database.
-use std::fmt;
+use std::{fmt, io, pin::Pin};
 
 use bytes::Bytes;
+use n0_future::Stream;
 use nested_enum_utils::enum_conversions;
 use tracing::Span;
 
-use super::{ActorResult, ReadOnlyTables};
+use super::ActorResult;
 use crate::{
-    api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
+    api::{
+        self,
+        proto::{BlobStatusMsg, ListTagsRequest, ShutdownMsg, SyncDbMsg},
+        tags::TagInfo,
+    },
     store::{fs::entry_state::EntryState, util::DD},
     util::channel::oneshot,
-    Hash,
+    Hash, HashAndFormat,
 };
 
 /// Get the entry state for a hash.
@@ -61,10 +66,51 @@ pub struct Dump {
     pub span: Span,
 }
 
-#[derive(Debug)]
-pub struct Snapshot {
-    pub(crate) tx: tokio::sync::oneshot::Sender<ReadOnlyTables>,
+/// A stream of rows from a read snapshot, which it owns.
+///
+/// The metadata actor hands it out and moves on, so it never waits for the reader.
+pub type Listing<T> = Pin<Box<dyn Stream<Item = api::Result<T>> + Send + 'static>>;
+
+/// The gc candidates (every blob) and the named tag roots, from one snapshot.
+pub type GcSnapshotReply = (Listing<Hash>, Listing<HashAndFormat>);
+
+/// List tags, from a snapshot taken after all earlier commands.
+pub struct ListTags {
+    pub request: ListTagsRequest,
+    pub tx: tokio::sync::oneshot::Sender<io::Result<Listing<TagInfo>>>,
     pub span: Span,
+}
+
+impl fmt::Debug for ListTags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ListTags")
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
+/// List the hashes of all blobs, from a snapshot taken after all earlier commands.
+pub struct ListBlobs {
+    pub tx: tokio::sync::oneshot::Sender<io::Result<Listing<Hash>>>,
+    pub span: Span,
+}
+
+impl fmt::Debug for ListBlobs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ListBlobs").finish_non_exhaustive()
+    }
+}
+
+/// The gc candidates and roots, from one snapshot taken after all earlier commands.
+pub struct GcSnapshot {
+    pub tx: tokio::sync::oneshot::Sender<io::Result<GcSnapshotReply>>,
+    pub span: Span,
+}
+
+impl fmt::Debug for GcSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GcSnapshot").finish_non_exhaustive()
+    }
 }
 
 /// Merge into the entry state of a hash, without a reply.
@@ -183,7 +229,9 @@ impl ReadWriteCommand {
 pub enum TopLevelCommand {
     SyncDb(SyncDbMsg),
     Shutdown(ShutdownMsg),
-    Snapshot(Snapshot),
+    ListTags(ListTags),
+    ListBlobs(ListBlobs),
+    GcSnapshot(GcSnapshot),
 }
 
 impl TopLevelCommand {
@@ -191,7 +239,9 @@ impl TopLevelCommand {
         match self {
             Self::SyncDb(x) => &x.span,
             Self::Shutdown(x) => &x.span,
-            Self::Snapshot(x) => &x.span,
+            Self::ListTags(x) => &x.span,
+            Self::ListBlobs(x) => &x.span,
+            Self::GcSnapshot(x) => &x.span,
         }
     }
 }

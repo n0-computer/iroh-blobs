@@ -133,7 +133,7 @@
 //! ends. A batch scope that ended meanwhile is not recreated: its queued tag and
 //! import requests are rejected.
 //!
-//! To build the snapshot, the main actor sends `Snapshot` to the metadata actor,
+//! To build the snapshot, the main actor sends `GcSnapshot` to the metadata actor,
 //! a top-level command, so tag changes queued before it are committed. It takes
 //! all blobs as candidates, and the named tags plus current and retained temp
 //! tags as roots. Then it freezes each HashSeq root through its entity, and
@@ -1044,7 +1044,7 @@ impl Actor {
 
     async fn enter_gc(&mut self, cmd: proto::GcRunMsg) {
         self.temp_tags.start_gc_run();
-        // Snapshot is a top-level metadata command: earlier tag mutations have
+        // GcSnapshot is a top-level metadata command: earlier tag mutations have
         // committed before this returns. Main has not dispatched any later ones.
         let snapshot = self.gc_snapshot(cmd.span.clone()).await;
         let snapshot = match snapshot {
