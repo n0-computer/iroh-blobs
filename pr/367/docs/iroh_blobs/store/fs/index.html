@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="File based blob store."><title>iroh_blobs::store::fs - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (900485642 2026-04-08)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module fs</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../iroh_blobs/index.html">iroh_<wbr>blobs</a><span class="version">0.105.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module fs</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#file-based-blob-store" title="File based blob store.">File based blob store.</a></li><li><a href="#design" title="Design">Design</a></li><li><a href="#actors" title="Actors">Actors</a></li><li><a href="#metadata-protocol" title="Metadata protocol">Metadata protocol</a></li><li><a href="#entities" title="Entities">Entities</a></li><li><a href="#file-notices" title="File notices">File notices</a></li><li><a href="#deletes" title="Deletes">Deletes</a></li><li><a href="#gc-sessions" title="GC sessions">GC sessions</a></li><li><a href="#tasks" title="Tasks">Tasks</a></li><li><a href="#context" title="Context">Context</a></li><li><a href="#runtime" title="Runtime">Runtime</a></li><li><a href="#limitations" title="Limitations">Limitations</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In iroh_<wbr>blobs::<wbr>store</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">iroh_blobs</a>::<wbr><a href="../index.html">store</a></div><h1>Module <span>fs</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/iroh_blobs/store/fs.rs.html#1-3688">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="file-based-blob-store"><a class="doc-anchor" href="#file-based-blob-store">§</a>File based blob store.</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="File based blob store."><title>iroh_blobs::store::fs - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iroh_blobs" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (900485642 2026-04-08)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module fs</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../iroh_blobs/index.html">iroh_<wbr>blobs</a><span class="version">0.105.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module fs</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#file-based-blob-store" title="File based blob store.">File based blob store.</a></li><li><a href="#design" title="Design">Design</a></li><li><a href="#actors" title="Actors">Actors</a></li><li><a href="#metadata-protocol" title="Metadata protocol">Metadata protocol</a></li><li><a href="#entities" title="Entities">Entities</a></li><li><a href="#unreferenced-parts" title="Unreferenced parts">Unreferenced parts</a></li><li><a href="#deletes" title="Deletes">Deletes</a></li><li><a href="#gc-sessions" title="GC sessions">GC sessions</a></li><li><a href="#tasks" title="Tasks">Tasks</a></li><li><a href="#context" title="Context">Context</a></li><li><a href="#runtime" title="Runtime">Runtime</a></li><li><a href="#limitations" title="Limitations">Limitations</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In iroh_<wbr>blobs::<wbr>store</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">iroh_blobs</a>::<wbr><a href="../index.html">store</a></div><h1>Module <span>fs</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/iroh_blobs/store/fs.rs.html#1-3821">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="file-based-blob-store"><a class="doc-anchor" href="#file-based-blob-store">§</a>File based blob store.</h2>
 <p>A file based blob store needs a writeable directory to work with.</p>
 <h2 id="design"><a class="doc-anchor" href="#design">§</a>Design</h2>
 <p>The metadata actor owns the metadata, and each entity owns the files of its
@@ -11,7 +11,8 @@ the entity too.</p>
 <ul>
 <li><strong>Main actor</strong>: handles user commands, runs the entity manager, holds the
 temp tags, forwards tag, status, listing and lifecycle commands to the
-metadata actor, fans deletes out to the entities, and routes file notices.</li>
+metadata actor, fans deletes out to the entities, and routes unreferenced
+parts.</li>
 <li><strong>Entity actors</strong>, one per hash that is currently being worked on: run the
 per-hash tasks (import, export, observe, persist, delete). While an entity
 exists, it is the only one that writes and deletes the files of its hash.</li>
@@ -30,17 +31,18 @@ hash:</p>
 <tr><td><code>set(state)</code></td><td>until applied</td><td>replace the entry state</td></tr>
 <tr><td><code>update(state)</code></td><td>no</td><td>merge into the entry state</td></tr>
 <tr><td><code>update_await(state)</code></td><td>until applied</td><td>merge into the entry state</td></tr>
-<tr><td><code>delete()</code></td><td>until applied</td><td>ensure the entry is absent; a notice confirms the commit</td></tr>
+<tr><td><code>delete()</code></td><td>until committed</td><td>ensure the entry is absent</td></tr>
 </tbody></table>
 </div>
 <p>“Applied” means visible to later commands, not durable. Durability comes with
 the commit of the batch, and commits are durable (redb’s default
-<code>Durability::Immediate</code>).</p>
-<p>After each commit, the metadata actor sends a <code>FileNotice</code> to the main actor
-for each hash that was deleted, or no longer references some of its files:
-whether the entry was deleted, and which files it referenced before or during
-the batch and no longer does. The channel is unbounded, so the metadata actor
-never waits on the main actor, which waits on it.</p>
+<code>Durability::Immediate</code>). Only <code>delete()</code> is answered after the commit, since
+its entity unlinks the files right after.</p>
+<p>After each commit, the metadata actor sends <code>UnreferencedParts</code> to the main
+actor for each hash that is not deleted and no longer references some of its
+files: the files it referenced before or during the batch and no longer does.
+The channel is unbounded, so the metadata actor never waits on the main
+actor, which waits on it.</p>
 <h2 id="entities"><a class="doc-anchor" href="#entities">§</a>Entities</h2>
 <p>An entity’s state is <code>Initial</code>, <code>Loading</code> or <code>Deleting</code> while it is in
 transition, and otherwise a loaded <code>Settled</code> entry: <code>NonExisting</code>,
@@ -52,43 +54,49 @@ transition, and otherwise a loaded <code>Settled</code> entry: <code>NonExisting
 <code>ReadOnly</code>, with no <code>.await</code> between the check and the change. Readers use
 <code>wait_settled</code>, which only waits for <code>Loading</code> and <code>Deleting</code>. Both wait on
 the entity’s state <code>watch</code>.</p>
-<h2 id="file-notices"><a class="doc-anchor" href="#file-notices">§</a>File notices</h2>
-<p>The main actor routes each notice:</p>
-<ul>
-<li><strong>An entity exists</strong> for the hash, running or still shutting down, since
-its shutdown may write the bitfield: the notice goes into its unbounded
-inbox. The entity unlinks the files its own state does not use. Its state
-is never behind its entry.</li>
-<li><strong>No entity exists</strong>: the main actor unlinks the files itself. Only it
-creates entities, so none can appear in between, and none has writes in
-flight. This also covers notices that arrive after the entities shut down.</li>
-</ul>
+<h2 id="unreferenced-parts"><a class="doc-anchor" href="#unreferenced-parts">§</a>Unreferenced parts</h2>
+<p>A committed state no longer referencing a file does not make it garbage: the
+entity may use it again, since its state is never behind its entry. So the
+main actor hands the parts to the hash’s entity, into its unbounded inbox,
+also while it shuts down, since its shutdown may write the bitfield. If
+there is no entity, one is woken for this, which keeps all file IO in
+entities. The entity checks each part against its own state, and only
+unlinks those it does not use.</p>
+<p>A notice is only as recent as its commit. By the time it arrives, the entry
+may have been deleted and created again, with new files, and its entity
+unloaded. So an entity that is not loaded, like one woken for the notice,
+loads before it checks the parts.</p>
+<p>At shutdown, the main actor hands the parts of the last batch to the
+entities before they shut down. Parts that arrive after that stay, as after
+a crash.</p>
 <h2 id="deletes"><a class="doc-anchor" href="#deletes">§</a>Deletes</h2>
 <p>The main actor fans <code>DeleteBlobs</code> out to the entity of each hash, creating it
-without loading if needed, also for inline entries. That orders a delete with
+if needed, also for inline entries. That orders a delete with
 concurrent requests even if no entity existed when it arrived. A delete that
 is not forced skips content with a current or retained temp tag; that check
 happens in the main actor, before the fan-out. The entity:</p>
 <ol>
-<li>Starts a new generation of the entry, which ends observers, and
-switches to <code>Deleting</code>. The cached state is dropped: readers see no
-entry, and changes wait from here on.</li>
+<li>Loads, and notes the files its state references: those of its entry, and
+those it wrote that the entry does not reference yet. Then it starts a
+new generation of the entry, which ends observers, and switches to
+<code>Deleting</code>. The cached state is dropped: readers see no entry, and
+changes wait from here on.</li>
 <li>Sends <code>delete</code> to the metadata actor. Deletes that arrive together still
 land in one transaction.</li>
-<li>Waits for the notice of the commit, which comes even if there was no
-entry. Waiting keeps the entity alive, so it cannot unload and come back
-with new files that the unlink would take.</li>
-<li>The notice unlinks every file and switches to <code>NonExisting</code>. Waiting
-writes continue on an empty entry: a running download keeps going with
-the ranges that arrive from then on.</li>
+<li>Waits for the answer, which comes once the delete is committed, even if
+there was no entry. Waiting keeps the entity alive, so it cannot unload
+and come back with new files that the unlink would take.</li>
+<li>Unlinks the files it noted, so an inline entry costs no unlink, and
+switches to <code>NonExisting</code>. Waiting writes continue on an empty entry: a running
+download keeps going with the ranges that arrive from then on.</li>
 </ol>
 <p>The main actor answers <code>DeleteBlobs</code> once every entity is done, after its
 unlink attempts. Unlink failures are logged. Shutdown waits for running
 deletes before it shuts down the entities, since an entity in shutdown takes
 no new tasks.</p>
 <p>A metadata error aborts the whole store. The main actor cancels the workers
-and releases pending callers instead of leaving entities waiting for notices
-that will never come. There is no per-entity rollback, and the abort does not
+and releases pending callers. A delete in a failed batch gets no answer, and
+fails instead of unlinking. There is no per-entity rollback, and the abort does not
 persist entity state or clear the unclean-run marker.</p>
 <h2 id="gc-sessions"><a class="doc-anchor" href="#gc-sessions">§</a>GC sessions</h2>
 <p><code>GcRun</code> is a bidi streaming request that enters an exclusive gc session. The
@@ -108,7 +116,7 @@ a top-level command, so tag changes queued before it are committed. It takes
 all blobs as candidates, and the named tags plus current and retained temp
 tags as roots. Then it freezes each HashSeq root through its entity, and
 sends the snapshot only once every freeze is acknowledged. It keeps running
-meanwhile, handling entity restarts and notices. The mem store takes the same
+meanwhile, handling entity restarts and unreferenced parts. The mem store takes the same
 view and freezes its handles in place.</p>
 <p>A freeze turns <code>ReadWrite</code> into <code>ReadOnly</code> with the same settled entry: reads
 go on, while writes, replacing imports and deletes wait. Complete and
@@ -184,11 +192,11 @@ safely shut down as well. Any store refs you are holding will be inoperable
 after this.</p>
 <h2 id="limitations"><a class="doc-anchor" href="#limitations">§</a>Limitations</h2>
 <ul>
-<li>A crash between a commit and the unlink of its notice leaves files that
+<li>A crash between a commit and the unlink that follows it leaves files that
 nothing references.</li>
 <li>After <code>export_path</code> with <code>TryReference</code> copies across file systems, the
-entity still uses the owned data file, so the notice keeps it and it
-leaks.</li>
+entity still uses the owned data file, so its check keeps the file when
+it comes back unreferenced, and it leaks.</li>
 <li>A same-file-system <code>TryReference</code> export renames the file before it
 commits the external location. If that commit fails, the metadata can
 still refer to the old path.</li>
