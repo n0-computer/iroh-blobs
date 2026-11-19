@@ -23,7 +23,7 @@ use n0_error::{Result, StdResultExt};
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
 
-use super::options::FsConfig;
+use crate::store::fs::options::FsConfig;
 use crate::{
     api::blobs::Bitfield,
     store::engine::metadata::{
@@ -32,7 +32,7 @@ use crate::{
     },
     store::{
         engine::{bao::raw_outboard_size, options::StoreOptions},
-        fs::{EntityOps, HashContext},
+        fs::entity::{EntityOps, HashContext},
         util::{
             read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,

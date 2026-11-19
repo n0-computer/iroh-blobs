@@ -1,7 +1,7 @@
 //! Deleting an entry's files.
 use tracing::warn;
 
-use super::options::PathOptions;
+use crate::store::fs::options::PathOptions;
 use crate::{store::engine::metadata::parts::BaoFilePart, Hash};
 
 /// Delete the given files of an entry, ignoring files that do not exist.

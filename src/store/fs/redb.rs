@@ -1470,7 +1470,12 @@ mod tests {
 
         use n0_future::StreamExt;
 
-        use crate::store::fs::{self, entity_manager::EntityManagerState};
+        use crate::store::{
+            engine::{
+                actor::TaskContext, entity::EntityGlobal, entity_manager::EntityManagerState,
+            },
+            fs,
+        };
 
         let dir = tempfile::tempdir()?;
         let options = Arc::new(Options::new(dir.path()));
@@ -1509,7 +1514,7 @@ mod tests {
         };
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
         let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
-        let context = Arc::new(fs::TaskContext {
+        let context = Arc::new(TaskContext {
             options: Arc::new(StoreOptions::from(&*options)),
             db: Db::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
@@ -1525,7 +1530,7 @@ mod tests {
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: tokio::task::JoinSet::new(),
             handles: EntityManagerState::new(
-                Arc::new(fs::EntityGlobal {
+                Arc::new(EntityGlobal {
                     store: context,
                     // The metadata actor above is built by hand, so start_meta is not used.
                     backend: fs::FsBackend::new(db_path.clone(), &options),
