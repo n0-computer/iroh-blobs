@@ -320,11 +320,11 @@ mod metadata;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
-use entity_api::{EmParams, EntityApi, EntityCtx, EntityGlobal};
+use entity_api::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal};
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use metadata::{MetaChannels, MetaTask};
-use options::{FsConfig, Options, StoreOptions};
+use options::{BatchOptions, FsConfig, Options, StoreOptions};
 use tracing::Instrument;
 
 use crate::{
@@ -646,7 +646,7 @@ enum Deferred {
 }
 
 #[derive(Debug)]
-struct Actor<E: EntityApi = FsEntity> {
+struct Actor<B: Backend = FsBackend> {
     // Context that can be cheaply shared with tasks.
     context: Arc<TaskContext>,
     // Receiver for incoming user commands.
@@ -662,7 +662,7 @@ struct Actor<E: EntityApi = FsEntity> {
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
     // Entity manager that handles concurrency for entities.
-    handles: EntityManagerState<EmParams<E>>,
+    handles: EntityManagerState<EmParams<B>>,
     // temp tags
     temp_tags: TempTags,
     gc: Option<GcSession>,
@@ -682,6 +682,35 @@ struct HashContext<'a> {
     state: &'a BaoFileHandle,
 }
 
+/// The fs store's backend: entities with their files in a data directory, and a redb metadata store.
+#[derive(Debug)]
+struct FsBackend {
+    /// What the entities need: paths and sync mode.
+    config: FsConfig,
+    /// Where the redb database is.
+    db_path: PathBuf,
+    /// How the redb store batches its transactions.
+    batch: BatchOptions,
+}
+
+impl FsBackend {
+    fn new(db_path: PathBuf, options: &Options) -> Self {
+        Self {
+            config: FsConfig::from(options),
+            db_path,
+            batch: options.batch.clone(),
+        }
+    }
+}
+
+impl Backend for FsBackend {
+    type Entity = FsEntity;
+
+    fn start_meta(&self, channels: MetaChannels) -> Result<impl MetaTask> {
+        meta::redb(&self.db_path, &self.config, &self.batch, channels)
+    }
+}
+
 /// The fs store's entity: the state of a hash's files.
 #[derive(Debug, Clone)]
 struct FsEntity {
@@ -691,11 +720,11 @@ struct FsEntity {
 
 impl FsEntity {
     /// The context its code runs in, for one request.
-    fn ctx<'a>(&'a self, global: &'a EntityGlobal<FsConfig>) -> HashContext<'a> {
+    fn ctx<'a>(&'a self, global: &'a EntityGlobal<FsBackend>) -> HashContext<'a> {
         HashContext {
             id: self.id,
             global: &global.store,
-            config: &global.config,
+            config: &global.backend.config,
             state: &self.handle,
         }
     }
@@ -717,55 +746,59 @@ impl entity_manager::Reset<Hash> for FsEntity {
 }
 
 impl EntityApi for FsEntity {
-    type Config = FsConfig;
+    type Backend = FsBackend;
 
-    async fn import_bao(&self, global: &EntityGlobal<FsConfig>, cmd: ImportBaoMsg) {
+    async fn import_bao(&self, global: &EntityGlobal<FsBackend>, cmd: ImportBaoMsg) {
         self.ctx(global).import_bao(cmd).await
     }
 
     async fn finish_import(
         &self,
-        global: &EntityGlobal<FsConfig>,
+        global: &EntityGlobal<FsBackend>,
         cmd: ImportEntryMsg,
         tt: TempTag,
     ) {
         self.ctx(global).finish_import(cmd, tt).await
     }
 
-    async fn observe(&self, global: &EntityGlobal<FsConfig>, cmd: ObserveMsg) {
+    async fn observe(&self, global: &EntityGlobal<FsBackend>, cmd: ObserveMsg) {
         self.ctx(global).observe(cmd).await
     }
 
-    async fn export_ranges(&self, global: &EntityGlobal<FsConfig>, cmd: ExportRangesMsg) {
+    async fn export_ranges(&self, global: &EntityGlobal<FsBackend>, cmd: ExportRangesMsg) {
         self.ctx(global).export_ranges(cmd).await
     }
 
-    async fn export_bao(&self, global: &EntityGlobal<FsConfig>, cmd: ExportBaoMsg) {
+    async fn export_bao(&self, global: &EntityGlobal<FsBackend>, cmd: ExportBaoMsg) {
         self.ctx(global).export_bao(cmd).await
     }
 
-    async fn export_path(&self, global: &EntityGlobal<FsConfig>, cmd: ExportPathMsg) {
+    async fn export_path(&self, global: &EntityGlobal<FsBackend>, cmd: ExportPathMsg) {
         self.ctx(global).export_path(cmd).await
     }
 
-    async fn delete(&self, global: &EntityGlobal<FsConfig>) -> io::Result<()> {
+    async fn delete(&self, global: &EntityGlobal<FsBackend>) -> io::Result<()> {
         self.ctx(global).delete().await
     }
 
     async fn freeze(
         &self,
-        global: &EntityGlobal<FsConfig>,
+        global: &EntityGlobal<FsBackend>,
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     ) {
         self.ctx(global).freeze(ack, release).await
     }
 
-    async fn delete_unreferenced(&self, global: &EntityGlobal<FsConfig>, parts: UnreferencedParts) {
+    async fn delete_unreferenced(
+        &self,
+        global: &EntityGlobal<FsBackend>,
+        parts: UnreferencedParts,
+    ) {
         self.ctx(global).delete_unreferenced(parts).await
     }
 
-    async fn persist(&self, global: &EntityGlobal<FsConfig>) {
+    async fn persist(&self, global: &EntityGlobal<FsBackend>) {
         self.ctx(global).persist().await
     }
 }
@@ -867,7 +900,7 @@ impl HashContext<'_> {
     }
 }
 
-impl<E: EntityApi> Actor<E> {
+impl<B: Backend> Actor<B> {
     fn db(&self) -> &meta::Db {
         &self.context.db
     }
@@ -1426,19 +1459,18 @@ impl<E: EntityApi> Actor<E> {
     ///
     /// This must only be called in the context of the store runtime, since the
     /// database actor is spawned on the current runtime and does blocking IO.
-    async fn new<T: MetaTask>(
+    async fn new(
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<StoreOptions>,
-        meta: impl FnOnce(MetaChannels) -> Result<T>,
-        config: E::Config,
+        backend: B,
     ) -> Result<Self> {
         trace!("creating temp directory: {}", options.temp_path.display());
         fs::create_dir_all(&options.temp_path)?;
         let (db_send, requests) = tokio::sync::mpsc::channel(100);
         let (unreferenced_send, unreferenced) = tokio::sync::mpsc::unbounded_channel();
-        let metadata = meta(MetaChannels {
+        let metadata = backend.start_meta(MetaChannels {
             requests,
             unreferenced: unreferenced_send,
         })?;
@@ -1454,7 +1486,7 @@ impl<E: EntityApi> Actor<E> {
         let metadata_task = Some(tokio::spawn(metadata));
         let global = Arc::new(EntityGlobal {
             store: slot_context.clone(),
-            config,
+            backend,
         });
         Ok(Self {
             context: slot_context,
@@ -1515,14 +1547,14 @@ fn remove_all_files(dir: &Path) {
 
 trait HashSpecificCommand: HashSpecific + Send + 'static {
     /// Handle the command on success by spawning a task into the per-hash context.
-    fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) -> impl Future<Output = ()> + Send + 'static;
+    fn handle<B: Backend>(self, ctx: EntityCtx<B>) -> impl Future<Output = ()> + Send + 'static;
 
     /// Opportunity to send an error if the entity is dead (e.g. after a panic).
     fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
 
-    async fn spawn<E: EntityApi>(
+    async fn spawn<B: Backend>(
         self,
-        manager: &mut entity_manager::EntityManagerState<EmParams<E>>,
+        manager: &mut entity_manager::EntityManagerState<EmParams<B>>,
         tasks: &mut JoinSet<()>,
     ) where
         Self: Sized,
@@ -1550,13 +1582,13 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 }
 
 impl HashSpecificCommand for ObserveMsg {
-    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
         ctx.state.observe(&ctx.global, self).await
     }
     async fn on_error(self) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
-    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
         ctx.state.export_path(&ctx.global, self).await
     }
     async fn on_error(self) {
@@ -1568,7 +1600,7 @@ impl HashSpecificCommand for ExportPathMsg {
     }
 }
 impl HashSpecificCommand for ExportBaoMsg {
-    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
         ctx.state.export_bao(&ctx.global, self).await
     }
     async fn on_error(self) {
@@ -1580,7 +1612,7 @@ impl HashSpecificCommand for ExportBaoMsg {
     }
 }
 impl HashSpecificCommand for ExportRangesMsg {
-    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
         ctx.state.export_ranges(&ctx.global, self).await
     }
     async fn on_error(self) {
@@ -1592,7 +1624,7 @@ impl HashSpecificCommand for ExportRangesMsg {
     }
 }
 impl HashSpecificCommand for ImportBaoMsg {
-    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
         ctx.state.import_bao(&ctx.global, self).await
     }
     async fn on_error(self) {
@@ -1606,7 +1638,7 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
     }
 }
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
-    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
         let (tt, cmd) = self;
         ctx.state.finish_import(&ctx.global, cmd, tt).await
     }
@@ -2313,27 +2345,18 @@ impl FsStore {
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
-        let config = FsConfig::from(&options);
-        trace!(
-            "creating data directory: {}",
-            config.path.data_path.display()
-        );
-        fs::create_dir_all(&config.path.data_path)?;
-        let store_options = StoreOptions::from(&options);
-        let meta = move |channels| meta::redb(db_path, &options, channels);
-        Self::from_parts::<FsEntity, _>(store_options, meta, config).await
+        let backend = FsBackend::new(db_path, &options);
+        let data_path = &backend.config.path.data_path;
+        trace!("creating data directory: {}", data_path.display());
+        fs::create_dir_all(data_path)?;
+        Self::from_parts(StoreOptions::from(&options), backend).await
     }
 
-    /// Starts a store from a metadata store and an entity implementation.
+    /// Starts a store from its options and a backend.
     ///
-    /// `meta` is called on the store's runtime with the channels of the
-    /// metadata store, and returns it running. `config` is shared by all
-    /// entities.
-    async fn from_parts<E: EntityApi, T: MetaTask>(
-        options: StoreOptions,
-        meta: impl FnOnce(MetaChannels) -> Result<T> + Send + 'static,
-        config: E::Config,
-    ) -> Result<FsStore> {
+    /// The backend starts the metadata store on the store's runtime, and is
+    /// shared by all entities as their configuration.
+    async fn from_parts<B: Backend>(options: StoreOptions, backend: B) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
@@ -2368,13 +2391,12 @@ impl FsStore {
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let mut actor = handle
-            .spawn(Actor::<E>::new(
+            .spawn(Actor::<B>::new(
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
                 Arc::new(options),
-                meta,
-                config,
+                backend,
             ))
             .await
             .anyerr()??;
@@ -2484,10 +2506,10 @@ pub mod tests {
         BlobFormat,
     };
 
-    /// The fs entity's config for a store built by hand, with its data directory created.
-    fn fs_config(options: &Options) -> io::Result<FsConfig> {
+    /// The fs backend for a store built by hand, with its data directory created.
+    fn fs_backend(db_path: PathBuf, options: &Options) -> io::Result<FsBackend> {
         fs::create_dir_all(&options.path.data_path)?;
-        Ok(FsConfig::from(options))
+        Ok(FsBackend::new(db_path, options))
     }
 
     /// Interesting sizes for testing.
@@ -2559,15 +2581,12 @@ pub mod tests {
             let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
             let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
             let options = Options::new(dir.path());
-            let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
-            let meta = move |channels| meta::redb(db_path, &meta_options, channels);
-            let mut actor = Actor::<FsEntity>::new(
+            let mut actor = Actor::<FsBackend>::new(
                 cmd_rx,
                 fs_rx,
                 fs_tx,
                 Arc::new(StoreOptions::from(&options)),
-                meta,
-                fs_config(&options)?,
+                fs_backend(dir.path().join("blobs.db"), &options)?,
             )
             .await?;
             let mut deletes = actor.deletes.subscribe();
@@ -2625,15 +2644,12 @@ pub mod tests {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
         let options = Options::new(dir.path());
-        let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
-        let meta = move |channels| meta::redb(db_path, &meta_options, channels);
-        let mut actor = Actor::<FsEntity>::new(
+        let mut actor = Actor::<FsBackend>::new(
             cmd_rx,
             fs_rx,
             fs_tx.clone(),
             Arc::new(StoreOptions::from(&options)),
-            meta,
-            fs_config(&options)?,
+            fs_backend(dir.path().join("blobs.db"), &options)?,
         )
         .await?;
         let (idle_tx, idle_rx) = irpc::channel::oneshot::channel();
@@ -3534,16 +3550,13 @@ pub mod tests {
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
         let mut options = Options::new(dir.path());
         options.inline.max_data_inlined = 64 * 1024;
-        let (db_path, meta_options) = (dir.path().join("blobs.db"), options.clone());
-        let meta = move |channels| meta::redb(db_path, &meta_options, channels);
         let options = Arc::new(options);
-        let mut actor = Actor::<FsEntity>::new(
+        let mut actor = Actor::<FsBackend>::new(
             cmd_rx,
             fs_rx,
             fs_tx,
             Arc::new(StoreOptions::from(&*options)),
-            meta,
-            fs_config(&options)?,
+            fs_backend(dir.path().join("blobs.db"), &options)?,
         )
         .await?;
         // Hold back the notices; metadata and entities run normally.

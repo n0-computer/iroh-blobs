@@ -167,11 +167,6 @@ impl Options {
         }
     }
 
-    /// True if files must reach the disk before metadata that depends on them is recorded.
-    pub(crate) fn syncs_files(&self) -> bool {
-        self.crash_consistency == CrashConsistency::PowerLoss
-    }
-
     // check if the data will be inlined, based on the size of the data
     pub fn is_inlined_data(&self, data_size: u64) -> bool {
         data_size <= self.inline.max_data_inlined

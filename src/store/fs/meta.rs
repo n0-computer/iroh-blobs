@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     io,
     ops::{Bound, Deref, DerefMut},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
 };
@@ -44,7 +44,7 @@ use super::{
     entry_state::{DataLocation, EntryState, OutboardLocation},
     file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
     metadata::{self, MetaChannels, MetaTask, Request},
-    options::{BatchOptions, Options, PathOptions},
+    options::{BatchOptions, FsConfig, PathOptions},
     util::PeekableReceiver,
 };
 use crate::store::IROH_BLOCK_SIZE;
@@ -1059,8 +1059,9 @@ impl From<Failure> for metadata::Failure {
 /// recovery if the last run did not shut down cleanly. Returns the store
 /// running, for [`super::FsStore`] to spawn.
 pub(super) fn redb(
-    db_path: PathBuf,
-    options: &Options,
+    db_path: &Path,
+    config: &FsConfig,
+    batch: &BatchOptions,
     channels: MetaChannels,
 ) -> n0_error::Result<impl MetaTask> {
     if let Some(parent) = db_path.parent() {
@@ -1068,12 +1069,12 @@ pub(super) fn redb(
         std::fs::create_dir_all(parent)?;
     }
     let actor = Actor::new(
-        db_path,
+        db_path.to_path_buf(),
         channels.requests,
         channels.unreferenced,
-        Arc::new(options.path.clone()),
-        options.batch.clone(),
-        options.syncs_files(),
+        Arc::new(config.path.clone()),
+        batch.clone(),
+        config.syncs_files(),
     )?;
     Ok(async move { actor.run().await.map_err(Into::into) })
 }
@@ -1256,7 +1257,7 @@ mod tests {
     use super::{
         super::{
             file_deletes::BaoFilePart,
-            options::{CrashConsistency, FsConfig, Options, PathOptions, StoreOptions},
+            options::{CrashConsistency, Options, PathOptions, StoreOptions},
         },
         *,
     };
@@ -1696,7 +1697,7 @@ mod tests {
             db: Db::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
         });
-        let mut actor = fs::Actor::<fs::FsEntity> {
+        let mut actor = fs::Actor::<fs::FsBackend> {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
@@ -1709,7 +1710,8 @@ mod tests {
             handles: EntityManagerState::new(
                 Arc::new(fs::EntityGlobal {
                     store: context,
-                    config: FsConfig::from(&*options),
+                    // The metadata actor above is built by hand, so start_meta is not used.
+                    backend: fs::FsBackend::new(db_path.clone(), &options),
                 }),
                 16,
                 32,
