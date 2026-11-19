@@ -93,20 +93,18 @@
 //! is not forced skips content with a current or retained temp tag; that check
 //! happens in the main actor, before the fan-out. The entity:
 //!
-//! 1. Notes the files its own state references, which may not be in the entry
-//!    yet. Not loaded, it wrote none. Then it starts a new generation of the
-//!    entry, which ends observers, and switches to `Deleting`. The cached state
-//!    is dropped: readers see no entry, and changes wait from here on.
+//! 1. Starts a new generation of the entry, which ends observers, and
+//!    switches to `Deleting`. The cached state is dropped: readers see no
+//!    entry, and changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
 //! 3. Waits for the answer, which comes once the delete is committed, even if
-//!    there was no entry, with the files the entry referenced. Waiting keeps
-//!    the entity alive, so it cannot unload and come back with new files that
-//!    the unlink would take.
-//! 4. Unlinks the files of both, so an inline entry costs no unlink, and
-//!    switches to `NonExisting`. Files nothing references, left by a crash,
-//!    stay. Waiting writes continue on an empty entry: a
-//!    running download keeps going with the ranges that arrive from then on.
+//!    there was no entry. Waiting keeps the entity alive, so it cannot unload
+//!    and come back with new files that the unlink would take.
+//! 4. Unlinks the files the entry referenced, which the answer lists, and those
+//!    its state referenced, which may not be in the entry yet, and switches to
+//!    `NonExisting`. Waiting writes continue on an empty entry: a running
+//!    download keeps going with the ranges that arrive from then on.
 //!
 //! The main actor answers `DeleteBlobs` once every entity is done, after its
 //! unlink attempts. Unlink failures are logged. Shutdown waits for running
@@ -544,29 +542,26 @@ async fn load_entity(ctx: &HashContext) {
 
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
-///
-/// Unlinks only the files the entry referenced, which the metadata reports,
-/// and those the entity's own state references, which may not be in the entry
-/// yet. An entity that is not loaded wrote none. So an inline entry costs no
-/// unlink at all.
 async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
     wait_writable(ctx).await;
-    let mut parts = BaoFileParts::new();
+    // Files the entity wrote that its entry may not reference yet. Not loaded,
+    // it wrote none.
+    let own: BaoFileParts = match &ctx.state.borrow().storage {
+        BaoFileStorage::Initial => BaoFileParts::new(),
+        storage => ALL_PARTS
+            .into_iter()
+            .filter(|part| storage.references(*part))
+            .collect(),
+    };
     // A new generation ends observers, even if they next wake only after this
     // hash was re-imported.
     ctx.state.send_modify(|state| {
-        if !matches!(state.storage, BaoFileStorage::Initial) {
-            parts = ALL_PARTS
-                .into_iter()
-                .filter(|part| state.storage.references(*part))
-                .collect();
-        }
         state.generation += 1;
         state.storage = BaoFileStorage::Deleting;
     });
-    // Answered once the delete is committed.
-    let referenced = match ctx.meta().delete().await {
-        Ok(referenced) => referenced,
+    // Answered once the delete is committed, with the files the entry referenced.
+    let mut parts = match ctx.meta().delete().await {
+        Ok(parts) => parts,
         Err(cause) => {
             // Metadata failure aborts the store. A command racing a graceful
             // shutdown can also be rejected, without a failure to trigger abort.
@@ -576,7 +571,7 @@ async fn delete_entry(ctx: &HashContext) -> io::Result<()> {
             return Err(cause);
         }
     };
-    for part in referenced {
+    for part in own {
         if !parts.contains(&part) {
             parts.push(part);
         }
