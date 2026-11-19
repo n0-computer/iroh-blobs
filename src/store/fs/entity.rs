@@ -2,7 +2,7 @@
 use super::{
     entity_storage::EntityStorage,
     export::export_path_impl,
-    file_deletes::{BaoFilePart, UnreferencedParts, ALL_PARTS},
+    file_deletes::{BaoFilePart, BaoFileParts, UnreferencedParts, ALL_PARTS},
     import::{ImportEntry, ImportEntryMsg},
     metadata::{EntryMeta, Metadata},
     options::Options,
@@ -114,10 +114,8 @@ impl<S: EntityStorage> StorageState<S> {
     /// while a file deleted too early loses data.
     pub(super) fn references(&self, part: BaoFilePart) -> bool {
         match self {
-            // Not loaded: the committed entry decides, and it no longer
-            // references the file.
-            Self::Initial => false,
-            Self::Loading | Self::Deleting => true,
+            // Not loaded: the entity knows nothing about its files.
+            Self::Initial | Self::Loading | Self::Deleting => true,
             Self::ReadWrite(s) | Self::ReadOnly(s) => s.as_ref().is_none_or(|s| s.references(part)),
         }
     }
@@ -470,7 +468,17 @@ async fn load_entity<S: EntityStorage>(ctx: &HashContext<S>) {
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
 async fn delete_entry<S: EntityStorage>(ctx: &HashContext<S>) -> io::Result<()> {
+    // Loaded, the entity's state knows all its files: those of its entry, and
+    // those it wrote that the entry does not reference yet.
+    ctx.load().await;
     wait_writable(ctx).await;
+    let parts: BaoFileParts = {
+        let state = ctx.state.borrow();
+        ALL_PARTS
+            .into_iter()
+            .filter(|part| state.references(*part))
+            .collect()
+    };
     // A new generation ends observers, even if they next wake only after this
     // hash was re-imported.
     ctx.state.send_modify(|state| {
@@ -485,21 +493,23 @@ async fn delete_entry<S: EntityStorage>(ctx: &HashContext<S>) -> io::Result<()> 
         ctx.state.set_storage(StorageState::ReadWrite(None));
         return Err(cause);
     }
-    // No durable state references the files anymore. Unlink every one, since
-    // the entity may have written files its entry did not reference yet.
-    S::delete_parts(&ctx.global.storage_config, &ctx.id, &ALL_PARTS);
+    // No durable state references the files anymore.
+    S::delete_parts(&ctx.global.storage_config, &ctx.id, &parts);
     ctx.state
         .set_storage(StorageState::ReadWrite(Some(S::empty())));
     Ok(())
 }
 
-/// Deletes the parts a committed batch stopped referencing, unless the entity still uses them.
+/// Deletes the parts a committed batch stopped referencing, unless the entry still uses them.
+///
+/// The notice is only as recent as its commit: by the time it arrives, the
+/// entry may have been deleted and created again, and its entity unloaded. So
+/// the parts are checked against the loaded state, which is never behind the
+/// entry. An entity woken just for this loads first.
 async fn delete_unreferenced<S: EntityStorage>(ctx: &HashContext<S>, parts: UnreferencedParts) {
+    ctx.load().await;
     wait_writable(ctx).await;
-    // The committed state no longer references these parts, but this entity's
-    // state, which is never behind its entry, may use them again. Check each
-    // one against it before deleting.
-    let parts: Vec<_> = {
+    let parts: BaoFileParts = {
         let state = ctx.state.borrow();
         parts
             .0
@@ -622,7 +632,9 @@ pub(super) trait EntityApi {
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     );
-    /// Delete the parts a committed batch stopped referencing, after checking each against the entity's own state.
+    /// Delete the parts a committed batch stopped referencing, after checking each against the loaded state.
+    ///
+    /// The notice may be stale, so the entity must load before deciding.
     async fn delete_unreferenced(&self, parts: UnreferencedParts);
     /// Persist the entry at the end of its lifecycle.
     async fn persist(&self);

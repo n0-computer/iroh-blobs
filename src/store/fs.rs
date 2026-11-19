@@ -79,34 +79,40 @@
 //!
 //! A committed state no longer referencing a file does not make it garbage: the
 //! entity may use it again, since its state is never behind its entry. So the
-//! main actor routes unreferenced parts:
+//! main actor hands the parts to the hash's entity, into its unbounded inbox,
+//! also while it shuts down, since its shutdown may write the bitfield. If
+//! there is no entity, one is woken for this, which keeps all file IO in
+//! entities. The entity checks each part against its own state, and only
+//! unlinks those it does not use.
 //!
-//! - **An entity exists** for the hash, running or still shutting down, since
-//!   its shutdown may write the bitfield: the parts go into its unbounded
-//!   inbox. The entity checks each part against its own state, and only
-//!   unlinks those it does not use.
-//! - **No entity exists**: the main actor unlinks the files itself. Only it
-//!   creates entities, so none can appear in between, and none has writes in
-//!   flight, so the committed state is all there is. This also covers parts
-//!   that arrive after the entities shut down.
+//! A notice is only as recent as its commit. By the time it arrives, the entry
+//! may have been deleted and created again, with new files, and its entity
+//! unloaded. So an entity that is not loaded, like one woken for the notice,
+//! loads before it checks the parts.
+//!
+//! At shutdown, the main actor hands the parts of the last batch to the
+//! entities before they shut down. Parts that arrive after that stay, as after
+//! a crash.
 //!
 //! # Deletes
 //!
 //! The main actor fans `DeleteBlobs` out to the entity of each hash, creating it
-//! without loading if needed, also for inline entries. That orders a delete with
+//! if needed, also for inline entries. That orders a delete with
 //! concurrent requests even if no entity existed when it arrived. A delete that
 //! is not forced skips content with a current or retained temp tag; that check
 //! happens in the main actor, before the fan-out. The entity:
 //!
-//! 1. Starts a new generation of the entry, which ends observers, and
-//!    switches to `Deleting`. The cached state is dropped: readers see no
-//!    entry, and changes wait from here on.
+//! 1. Loads, and notes the files its state references: those of its entry, and
+//!    those it wrote that the entry does not reference yet. Then it starts a
+//!    new generation of the entry, which ends observers, and switches to
+//!    `Deleting`. The cached state is dropped: readers see no entry, and
+//!    changes wait from here on.
 //! 2. Sends `delete` to the metadata actor. Deletes that arrive together still
 //!    land in one transaction.
 //! 3. Waits for the answer, which comes once the delete is committed, even if
 //!    there was no entry. Waiting keeps the entity alive, so it cannot unload
 //!    and come back with new files that the unlink would take.
-//! 4. Unlinks every file, also those its entry did not reference yet, and
+//! 4. Unlinks the files it noted, so an inline entry costs no unlink, and
 //!    switches to `NonExisting`. Waiting writes continue on an empty entry: a
 //!    running download keeps going with the ranges that arrive from then on.
 //!
@@ -463,7 +469,6 @@ enum Deferred {
 struct Actor<S: EntityStorage = FileStorage> {
     // Context that can be cheaply shared with tasks.
     context: Arc<TaskContext>,
-    storage_config: Arc<S::Config>,
     // Receiver for incoming user commands.
     cmd_rx: tokio::sync::mpsc::Receiver<Command>,
     // Receiver for incoming file store specific commands.
@@ -946,6 +951,12 @@ impl<S: EntityStorage> Actor<S> {
                 }
             }
         }
+        // The metadata actor committed its last batch. Hand what that left to
+        // do to the entities while they still take tasks, since only they
+        // touch files.
+        while let Ok((hash, parts)) = self.unreferenced.try_recv() {
+            self.route_unreferenced(hash, parts).await;
+        }
         self.handles.shutdown().await;
         while !self.tasks.is_empty() {
             tokio::select! {
@@ -959,40 +970,30 @@ impl<S: EntityStorage> Actor<S> {
                 Some(res) = self.tasks.join_next() => Self::log_task_result(res),
             }
         }
-        // No entity exists anymore, so what the last batches left to do is
-        // done here directly. No acknowledgement, the database is closed.
-        while let Ok((hash, parts)) = self.unreferenced.try_recv() {
-            S::delete_parts(&self.storage_config, &hash, &parts.0);
-        }
+        // Parts that still arrive now stay, as after a crash: nothing
+        // references them, and only entities touch files.
     }
 
-    /// Hands unreferenced parts to the hash's entity, or deletes them itself if there is none.
+    /// Hands unreferenced parts to the hash's entity, waking it if there is none.
+    ///
+    /// All file IO happens in entities. A woken entity loads before it checks the parts.
     async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
         trace!("{} {parts:?}", hash.fmt_short());
-        if self.handles.contains(&hash) {
-            // Queue them even while the entity is shutting down. The entity
-            // checks them against its own state before deleting.
-            let task = self
-                .handles
-                .spawn(hash, move |arg| async move {
-                    match arg {
-                        SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
-                        SpawnArg::Dead => {
-                            warn!("no entity for {}, its files stay", hash);
-                        }
+        // Queued even while the entity is shutting down. The entity checks
+        // the parts against its own state before deleting.
+        let task = self
+            .handles
+            .spawn(hash, move |arg| async move {
+                match arg {
+                    SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
+                    SpawnArg::Dead => {
+                        warn!("no entity for {}, its files stay", hash);
                     }
-                })
-                .await;
-            if let Some(task) = task {
-                self.spawn(task);
-            }
-        } else {
-            // No entity exists for the hash, and none can be created before
-            // this is done, since only this actor creates them. So nothing
-            // else touches these files, and no writes from before are in
-            // flight: with no entity state to check against, the committed
-            // state is the whole truth, and the parts are garbage.
-            S::delete_parts(&self.storage_config, &hash, &parts.0);
+                }
+            })
+            .await;
+        if let Some(task) = task {
+            self.spawn(task);
         }
     }
 
@@ -1095,7 +1096,6 @@ impl<S: EntityStorage> Actor<S> {
         let metadata_task = Some(tokio::spawn(db_actor.run()));
         Ok(Self {
             context: slot_context.clone(),
-            storage_config: storage_config.clone(),
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
             unreferenced,
@@ -2524,6 +2524,102 @@ pub mod tests {
         Ok(())
     }
 
+    /// Unreferenced parts that arrive after the entry was recreated and its entity unloaded do not delete the new files.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_stale_unreferenced_parts_keep_recreated_files() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
+        let mut options = Options::new(dir.path());
+        options.inline.max_data_inlined = 64 * 1024;
+        let options = Arc::new(options);
+        let mut actor = Actor::<FileStorage>::new(
+            dir.path().join("blobs.db"),
+            cmd_rx,
+            fs_rx,
+            fs_tx,
+            options.clone(),
+            options.clone(),
+        )
+        .await?;
+        // Hold back the notices; metadata and entities run normally.
+        let (deliver, delayed) = tokio::sync::mpsc::unbounded_channel();
+        let mut notices = std::mem::replace(&mut actor.unreferenced, delayed);
+        let actor_task = tokio::spawn(actor.run());
+        let store = Store::from_client(cmd_tx);
+        let path = &options.path;
+        // Two chunk groups: partial on disk, inlined once complete. Whole
+        // groups, so the partial entry can be exported.
+        let data = test_data(32 * 1024);
+        let half = ChunkRanges::from(..ChunkNum(16));
+        let rest = ChunkRanges::from(ChunkNum(16)..);
+        let (hash, half_bao) = create_n0_bao(&data, &half)?;
+        let (_, rest_bao) = create_n0_bao(&data, &rest)?;
+        store
+            .import_bao_bytes(hash, half.clone(), half_bao.clone())
+            .await?;
+        store.sync_db().await?;
+        store.import_bao_bytes(hash, rest, rest_bao).await?;
+        store.sync_db().await?;
+        // Partial to complete and inline: the data file is no longer referenced.
+        let notice = notices.recv().await.expect("notice");
+        assert_eq!(notice.0, hash);
+        assert!(notice.1 .0.contains(&file_deletes::BaoFilePart::Data));
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        // Partial again, with a new data file, and no entity in memory.
+        store
+            .import_bao_bytes(hash, half.clone(), half_bao.clone())
+            .await?;
+        store.sync_db().await?;
+        store.wait_idle().await?;
+        assert!(path.data_path(&hash).exists());
+        // The notice from before the delete arrives now.
+        deliver.send(notice)?;
+        store.wait_idle().await?;
+        assert!(
+            path.data_path(&hash).exists(),
+            "a stale notice deleted the data of the recreated entry"
+        );
+        let exported = store.export_bao(hash, half).bao_to_vec().await?;
+        assert_eq!(exported, half_bao);
+        store.shutdown().await?;
+        actor_task.await?;
+        Ok(())
+    }
+
+    /// Deleting an entry whose entity is not loaded removes the files the entry referenced.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_delete_unloaded_entry_removes_files() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let options = Options::new(dir.path());
+        let store = FsStore::load_with_opts(dir.path().join("blobs.db"), options.clone()).await?;
+        let path = &options.path;
+        // 1 MiB: an owned data file and an inlined outboard
+        let data = test_data(1024 * 1024);
+        let hash = store.add_bytes(data).await?.hash;
+        store.sync_db().await?;
+        store.wait_idle().await?;
+        assert!(path.data_path(&hash).exists());
+        store
+            .blobs()
+            .delete_with_opts(crate::api::proto::BlobDeleteRequest {
+                hashes: vec![hash],
+                force: true,
+            })
+            .await?;
+        assert!(!path.data_path(&hash).exists());
+        store.shutdown().await?;
+        Ok(())
+    }
+
     /// No metadata row is still a completed delete, including observer teardown.
     #[tokio::test]
     async fn test_delete_absent_entry_completes_and_can_be_reimported() -> TestResult<()> {
@@ -2534,14 +2630,11 @@ pub mod tests {
         let hash = Hash::new(&data);
         let mut observer = Box::pin(store.observe(hash).stream().await?);
         assert!(observer.next().await.is_some());
-        // A file left by an interrupted import need not have a metadata row.
-        std::fs::write(options.path.data_path(&hash), b"orphan")?;
         tokio::time::timeout(
             Duration::from_secs(5),
             store.blobs().delete(vec![hash, hash]),
         )
         .await??;
-        assert!(!options.path.data_path(&hash).exists());
         assert!(
             tokio::time::timeout(Duration::from_secs(5), observer.next())
                 .await?

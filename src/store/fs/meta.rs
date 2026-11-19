@@ -870,10 +870,9 @@ impl Actor {
                         tx.send(Ok(()));
                     }
                     // The main actor hands unreferenced parts to the hash's
-                    // entity, which checks them against its own state, or
-                    // deletes them itself if there is none. Unbounded, so this
-                    // actor never waits on the main actor, which waits on this
-                    // one.
+                    // entity, which loads and checks them against its own
+                    // state. Unbounded, so this actor never waits on the main
+                    // actor, which waits on this one.
                     for parts in unreferenced {
                         self.unreferenced.send(parts).ok();
                     }
@@ -1528,7 +1527,6 @@ mod tests {
         });
         let mut actor = fs::Actor::<fs::FileStorage> {
             context: context.clone(),
-            storage_config: options.clone(),
             cmd_rx,
             fs_cmd_rx,
             unreferenced,
