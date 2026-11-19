@@ -199,6 +199,12 @@ pub(crate) struct StoreOptions {
     /// Inlining, which every entity implementation shares.
     pub inline: InlineOptions,
     /// Where imports stage their files.
+    ///
+    /// Imports stage and hash their data before the hash is known, so outside
+    /// any entity, and the fs entity then renames the files into place. So
+    /// this belongs to the fs entity really, and must be on the same device as
+    /// its data directory. It moves there once import staging is part of the
+    /// entity implementation.
     pub temp_path: PathBuf,
     /// Gc configuration.
     pub gc: Option<GcConfig>,
