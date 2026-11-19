@@ -4,15 +4,18 @@ use tokio::{select, sync::mpsc};
 pub(crate) mod entity_manager;
 
 /// A wrapper for a tokio mpsc receiver that allows peeking at the next message.
+///
+/// The channel carries `R`, which each message is converted from into `T` as it
+/// is received.
 #[derive(Debug)]
-pub struct PeekableReceiver<T> {
+pub struct PeekableReceiver<T, R = T> {
     msg: Option<T>,
-    recv: mpsc::Receiver<T>,
+    recv: mpsc::Receiver<R>,
 }
 
 #[allow(dead_code)]
-impl<T> PeekableReceiver<T> {
-    pub fn new(recv: mpsc::Receiver<T>) -> Self {
+impl<T: From<R>, R> PeekableReceiver<T, R> {
+    pub fn new(recv: mpsc::Receiver<R>) -> Self {
         Self { msg: None, recv }
     }
 
@@ -26,7 +29,7 @@ impl<T> PeekableReceiver<T> {
         if let Some(msg) = self.msg.take() {
             return Some(msg);
         }
-        self.recv.recv().await
+        self.recv.recv().await.map(T::from)
     }
 
     /// Receive the next message, but only if it passes the filter.

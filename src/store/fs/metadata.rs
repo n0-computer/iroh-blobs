@@ -7,8 +7,8 @@
 //! error.
 //!
 //! How the actor batches requests into transactions is up to it. The fs store's
-//! redb actor groups them by its own [`Command`] classification, which
-//! [`Request`] converts to and from.
+//! redb actor converts each request into its own [`Command`] as it receives it,
+//! and groups them by that.
 //!
 //! # Contract
 //!
@@ -98,35 +98,6 @@ impl From<Request> for Command {
             Request::GcSnapshot(x) => TopLevelCommand::GcSnapshot(x).into(),
             Request::SyncDb(x) => TopLevelCommand::SyncDb(x).into(),
             Request::Shutdown(x) => TopLevelCommand::Shutdown(x).into(),
-        }
-    }
-}
-
-impl From<Command> for Request {
-    fn from(command: Command) -> Self {
-        match command {
-            Command::ReadOnly(cmd) => match cmd {
-                ReadOnlyCommand::Get(x) => Self::Get(x),
-                ReadOnlyCommand::Dump(x) => Self::Dump(x),
-                ReadOnlyCommand::GetBlobStatus(x) => Self::BlobStatus(x),
-            },
-            Command::ReadWrite(cmd) => match cmd {
-                ReadWriteCommand::Update(x) => Self::Update(x),
-                ReadWriteCommand::UpdateAwait(x) => Self::UpdateAwait(x),
-                ReadWriteCommand::Set(x) => Self::Set(x),
-                ReadWriteCommand::Delete(x) => Self::Delete(x),
-                ReadWriteCommand::SetTag(x) => Self::SetTag(x),
-                ReadWriteCommand::DeleteTags(x) => Self::DeleteTags(x),
-                ReadWriteCommand::RenameTag(x) => Self::RenameTag(x),
-                ReadWriteCommand::CreateTag(x) => Self::CreateTag(x),
-            },
-            Command::TopLevel(cmd) => match cmd {
-                TopLevelCommand::SyncDb(x) => Self::SyncDb(x),
-                TopLevelCommand::Shutdown(x) => Self::Shutdown(x),
-                TopLevelCommand::ListTags(x) => Self::ListTags(x),
-                TopLevelCommand::ListBlobs(x) => Self::ListBlobs(x),
-                TopLevelCommand::GcSnapshot(x) => Self::GcSnapshot(x),
-            },
         }
     }
 }

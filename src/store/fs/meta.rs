@@ -43,6 +43,7 @@ use super::{
     boot_id,
     entry_state::{DataLocation, EntryState, OutboardLocation},
     file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
+    metadata::Request,
     options::{BatchOptions, PathOptions},
     util::PeekableReceiver,
 };
@@ -103,11 +104,11 @@ pub type ActorResult<T> = std::result::Result<T, ActorError>;
 
 #[derive(Debug, Clone)]
 pub struct Db {
-    sender: tokio::sync::mpsc::Sender<Command>,
+    sender: tokio::sync::mpsc::Sender<Request>,
 }
 
 impl Db {
-    pub fn new(sender: tokio::sync::mpsc::Sender<Command>) -> Self {
+    pub fn new(sender: tokio::sync::mpsc::Sender<Request>) -> Self {
         Self { sender }
     }
 
@@ -244,7 +245,7 @@ impl Db {
     ///
     /// This will fail only if the database actor is dead. In that case the main
     /// actor should probably also shut down.
-    pub async fn send(&self, cmd: Command) -> io::Result<()> {
+    pub async fn send(&self, cmd: Request) -> io::Result<()> {
         self.sender
             .send(cmd)
             .await
@@ -645,7 +646,7 @@ pub(super) fn trigger_reboot_check(db: &std::path::Path) -> n0_error::Result<boo
 #[derive(Debug)]
 pub struct Actor {
     db: DbWrapper,
-    cmds: PeekableReceiver<Command>,
+    cmds: PeekableReceiver<Command, Request>,
     /// Where the parts each committed batch stopped referencing go, see [`UnreferencedParts`].
     unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
     options: BatchOptions,
@@ -655,7 +656,7 @@ pub struct Actor {
 impl Actor {
     pub fn new(
         db_path: PathBuf,
-        cmds: tokio::sync::mpsc::Receiver<Command>,
+        cmds: tokio::sync::mpsc::Receiver<Request>,
         unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
         paths: Arc<PathOptions>,
         options: BatchOptions,
