@@ -1520,7 +1520,7 @@ mod tests {
             db: Db::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
         });
-        let mut actor = fs::Actor::<fs::FsBackend> {
+        let mut actor = crate::store::engine::actor::Actor::<fs::FsBackend> {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
@@ -1544,7 +1544,7 @@ mod tests {
             gc: None,
             deferred: Default::default(),
             idle_waiters: Vec::new(),
-            _rt: fs::RtWrapper(None),
+            _rt: crate::store::engine::actor::RtWrapper(None),
         };
         struct Worker {
             closed: Arc<AtomicBool>,

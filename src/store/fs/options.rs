@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use n0_future::time::Duration;
 
-use super::{meta::raw_outboard_size, temp_name};
+use super::meta::raw_outboard_size;
+use crate::store::engine::actor::temp_name;
 use crate::{store::gc::GcConfig, Hash};
 
 /// Options for directories used by the file store.
