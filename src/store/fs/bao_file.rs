@@ -23,13 +23,13 @@ use n0_error::{Result, StdResultExt};
 use tokio::sync::watch;
 use tracing::{debug, info, trace};
 
-use super::{
-    entry_state::{DataLocation, EntryState, OutboardLocation},
-    file_deletes::BaoFilePart,
-    options::{FsConfig, StoreOptions},
-};
+use super::options::{FsConfig, StoreOptions};
 use crate::{
     api::blobs::Bitfield,
+    store::engine::metadata::{
+        entry_state::{DataLocation, EntryState, OutboardLocation},
+        parts::BaoFilePart,
+    },
     store::{
         fs::{meta::raw_outboard_size, EntityOps, HashContext},
         util::{

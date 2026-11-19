@@ -266,7 +266,6 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
 use n0_error::{Result, StdResultExt};
@@ -303,10 +302,9 @@ use crate::{
 };
 mod bao_file;
 use bao_file::BaoFileHandle;
-use file_deletes::{delete_files, BaoFileParts, UnreferencedParts, ALL_PARTS};
+use file_deletes::delete_files;
 mod boot_id;
-pub(crate) mod entry_state;
-pub(crate) mod file_deletes;
+mod file_deletes;
 pub(crate) mod import;
 #[cfg(test)]
 mod lazyfs_tests;
@@ -319,9 +317,13 @@ pub(crate) mod util;
 use crate::store::engine::{
     entity::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal},
     entity_manager::{self, EntityManagerState, SpawnArg},
-    metadata::{self, MetaChannels, MetaTask},
+    metadata::{
+        self,
+        entry_state::{DataLocation, EntryState, OutboardLocation},
+        parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
+        MetaChannels, MetaTask,
+    },
 };
-use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use options::{BatchOptions, FsConfig, Options, StoreOptions};
 use tracing::Instrument;
@@ -3583,7 +3585,7 @@ pub mod tests {
         // Partial to complete and inline: the data file is no longer referenced.
         let notice = notices.recv().await.expect("notice");
         assert_eq!(notice.0, hash);
-        assert!(notice.1 .0.contains(&file_deletes::BaoFilePart::Data));
+        assert!(notice.1 .0.contains(&metadata::parts::BaoFilePart::Data));
         store
             .blobs()
             .delete_with_opts(crate::api::proto::BlobDeleteRequest {

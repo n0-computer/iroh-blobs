@@ -1,10 +1,24 @@
-use std::{fmt::Debug, path::PathBuf};
+//! The state of an entry, as the metadata store keeps it.
+use std::{
+    fmt::{self, Debug},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 
-use super::meta::{ActorError, ActorResult};
 use crate::store::util::SliceInfoExt;
+
+/// Two states of one entry that cannot both be true, such as two different validated sizes.
+#[derive(Debug)]
+pub struct InconsistentEntry(pub String);
+
+impl fmt::Display for InconsistentEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "inconsistent entry: {}", self.0)
+    }
+}
+
+impl std::error::Error for InconsistentEntry {}
 
 /// Location of the data.
 ///
@@ -39,14 +53,14 @@ impl<I: AsRef<[u8]>, E: Debug> DataLocation<I, E> {
 
 impl<X> DataLocation<X, u64> {
     #[allow(clippy::result_large_err)]
-    fn union(self, that: DataLocation<X, u64>) -> ActorResult<Self> {
+    fn union(self, that: DataLocation<X, u64>) -> Result<Self, InconsistentEntry> {
         Ok(match (self, that) {
             (
                 DataLocation::External(mut paths, a_size),
                 DataLocation::External(b_paths, b_size),
             ) => {
                 if a_size != b_size {
-                    return Err(ActorError::inconsistent(format!(
+                    return Err(InconsistentEntry(format!(
                         "complete size mismatch {a_size} {b_size}"
                     )));
                 }
@@ -215,8 +229,7 @@ impl<I: AsRef<[u8]>> EntryState<I> {
 }
 
 impl EntryState {
-    #[allow(clippy::result_large_err)]
-    pub fn union(old: Self, new: Self) -> ActorResult<Self> {
+    pub fn union(old: Self, new: Self) -> Result<Self, InconsistentEntry> {
         match (old, new) {
             (
                 Self::Complete {
@@ -251,7 +264,7 @@ impl EntryState {
                         // least one validation was wrong, which would be a bug
                         // in bao-tree.
                         if a_size != b_size {
-                            return Err(ActorError::inconsistent(format!(
+                            return Err(InconsistentEntry(format!(
                                 "validated size mismatch {a_size} {b_size}"
                             )));
                         }
@@ -264,34 +277,5 @@ impl EntryState {
                 Ok(Self::Partial { size })
             }
         }
-    }
-}
-
-impl redb::Value for EntryState {
-    type SelfType<'a> = EntryState;
-
-    type AsBytes<'a> = SmallVec<[u8; 128]>;
-
-    fn fixed_width() -> Option<usize> {
-        None
-    }
-
-    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
-    where
-        Self: 'a,
-    {
-        postcard::from_bytes(data).unwrap()
-    }
-
-    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
-    where
-        Self: 'a,
-        Self: 'b,
-    {
-        postcard::to_extend(value, SmallVec::new()).unwrap()
-    }
-
-    fn type_name() -> redb::TypeName {
-        redb::TypeName::new("EntryState")
     }
 }

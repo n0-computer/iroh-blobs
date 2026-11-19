@@ -5,6 +5,7 @@ use bytes::Bytes;
 use tracing::Span;
 
 use super::{
+    entry_state::EntryState,
     proto::{
         Delete, GcSnapshot, GcSnapshotReply, Get, ListBlobs, ListTags, Listing, Set, Update,
         UpdateAwait,
@@ -13,7 +14,6 @@ use super::{
 };
 use crate::{
     api::{proto::ListTagsRequest, tags::TagInfo},
-    store::fs::entry_state::EntryState,
     util::channel::oneshot,
     Hash,
 };

@@ -41,13 +41,16 @@ use tracing::{debug, info, info_span, trace, warn};
 
 use super::{
     boot_id,
-    entry_state::{DataLocation, EntryState, OutboardLocation},
-    file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
     options::{BatchOptions, FsConfig, PathOptions},
     util::PeekableReceiver,
 };
 use crate::store::{
-    engine::metadata::{self, MetaChannels, MetaTask, Request},
+    engine::metadata::{
+        self,
+        entry_state::{DataLocation, EntryState, InconsistentEntry, OutboardLocation},
+        parts::{referenced_parts, BaoFileParts, UnreferencedParts},
+        MetaChannels, MetaTask, Request,
+    },
     IROH_BLOCK_SIZE,
 };
 
@@ -103,6 +106,12 @@ impl ActorError {
 }
 
 pub type ActorResult<T> = std::result::Result<T, ActorError>;
+
+impl From<InconsistentEntry> for ActorError {
+    fn from(e: InconsistentEntry) -> Self {
+        ActorError::inconsistent(e.0)
+    }
+}
 
 fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
     trace!("{cmd:?}");
@@ -1071,13 +1080,10 @@ mod tests {
     use tracing::Span;
 
     use super::{
-        super::{
-            file_deletes::BaoFilePart,
-            options::{CrashConsistency, Options, PathOptions, StoreOptions},
-        },
+        super::options::{CrashConsistency, Options, PathOptions, StoreOptions},
         *,
     };
-    use crate::store::engine::metadata::Db;
+    use crate::store::engine::metadata::{parts::BaoFilePart, Db};
 
     fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
         Run {

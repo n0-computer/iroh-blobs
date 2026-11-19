@@ -7,7 +7,7 @@ use tracing::Span;
 
 use crate::{
     api::{self, proto::ListTagsRequest, tags::TagInfo},
-    store::{fs::entry_state::EntryState, util::DD},
+    store::{engine::metadata::entry_state::EntryState, util::DD},
     util::channel::oneshot,
     Hash, HashAndFormat,
 };

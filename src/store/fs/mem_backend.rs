@@ -24,9 +24,7 @@ use n0_future::stream;
 use tokio::sync::watch;
 
 use super::{
-    entry_state::{DataLocation, EntryState, OutboardLocation},
     export_bao_impl, export_ranges_impl,
-    file_deletes::UnreferencedParts,
     import::{ImportEntry, ImportEntryMsg, ImportSource},
     import_bao_impl,
     options::StoreOptions,
@@ -49,6 +47,8 @@ use crate::{
         entity::{Backend, EntityApi, EntityGlobal},
         entity_manager::Reset,
         metadata::{
+            entry_state::{DataLocation, EntryState, OutboardLocation},
+            parts::UnreferencedParts,
             proto::{
                 CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, GetResult, ListBlobs,
                 ListTags, Listing, RenameTagMsg, Set, SetTagMsg, Update, UpdateAwait,

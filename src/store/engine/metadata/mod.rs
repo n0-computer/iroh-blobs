@@ -35,9 +35,12 @@ use nested_enum_utils::enum_conversions;
 use tokio::sync::mpsc;
 
 mod client;
+pub(crate) mod entry_state;
+pub(crate) mod parts;
 pub(crate) mod proto;
 
 pub(crate) use client::{Db, EntryMeta};
+use parts::UnreferencedParts;
 use proto::{
     CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, ListBlobs, ListTags, RenameTagMsg,
     Set, SetTagMsg, Update, UpdateAwait,
@@ -45,7 +48,6 @@ use proto::{
 
 use crate::{
     api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
-    store::fs::file_deletes::UnreferencedParts,
     Hash,
 };
 

@@ -27,11 +27,12 @@
 //! - [`EntityApi::persist`] runs when the entity unloads, idle or at shutdown.
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
+use super::metadata::parts::UnreferencedParts;
 use super::{
     entity_manager::{self, ActiveEntityState, Reset},
     metadata::{MetaChannels, MetaTask},
 };
-use crate::store::fs::{file_deletes::UnreferencedParts, import::ImportEntryMsg, TaskContext};
+use crate::store::fs::{import::ImportEntryMsg, TaskContext};
 use crate::{
     api::proto::{ExportBaoMsg, ExportPathMsg, ExportRangesMsg, ImportBaoMsg, ObserveMsg},
     util::temp_tag::TempTag,

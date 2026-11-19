@@ -20,10 +20,8 @@ use redb::ReadableTable;
 use super::{tables::Tables, ActorError};
 use crate::{
     store::{
-        fs::{
-            entry_state::{DataLocation, EntryState, OutboardLocation},
-            options::PathOptions,
-        },
+        engine::metadata::entry_state::{DataLocation, EntryState, OutboardLocation},
+        fs::options::PathOptions,
         util::size_slot,
     },
     Hash,
