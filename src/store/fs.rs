@@ -2719,6 +2719,38 @@ pub mod tests {
         Ok(())
     }
 
+    // a file big enough to be hashed on several threads gets the same hash and outboard
+    #[tokio::test]
+    async fn test_import_path_parallel() -> TestResult<()> {
+        let testdir = tempfile::tempdir()?;
+        let size = crate::util::outboard_with_progress::PARALLEL_MIN_SIZE as usize + 1;
+        let data = test_data(size);
+        let path = testdir.path().join("big");
+        fs::write(&path, &data)?;
+        for (i, mode) in [ImportMode::Copy, ImportMode::TryReference]
+            .into_iter()
+            .enumerate()
+        {
+            let store = FsStore::load(testdir.path().join(format!("db{i}"))).await?;
+            let tt = store
+                .add_path_with_opts(AddPathOptions {
+                    path: path.clone(),
+                    mode,
+                    format: BlobFormat::Raw,
+                })
+                .await?;
+            assert_eq!(tt.hash, Hash::new(&data));
+            let (_, expected) = create_n0_bao(&data, &ChunkRanges::all())?;
+            let actual = store
+                .export_bao(tt.hash, ChunkRanges::all())
+                .bao_to_vec()
+                .await?;
+            assert!(actual == expected, "bao encoding differs");
+            store.shutdown().await?;
+        }
+        Ok(())
+    }
+
     // import data via import_bytes, check that we can observe it and that it is complete
     #[tokio::test]
     #[traced_test]

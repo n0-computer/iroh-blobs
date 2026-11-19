@@ -19,7 +19,10 @@ use std::{
 };
 
 use bao_tree::{
-    io::outboard::{PreOrderMemOutboard, PreOrderOutboard},
+    io::{
+        outboard::{PreOrderMemOutboard, PreOrderOutboard},
+        sync::WriteAt,
+    },
     BaoTree, ChunkNum,
 };
 use bytes::Bytes;
@@ -47,7 +50,10 @@ use crate::{
         util::{MemOrFile, DD},
         IROH_BLOCK_SIZE,
     },
-    util::{outboard_with_progress::init_outboard, sink::Sink},
+    util::{
+        outboard_with_progress::{hash_threads, init_outboard, init_outboard_parallel},
+        sink::Sink,
+    },
     BlobFormat, Hash,
 };
 
@@ -396,6 +402,25 @@ impl Sink<ChunkNum> for OutboardProgress {
     }
 }
 
+/// Hashes `source` into `outboard`, on several threads for a big file.
+async fn init_outboard_from<W: WriteAt>(
+    source: &ImportSource,
+    outboard: &mut PreOrderOutboard<W>,
+    progress: &mut OutboardProgress,
+) -> io::Result<()> {
+    if let ImportSource::External(_, file, size) | ImportSource::TempFile(_, file, size) = source {
+        let threads = hash_threads(*size);
+        if threads > 1 {
+            // the threads read the file by offset, through their own handle
+            let file = Arc::new(file.try_clone()?);
+            return Ok(init_outboard_parallel(file, outboard, progress, threads).await??);
+        }
+    }
+    let mut data = source.read();
+    data.rewind()?;
+    Ok(init_outboard(data, outboard, progress).await??)
+}
+
 async fn compute_outboard(
     source: ImportSource,
     format: BlobFormat,
@@ -408,8 +433,6 @@ async fn compute_outboard(
     let root = bao_tree::blake3::Hash::from_bytes([0; 32]);
     let outboard_size = raw_outboard_size(size);
     let send_progress = OutboardProgress::ref_cast_mut(tx);
-    let mut data = source.read();
-    data.rewind()?;
     let (hash, outboard) = if outboard_size > options.inline.max_outboard_inlined {
         // outboard will eventually be stored as a file, so compute it directly to a file
         // we don't know the hash yet, so we need to create a temp file
@@ -422,7 +445,7 @@ async fn compute_outboard(
             root,
             data: &mut outboard_file,
         };
-        init_outboard(data, &mut outboard, send_progress).await??;
+        init_outboard_from(&source, &mut outboard, send_progress).await?;
         (outboard.root, MemOrFile::File(outboard_path))
     } else {
         // outboard will be stored in memory, so compute it to a memory buffer
@@ -433,7 +456,7 @@ async fn compute_outboard(
             root,
             data: &mut outboard_file,
         };
-        init_outboard(data, &mut outboard, send_progress).await??;
+        init_outboard_from(&source, &mut outboard, send_progress).await?;
         (outboard.root, MemOrFile::Mem(Bytes::from(outboard_file)))
     };
     Ok(ImportEntry {
@@ -576,7 +599,11 @@ mod tests {
         Ok(())
     }
 
-    async fn test_import_file_task(data: Bytes, options: Arc<Options>) -> TestResult<()> {
+    async fn test_import_file_task(
+        data: Bytes,
+        mode: ImportMode,
+        options: Arc<Options>,
+    ) -> TestResult<()> {
         let path = options.path.temp_file_name();
         std::fs::write(&path, &data)?;
         let expected_outboard = PreOrderMemOutboard::create(data.as_ref(), IROH_BLOCK_SIZE);
@@ -584,7 +611,7 @@ mod tests {
         let (mut tx, rx) = mpsc::channel(1024 * 1024);
         let cmd = ImportPathRequest {
             path,
-            mode: ImportMode::Copy,
+            mode,
             format: BlobFormat::Raw,
             scope: Scope::default(),
         };
@@ -592,15 +619,19 @@ mod tests {
         let Ok(res) = res else {
             panic!("import failed");
         };
-        let ImportEntry { outboard, .. } = res;
+        let ImportEntry { hash, outboard, .. } = res;
         drop(tx);
+        assert_eq!(hash, Hash::new(&data));
         let actual_outboard = match &outboard {
             MemOrFile::Mem(data) => data.clone(),
             MemOrFile::File(path) => std::fs::read(path)?.into(),
         };
-        assert_eq!(expected_outboard.data.as_slice(), actual_outboard.as_ref());
+        assert!(expected_outboard.data.as_slice() == actual_outboard.as_ref());
         let progress = drain(rx).await?;
-        assert_expected_progress(&progress);
+        // a referenced file is not copied, so there is no CopyDone
+        if mode == ImportMode::Copy {
+            assert_expected_progress(&progress);
+        }
         Ok(())
     }
 
@@ -632,7 +663,26 @@ mod tests {
         for size in sizes {
             let data = Bytes::from(vec![0; size]);
             test_import_byte_stream_task(data.clone(), options.clone()).await?;
-            test_import_file_task(data, options.clone()).await?;
+            test_import_file_task(data, ImportMode::Copy, options.clone()).await?;
+        }
+        Ok(())
+    }
+
+    /// Files from `PARALLEL_MIN_SIZE` on are hashed on several threads, to the same result.
+    #[tokio::test]
+    async fn parallel_hashing() -> TestResult<()> {
+        use crate::util::outboard_with_progress::PARALLEL_MIN_SIZE;
+        let dir = tempfile::tempdir()?;
+        let options = Arc::new(Options::new(dir.path()));
+        std::fs::create_dir_all(&options.path.temp_path)?;
+        let min = PARALLEL_MIN_SIZE as usize;
+        for size in [min - 1, min, min + 16 * 1024 + 1] {
+            let data: Bytes = (0..size as u64)
+                .map(|i| (i.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as u8)
+                .collect();
+            for mode in [ImportMode::Copy, ImportMode::TryReference] {
+                test_import_file_task(data.clone(), mode, options.clone()).await?;
+            }
         }
         Ok(())
     }
