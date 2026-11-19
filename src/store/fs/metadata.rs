@@ -29,14 +29,60 @@
 //!   store.
 //! - **Shutdown** commits everything, records the clean shutdown so the next
 //!   open needs no recovery, and replies. Then the actor ends.
-use nested_enum_utils::enum_conversions;
+use std::{any::Any, fmt, future::Future, pin::Pin};
 
-use super::meta::{
-    Command, CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, ListBlobs, ListTags,
-    ReadOnlyCommand, ReadWriteCommand, RenameTagMsg, Set, SetTagMsg, TopLevelCommand, Update,
-    UpdateAwait,
+use nested_enum_utils::enum_conversions;
+use tokio::sync::mpsc;
+
+use super::{
+    file_deletes::UnreferencedParts,
+    meta::{
+        Command, CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, ListBlobs, ListTags,
+        ReadOnlyCommand, ReadWriteCommand, RenameTagMsg, Set, SetTagMsg, TopLevelCommand, Update,
+        UpdateAwait,
+    },
 };
-use crate::api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg};
+use crate::{
+    api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
+    Hash,
+};
+
+/// What a metadata store is started with.
+pub(crate) struct MetaChannels {
+    /// The requests, in order.
+    pub requests: mpsc::Receiver<Request>,
+    /// Where to send the parts a commit stopped referencing.
+    pub unreferenced: mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
+}
+
+/// The running metadata store. It ends with an error to fail the store.
+pub(crate) type MetaTask = Pin<Box<dyn Future<Output = Result<(), Failure>> + Send + 'static>>;
+
+/// Why a metadata store ended, and what it keeps alive until the store has stopped its workers.
+///
+/// The redb store keeps its database here, so the database stays locked
+/// until no worker can touch files anymore.
+pub(crate) struct Failure {
+    pub error: n0_error::AnyError,
+    _guard: Box<dyn Any + Send>,
+}
+
+impl Failure {
+    pub fn new(error: n0_error::AnyError, guard: impl Any + Send) -> Self {
+        Self {
+            error,
+            _guard: Box::new(guard),
+        }
+    }
+}
+
+impl fmt::Debug for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Failure")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
 
 /// A request to the metadata store.
 #[derive(Debug)]

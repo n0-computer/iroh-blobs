@@ -293,7 +293,7 @@ use crate::{
             bao_file::{
                 BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
             },
-            util::entity_manager::{self, ActiveEntityState},
+            util::entity_manager,
         },
         gc::run_gc,
         util::{drain, BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
@@ -309,6 +309,7 @@ mod bao_file;
 use bao_file::BaoFileHandle;
 use file_deletes::{delete_files, BaoFileParts, UnreferencedParts, ALL_PARTS};
 mod boot_id;
+mod entity_api;
 mod entry_state;
 mod file_deletes;
 mod import;
@@ -319,8 +320,10 @@ mod metadata;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
+use entity_api::{EmParams, EntityApi, EntityCtx, EntityGlobal};
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
+use metadata::{MetaChannels, MetaTask};
 use options::Options;
 use tracing::Instrument;
 
@@ -406,25 +409,6 @@ impl TaskContext {
             .send(ClearScope { scope }.into())
             .await
             .ok();
-    }
-}
-
-#[derive(Debug)]
-struct EmParams;
-
-impl entity_manager::Params for EmParams {
-    type EntityId = Hash;
-
-    type GlobalState = Arc<TaskContext>;
-
-    type EntityState = BaoFileHandle;
-
-    async fn on_shutdown(
-        state: entity_manager::ActiveEntityState<Self>,
-        cause: entity_manager::ShutdownCause,
-    ) {
-        trace!("persist {:?} due to {cause:?}", state.id);
-        state.persist().await;
     }
 }
 
@@ -662,7 +646,7 @@ enum Deferred {
 }
 
 #[derive(Debug)]
-struct Actor {
+struct Actor<E: EntityApi = FsEntity> {
     // Context that can be cheaply shared with tasks.
     context: Arc<TaskContext>,
     // Receiver for incoming user commands.
@@ -672,13 +656,13 @@ struct Actor {
     // Parts committed metadata batches stopped referencing, from the database actor.
     unreferenced: tokio::sync::mpsc::UnboundedReceiver<(Hash, UnreferencedParts)>,
     // A failed metadata task must abort the workers, including waiting deletes.
-    metadata_task: Option<tokio::task::JoinHandle<Result<(), meta::Failure>>>,
+    metadata_task: Option<tokio::task::JoinHandle<Result<(), metadata::Failure>>>,
     // How many deletes are running, so shutdown can let them finish.
     deletes: Arc<tokio::sync::watch::Sender<usize>>,
     // Tasks for import and export operations.
     tasks: JoinSet<()>,
     // Entity manager that handles concurrency for entities.
-    handles: EntityManagerState<EmParams>,
+    handles: EntityManagerState<EmParams<E>>,
     // temp tags
     temp_tags: TempTags,
     gc: Option<GcSession>,
@@ -689,7 +673,134 @@ struct Actor {
     _rt: RtWrapper,
 }
 
-type HashContext = ActiveEntityState<EmParams>;
+/// What the fs entity's code works on: the hash, the store, and the entity's state.
+#[derive(Debug, Clone)]
+struct HashContext {
+    id: Hash,
+    global: Arc<TaskContext>,
+    state: BaoFileHandle,
+}
+
+/// The fs store's entity: the state of a hash's files.
+#[derive(Debug, Clone)]
+struct FsEntity {
+    id: Hash,
+    handle: BaoFileHandle,
+}
+
+impl FsEntity {
+    /// The context its code runs in, for one request.
+    fn ctx(&self, global: &EntityGlobal<()>) -> HashContext {
+        HashContext {
+            id: self.id,
+            global: global.store.clone(),
+            state: self.handle.clone(),
+        }
+    }
+}
+
+impl entity_manager::Reset<Hash> for FsEntity {
+    fn new(id: &Hash) -> Self {
+        Self {
+            id: *id,
+            handle: BaoFileHandle::default(),
+        }
+    }
+
+    fn reset(&mut self, id: &Hash) {
+        self.id = *id;
+        // Keeps the generation.
+        self.handle.set_storage(BaoFileStorage::Initial);
+    }
+}
+
+impl EntityApi for FsEntity {
+    type Config = ();
+
+    fn import_bao(
+        &self,
+        global: &EntityGlobal<()>,
+        cmd: ImportBaoMsg,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.import_bao(cmd).await }
+    }
+
+    fn finish_import(
+        &self,
+        global: &EntityGlobal<()>,
+        cmd: ImportEntryMsg,
+        tt: TempTag,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.finish_import(cmd, tt).await }
+    }
+
+    fn observe(
+        &self,
+        global: &EntityGlobal<()>,
+        cmd: ObserveMsg,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.observe(cmd).await }
+    }
+
+    fn export_ranges(
+        &self,
+        global: &EntityGlobal<()>,
+        cmd: ExportRangesMsg,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.export_ranges(cmd).await }
+    }
+
+    fn export_bao(
+        &self,
+        global: &EntityGlobal<()>,
+        cmd: ExportBaoMsg,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.export_bao(cmd).await }
+    }
+
+    fn export_path(
+        &self,
+        global: &EntityGlobal<()>,
+        cmd: ExportPathMsg,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.export_path(cmd).await }
+    }
+
+    fn delete(&self, global: &EntityGlobal<()>) -> impl Future<Output = io::Result<()>> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.delete().await }
+    }
+
+    fn freeze(
+        &self,
+        global: &EntityGlobal<()>,
+        ack: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::watch::Receiver<()>,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.freeze(ack, release).await }
+    }
+
+    fn delete_unreferenced(
+        &self,
+        global: &EntityGlobal<()>,
+        parts: UnreferencedParts,
+    ) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.delete_unreferenced(parts).await }
+    }
+
+    fn persist(&self, global: &EntityGlobal<()>) -> impl Future<Output = ()> + Send {
+        let ctx = self.ctx(global);
+        async move { ctx.persist().await }
+    }
+}
 
 impl SyncEntityApi for HashContext {
     /// Load the state from the database.
@@ -788,7 +899,7 @@ impl HashContext {
     }
 }
 
-impl Actor {
+impl<E: EntityApi> Actor<E> {
     fn db(&self) -> &meta::Db {
         &self.context.db
     }
@@ -815,7 +926,7 @@ impl Actor {
     /// On a transaction error, `result` retains the database lock until all
     /// workers have stopped, preventing a reopened store from racing them.
     async fn abort_on_metadata_failure(
-        result: Result<Result<(), meta::Failure>, JoinError>,
+        result: Result<Result<(), metadata::Failure>, JoinError>,
         tasks: &mut JoinSet<()>,
     ) -> bool {
         match &result {
@@ -1068,7 +1179,7 @@ impl Actor {
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        ctx.freeze(ack, release_rx).await;
+                        ctx.state.freeze(&ctx.global, ack, release_rx).await;
                     }
                 })
                 .await
@@ -1280,7 +1391,9 @@ impl Actor {
             .handles
             .spawn(hash, move |arg| async move {
                 match arg {
-                    SpawnArg::Active(ctx) => ctx.delete_unreferenced(parts).await,
+                    SpawnArg::Active(ctx) => {
+                        ctx.state.delete_unreferenced(&ctx.global, parts).await
+                    }
                     SpawnArg::Dead => {
                         warn!("no entity for {}, its files stay", hash);
                     }
@@ -1328,7 +1441,7 @@ impl Actor {
                 .spawn(hash, move |arg| async move {
                     let _running = running;
                     let res = match arg {
-                        SpawnArg::Active(ctx) => ctx.delete().await,
+                        SpawnArg::Active(ctx) => ctx.state.delete(&ctx.global).await,
                         SpawnArg::Dead => Err(io::Error::other("no entity to delete through")),
                     };
                     res_tx.send(res).ok();
@@ -1346,11 +1459,12 @@ impl Actor {
     /// This must only be called in the context of the store runtime, since the
     /// database actor is spawned on the current runtime and does blocking IO.
     async fn new(
-        db_path: PathBuf,
         cmd_rx: tokio::sync::mpsc::Receiver<Command>,
         fs_commands_rx: tokio::sync::mpsc::Receiver<InternalCommand>,
         fs_commands_tx: tokio::sync::mpsc::Sender<InternalCommand>,
         options: Arc<Options>,
+        meta: impl FnOnce(MetaChannels) -> Result<MetaTask>,
+        config: E::Config,
     ) -> Result<Self> {
         trace!(
             "creating data directory: {}",
@@ -1362,41 +1476,35 @@ impl Actor {
             options.path.temp_path.display()
         );
         fs::create_dir_all(&options.path.temp_path)?;
-        trace!(
-            "creating parent directory for db file{}",
-            db_path.parent().unwrap().display()
-        );
-        fs::create_dir_all(db_path.parent().unwrap())?;
-        let (db_send, db_recv) = tokio::sync::mpsc::channel(100);
+        let (db_send, requests) = tokio::sync::mpsc::channel(100);
         let (unreferenced_send, unreferenced) = tokio::sync::mpsc::unbounded_channel();
-        let paths = Arc::new(options.path.clone());
-        let db_actor = meta::Actor::new(
-            db_path,
-            db_recv,
-            unreferenced_send,
-            paths,
-            options.batch.clone(),
-            options.syncs_files(),
-        )?;
-        // We hold the database lock now, so no other store is importing into the temp
-        // directory. Anything in it is left over from imports that did not complete,
-        // for example because the process was killed.
+        let metadata = meta(MetaChannels {
+            requests,
+            unreferenced: unreferenced_send,
+        })?;
+        // The metadata store holds its lock now, so no other store is importing
+        // into the temp directory. Anything in it is left over from imports that
+        // did not complete, for example because the process was killed.
         remove_all_files(&options.path.temp_path);
         let slot_context = Arc::new(TaskContext {
             options: options.clone(),
             db: meta::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
         });
-        let metadata_task = Some(tokio::spawn(db_actor.run()));
+        let metadata_task = Some(tokio::spawn(metadata));
+        let global = Arc::new(EntityGlobal {
+            store: slot_context.clone(),
+            config,
+        });
         Ok(Self {
-            context: slot_context.clone(),
+            context: slot_context,
             cmd_rx,
             fs_cmd_rx: fs_commands_rx,
             unreferenced,
             metadata_task,
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: JoinSet::new(),
-            handles: EntityManagerState::new(slot_context, 1024, 32, 2),
+            handles: EntityManagerState::new(global, 1024, 32, 2),
             temp_tags: Default::default(),
             gc: None,
             deferred: VecDeque::new(),
@@ -1447,14 +1555,14 @@ fn remove_all_files(dir: &Path) {
 
 trait HashSpecificCommand: HashSpecific + Send + 'static {
     /// Handle the command on success by spawning a task into the per-hash context.
-    fn handle(self, ctx: HashContext) -> impl Future<Output = ()> + Send + 'static;
+    fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) -> impl Future<Output = ()> + Send + 'static;
 
     /// Opportunity to send an error if the entity is dead (e.g. after a panic).
     fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
 
-    async fn spawn(
+    async fn spawn<E: EntityApi>(
         self,
-        manager: &mut entity_manager::EntityManagerState<EmParams>,
+        manager: &mut entity_manager::EntityManagerState<EmParams<E>>,
         tasks: &mut JoinSet<()>,
     ) where
         Self: Sized,
@@ -1482,14 +1590,14 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 }
 
 impl HashSpecificCommand for ObserveMsg {
-    async fn handle(self, ctx: HashContext) {
-        ctx.observe(self).await
+    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+        ctx.state.observe(&ctx.global, self).await
     }
     async fn on_error(self) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
-    async fn handle(self, ctx: HashContext) {
-        ctx.export_path(self).await
+    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+        ctx.state.export_path(&ctx.global, self).await
     }
     async fn on_error(self) {
         let err = err_entity_dead();
@@ -1500,8 +1608,8 @@ impl HashSpecificCommand for ExportPathMsg {
     }
 }
 impl HashSpecificCommand for ExportBaoMsg {
-    async fn handle(self, ctx: HashContext) {
-        ctx.export_bao(self).await
+    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+        ctx.state.export_bao(&ctx.global, self).await
     }
     async fn on_error(self) {
         let err = err_entity_dead();
@@ -1512,8 +1620,8 @@ impl HashSpecificCommand for ExportBaoMsg {
     }
 }
 impl HashSpecificCommand for ExportRangesMsg {
-    async fn handle(self, ctx: HashContext) {
-        ctx.export_ranges(self).await
+    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+        ctx.state.export_ranges(&ctx.global, self).await
     }
     async fn on_error(self) {
         let err = err_entity_dead();
@@ -1524,8 +1632,8 @@ impl HashSpecificCommand for ExportRangesMsg {
     }
 }
 impl HashSpecificCommand for ImportBaoMsg {
-    async fn handle(self, ctx: HashContext) {
-        ctx.import_bao(self).await
+    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
+        ctx.state.import_bao(&ctx.global, self).await
     }
     async fn on_error(self) {
         let err = err_entity_dead();
@@ -1538,9 +1646,9 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
     }
 }
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
-    async fn handle(self, ctx: HashContext) {
+    async fn handle<E: EntityApi>(self, ctx: EntityCtx<E>) {
         let (tt, cmd) = self;
-        ctx.finish_import(cmd, tt).await
+        ctx.state.finish_import(&ctx.global, cmd, tt).await
     }
     async fn on_error(self) {
         let err = err_entity_dead();
@@ -1603,8 +1711,8 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
     Ok(())
 }
 
-/// The minimal API you need to implement for an entity for a store to work.
-trait EntityApi {
+/// The requests the fs entity's code handles, for one hash.
+trait EntityOps {
     /// The hash of the entry.
     fn id(&self) -> Hash;
     /// The metadata of the entry.
@@ -1638,8 +1746,8 @@ trait EntityApi {
 }
 
 /// A more opinionated API that can be used as a helper to save implementation
-/// effort when implementing the EntityApi trait.
-trait SyncEntityApi: EntityApi {
+/// effort when implementing the EntityOps trait.
+trait SyncEntityApi: EntityOps {
     /// Load the entry state from the database. This must make sure that it is
     /// not run concurrently, so if load is called multiple times, all but one
     /// must wait. You can use a tokio::sync::OnceCell or similar to achieve this.
@@ -1673,7 +1781,7 @@ trait SyncEntityApi: EntityApi {
 }
 
 /// The high level entry point per entry.
-impl EntityApi for HashContext {
+impl EntityOps for HashContext {
     fn id(&self) -> Hash {
         self.id
     }
@@ -2245,6 +2353,20 @@ impl FsStore {
 
     /// Load or create a new store with custom options, returning an additional sender for file store specific commands.
     pub async fn load_with_opts(db_path: PathBuf, options: Options) -> Result<FsStore> {
+        let meta = meta::redb(db_path, &options);
+        Self::from_parts::<FsEntity>(options, meta, ()).await
+    }
+
+    /// Starts a store from a metadata store and an entity implementation.
+    ///
+    /// `meta` is called on the store's runtime with the channels of the
+    /// metadata store, and returns it running. `config` is shared by all
+    /// entities.
+    async fn from_parts<E: EntityApi>(
+        options: Options,
+        meta: impl FnOnce(MetaChannels) -> Result<MetaTask> + Send + 'static,
+        config: E::Config,
+    ) -> Result<FsStore> {
         static THREAD_NR: AtomicU64 = AtomicU64::new(0);
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
@@ -2279,12 +2401,13 @@ impl FsStore {
         let (fs_commands_tx, fs_commands_rx) = tokio::sync::mpsc::channel(100);
         let gc_config = options.gc.clone();
         let mut actor = handle
-            .spawn(Actor::new(
-                db_path,
+            .spawn(Actor::<E>::new(
                 commands_rx,
                 fs_commands_rx,
                 fs_commands_tx.clone(),
                 Arc::new(options),
+                meta,
+                config,
             ))
             .await
             .anyerr()??;
@@ -2462,14 +2585,10 @@ pub mod tests {
             let dir = tempfile::tempdir()?;
             let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
             let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
-            let mut actor = Actor::new(
-                dir.path().join("blobs.db"),
-                cmd_rx,
-                fs_rx,
-                fs_tx,
-                Arc::new(Options::new(dir.path())),
-            )
-            .await?;
+            let options = Options::new(dir.path());
+            let meta = meta::redb(dir.path().join("blobs.db"), &options);
+            let mut actor =
+                Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx, Arc::new(options), meta, ()).await?;
             let mut deletes = actor.deletes.subscribe();
             let hash = Hash::new("held deletion");
             let (ack, frozen) = tokio::sync::oneshot::channel();
@@ -2478,7 +2597,7 @@ pub mod tests {
                 .handles
                 .spawn(hash, move |arg| async move {
                     if let SpawnArg::Active(ctx) = arg {
-                        ctx.freeze(ack, release_rx).await;
+                        ctx.state.freeze(&ctx.global, ack, release_rx).await;
                     }
                 })
                 .await
@@ -2524,14 +2643,11 @@ pub mod tests {
         let dir = tempfile::tempdir()?;
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
-        let mut actor = Actor::new(
-            dir.path().join("blobs.db"),
-            cmd_rx,
-            fs_rx,
-            fs_tx.clone(),
-            Arc::new(Options::new(dir.path())),
-        )
-        .await?;
+        let options = Options::new(dir.path());
+        let meta = meta::redb(dir.path().join("blobs.db"), &options);
+        let mut actor =
+            Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx.clone(), Arc::new(options), meta, ())
+                .await?;
         let (idle_tx, idle_rx) = irpc::channel::oneshot::channel();
         actor.idle_waiters.push(idle_tx);
         let (scope, _) = actor.temp_tags.create_scope();
@@ -3430,15 +3546,10 @@ pub mod tests {
         let (fs_tx, fs_rx) = tokio::sync::mpsc::channel(32);
         let mut options = Options::new(dir.path());
         options.inline.max_data_inlined = 64 * 1024;
+        let meta = meta::redb(dir.path().join("blobs.db"), &options);
         let options = Arc::new(options);
-        let mut actor = Actor::new(
-            dir.path().join("blobs.db"),
-            cmd_rx,
-            fs_rx,
-            fs_tx,
-            options.clone(),
-        )
-        .await?;
+        let mut actor =
+            Actor::<FsEntity>::new(cmd_rx, fs_rx, fs_tx, options.clone(), meta, ()).await?;
         // Hold back the notices; metadata and entities run normally.
         let (deliver, delayed) = tokio::sync::mpsc::unbounded_channel();
         let mut notices = std::mem::replace(&mut actor.unreferenced, delayed);

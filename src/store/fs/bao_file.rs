@@ -31,7 +31,7 @@ use super::{
 use crate::{
     api::blobs::Bitfield,
     store::{
-        fs::{meta::raw_outboard_size, util::entity_manager, EntityApi, HashContext},
+        fs::{meta::raw_outboard_size, EntityOps, HashContext},
         util::{
             read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
@@ -652,17 +652,6 @@ impl BaoFileHandle {
     /// Replaces the storage, keeping the generation.
     pub(super) fn set_storage(&self, storage: BaoFileStorage) {
         self.send_modify(|state| state.storage = storage);
-    }
-}
-
-impl entity_manager::Reset<Hash> for BaoFileHandle {
-    fn new(_id: &Hash) -> Self {
-        Self::default()
-    }
-
-    fn reset(&mut self, _id: &Hash) {
-        // Keeps the generation.
-        self.send_modify(|state| state.storage = BaoFileStorage::Initial);
     }
 }
 

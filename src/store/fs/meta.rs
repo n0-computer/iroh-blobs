@@ -43,8 +43,8 @@ use super::{
     boot_id,
     entry_state::{DataLocation, EntryState, OutboardLocation},
     file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
-    metadata::Request,
-    options::{BatchOptions, PathOptions},
+    metadata::{self, MetaChannels, MetaTask, Request},
+    options::{BatchOptions, Options, PathOptions},
     util::PeekableReceiver,
 };
 use crate::store::IROH_BLOCK_SIZE;
@@ -1047,6 +1047,42 @@ pub(super) struct Failure {
     _db: DbWrapper,
 }
 
+impl From<Failure> for metadata::Failure {
+    fn from(failure: Failure) -> Self {
+        Self::new(failure.error.into(), failure._db)
+    }
+}
+
+/// Starts the redb metadata store at `db_path` on the store's runtime.
+///
+/// Creates the database's directory, opens or creates the database, and runs
+/// recovery if the last run did not shut down cleanly.
+pub(super) fn redb(
+    db_path: PathBuf,
+    options: &Options,
+) -> impl FnOnce(MetaChannels) -> n0_error::Result<MetaTask> + Send + 'static {
+    let paths = Arc::new(options.path.clone());
+    let batch = options.batch.clone();
+    let syncs_files = options.syncs_files();
+    move |channels| {
+        if let Some(parent) = db_path.parent() {
+            trace!("creating parent directory for db file {}", parent.display());
+            std::fs::create_dir_all(parent)?;
+        }
+        let actor = Actor::new(
+            db_path,
+            channels.requests,
+            channels.unreferenced,
+            paths,
+            batch,
+            syncs_files,
+        )?;
+        Ok(Box::pin(
+            async move { actor.run().await.map_err(Into::into) },
+        ))
+    }
+}
+
 /// Logs what recovery did.
 fn report(recovered: &recovery::Recovered) {
     info!(
@@ -1665,15 +1701,25 @@ mod tests {
             db: Db::new(db_tx),
             internal_cmd_tx: fs_tx.clone(),
         });
-        let mut actor = fs::Actor {
+        let mut actor = fs::Actor::<fs::FsEntity> {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
             unreferenced,
-            metadata_task: Some(tokio::spawn(metadata.run())),
+            metadata_task: Some(tokio::spawn(async move {
+                metadata.run().await.map_err(Into::into)
+            })),
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: tokio::task::JoinSet::new(),
-            handles: EntityManagerState::new(context, 16, 32, 2),
+            handles: EntityManagerState::new(
+                Arc::new(fs::EntityGlobal {
+                    store: context,
+                    config: (),
+                }),
+                16,
+                32,
+                2,
+            ),
             temp_tags: Default::default(),
             gc: None,
             deferred: Default::default(),
