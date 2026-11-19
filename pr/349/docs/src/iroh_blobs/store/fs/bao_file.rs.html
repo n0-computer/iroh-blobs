@@ -602,310 +602,308 @@
 <a href=#602 id=602 data-nosnippet>602</a>    /// while a file deleted too early loses data.
 <a href=#603 id=603 data-nosnippet>603</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>references(<span class="kw-2">&amp;</span><span class="self">self</span>, part: BaoFilePart) -&gt; bool {
 <a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#605 id=605 data-nosnippet>605</a>            <span class="comment">// Not loaded: the committed entry decides, and it no longer
-<a href=#606 id=606 data-nosnippet>606</a>            // references the file.
-<a href=#607 id=607 data-nosnippet>607</a>            </span><span class="self">Self</span>::Initial =&gt; <span class="bool-val">false</span>,
-<a href=#608 id=608 data-nosnippet>608</a>            <span class="self">Self</span>::Loading | <span class="self">Self</span>::Deleting =&gt; <span class="bool-val">true</span>,
-<a href=#609 id=609 data-nosnippet>609</a>            <span class="self">Self</span>::ReadWrite(s) | <span class="self">Self</span>::ReadOnly(s) =&gt; s.references(part),
-<a href=#610 id=610 data-nosnippet>610</a>        }
-<a href=#611 id=611 data-nosnippet>611</a>    }
-<a href=#612 id=612 data-nosnippet>612</a>
-<a href=#613 id=613 data-nosnippet>613</a>    <span class="doccomment">/// Takes the state, leaving an invalid one behind.
-<a href=#614 id=614 data-nosnippet>614</a>    </span><span class="kw">pub fn </span>take(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-<a href=#615 id=615 data-nosnippet>615</a>        std::mem::replace(<span class="self">self</span>, <span class="self">Self</span>::ReadWrite(Settled::Invalid))
-<a href=#616 id=616 data-nosnippet>616</a>    }
-<a href=#617 id=617 data-nosnippet>617</a>}
-<a href=#618 id=618 data-nosnippet>618</a>
-<a href=#619 id=619 data-nosnippet>619</a><span class="doccomment">/// The state of an entity: its storage, and the generation of its entry.
-<a href=#620 id=620 data-nosnippet>620</a>///
-<a href=#621 id=621 data-nosnippet>621</a>/// Derefs to the storage, which is what almost all code looks at.
-<a href=#622 id=622 data-nosnippet>622</a></span><span class="attr">#[derive(Debug, Default)]
-<a href=#623 id=623 data-nosnippet>623</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>EntityState {
-<a href=#624 id=624 data-nosnippet>624</a>    <span class="doccomment">/// Starts a new generation with every delete of the entry. Observers end
-<a href=#625 id=625 data-nosnippet>625</a>    /// when it changes, even if they wake only after the entry was filled
-<a href=#626 id=626 data-nosnippet>626</a>    /// again. Only ever grows, also across recycling.
-<a href=#627 id=627 data-nosnippet>627</a>    </span><span class="kw">pub </span>generation: u64,
-<a href=#628 id=628 data-nosnippet>628</a>    <span class="kw">pub </span>storage: BaoFileStorage,
-<a href=#629 id=629 data-nosnippet>629</a>}
-<a href=#630 id=630 data-nosnippet>630</a>
-<a href=#631 id=631 data-nosnippet>631</a><span class="kw">impl </span>Deref <span class="kw">for </span>EntityState {
-<a href=#632 id=632 data-nosnippet>632</a>    <span class="kw">type </span>Target = BaoFileStorage;
-<a href=#633 id=633 data-nosnippet>633</a>
-<a href=#634 id=634 data-nosnippet>634</a>    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>BaoFileStorage {
-<a href=#635 id=635 data-nosnippet>635</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.storage
-<a href=#636 id=636 data-nosnippet>636</a>    }
-<a href=#637 id=637 data-nosnippet>637</a>}
-<a href=#638 id=638 data-nosnippet>638</a>
-<a href=#639 id=639 data-nosnippet>639</a><span class="kw">impl </span>DerefMut <span class="kw">for </span>EntityState {
-<a href=#640 id=640 data-nosnippet>640</a>    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>BaoFileStorage {
-<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.storage
-<a href=#642 id=642 data-nosnippet>642</a>    }
-<a href=#643 id=643 data-nosnippet>643</a>}
-<a href=#644 id=644 data-nosnippet>644</a>
-<a href=#645 id=645 data-nosnippet>645</a><span class="doccomment">/// A cheaply cloneable handle to a bao file.
-<a href=#646 id=646 data-nosnippet>646</a>///
-<a href=#647 id=647 data-nosnippet>647</a>/// You must call [Self::persist] to write the bitfield to disk, if you want to persist
-<a href=#648 id=648 data-nosnippet>648</a>/// the file handle, otherwise the bitfield will not be written to disk and will have
-<a href=#649 id=649 data-nosnippet>649</a>/// to be reconstructed on next use.
-<a href=#650 id=650 data-nosnippet>650</a></span><span class="attr">#[derive(Debug, Clone, Default, derive_more::Deref)]
-<a href=#651 id=651 data-nosnippet>651</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BaoFileHandle(<span class="kw">pub</span>(<span class="kw">super</span>) watch::Sender&lt;EntityState&gt;);
-<a href=#652 id=652 data-nosnippet>652</a>
-<a href=#653 id=653 data-nosnippet>653</a><span class="kw">impl </span>BaoFileHandle {
-<a href=#654 id=654 data-nosnippet>654</a>    <span class="doccomment">/// Replaces the storage, keeping the generation.
-<a href=#655 id=655 data-nosnippet>655</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>set_storage(<span class="kw-2">&amp;</span><span class="self">self</span>, storage: BaoFileStorage) {
-<a href=#656 id=656 data-nosnippet>656</a>        <span class="self">self</span>.send_modify(|state| state.storage = storage);
-<a href=#657 id=657 data-nosnippet>657</a>    }
-<a href=#658 id=658 data-nosnippet>658</a>}
-<a href=#659 id=659 data-nosnippet>659</a>
-<a href=#660 id=660 data-nosnippet>660</a><span class="kw">impl </span>entity_manager::Reset <span class="kw">for </span>BaoFileHandle {
-<a href=#661 id=661 data-nosnippet>661</a>    <span class="kw">fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#662 id=662 data-nosnippet>662</a>        <span class="comment">// Keeps the generation.
-<a href=#663 id=663 data-nosnippet>663</a>        </span><span class="self">self</span>.send_modify(|state| state.storage = BaoFileStorage::Initial);
-<a href=#664 id=664 data-nosnippet>664</a>    }
-<a href=#665 id=665 data-nosnippet>665</a>}
-<a href=#666 id=666 data-nosnippet>666</a>
-<a href=#667 id=667 data-nosnippet>667</a><span class="doccomment">/// A reader for a bao file, reading just the data.
-<a href=#668 id=668 data-nosnippet>668</a></span><span class="attr">#[derive(Debug)]
-<a href=#669 id=669 data-nosnippet>669</a></span><span class="kw">pub struct </span>DataReader(<span class="kw">pub</span>(<span class="kw">super</span>) BaoFileHandle);
-<a href=#670 id=670 data-nosnippet>670</a>
-<a href=#671 id=671 data-nosnippet>671</a><span class="kw">impl </span>ReadBytesAt <span class="kw">for </span>DataReader {
-<a href=#672 id=672 data-nosnippet>672</a>    <span class="kw">fn </span>read_bytes_at(<span class="kw-2">&amp;</span><span class="self">self</span>, offset: u64, size: usize) -&gt; std::io::Result&lt;Bytes&gt; {
-<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">let </span>guard = <span class="self">self</span>.<span class="number">0</span>.borrow();
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="kw">match </span>guard.try_settled()<span class="question-mark">? </span>{
-<a href=#675 id=675 data-nosnippet>675</a>            Settled::Partial(x) =&gt; x.data.read_bytes_at(offset, size),
-<a href=#676 id=676 data-nosnippet>676</a>            Settled::Complete(x) =&gt; x.data.read_bytes_at(offset, size),
-<a href=#677 id=677 data-nosnippet>677</a>            Settled::Invalid =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"invalid storage"</span>)),
-<a href=#678 id=678 data-nosnippet>678</a>            Settled::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
-<a href=#679 id=679 data-nosnippet>679</a>        }
-<a href=#680 id=680 data-nosnippet>680</a>    }
-<a href=#681 id=681 data-nosnippet>681</a>}
-<a href=#682 id=682 data-nosnippet>682</a>
-<a href=#683 id=683 data-nosnippet>683</a><span class="doccomment">/// A reader for the outboard part of a bao file.
-<a href=#684 id=684 data-nosnippet>684</a></span><span class="attr">#[derive(Debug)]
-<a href=#685 id=685 data-nosnippet>685</a></span><span class="kw">pub struct </span>OutboardReader(<span class="kw">pub</span>(<span class="kw">super</span>) BaoFileHandle);
-<a href=#686 id=686 data-nosnippet>686</a>
-<a href=#687 id=687 data-nosnippet>687</a><span class="kw">impl </span>ReadAt <span class="kw">for </span>OutboardReader {
-<a href=#688 id=688 data-nosnippet>688</a>    <span class="kw">fn </span>read_at(<span class="kw-2">&amp;</span><span class="self">self</span>, offset: u64, buf: <span class="kw-2">&amp;mut </span>[u8]) -&gt; io::Result&lt;usize&gt; {
-<a href=#689 id=689 data-nosnippet>689</a>        <span class="kw">let </span>guard = <span class="self">self</span>.<span class="number">0</span>.borrow();
-<a href=#690 id=690 data-nosnippet>690</a>        <span class="kw">match </span>guard.try_settled()<span class="question-mark">? </span>{
-<a href=#691 id=691 data-nosnippet>691</a>            Settled::Partial(x) =&gt; x.outboard.read_at(offset, buf),
-<a href=#692 id=692 data-nosnippet>692</a>            Settled::Complete(x) =&gt; x.outboard.read_at(offset, buf),
-<a href=#693 id=693 data-nosnippet>693</a>            Settled::Invalid =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"invalid storage"</span>)),
-<a href=#694 id=694 data-nosnippet>694</a>            Settled::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
-<a href=#695 id=695 data-nosnippet>695</a>        }
-<a href=#696 id=696 data-nosnippet>696</a>    }
-<a href=#697 id=697 data-nosnippet>697</a>}
-<a href=#698 id=698 data-nosnippet>698</a>
-<a href=#699 id=699 data-nosnippet>699</a><span class="kw">impl </span>Settled {
-<a href=#700 id=700 data-nosnippet>700</a>    <span class="kw">pub async fn </span>open(state: <span class="prelude-ty">Option</span>&lt;EntryState&lt;Bytes&gt;&gt;, ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;<span class="self">Self</span>&gt; {
-<a href=#701 id=701 data-nosnippet>701</a>        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
-<a href=#702 id=702 data-nosnippet>702</a>        <span class="kw">let </span>options = <span class="kw-2">&amp;</span>ctx.global.options;
-<a href=#703 id=703 data-nosnippet>703</a>        <span class="prelude-val">Ok</span>(<span class="kw">match </span>state {
-<a href=#704 id=704 data-nosnippet>704</a>            <span class="prelude-val">Some</span>(EntryState::Complete {
-<a href=#705 id=705 data-nosnippet>705</a>                data_location,
-<a href=#706 id=706 data-nosnippet>706</a>                outboard_location,
-<a href=#707 id=707 data-nosnippet>707</a>            }) =&gt; {
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="kw">let </span>data = <span class="kw">match </span>data_location {
-<a href=#709 id=709 data-nosnippet>709</a>                    DataLocation::Inline(data) =&gt; MemOrFile::Mem(data),
-<a href=#710 id=710 data-nosnippet>710</a>                    DataLocation::Owned(size) =&gt; {
-<a href=#711 id=711 data-nosnippet>711</a>                        <span class="kw">let </span>path = options.path.data_path(hash);
-<a href=#712 id=712 data-nosnippet>712</a>                        <span class="kw">let </span>file = std::fs::File::open(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
-<a href=#713 id=713 data-nosnippet>713</a>                        MemOrFile::File(FixedSize::new(file, size))
-<a href=#714 id=714 data-nosnippet>714</a>                    }
-<a href=#715 id=715 data-nosnippet>715</a>                    DataLocation::External(paths, size) =&gt; {
-<a href=#716 id=716 data-nosnippet>716</a>                        <span class="kw">let </span>file = open_external(<span class="kw-2">&amp;</span>paths)<span class="question-mark">?</span>;
-<a href=#717 id=717 data-nosnippet>717</a>                        MemOrFile::File(FixedSize::new(file, size))
-<a href=#718 id=718 data-nosnippet>718</a>                    }
-<a href=#719 id=719 data-nosnippet>719</a>                };
-<a href=#720 id=720 data-nosnippet>720</a>                <span class="kw">let </span>outboard = <span class="kw">match </span>outboard_location {
-<a href=#721 id=721 data-nosnippet>721</a>                    OutboardLocation::NotNeeded =&gt; MemOrFile::empty(),
-<a href=#722 id=722 data-nosnippet>722</a>                    OutboardLocation::Inline(data) =&gt; MemOrFile::Mem(data),
-<a href=#723 id=723 data-nosnippet>723</a>                    OutboardLocation::Owned =&gt; {
-<a href=#724 id=724 data-nosnippet>724</a>                        <span class="kw">let </span>path = options.path.outboard_path(hash);
-<a href=#725 id=725 data-nosnippet>725</a>                        <span class="kw">let </span>file = std::fs::File::open(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
-<a href=#726 id=726 data-nosnippet>726</a>                        MemOrFile::File(file)
-<a href=#727 id=727 data-nosnippet>727</a>                    }
-<a href=#728 id=728 data-nosnippet>728</a>                };
-<a href=#729 id=729 data-nosnippet>729</a>                <span class="self">Self</span>::new_complete(data, outboard)
-<a href=#730 id=730 data-nosnippet>730</a>            }
-<a href=#731 id=731 data-nosnippet>731</a>            <span class="prelude-val">Some</span>(EntryState::Partial { .. }) =&gt; <span class="self">Self</span>::new_partial_file(ctx).<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="prelude-val">None </span>=&gt; <span class="self">Self</span>::NonExisting,
-<a href=#733 id=733 data-nosnippet>733</a>        })
-<a href=#734 id=734 data-nosnippet>734</a>    }
-<a href=#735 id=735 data-nosnippet>735</a>
-<a href=#736 id=736 data-nosnippet>736</a>    <span class="doccomment">/// Create a new bao file handle with a partial file.
-<a href=#737 id=737 data-nosnippet>737</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">async fn </span>new_partial_file(ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;<span class="self">Self</span>&gt; {
-<a href=#738 id=738 data-nosnippet>738</a>        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
-<a href=#739 id=739 data-nosnippet>739</a>        <span class="kw">let </span>options = ctx.global.options.clone();
-<a href=#740 id=740 data-nosnippet>740</a>        <span class="kw">let </span>storage = PartialFileStorage::load(hash, <span class="kw-2">&amp;</span>options)<span class="question-mark">?</span>;
-<a href=#741 id=741 data-nosnippet>741</a>        <span class="prelude-val">Ok</span>(<span class="kw">if </span>storage.bitfield.is_complete() {
-<a href=#742 id=742 data-nosnippet>742</a>            <span class="kw">let </span>size = storage.bitfield.size;
-<a href=#743 id=743 data-nosnippet>743</a>            <span class="kw">let </span>(storage, entry_state) = storage.into_complete(size, <span class="kw-2">&amp;</span>options)<span class="question-mark">?</span>;
-<a href=#744 id=744 data-nosnippet>744</a>            <span class="macro">debug!</span>(<span class="string">"File was reconstructed as complete"</span>);
-<a href=#745 id=745 data-nosnippet>745</a>            ctx.meta().set(entry_state).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#605 id=605 data-nosnippet>605</a>            <span class="comment">// Not loaded: the entity knows nothing about its files.
+<a href=#606 id=606 data-nosnippet>606</a>            </span><span class="self">Self</span>::Initial | <span class="self">Self</span>::Loading | <span class="self">Self</span>::Deleting =&gt; <span class="bool-val">true</span>,
+<a href=#607 id=607 data-nosnippet>607</a>            <span class="self">Self</span>::ReadWrite(s) | <span class="self">Self</span>::ReadOnly(s) =&gt; s.references(part),
+<a href=#608 id=608 data-nosnippet>608</a>        }
+<a href=#609 id=609 data-nosnippet>609</a>    }
+<a href=#610 id=610 data-nosnippet>610</a>
+<a href=#611 id=611 data-nosnippet>611</a>    <span class="doccomment">/// Takes the state, leaving an invalid one behind.
+<a href=#612 id=612 data-nosnippet>612</a>    </span><span class="kw">pub fn </span>take(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+<a href=#613 id=613 data-nosnippet>613</a>        std::mem::replace(<span class="self">self</span>, <span class="self">Self</span>::ReadWrite(Settled::Invalid))
+<a href=#614 id=614 data-nosnippet>614</a>    }
+<a href=#615 id=615 data-nosnippet>615</a>}
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a><span class="doccomment">/// The state of an entity: its storage, and the generation of its entry.
+<a href=#618 id=618 data-nosnippet>618</a>///
+<a href=#619 id=619 data-nosnippet>619</a>/// Derefs to the storage, which is what almost all code looks at.
+<a href=#620 id=620 data-nosnippet>620</a></span><span class="attr">#[derive(Debug, Default)]
+<a href=#621 id=621 data-nosnippet>621</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>EntityState {
+<a href=#622 id=622 data-nosnippet>622</a>    <span class="doccomment">/// Starts a new generation with every delete of the entry. Observers end
+<a href=#623 id=623 data-nosnippet>623</a>    /// when it changes, even if they wake only after the entry was filled
+<a href=#624 id=624 data-nosnippet>624</a>    /// again. Only ever grows, also across recycling.
+<a href=#625 id=625 data-nosnippet>625</a>    </span><span class="kw">pub </span>generation: u64,
+<a href=#626 id=626 data-nosnippet>626</a>    <span class="kw">pub </span>storage: BaoFileStorage,
+<a href=#627 id=627 data-nosnippet>627</a>}
+<a href=#628 id=628 data-nosnippet>628</a>
+<a href=#629 id=629 data-nosnippet>629</a><span class="kw">impl </span>Deref <span class="kw">for </span>EntityState {
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="kw">type </span>Target = BaoFileStorage;
+<a href=#631 id=631 data-nosnippet>631</a>
+<a href=#632 id=632 data-nosnippet>632</a>    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>BaoFileStorage {
+<a href=#633 id=633 data-nosnippet>633</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.storage
+<a href=#634 id=634 data-nosnippet>634</a>    }
+<a href=#635 id=635 data-nosnippet>635</a>}
+<a href=#636 id=636 data-nosnippet>636</a>
+<a href=#637 id=637 data-nosnippet>637</a><span class="kw">impl </span>DerefMut <span class="kw">for </span>EntityState {
+<a href=#638 id=638 data-nosnippet>638</a>    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>BaoFileStorage {
+<a href=#639 id=639 data-nosnippet>639</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.storage
+<a href=#640 id=640 data-nosnippet>640</a>    }
+<a href=#641 id=641 data-nosnippet>641</a>}
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a><span class="doccomment">/// A cheaply cloneable handle to a bao file.
+<a href=#644 id=644 data-nosnippet>644</a>///
+<a href=#645 id=645 data-nosnippet>645</a>/// You must call [Self::persist] to write the bitfield to disk, if you want to persist
+<a href=#646 id=646 data-nosnippet>646</a>/// the file handle, otherwise the bitfield will not be written to disk and will have
+<a href=#647 id=647 data-nosnippet>647</a>/// to be reconstructed on next use.
+<a href=#648 id=648 data-nosnippet>648</a></span><span class="attr">#[derive(Debug, Clone, Default, derive_more::Deref)]
+<a href=#649 id=649 data-nosnippet>649</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BaoFileHandle(<span class="kw">pub</span>(<span class="kw">super</span>) watch::Sender&lt;EntityState&gt;);
+<a href=#650 id=650 data-nosnippet>650</a>
+<a href=#651 id=651 data-nosnippet>651</a><span class="kw">impl </span>BaoFileHandle {
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="doccomment">/// Replaces the storage, keeping the generation.
+<a href=#653 id=653 data-nosnippet>653</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>set_storage(<span class="kw-2">&amp;</span><span class="self">self</span>, storage: BaoFileStorage) {
+<a href=#654 id=654 data-nosnippet>654</a>        <span class="self">self</span>.send_modify(|state| state.storage = storage);
+<a href=#655 id=655 data-nosnippet>655</a>    }
+<a href=#656 id=656 data-nosnippet>656</a>}
+<a href=#657 id=657 data-nosnippet>657</a>
+<a href=#658 id=658 data-nosnippet>658</a><span class="kw">impl </span>entity_manager::Reset <span class="kw">for </span>BaoFileHandle {
+<a href=#659 id=659 data-nosnippet>659</a>    <span class="kw">fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#660 id=660 data-nosnippet>660</a>        <span class="comment">// Keeps the generation.
+<a href=#661 id=661 data-nosnippet>661</a>        </span><span class="self">self</span>.send_modify(|state| state.storage = BaoFileStorage::Initial);
+<a href=#662 id=662 data-nosnippet>662</a>    }
+<a href=#663 id=663 data-nosnippet>663</a>}
+<a href=#664 id=664 data-nosnippet>664</a>
+<a href=#665 id=665 data-nosnippet>665</a><span class="doccomment">/// A reader for a bao file, reading just the data.
+<a href=#666 id=666 data-nosnippet>666</a></span><span class="attr">#[derive(Debug)]
+<a href=#667 id=667 data-nosnippet>667</a></span><span class="kw">pub struct </span>DataReader(<span class="kw">pub</span>(<span class="kw">super</span>) BaoFileHandle);
+<a href=#668 id=668 data-nosnippet>668</a>
+<a href=#669 id=669 data-nosnippet>669</a><span class="kw">impl </span>ReadBytesAt <span class="kw">for </span>DataReader {
+<a href=#670 id=670 data-nosnippet>670</a>    <span class="kw">fn </span>read_bytes_at(<span class="kw-2">&amp;</span><span class="self">self</span>, offset: u64, size: usize) -&gt; std::io::Result&lt;Bytes&gt; {
+<a href=#671 id=671 data-nosnippet>671</a>        <span class="kw">let </span>guard = <span class="self">self</span>.<span class="number">0</span>.borrow();
+<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">match </span>guard.try_settled()<span class="question-mark">? </span>{
+<a href=#673 id=673 data-nosnippet>673</a>            Settled::Partial(x) =&gt; x.data.read_bytes_at(offset, size),
+<a href=#674 id=674 data-nosnippet>674</a>            Settled::Complete(x) =&gt; x.data.read_bytes_at(offset, size),
+<a href=#675 id=675 data-nosnippet>675</a>            Settled::Invalid =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"invalid storage"</span>)),
+<a href=#676 id=676 data-nosnippet>676</a>            Settled::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
+<a href=#677 id=677 data-nosnippet>677</a>        }
+<a href=#678 id=678 data-nosnippet>678</a>    }
+<a href=#679 id=679 data-nosnippet>679</a>}
+<a href=#680 id=680 data-nosnippet>680</a>
+<a href=#681 id=681 data-nosnippet>681</a><span class="doccomment">/// A reader for the outboard part of a bao file.
+<a href=#682 id=682 data-nosnippet>682</a></span><span class="attr">#[derive(Debug)]
+<a href=#683 id=683 data-nosnippet>683</a></span><span class="kw">pub struct </span>OutboardReader(<span class="kw">pub</span>(<span class="kw">super</span>) BaoFileHandle);
+<a href=#684 id=684 data-nosnippet>684</a>
+<a href=#685 id=685 data-nosnippet>685</a><span class="kw">impl </span>ReadAt <span class="kw">for </span>OutboardReader {
+<a href=#686 id=686 data-nosnippet>686</a>    <span class="kw">fn </span>read_at(<span class="kw-2">&amp;</span><span class="self">self</span>, offset: u64, buf: <span class="kw-2">&amp;mut </span>[u8]) -&gt; io::Result&lt;usize&gt; {
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span>guard = <span class="self">self</span>.<span class="number">0</span>.borrow();
+<a href=#688 id=688 data-nosnippet>688</a>        <span class="kw">match </span>guard.try_settled()<span class="question-mark">? </span>{
+<a href=#689 id=689 data-nosnippet>689</a>            Settled::Partial(x) =&gt; x.outboard.read_at(offset, buf),
+<a href=#690 id=690 data-nosnippet>690</a>            Settled::Complete(x) =&gt; x.outboard.read_at(offset, buf),
+<a href=#691 id=691 data-nosnippet>691</a>            Settled::Invalid =&gt; <span class="prelude-val">Err</span>(io::Error::other(<span class="string">"invalid storage"</span>)),
+<a href=#692 id=692 data-nosnippet>692</a>            Settled::NonExisting =&gt; <span class="prelude-val">Err</span>(io::ErrorKind::NotFound.into()),
+<a href=#693 id=693 data-nosnippet>693</a>        }
+<a href=#694 id=694 data-nosnippet>694</a>    }
+<a href=#695 id=695 data-nosnippet>695</a>}
+<a href=#696 id=696 data-nosnippet>696</a>
+<a href=#697 id=697 data-nosnippet>697</a><span class="kw">impl </span>Settled {
+<a href=#698 id=698 data-nosnippet>698</a>    <span class="kw">pub async fn </span>open(state: <span class="prelude-ty">Option</span>&lt;EntryState&lt;Bytes&gt;&gt;, ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#699 id=699 data-nosnippet>699</a>        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="kw">let </span>options = <span class="kw-2">&amp;</span>ctx.global.options;
+<a href=#701 id=701 data-nosnippet>701</a>        <span class="prelude-val">Ok</span>(<span class="kw">match </span>state {
+<a href=#702 id=702 data-nosnippet>702</a>            <span class="prelude-val">Some</span>(EntryState::Complete {
+<a href=#703 id=703 data-nosnippet>703</a>                data_location,
+<a href=#704 id=704 data-nosnippet>704</a>                outboard_location,
+<a href=#705 id=705 data-nosnippet>705</a>            }) =&gt; {
+<a href=#706 id=706 data-nosnippet>706</a>                <span class="kw">let </span>data = <span class="kw">match </span>data_location {
+<a href=#707 id=707 data-nosnippet>707</a>                    DataLocation::Inline(data) =&gt; MemOrFile::Mem(data),
+<a href=#708 id=708 data-nosnippet>708</a>                    DataLocation::Owned(size) =&gt; {
+<a href=#709 id=709 data-nosnippet>709</a>                        <span class="kw">let </span>path = options.path.data_path(hash);
+<a href=#710 id=710 data-nosnippet>710</a>                        <span class="kw">let </span>file = std::fs::File::open(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
+<a href=#711 id=711 data-nosnippet>711</a>                        MemOrFile::File(FixedSize::new(file, size))
+<a href=#712 id=712 data-nosnippet>712</a>                    }
+<a href=#713 id=713 data-nosnippet>713</a>                    DataLocation::External(paths, size) =&gt; {
+<a href=#714 id=714 data-nosnippet>714</a>                        <span class="kw">let </span>file = open_external(<span class="kw-2">&amp;</span>paths)<span class="question-mark">?</span>;
+<a href=#715 id=715 data-nosnippet>715</a>                        MemOrFile::File(FixedSize::new(file, size))
+<a href=#716 id=716 data-nosnippet>716</a>                    }
+<a href=#717 id=717 data-nosnippet>717</a>                };
+<a href=#718 id=718 data-nosnippet>718</a>                <span class="kw">let </span>outboard = <span class="kw">match </span>outboard_location {
+<a href=#719 id=719 data-nosnippet>719</a>                    OutboardLocation::NotNeeded =&gt; MemOrFile::empty(),
+<a href=#720 id=720 data-nosnippet>720</a>                    OutboardLocation::Inline(data) =&gt; MemOrFile::Mem(data),
+<a href=#721 id=721 data-nosnippet>721</a>                    OutboardLocation::Owned =&gt; {
+<a href=#722 id=722 data-nosnippet>722</a>                        <span class="kw">let </span>path = options.path.outboard_path(hash);
+<a href=#723 id=723 data-nosnippet>723</a>                        <span class="kw">let </span>file = std::fs::File::open(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
+<a href=#724 id=724 data-nosnippet>724</a>                        MemOrFile::File(file)
+<a href=#725 id=725 data-nosnippet>725</a>                    }
+<a href=#726 id=726 data-nosnippet>726</a>                };
+<a href=#727 id=727 data-nosnippet>727</a>                <span class="self">Self</span>::new_complete(data, outboard)
+<a href=#728 id=728 data-nosnippet>728</a>            }
+<a href=#729 id=729 data-nosnippet>729</a>            <span class="prelude-val">Some</span>(EntryState::Partial { .. }) =&gt; <span class="self">Self</span>::new_partial_file(ctx).<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#730 id=730 data-nosnippet>730</a>            <span class="prelude-val">None </span>=&gt; <span class="self">Self</span>::NonExisting,
+<a href=#731 id=731 data-nosnippet>731</a>        })
+<a href=#732 id=732 data-nosnippet>732</a>    }
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a>    <span class="doccomment">/// Create a new bao file handle with a partial file.
+<a href=#735 id=735 data-nosnippet>735</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">async fn </span>new_partial_file(ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;<span class="self">Self</span>&gt; {
+<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
+<a href=#737 id=737 data-nosnippet>737</a>        <span class="kw">let </span>options = ctx.global.options.clone();
+<a href=#738 id=738 data-nosnippet>738</a>        <span class="kw">let </span>storage = PartialFileStorage::load(hash, <span class="kw-2">&amp;</span>options)<span class="question-mark">?</span>;
+<a href=#739 id=739 data-nosnippet>739</a>        <span class="prelude-val">Ok</span>(<span class="kw">if </span>storage.bitfield.is_complete() {
+<a href=#740 id=740 data-nosnippet>740</a>            <span class="kw">let </span>size = storage.bitfield.size;
+<a href=#741 id=741 data-nosnippet>741</a>            <span class="kw">let </span>(storage, entry_state) = storage.into_complete(size, <span class="kw-2">&amp;</span>options)<span class="question-mark">?</span>;
+<a href=#742 id=742 data-nosnippet>742</a>            <span class="macro">debug!</span>(<span class="string">"File was reconstructed as complete"</span>);
+<a href=#743 id=743 data-nosnippet>743</a>            ctx.meta().set(entry_state).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#744 id=744 data-nosnippet>744</a>            storage.into()
+<a href=#745 id=745 data-nosnippet>745</a>        } <span class="kw">else </span>{
 <a href=#746 id=746 data-nosnippet>746</a>            storage.into()
-<a href=#747 id=747 data-nosnippet>747</a>        } <span class="kw">else </span>{
-<a href=#748 id=748 data-nosnippet>748</a>            storage.into()
-<a href=#749 id=749 data-nosnippet>749</a>        })
-<a href=#750 id=750 data-nosnippet>750</a>    }
-<a href=#751 id=751 data-nosnippet>751</a>
-<a href=#752 id=752 data-nosnippet>752</a>    <span class="doccomment">/// Create a new complete bao file handle.
-<a href=#753 id=753 data-nosnippet>753</a>    </span><span class="kw">pub fn </span>new_complete(
-<a href=#754 id=754 data-nosnippet>754</a>        data: MemOrFile&lt;Bytes, FixedSize&lt;File&gt;&gt;,
-<a href=#755 id=755 data-nosnippet>755</a>        outboard: MemOrFile&lt;Bytes, File&gt;,
-<a href=#756 id=756 data-nosnippet>756</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#757 id=757 data-nosnippet>757</a>        CompleteStorage { data, outboard }.into()
-<a href=#758 id=758 data-nosnippet>758</a>    }
-<a href=#759 id=759 data-nosnippet>759</a>}
-<a href=#760 id=760 data-nosnippet>760</a>
-<a href=#761 id=761 data-nosnippet>761</a><span class="kw">impl </span>BaoFileHandle {
-<a href=#762 id=762 data-nosnippet>762</a>    <span class="doccomment">/// Complete the handle
-<a href=#763 id=763 data-nosnippet>763</a>    </span><span class="kw">pub fn </span>complete(
-<a href=#764 id=764 data-nosnippet>764</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#765 id=765 data-nosnippet>765</a>        data: MemOrFile&lt;Bytes, FixedSize&lt;File&gt;&gt;,
-<a href=#766 id=766 data-nosnippet>766</a>        outboard: MemOrFile&lt;Bytes, File&gt;,
-<a href=#767 id=767 data-nosnippet>767</a>    ) {
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="self">self</span>.send_if_modified(|guard| {
-<a href=#769 id=769 data-nosnippet>769</a>            <span class="comment">// A finished import does not depend on the old content, so it
-<a href=#770 id=770 data-nosnippet>770</a>            // completes any writable state, an invalid one included.
-<a href=#771 id=771 data-nosnippet>771</a>            </span><span class="kw">let </span>needs_complete = <span class="kw">match </span><span class="kw-2">&amp;</span>guard.storage {
-<a href=#772 id=772 data-nosnippet>772</a>                BaoFileStorage::ReadWrite(Settled::Complete(<span class="kw">_</span>)) =&gt; <span class="bool-val">false</span>,
-<a href=#773 id=773 data-nosnippet>773</a>                BaoFileStorage::ReadWrite(<span class="kw">_</span>) =&gt; <span class="bool-val">true</span>,
-<a href=#774 id=774 data-nosnippet>774</a>                <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
-<a href=#775 id=775 data-nosnippet>775</a>            };
-<a href=#776 id=776 data-nosnippet>776</a>            <span class="kw">if </span>needs_complete {
-<a href=#777 id=777 data-nosnippet>777</a>                guard.storage = BaoFileStorage::ReadWrite(Settled::Complete(CompleteStorage {
-<a href=#778 id=778 data-nosnippet>778</a>                    data,
-<a href=#779 id=779 data-nosnippet>779</a>                    outboard,
-<a href=#780 id=780 data-nosnippet>780</a>                }));
+<a href=#747 id=747 data-nosnippet>747</a>        })
+<a href=#748 id=748 data-nosnippet>748</a>    }
+<a href=#749 id=749 data-nosnippet>749</a>
+<a href=#750 id=750 data-nosnippet>750</a>    <span class="doccomment">/// Create a new complete bao file handle.
+<a href=#751 id=751 data-nosnippet>751</a>    </span><span class="kw">pub fn </span>new_complete(
+<a href=#752 id=752 data-nosnippet>752</a>        data: MemOrFile&lt;Bytes, FixedSize&lt;File&gt;&gt;,
+<a href=#753 id=753 data-nosnippet>753</a>        outboard: MemOrFile&lt;Bytes, File&gt;,
+<a href=#754 id=754 data-nosnippet>754</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#755 id=755 data-nosnippet>755</a>        CompleteStorage { data, outboard }.into()
+<a href=#756 id=756 data-nosnippet>756</a>    }
+<a href=#757 id=757 data-nosnippet>757</a>}
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a><span class="kw">impl </span>BaoFileHandle {
+<a href=#760 id=760 data-nosnippet>760</a>    <span class="doccomment">/// Complete the handle
+<a href=#761 id=761 data-nosnippet>761</a>    </span><span class="kw">pub fn </span>complete(
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#763 id=763 data-nosnippet>763</a>        data: MemOrFile&lt;Bytes, FixedSize&lt;File&gt;&gt;,
+<a href=#764 id=764 data-nosnippet>764</a>        outboard: MemOrFile&lt;Bytes, File&gt;,
+<a href=#765 id=765 data-nosnippet>765</a>    ) {
+<a href=#766 id=766 data-nosnippet>766</a>        <span class="self">self</span>.send_if_modified(|guard| {
+<a href=#767 id=767 data-nosnippet>767</a>            <span class="comment">// A finished import does not depend on the old content, so it
+<a href=#768 id=768 data-nosnippet>768</a>            // completes any writable state, an invalid one included.
+<a href=#769 id=769 data-nosnippet>769</a>            </span><span class="kw">let </span>needs_complete = <span class="kw">match </span><span class="kw-2">&amp;</span>guard.storage {
+<a href=#770 id=770 data-nosnippet>770</a>                BaoFileStorage::ReadWrite(Settled::Complete(<span class="kw">_</span>)) =&gt; <span class="bool-val">false</span>,
+<a href=#771 id=771 data-nosnippet>771</a>                BaoFileStorage::ReadWrite(<span class="kw">_</span>) =&gt; <span class="bool-val">true</span>,
+<a href=#772 id=772 data-nosnippet>772</a>                <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
+<a href=#773 id=773 data-nosnippet>773</a>            };
+<a href=#774 id=774 data-nosnippet>774</a>            <span class="kw">if </span>needs_complete {
+<a href=#775 id=775 data-nosnippet>775</a>                guard.storage = BaoFileStorage::ReadWrite(Settled::Complete(CompleteStorage {
+<a href=#776 id=776 data-nosnippet>776</a>                    data,
+<a href=#777 id=777 data-nosnippet>777</a>                    outboard,
+<a href=#778 id=778 data-nosnippet>778</a>                }));
+<a href=#779 id=779 data-nosnippet>779</a>                <span class="bool-val">true
+<a href=#780 id=780 data-nosnippet>780</a>            </span>} <span class="kw">else </span>{
 <a href=#781 id=781 data-nosnippet>781</a>                <span class="bool-val">true
-<a href=#782 id=782 data-nosnippet>782</a>            </span>} <span class="kw">else </span>{
-<a href=#783 id=783 data-nosnippet>783</a>                <span class="bool-val">true
-<a href=#784 id=784 data-nosnippet>784</a>            </span>}
-<a href=#785 id=785 data-nosnippet>785</a>        });
-<a href=#786 id=786 data-nosnippet>786</a>    }
-<a href=#787 id=787 data-nosnippet>787</a>}
-<a href=#788 id=788 data-nosnippet>788</a>
-<a href=#789 id=789 data-nosnippet>789</a><span class="kw">impl </span>PartialMemStorage {
-<a href=#790 id=790 data-nosnippet>790</a>    <span class="doccomment">/// Persist the batch to disk.
-<a href=#791 id=791 data-nosnippet>791</a>    </span><span class="kw">fn </span>persist(<span class="self">self</span>, ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;PartialFileStorage&gt; {
-<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">let </span>options = <span class="kw-2">&amp;</span>ctx.global.options.path;
-<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span>sync = ctx.global.options.syncs_files();
-<a href=#794 id=794 data-nosnippet>794</a>        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
-<a href=#795 id=795 data-nosnippet>795</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = create_read_write(options.data_path(hash))<span class="question-mark">?</span>;
-<a href=#796 id=796 data-nosnippet>796</a>        <span class="kw">let </span><span class="kw-2">mut </span>outboard = create_read_write(options.outboard_path(hash))<span class="question-mark">?</span>;
-<a href=#797 id=797 data-nosnippet>797</a>        <span class="kw">let </span><span class="kw-2">mut </span>sizes = create_read_write(options.sizes_path(hash))<span class="question-mark">?</span>;
-<a href=#798 id=798 data-nosnippet>798</a>        <span class="self">self</span>.data.persist(<span class="kw-2">&amp;mut </span>data)<span class="question-mark">?</span>;
-<a href=#799 id=799 data-nosnippet>799</a>        <span class="self">self</span>.outboard.persist(<span class="kw-2">&amp;mut </span>outboard)<span class="question-mark">?</span>;
-<a href=#800 id=800 data-nosnippet>800</a>        <span class="self">self</span>.size.persist(<span class="kw-2">&amp;mut </span>sizes)<span class="question-mark">?</span>;
-<a href=#801 id=801 data-nosnippet>801</a>        <span class="kw">if </span>sync {
-<a href=#802 id=802 data-nosnippet>802</a>            data.sync_all()<span class="question-mark">?</span>;
-<a href=#803 id=803 data-nosnippet>803</a>            outboard.sync_all()<span class="question-mark">?</span>;
-<a href=#804 id=804 data-nosnippet>804</a>            sizes.sync_all()<span class="question-mark">?</span>;
-<a href=#805 id=805 data-nosnippet>805</a>            <span class="kw">super</span>::sync_dir(<span class="kw-2">&amp;</span>options.data_path)<span class="question-mark">?</span>;
-<a href=#806 id=806 data-nosnippet>806</a>        }
-<a href=#807 id=807 data-nosnippet>807</a>        <span class="prelude-val">Ok</span>(PartialFileStorage {
-<a href=#808 id=808 data-nosnippet>808</a>            data,
-<a href=#809 id=809 data-nosnippet>809</a>            outboard,
-<a href=#810 id=810 data-nosnippet>810</a>            sizes,
-<a href=#811 id=811 data-nosnippet>811</a>            bitfield: <span class="self">self</span>.bitfield,
-<a href=#812 id=812 data-nosnippet>812</a>        })
-<a href=#813 id=813 data-nosnippet>813</a>    }
-<a href=#814 id=814 data-nosnippet>814</a>}
-<a href=#815 id=815 data-nosnippet>815</a>
-<a href=#816 id=816 data-nosnippet>816</a><span class="kw">pub struct </span>BaoFileStorageSubscriber {
-<a href=#817 id=817 data-nosnippet>817</a>    receiver: watch::Receiver&lt;EntityState&gt;,
-<a href=#818 id=818 data-nosnippet>818</a>    <span class="doccomment">/// The entry's generation when the subscription started.
-<a href=#819 id=819 data-nosnippet>819</a>    </span>generation: u64,
-<a href=#820 id=820 data-nosnippet>820</a>}
-<a href=#821 id=821 data-nosnippet>821</a>
-<a href=#822 id=822 data-nosnippet>822</a><span class="kw">impl </span>BaoFileStorageSubscriber {
-<a href=#823 id=823 data-nosnippet>823</a>    <span class="kw">pub fn </span>new(handle: <span class="kw-2">&amp;</span>BaoFileHandle) -&gt; <span class="self">Self </span>{
-<a href=#824 id=824 data-nosnippet>824</a>        <span class="kw">let </span>receiver = handle.subscribe();
-<a href=#825 id=825 data-nosnippet>825</a>        <span class="kw">let </span>generation = receiver.borrow().generation;
-<a href=#826 id=826 data-nosnippet>826</a>        <span class="self">Self </span>{
-<a href=#827 id=827 data-nosnippet>827</a>            receiver,
-<a href=#828 id=828 data-nosnippet>828</a>            generation,
-<a href=#829 id=829 data-nosnippet>829</a>        }
-<a href=#830 id=830 data-nosnippet>830</a>    }
-<a href=#831 id=831 data-nosnippet>831</a>
-<a href=#832 id=832 data-nosnippet>832</a>    <span class="doccomment">/// Forward observed *values* to the given sender
+<a href=#782 id=782 data-nosnippet>782</a>            </span>}
+<a href=#783 id=783 data-nosnippet>783</a>        });
+<a href=#784 id=784 data-nosnippet>784</a>    }
+<a href=#785 id=785 data-nosnippet>785</a>}
+<a href=#786 id=786 data-nosnippet>786</a>
+<a href=#787 id=787 data-nosnippet>787</a><span class="kw">impl </span>PartialMemStorage {
+<a href=#788 id=788 data-nosnippet>788</a>    <span class="doccomment">/// Persist the batch to disk.
+<a href=#789 id=789 data-nosnippet>789</a>    </span><span class="kw">fn </span>persist(<span class="self">self</span>, ctx: <span class="kw-2">&amp;</span>HashContext) -&gt; io::Result&lt;PartialFileStorage&gt; {
+<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">let </span>options = <span class="kw-2">&amp;</span>ctx.global.options.path;
+<a href=#791 id=791 data-nosnippet>791</a>        <span class="kw">let </span>sync = ctx.global.options.syncs_files();
+<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">let </span>hash = <span class="kw-2">&amp;</span>ctx.id;
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span><span class="kw-2">mut </span>data = create_read_write(options.data_path(hash))<span class="question-mark">?</span>;
+<a href=#794 id=794 data-nosnippet>794</a>        <span class="kw">let </span><span class="kw-2">mut </span>outboard = create_read_write(options.outboard_path(hash))<span class="question-mark">?</span>;
+<a href=#795 id=795 data-nosnippet>795</a>        <span class="kw">let </span><span class="kw-2">mut </span>sizes = create_read_write(options.sizes_path(hash))<span class="question-mark">?</span>;
+<a href=#796 id=796 data-nosnippet>796</a>        <span class="self">self</span>.data.persist(<span class="kw-2">&amp;mut </span>data)<span class="question-mark">?</span>;
+<a href=#797 id=797 data-nosnippet>797</a>        <span class="self">self</span>.outboard.persist(<span class="kw-2">&amp;mut </span>outboard)<span class="question-mark">?</span>;
+<a href=#798 id=798 data-nosnippet>798</a>        <span class="self">self</span>.size.persist(<span class="kw-2">&amp;mut </span>sizes)<span class="question-mark">?</span>;
+<a href=#799 id=799 data-nosnippet>799</a>        <span class="kw">if </span>sync {
+<a href=#800 id=800 data-nosnippet>800</a>            data.sync_all()<span class="question-mark">?</span>;
+<a href=#801 id=801 data-nosnippet>801</a>            outboard.sync_all()<span class="question-mark">?</span>;
+<a href=#802 id=802 data-nosnippet>802</a>            sizes.sync_all()<span class="question-mark">?</span>;
+<a href=#803 id=803 data-nosnippet>803</a>            <span class="kw">super</span>::sync_dir(<span class="kw-2">&amp;</span>options.data_path)<span class="question-mark">?</span>;
+<a href=#804 id=804 data-nosnippet>804</a>        }
+<a href=#805 id=805 data-nosnippet>805</a>        <span class="prelude-val">Ok</span>(PartialFileStorage {
+<a href=#806 id=806 data-nosnippet>806</a>            data,
+<a href=#807 id=807 data-nosnippet>807</a>            outboard,
+<a href=#808 id=808 data-nosnippet>808</a>            sizes,
+<a href=#809 id=809 data-nosnippet>809</a>            bitfield: <span class="self">self</span>.bitfield,
+<a href=#810 id=810 data-nosnippet>810</a>        })
+<a href=#811 id=811 data-nosnippet>811</a>    }
+<a href=#812 id=812 data-nosnippet>812</a>}
+<a href=#813 id=813 data-nosnippet>813</a>
+<a href=#814 id=814 data-nosnippet>814</a><span class="kw">pub struct </span>BaoFileStorageSubscriber {
+<a href=#815 id=815 data-nosnippet>815</a>    receiver: watch::Receiver&lt;EntityState&gt;,
+<a href=#816 id=816 data-nosnippet>816</a>    <span class="doccomment">/// The entry's generation when the subscription started.
+<a href=#817 id=817 data-nosnippet>817</a>    </span>generation: u64,
+<a href=#818 id=818 data-nosnippet>818</a>}
+<a href=#819 id=819 data-nosnippet>819</a>
+<a href=#820 id=820 data-nosnippet>820</a><span class="kw">impl </span>BaoFileStorageSubscriber {
+<a href=#821 id=821 data-nosnippet>821</a>    <span class="kw">pub fn </span>new(handle: <span class="kw-2">&amp;</span>BaoFileHandle) -&gt; <span class="self">Self </span>{
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>receiver = handle.subscribe();
+<a href=#823 id=823 data-nosnippet>823</a>        <span class="kw">let </span>generation = receiver.borrow().generation;
+<a href=#824 id=824 data-nosnippet>824</a>        <span class="self">Self </span>{
+<a href=#825 id=825 data-nosnippet>825</a>            receiver,
+<a href=#826 id=826 data-nosnippet>826</a>            generation,
+<a href=#827 id=827 data-nosnippet>827</a>        }
+<a href=#828 id=828 data-nosnippet>828</a>    }
+<a href=#829 id=829 data-nosnippet>829</a>
+<a href=#830 id=830 data-nosnippet>830</a>    <span class="doccomment">/// Forward observed *values* to the given sender
+<a href=#831 id=831 data-nosnippet>831</a>    ///
+<a href=#832 id=832 data-nosnippet>832</a>    /// Returns an error if sending fails, or if the last sender is dropped
 <a href=#833 id=833 data-nosnippet>833</a>    ///
-<a href=#834 id=834 data-nosnippet>834</a>    /// Returns an error if sending fails, or if the last sender is dropped
-<a href=#835 id=835 data-nosnippet>835</a>    ///
-<a href=#836 id=836 data-nosnippet>836</a>    /// Ends the stream if the ranges shrink, for example when the entry was
-<a href=#837 id=837 data-nosnippet>837</a>    /// deleted while observed, since observers only ever see them grow.
-<a href=#838 id=838 data-nosnippet>838</a>    </span><span class="kw">pub async fn </span>forward(<span class="kw-2">mut </span><span class="self">self</span>, <span class="kw-2">mut </span>tx: mpsc::Sender&lt;Bitfield&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#839 id=839 data-nosnippet>839</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
-<a href=#840 id=840 data-nosnippet>840</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#841 id=841 data-nosnippet>841</a>        };
-<a href=#842 id=842 data-nosnippet>842</a>        <span class="kw">let </span><span class="kw-2">mut </span>last = value.clone();
-<a href=#843 id=843 data-nosnippet>843</a>        tx.send(value).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#844 id=844 data-nosnippet>844</a>        <span class="kw">loop </span>{
-<a href=#845 id=845 data-nosnippet>845</a>            <span class="self">self</span>.update_or_closed(<span class="kw-2">&amp;mut </span>tx).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#846 id=846 data-nosnippet>846</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
-<a href=#847 id=847 data-nosnippet>847</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#848 id=848 data-nosnippet>848</a>            };
-<a href=#849 id=849 data-nosnippet>849</a>            <span class="kw">if </span>!value.ranges.is_superset(<span class="kw-2">&amp;</span>last.ranges) {
-<a href=#850 id=850 data-nosnippet>850</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#851 id=851 data-nosnippet>851</a>            }
-<a href=#852 id=852 data-nosnippet>852</a>            <span class="comment">// Skip notifications that do not change the observed bitfield.
-<a href=#853 id=853 data-nosnippet>853</a>            </span><span class="kw">if </span>value == last {
-<a href=#854 id=854 data-nosnippet>854</a>                <span class="kw">continue</span>;
-<a href=#855 id=855 data-nosnippet>855</a>            }
-<a href=#856 id=856 data-nosnippet>856</a>            last = value.clone();
-<a href=#857 id=857 data-nosnippet>857</a>            tx.send(value).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#858 id=858 data-nosnippet>858</a>        }
-<a href=#859 id=859 data-nosnippet>859</a>    }
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>    <span class="doccomment">/// Forward observed *deltas* to the given sender
-<a href=#862 id=862 data-nosnippet>862</a>    ///
-<a href=#863 id=863 data-nosnippet>863</a>    /// Returns an error if sending fails, or if the last sender is dropped
-<a href=#864 id=864 data-nosnippet>864</a>    </span><span class="attr">#[allow(dead_code)]
-<a href=#865 id=865 data-nosnippet>865</a>    </span><span class="kw">pub async fn </span>forward_delta(<span class="kw-2">mut </span><span class="self">self</span>, <span class="kw-2">mut </span>tx: mpsc::Sender&lt;Bitfield&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
-<a href=#867 id=867 data-nosnippet>867</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#868 id=868 data-nosnippet>868</a>        };
-<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">let </span><span class="kw-2">mut </span>old = value.clone();
-<a href=#870 id=870 data-nosnippet>870</a>        tx.send(value).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#871 id=871 data-nosnippet>871</a>        <span class="kw">loop </span>{
-<a href=#872 id=872 data-nosnippet>872</a>            <span class="self">self</span>.update_or_closed(<span class="kw-2">&amp;mut </span>tx).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#873 id=873 data-nosnippet>873</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(new) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
-<a href=#874 id=874 data-nosnippet>874</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#875 id=875 data-nosnippet>875</a>            };
-<a href=#876 id=876 data-nosnippet>876</a>            <span class="kw">let </span>diff = old.diff(<span class="kw-2">&amp;</span>new);
-<a href=#877 id=877 data-nosnippet>877</a>            <span class="kw">if </span>diff.is_empty() {
-<a href=#878 id=878 data-nosnippet>878</a>                <span class="kw">continue</span>;
-<a href=#879 id=879 data-nosnippet>879</a>            }
-<a href=#880 id=880 data-nosnippet>880</a>            tx.send(diff).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#881 id=881 data-nosnippet>881</a>            old = new;
-<a href=#882 id=882 data-nosnippet>882</a>        }
-<a href=#883 id=883 data-nosnippet>883</a>    }
-<a href=#884 id=884 data-nosnippet>884</a>
-<a href=#885 id=885 data-nosnippet>885</a>    <span class="doccomment">/// The current bitfield, or `None` if the storage is invalid or the entry was deleted.
-<a href=#886 id=886 data-nosnippet>886</a>    ///
-<a href=#887 id=887 data-nosnippet>887</a>    /// Observers end the stream on `None`, since there is no error channel,
-<a href=#888 id=888 data-nosnippet>888</a>    /// and since observed ranges must only ever grow.
-<a href=#889 id=889 data-nosnippet>889</a>    </span><span class="kw">fn </span>bitfield(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Bitfield&gt; {
-<a href=#890 id=890 data-nosnippet>890</a>        <span class="comment">// The generation and the storage come from the same value.
-<a href=#891 id=891 data-nosnippet>891</a>        </span><span class="kw">let </span>state = <span class="self">self</span>.receiver.borrow();
-<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw">if </span>state.generation != <span class="self">self</span>.generation {
-<a href=#893 id=893 data-nosnippet>893</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#894 id=894 data-nosnippet>894</a>        }
-<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">match </span>state.settled() {
-<a href=#896 id=896 data-nosnippet>896</a>            <span class="prelude-val">Some</span>(Settled::Invalid) =&gt; <span class="prelude-val">None</span>,
-<a href=#897 id=897 data-nosnippet>897</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Some</span>(state.storage.bitfield()),
-<a href=#898 id=898 data-nosnippet>898</a>        }
-<a href=#899 id=899 data-nosnippet>899</a>    }
-<a href=#900 id=900 data-nosnippet>900</a>
-<a href=#901 id=901 data-nosnippet>901</a>    <span class="kw">async fn </span>update_or_closed(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;Bitfield&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#902 id=902 data-nosnippet>902</a>        <span class="macro">tokio::select!</span> {
-<a href=#903 id=903 data-nosnippet>903</a>            <span class="kw">_ </span>= tx.closed() =&gt; {
-<a href=#904 id=904 data-nosnippet>904</a>                <span class="comment">// the sender is closed, we are done
-<a href=#905 id=905 data-nosnippet>905</a>                </span><span class="prelude-val">Err</span>(<span class="macro">n0_error::e!</span>(irpc::channel::SendError::ReceiverClosed).into())
-<a href=#906 id=906 data-nosnippet>906</a>            }
-<a href=#907 id=907 data-nosnippet>907</a>            e = <span class="self">self</span>.receiver.changed() =&gt; <span class="prelude-val">Ok</span>(e.anyerr()<span class="question-mark">?</span>),
-<a href=#908 id=908 data-nosnippet>908</a>        }
-<a href=#909 id=909 data-nosnippet>909</a>    }
-<a href=#910 id=910 data-nosnippet>910</a>}
+<a href=#834 id=834 data-nosnippet>834</a>    /// Ends the stream if the ranges shrink, for example when the entry was
+<a href=#835 id=835 data-nosnippet>835</a>    /// deleted while observed, since observers only ever see them grow.
+<a href=#836 id=836 data-nosnippet>836</a>    </span><span class="kw">pub async fn </span>forward(<span class="kw-2">mut </span><span class="self">self</span>, <span class="kw-2">mut </span>tx: mpsc::Sender&lt;Bitfield&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#837 id=837 data-nosnippet>837</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
+<a href=#838 id=838 data-nosnippet>838</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#839 id=839 data-nosnippet>839</a>        };
+<a href=#840 id=840 data-nosnippet>840</a>        <span class="kw">let </span><span class="kw-2">mut </span>last = value.clone();
+<a href=#841 id=841 data-nosnippet>841</a>        tx.send(value).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#842 id=842 data-nosnippet>842</a>        <span class="kw">loop </span>{
+<a href=#843 id=843 data-nosnippet>843</a>            <span class="self">self</span>.update_or_closed(<span class="kw-2">&amp;mut </span>tx).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#844 id=844 data-nosnippet>844</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
+<a href=#845 id=845 data-nosnippet>845</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#846 id=846 data-nosnippet>846</a>            };
+<a href=#847 id=847 data-nosnippet>847</a>            <span class="kw">if </span>!value.ranges.is_superset(<span class="kw-2">&amp;</span>last.ranges) {
+<a href=#848 id=848 data-nosnippet>848</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#849 id=849 data-nosnippet>849</a>            }
+<a href=#850 id=850 data-nosnippet>850</a>            <span class="comment">// Skip notifications that do not change the observed bitfield.
+<a href=#851 id=851 data-nosnippet>851</a>            </span><span class="kw">if </span>value == last {
+<a href=#852 id=852 data-nosnippet>852</a>                <span class="kw">continue</span>;
+<a href=#853 id=853 data-nosnippet>853</a>            }
+<a href=#854 id=854 data-nosnippet>854</a>            last = value.clone();
+<a href=#855 id=855 data-nosnippet>855</a>            tx.send(value).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#856 id=856 data-nosnippet>856</a>        }
+<a href=#857 id=857 data-nosnippet>857</a>    }
+<a href=#858 id=858 data-nosnippet>858</a>
+<a href=#859 id=859 data-nosnippet>859</a>    <span class="doccomment">/// Forward observed *deltas* to the given sender
+<a href=#860 id=860 data-nosnippet>860</a>    ///
+<a href=#861 id=861 data-nosnippet>861</a>    /// Returns an error if sending fails, or if the last sender is dropped
+<a href=#862 id=862 data-nosnippet>862</a>    </span><span class="attr">#[allow(dead_code)]
+<a href=#863 id=863 data-nosnippet>863</a>    </span><span class="kw">pub async fn </span>forward_delta(<span class="kw-2">mut </span><span class="self">self</span>, <span class="kw-2">mut </span>tx: mpsc::Sender&lt;Bitfield&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#864 id=864 data-nosnippet>864</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
+<a href=#865 id=865 data-nosnippet>865</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#866 id=866 data-nosnippet>866</a>        };
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span><span class="kw-2">mut </span>old = value.clone();
+<a href=#868 id=868 data-nosnippet>868</a>        tx.send(value).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">loop </span>{
+<a href=#870 id=870 data-nosnippet>870</a>            <span class="self">self</span>.update_or_closed(<span class="kw-2">&amp;mut </span>tx).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#871 id=871 data-nosnippet>871</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(new) = <span class="self">self</span>.bitfield() <span class="kw">else </span>{
+<a href=#872 id=872 data-nosnippet>872</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#873 id=873 data-nosnippet>873</a>            };
+<a href=#874 id=874 data-nosnippet>874</a>            <span class="kw">let </span>diff = old.diff(<span class="kw-2">&amp;</span>new);
+<a href=#875 id=875 data-nosnippet>875</a>            <span class="kw">if </span>diff.is_empty() {
+<a href=#876 id=876 data-nosnippet>876</a>                <span class="kw">continue</span>;
+<a href=#877 id=877 data-nosnippet>877</a>            }
+<a href=#878 id=878 data-nosnippet>878</a>            tx.send(diff).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#879 id=879 data-nosnippet>879</a>            old = new;
+<a href=#880 id=880 data-nosnippet>880</a>        }
+<a href=#881 id=881 data-nosnippet>881</a>    }
+<a href=#882 id=882 data-nosnippet>882</a>
+<a href=#883 id=883 data-nosnippet>883</a>    <span class="doccomment">/// The current bitfield, or `None` if the storage is invalid or the entry was deleted.
+<a href=#884 id=884 data-nosnippet>884</a>    ///
+<a href=#885 id=885 data-nosnippet>885</a>    /// Observers end the stream on `None`, since there is no error channel,
+<a href=#886 id=886 data-nosnippet>886</a>    /// and since observed ranges must only ever grow.
+<a href=#887 id=887 data-nosnippet>887</a>    </span><span class="kw">fn </span>bitfield(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Bitfield&gt; {
+<a href=#888 id=888 data-nosnippet>888</a>        <span class="comment">// The generation and the storage come from the same value.
+<a href=#889 id=889 data-nosnippet>889</a>        </span><span class="kw">let </span>state = <span class="self">self</span>.receiver.borrow();
+<a href=#890 id=890 data-nosnippet>890</a>        <span class="kw">if </span>state.generation != <span class="self">self</span>.generation {
+<a href=#891 id=891 data-nosnippet>891</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#892 id=892 data-nosnippet>892</a>        }
+<a href=#893 id=893 data-nosnippet>893</a>        <span class="kw">match </span>state.settled() {
+<a href=#894 id=894 data-nosnippet>894</a>            <span class="prelude-val">Some</span>(Settled::Invalid) =&gt; <span class="prelude-val">None</span>,
+<a href=#895 id=895 data-nosnippet>895</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Some</span>(state.storage.bitfield()),
+<a href=#896 id=896 data-nosnippet>896</a>        }
+<a href=#897 id=897 data-nosnippet>897</a>    }
+<a href=#898 id=898 data-nosnippet>898</a>
+<a href=#899 id=899 data-nosnippet>899</a>    <span class="kw">async fn </span>update_or_closed(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tx: <span class="kw-2">&amp;mut </span>mpsc::Sender&lt;Bitfield&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#900 id=900 data-nosnippet>900</a>        <span class="macro">tokio::select!</span> {
+<a href=#901 id=901 data-nosnippet>901</a>            <span class="kw">_ </span>= tx.closed() =&gt; {
+<a href=#902 id=902 data-nosnippet>902</a>                <span class="comment">// the sender is closed, we are done
+<a href=#903 id=903 data-nosnippet>903</a>                </span><span class="prelude-val">Err</span>(<span class="macro">n0_error::e!</span>(irpc::channel::SendError::ReceiverClosed).into())
+<a href=#904 id=904 data-nosnippet>904</a>            }
+<a href=#905 id=905 data-nosnippet>905</a>            e = <span class="self">self</span>.receiver.changed() =&gt; <span class="prelude-val">Ok</span>(e.anyerr()<span class="question-mark">?</span>),
+<a href=#906 id=906 data-nosnippet>906</a>        }
+<a href=#907 id=907 data-nosnippet>907</a>    }
+<a href=#908 id=908 data-nosnippet>908</a>}
 </code></pre></div></section></main></body></html>
