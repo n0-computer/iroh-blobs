@@ -50,7 +50,6 @@ use crate::{
 #[derive(Debug)]
 #[enum_conversions()]
 pub(crate) enum InternalCommand {
-    Dump(metadata::proto::Dump),
     FinishImport(ImportEntryMsg),
     ClearScope(ClearScope),
     EndGcRun(EndGcRun),
@@ -78,7 +77,6 @@ pub(crate) struct ClearScope {
 impl InternalCommand {
     pub fn parent_span(&self) -> tracing::Span {
         match self {
-            Self::Dump(_) => tracing::Span::current(),
             Self::ClearScope(_) => tracing::Span::current(),
             Self::EndGcRun(_) | Self::GcDelete(_) => tracing::Span::current(),
             Self::FinishImport(cmd) => cmd.span.clone(),
@@ -401,10 +399,6 @@ impl<B: Backend> Actor<B> {
         let span = cmd.parent_span();
         let _entered = span.enter();
         match cmd {
-            InternalCommand::Dump(cmd) => {
-                trace!("{cmd:?}");
-                self.db().send(cmd.into()).await.ok();
-            }
             InternalCommand::EndGcRun(_) => self.exit_gc(),
             InternalCommand::GcDelete(cmd) => self.gc_delete(cmd).await,
             InternalCommand::ClearScope(cmd) => {
@@ -1006,8 +1000,6 @@ async fn handle_batch_impl(cmd: BatchMsg, id: Scope, scope: &Arc<TempTagScope>) 
 pub(crate) struct Started {
     /// Requests of the store api.
     pub commands: irpc::LocalSender<proto::Request>,
-    /// Store-internal commands.
-    pub internal: tokio::sync::mpsc::Sender<InternalCommand>,
     /// The live threads of the store runtime, for tests.
     #[cfg(test)]
     pub threads: Arc<AtomicU64>,
@@ -1068,7 +1060,6 @@ pub(crate) async fn start<B: Backend>(options: StoreOptions, backend: B) -> Resu
     }
     Ok(Started {
         commands: commands_tx.into(),
-        internal: fs_commands_tx,
         #[cfg(test)]
         threads,
     })

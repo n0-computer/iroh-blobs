@@ -27,7 +27,6 @@ pub(super) const RUN_KEY: &str = "run";
 /// mutable table is needed.
 pub(super) trait ReadableTables {
     fn blobs(&self) -> &impl ReadableTable<Hash, EntryState>;
-    fn tags(&self) -> &impl ReadableTable<Tag, HashAndFormat>;
     fn inline_data(&self) -> &impl ReadableTable<Hash, &'static [u8]>;
     fn inline_outboard(&self) -> &impl ReadableTable<Hash, &'static [u8]>;
 }
@@ -55,9 +54,6 @@ impl<'txn> Tables<'txn> {
 impl ReadableTables for Tables<'_> {
     fn blobs(&self) -> &impl ReadableTable<Hash, EntryState> {
         &self.blobs
-    }
-    fn tags(&self) -> &impl ReadableTable<Tag, HashAndFormat> {
-        &self.tags
     }
     fn inline_data(&self) -> &impl ReadableTable<Hash, &'static [u8]> {
         &self.inline_data
@@ -91,9 +87,6 @@ impl ReadOnlyTables {
 impl ReadableTables for ReadOnlyTables {
     fn blobs(&self) -> &impl ReadableTable<Hash, EntryState> {
         &self.blobs
-    }
-    fn tags(&self) -> &impl ReadableTable<Tag, HashAndFormat> {
-        &self.tags
     }
     fn inline_data(&self) -> &impl ReadableTable<Hash, &'static [u8]> {
         &self.inline_data

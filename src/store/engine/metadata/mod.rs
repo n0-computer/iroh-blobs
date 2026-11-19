@@ -42,8 +42,8 @@ pub(crate) mod proto;
 pub(crate) use client::{Db, EntryMeta};
 use parts::UnreferencedParts;
 use proto::{
-    CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, ListBlobs, ListTags, RenameTagMsg,
-    Set, SetTagMsg, Update, UpdateAwait,
+    CreateTagMsg, Delete, DeleteTagsMsg, GcSnapshot, Get, ListBlobs, ListTags, RenameTagMsg, Set,
+    SetTagMsg, Update, UpdateAwait,
 };
 
 use crate::{
@@ -121,8 +121,6 @@ pub(crate) enum Request {
     BlobStatus(BlobStatusMsg),
     /// List the hashes of all blobs from a snapshot.
     ListBlobs(ListBlobs),
-    /// Log the content of the store, for debugging.
-    Dump(Dump),
     /// The gc candidates and roots from one snapshot.
     GcSnapshot(GcSnapshot),
     /// Answered once everything before it is committed.

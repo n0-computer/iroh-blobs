@@ -50,16 +50,6 @@ pub struct GetResult {
     pub state: io::Result<Option<EntryState<Bytes>>>,
 }
 
-/// Get the entry state for a hash.
-///
-/// This will read from the blobs table and enrich the result with the content
-/// of the inline data and inline outboard tables if necessary.
-#[derive(Debug)]
-pub struct Dump {
-    pub tx: oneshot::Sender<n0_error::Result<()>>,
-    pub span: Span,
-}
-
 /// A stream of rows from a read snapshot, which it owns.
 ///
 /// The metadata actor hands it out and moves on, so it never waits for the reader.

@@ -14,7 +14,6 @@ use crate::{
 #[enum_conversions(Command)]
 pub enum ReadOnlyCommand {
     Get(Get),
-    Dump(Dump),
     GetBlobStatus(BlobStatusMsg),
 }
 
@@ -22,7 +21,6 @@ impl ReadOnlyCommand {
     pub fn parent_span(&self) -> &Span {
         match self {
             Self::Get(x) => &x.span,
-            Self::Dump(x) => &x.span,
             Self::GetBlobStatus(x) => &x.span,
         }
     }
@@ -134,7 +132,6 @@ impl From<Request> for Command {
             Request::ListTags(x) => TopLevelCommand::ListTags(x).into(),
             Request::BlobStatus(x) => ReadOnlyCommand::GetBlobStatus(x).into(),
             Request::ListBlobs(x) => TopLevelCommand::ListBlobs(x).into(),
-            Request::Dump(x) => ReadOnlyCommand::Dump(x).into(),
             Request::GcSnapshot(x) => TopLevelCommand::GcSnapshot(x).into(),
             Request::SyncDb(x) => TopLevelCommand::SyncDb(x).into(),
             Request::Shutdown(x) => TopLevelCommand::Shutdown(x).into(),

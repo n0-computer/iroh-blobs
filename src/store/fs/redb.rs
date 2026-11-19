@@ -137,53 +137,6 @@ fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
     Ok(())
 }
 
-fn handle_dump(cmd: Dump, tables: &impl ReadableTables) -> ActorResult<()> {
-    trace!("{cmd:?}");
-    trace!("dumping database");
-    for e in tables
-        .blobs()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("blobs: {} -> {:?}", k.to_hex(), v);
-    }
-    for e in tables
-        .tags()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("tags: {k} -> {v:?}");
-    }
-    for e in tables
-        .inline_data()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("inline_data: {} -> {:?}", k.to_hex(), v.len());
-    }
-    for e in tables
-        .inline_outboard()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("inline_outboard: {} -> {:?}", k.to_hex(), v.len());
-    }
-    cmd.tx.send(Ok(()));
-    Ok(())
-}
-
 async fn handle_get_blob_status(
     msg: BlobStatusMsg,
     tables: &impl ReadableTables,
@@ -552,7 +505,6 @@ impl Actor {
         let _guard = span.enter();
         match cmd {
             ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables),
-            ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }
     }
@@ -1568,7 +1520,7 @@ mod tests {
             std::future::pending::<()>().await;
         });
         let task = tokio::spawn(actor.run());
-        let store = fs::FsStore::new(cmd_tx.into(), fs_tx);
+        let store = fs::FsStore::new(cmd_tx.into());
         let data = fs::tests::test_data(100_000);
         let hash = store.add_bytes(data.clone()).await?.hash;
         let other = store.add_slice("cached observer").await?.hash;

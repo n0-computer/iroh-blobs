@@ -46,7 +46,7 @@ use crate::{
             entry_state::{DataLocation, EntryState, OutboardLocation},
             parts::UnreferencedParts,
             proto::{
-                CreateTagMsg, Delete, DeleteTagsMsg, Dump, GcSnapshot, Get, GetResult, ListBlobs,
+                CreateTagMsg, Delete, DeleteTagsMsg, GcSnapshot, Get, GetResult, ListBlobs,
                 ListTags, Listing, RenameTagMsg, Set, SetTagMsg, Update, UpdateAwait,
             },
             Failure, MetaChannels, MetaTask, Request,
@@ -246,7 +246,6 @@ impl MemMeta {
                 tx.send(Ok(Box::pin(stream::iter(hashes)) as Listing<Hash>))
                     .ok();
             }
-            Request::Dump(Dump { tx, .. }) => tx.send(Ok(())),
             Request::GcSnapshot(GcSnapshot { tx, .. }) => {
                 let candidates: Vec<api::Result<Hash>> =
                     self.blobs.keys().copied().map(Ok).collect();

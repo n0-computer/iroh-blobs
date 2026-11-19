@@ -250,13 +250,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use n0_error::{Result, StdResultExt};
+use n0_error::Result;
 use tracing::trace;
 
-use crate::{
-    api::{proto, ApiClient},
-    util::channel::oneshot,
-};
+use crate::api::{proto, ApiClient};
 mod entity;
 use entity::FsEntity;
 #[cfg(test)]
@@ -266,9 +263,9 @@ pub(crate) mod mem_backend;
 pub mod options;
 mod redb;
 use crate::store::engine::{
-    actor::{self, InternalCommand},
+    actor,
     entity::Backend,
-    metadata::{self, MetaChannels, MetaTask},
+    metadata::{MetaChannels, MetaTask},
     options::StoreOptions,
 };
 use options::{BatchOptions, FsConfig, Options};
@@ -331,7 +328,7 @@ impl FsStore {
         Ok(FsStore {
             #[cfg(test)]
             threads: started.threads,
-            ..FsStore::new(started.commands, started.internal)
+            ..FsStore::new(started.commands)
         })
     }
 }
@@ -343,12 +340,10 @@ impl FsStore {
 /// you to customize the options and the location of the database. Both variants will create the database
 /// if it does not exist, and load an existing database if one is found at the configured location.
 ///
-/// In addition to implementing the [`Store`](`crate::api::Store`) API via [`Deref`](`std::ops::Deref`),
-/// there are a few additional methods that are specific to file based stores, such as [`dump`](FsStore::dump).
+/// It implements the [`Store`](`crate::api::Store`) API via [`Deref`](`std::ops::Deref`).
 #[derive(Debug, Clone)]
 pub struct FsStore {
     sender: ApiClient,
-    db: tokio::sync::mpsc::Sender<InternalCommand>,
     #[cfg(test)]
     threads: Arc<AtomicU64>,
 }
@@ -374,32 +369,12 @@ impl AsRef<Store> for FsStore {
 }
 
 impl FsStore {
-    fn new(
-        sender: irpc::LocalSender<proto::Request>,
-        db: tokio::sync::mpsc::Sender<InternalCommand>,
-    ) -> Self {
+    fn new(sender: irpc::LocalSender<proto::Request>) -> Self {
         Self {
             sender: sender.into(),
-            db,
             #[cfg(test)]
             threads: Default::default(),
         }
-    }
-
-    pub async fn dump(&self) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.db
-            .send(
-                metadata::proto::Dump {
-                    tx,
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .anyerr()?;
-        rx.await.anyerr()??;
-        Ok(())
     }
 }
 
@@ -917,12 +892,10 @@ pub mod tests {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         {
             let store = FsStore::load(&db_dir).await?;
-            store.dump().await?;
             for size in sizes {
                 let data = test_data(size);
                 let (hash, ranges, expected) = create_n0_bao_full(&data, &just_size)?;
@@ -956,7 +929,6 @@ pub mod tests {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         dump_dir_full(testdir.path())?;
@@ -975,13 +947,11 @@ pub mod tests {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         // check if the data is complete
         {
             let store = FsStore::load(&db_dir).await?;
-            store.dump().await?;
             for size in sizes {
                 let data = test_data(size);
                 let (hash, ranges, expected) = create_n0_bao_full(&data, &ChunkRanges::all())?;
@@ -991,7 +961,6 @@ pub mod tests {
                 };
                 assert_eq!(&expected, &actual);
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         dump_dir_full(testdir.path())?;
@@ -1020,7 +989,6 @@ pub mod tests {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         dump_dir_full(testdir.path())?;
@@ -1034,7 +1002,6 @@ pub mod tests {
                 let bitfield = store.observe(hash).await?;
                 assert_eq!(bitfield.ranges, expected_ranges);
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         Ok(())
@@ -1059,7 +1026,6 @@ pub mod tests {
                     panic!("failed to import size={size}: {cause}");
                 }
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         delete_rec(testdir.path(), "bitfield")?;
@@ -1074,7 +1040,6 @@ pub mod tests {
                 let bitfield = store.observe(hash).await?;
                 assert_eq!(bitfield.ranges, expected_ranges, "size={size}");
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         Ok(())
@@ -1208,12 +1173,10 @@ pub mod tests {
                 let data = data;
                 tts.push(store.add_bytes(data.clone()).await?);
             }
-            store.dump().await?;
             store.shutdown().await?;
         }
         {
             let store = FsStore::load(&db_dir).await?;
-            store.dump().await?;
             for size in sizes {
                 let expected = test_data(size);
                 let hash = Hash::new(&expected);
@@ -1313,7 +1276,6 @@ pub mod tests {
                 .unwrap();
             bao_by_hash.insert(hash, bao);
         }
-        store.dump().await?;
 
         for size in sizes {
             let data = test_data(size);
@@ -1522,7 +1484,10 @@ pub mod tests {
         // Partial to complete and inline: the data file is no longer referenced.
         let notice = notices.recv().await.expect("notice");
         assert_eq!(notice.0, hash);
-        assert!(notice.1 .0.contains(&metadata::parts::BaoFilePart::Data));
+        assert!(notice
+            .1
+             .0
+            .contains(&crate::store::engine::metadata::parts::BaoFilePart::Data));
         store
             .blobs()
             .delete_with_opts(crate::api::proto::BlobDeleteRequest {
