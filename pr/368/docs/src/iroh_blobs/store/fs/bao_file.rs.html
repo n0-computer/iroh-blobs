@@ -602,8 +602,8 @@
 <a href=#602 id=602 data-nosnippet>602</a>    /// while a file deleted too early loses data.
 <a href=#603 id=603 data-nosnippet>603</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>references(<span class="kw-2">&amp;</span><span class="self">self</span>, part: BaoFilePart) -&gt; bool {
 <a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#605 id=605 data-nosnippet>605</a>            <span class="comment">// Not loaded: the committed entry decides, and it no longer
-<a href=#606 id=606 data-nosnippet>606</a>            // references the file.
+<a href=#605 id=605 data-nosnippet>605</a>            <span class="comment">// Not loaded: the entity knows nothing about its files, so the
+<a href=#606 id=606 data-nosnippet>606</a>            // caller must check the current entry first.
 <a href=#607 id=607 data-nosnippet>607</a>            </span><span class="self">Self</span>::Initial =&gt; <span class="bool-val">false</span>,
 <a href=#608 id=608 data-nosnippet>608</a>            <span class="self">Self</span>::Loading | <span class="self">Self</span>::Deleting =&gt; <span class="bool-val">true</span>,
 <a href=#609 id=609 data-nosnippet>609</a>            <span class="self">Self</span>::ReadWrite(s) | <span class="self">Self</span>::ReadOnly(s) =&gt; s.references(part),
