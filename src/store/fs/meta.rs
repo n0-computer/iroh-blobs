@@ -194,10 +194,10 @@ impl Db {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(
-                Update {
+                UpdateAwait {
                     hash,
                     state,
-                    tx: Some(tx),
+                    tx,
                     span: tracing::Span::current(),
                 }
                 .into(),
@@ -216,7 +216,6 @@ impl Db {
                 Update {
                     hash,
                     state,
-                    tx: None,
                     span: Span::current(),
                 }
                 .into(),
@@ -455,9 +454,7 @@ fn handle_update(
     tables: &mut Tables,
 ) -> ActorResult<()> {
     trace!("{cmd:?}");
-    let Update {
-        hash, state, tx, ..
-    } = cmd;
+    let Update { hash, state, .. } = cmd;
     trace!("updating hash {} to {}", hash.to_hex(), state.fmt_short());
     let old_entry_opt = tables.blobs.get(hash)?.map(|e| e.value());
     bookkeeping.written(hash, old_entry_opt.as_ref());
@@ -500,9 +497,23 @@ fn handle_update(
             .insert(hash, outboard.as_ref())
             .map_err(|e| e!(ActorError::Storage, e))?;
     }
-    if let Some(tx) = tx {
-        tx.send(Ok(()));
-    }
+    Ok(())
+}
+
+/// Like [`handle_update`], and replies once the update is applied.
+fn handle_update_await(
+    cmd: UpdateAwait,
+    bookkeeping: &mut Bookkeeping,
+    tables: &mut Tables,
+) -> ActorResult<()> {
+    let UpdateAwait {
+        hash,
+        state,
+        tx,
+        span,
+    } = cmd;
+    handle_update(Update { hash, state, span }, bookkeeping, tables)?;
+    tx.send(Ok(()));
     Ok(())
 }
 
@@ -881,6 +892,7 @@ impl Actor {
         let _guard = span.enter();
         match cmd {
             ReadWriteCommand::Update(cmd) => handle_update(cmd, state, tables),
+            ReadWriteCommand::UpdateAwait(cmd) => handle_update_await(cmd, state, tables),
             ReadWriteCommand::Set(cmd) => handle_set(cmd, state, tables),
             ReadWriteCommand::Delete(cmd) => Self::delete(state, tables, cmd),
             ReadWriteCommand::SetTag(cmd) => Self::set_tag(tables, cmd).await,
@@ -1380,7 +1392,6 @@ mod tests {
         Update {
             hash,
             state,
-            tx: None,
             span: Span::none(),
         }
     }
@@ -1432,7 +1443,6 @@ mod tests {
                         data_location: DataLocation::Owned(7),
                         outboard_location: OutboardLocation::NotNeeded,
                     },
-                    tx: None,
                     span: Span::none(),
                 },
                 state,
@@ -1446,6 +1456,33 @@ mod tests {
                 .all(|(_, n)| !n.0.contains(&BaoFilePart::Data)),
             "committed metadata still refers to this file: {unreferenced:?}"
         );
+        Ok(())
+    }
+
+    /// An awaited update is answered once applied, before its batch commits.
+    #[test]
+    fn an_update_await_is_answered_before_the_commit() -> testresult::TestResult<()> {
+        let (_dir, _paths, db) = setup()?;
+        let hash = Hash::new(b"partial");
+        let mut state = Bookkeeping::default();
+        let (tx, rx) = oneshot::channel();
+        let oneshot::Receiver::Tokio(mut rx) = rx;
+        write_batch(&db, &mut state, |tables, state| {
+            handle_update_await(
+                UpdateAwait {
+                    hash,
+                    state: EntryState::Partial {
+                        size: Some(100_000),
+                    },
+                    tx,
+                    span: Span::none(),
+                },
+                state,
+                tables,
+            )?;
+            assert!(matches!(rx.try_recv(), Ok(Ok(()))));
+            Ok(())
+        })?;
         Ok(())
     }
 

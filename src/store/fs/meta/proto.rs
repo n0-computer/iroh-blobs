@@ -67,11 +67,14 @@ pub struct Snapshot {
     pub span: Span,
 }
 
+/// Merge into the entry state of a hash, without a reply.
+///
+/// Sent by the hash's entity for its writes. If applying it fails, the
+/// metadata actor fails, and with it the store, so the entity never runs on
+/// a state the metadata does not have.
 pub struct Update {
     pub hash: Hash,
     pub state: EntryState<Bytes>,
-    /// do I need this? Optional?
-    pub tx: Option<oneshot::Sender<ActorResult<()>>>,
     pub span: Span,
 }
 
@@ -80,8 +83,27 @@ impl fmt::Debug for Update {
         f.debug_struct("Update")
             .field("hash", &self.hash)
             .field("state", &DD(self.state.fmt_short()))
-            .field("tx", &self.tx.is_some())
-            .finish()
+            .finish_non_exhaustive()
+    }
+}
+
+/// Merge into the entry state of a hash, replied once applied.
+///
+/// Applied means visible to later commands, not committed: the reply comes
+/// before the batch commits. If the commit fails, the store fails.
+pub struct UpdateAwait {
+    pub hash: Hash,
+    pub state: EntryState<Bytes>,
+    pub tx: oneshot::Sender<ActorResult<()>>,
+    pub span: Span,
+}
+
+impl fmt::Debug for UpdateAwait {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpdateAwait")
+            .field("hash", &self.hash)
+            .field("state", &DD(self.state.fmt_short()))
+            .finish_non_exhaustive()
     }
 }
 
@@ -132,6 +154,7 @@ impl ReadOnlyCommand {
 #[enum_conversions(Command)]
 pub enum ReadWriteCommand {
     Update(Update),
+    UpdateAwait(UpdateAwait),
     Set(Set),
     Delete(Delete),
     SetTag(SetTagMsg),
@@ -144,6 +167,7 @@ impl ReadWriteCommand {
     pub fn parent_span(&self) -> &Span {
         match self {
             Self::Update(x) => &x.span,
+            Self::UpdateAwait(x) => &x.span,
             Self::Set(x) => &x.span,
             Self::Delete(x) => &x.span,
             Self::SetTag(x) => &x.span,
