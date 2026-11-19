@@ -24,7 +24,6 @@ use n0_future::stream;
 use tokio::sync::watch;
 
 use super::{
-    entity_api::{Backend, EntityApi, EntityGlobal},
     entry_state::{DataLocation, EntryState, OutboardLocation},
     export_bao_impl, export_ranges_impl,
     file_deletes::UnreferencedParts,
@@ -36,7 +35,6 @@ use super::{
     },
     metadata::{Failure, MetaChannels, MetaTask, Request},
     options::StoreOptions,
-    util::entity_manager::Reset,
     FsStore, SyncEntityApi,
 };
 use crate::{
@@ -51,6 +49,10 @@ use crate::{
         },
         tags::TagInfo,
         Tag,
+    },
+    store::engine::{
+        entity::{Backend, EntityApi, EntityGlobal},
+        entity_manager::Reset,
     },
     store::util::{MemOrFile, PartialMemStorage},
     util::temp_tag::TempTag,

@@ -27,11 +27,11 @@
 //! - [`EntityApi::persist`] runs when the entity unloads, idle or at shutdown.
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
-use super::{
+use super::entity_manager::{self, ActiveEntityState, Reset};
+use crate::store::fs::{
     file_deletes::UnreferencedParts,
     import::ImportEntryMsg,
     metadata::{MetaChannels, MetaTask},
-    util::entity_manager::{self, ActiveEntityState, Reset},
     TaskContext,
 };
 use crate::{
@@ -41,7 +41,7 @@ use crate::{
 };
 
 /// The parts a store is built from, beyond its own options.
-pub(super) trait Backend: fmt::Debug + Send + Sync + 'static {
+pub(crate) trait Backend: fmt::Debug + Send + Sync + 'static {
     /// The state of one hash, which handles its requests.
     ///
     /// The entity manager creates it with [`Reset::new`], so this type is the
@@ -56,7 +56,7 @@ pub(super) trait Backend: fmt::Debug + Send + Sync + 'static {
 
 /// What every entity of a store shares.
 #[derive(Debug)]
-pub(super) struct EntityGlobal<B> {
+pub(crate) struct EntityGlobal<B> {
     /// The store: options, and the client of the metadata store.
     pub store: Arc<TaskContext>,
     /// The backend, which is the entities' configuration.
@@ -64,7 +64,7 @@ pub(super) struct EntityGlobal<B> {
 }
 
 /// The state of one hash, which handles its requests.
-pub(super) trait EntityApi:
+pub(crate) trait EntityApi:
     Reset<Hash> + fmt::Debug + Clone + Send + Sync + 'static
 {
     /// The backend this entity belongs to.
@@ -139,7 +139,7 @@ pub(super) trait EntityApi:
 }
 
 /// Runs the entities of backend `B` on the entity manager.
-pub(super) struct EmParams<B>(PhantomData<fn() -> B>);
+pub(crate) struct EmParams<B>(PhantomData<fn() -> B>);
 
 impl<B> fmt::Debug for EmParams<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -164,4 +164,4 @@ impl<B: Backend> entity_manager::Params for EmParams<B> {
 }
 
 /// An entity as the manager hands it to a task: its hash, the shared state, and the entity.
-pub(super) type EntityCtx<B> = ActiveEntityState<EmParams<B>>;
+pub(crate) type EntityCtx<B> = ActiveEntityState<EmParams<B>>;

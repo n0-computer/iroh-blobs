@@ -266,7 +266,6 @@ use bao_tree::{
     },
     BaoTree, ChunkNum, ChunkRanges,
 };
-use entity_manager::{EntityManagerState, SpawnArg};
 use entry_state::{DataLocation, OutboardLocation};
 use import::{ImportEntry, ImportSource};
 use irpc::{channel::mpsc, RpcMessage};
@@ -289,11 +288,8 @@ use crate::{
     },
     protocol::ChunkRangesExt,
     store::{
-        fs::{
-            bao_file::{
-                BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
-            },
-            util::entity_manager,
+        fs::bao_file::{
+            BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
         },
         gc::run_gc,
         util::{drain, BaoTreeSender, FixedSize, MemOrFile, ValueOrPoisioned},
@@ -309,20 +305,22 @@ mod bao_file;
 use bao_file::BaoFileHandle;
 use file_deletes::{delete_files, BaoFileParts, UnreferencedParts, ALL_PARTS};
 mod boot_id;
-mod entity_api;
 mod entry_state;
-mod file_deletes;
-mod import;
+pub(crate) mod file_deletes;
+pub(crate) mod import;
 #[cfg(test)]
 mod lazyfs_tests;
 #[cfg(test)]
 pub(crate) mod mem_backend;
 mod meta;
-mod metadata;
+pub(crate) mod metadata;
 pub mod options;
 mod sync_fs;
 pub(crate) mod util;
-use entity_api::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal};
+use crate::store::engine::{
+    entity::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal},
+    entity_manager::{self, EntityManagerState, SpawnArg},
+};
 use entry_state::EntryState;
 use import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg};
 use metadata::{MetaChannels, MetaTask};
@@ -396,7 +394,7 @@ impl InternalCommand {
 
 /// Context needed by most tasks
 #[derive(Debug)]
-struct TaskContext {
+pub(crate) struct TaskContext {
     // The store's own options: inlining, the temp directory, gc.
     pub options: Arc<StoreOptions>,
     // Metadata database, basically a mpsc sender with some extra functionality.
