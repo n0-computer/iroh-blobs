@@ -263,10 +263,8 @@ pub(crate) mod mem_backend;
 pub mod options;
 mod redb;
 use crate::store::engine::{
-    actor,
-    entity::Backend,
     metadata::{MetaChannels, MetaTask},
-    options::StoreOptions,
+    start, Backend, StoreOptions,
 };
 use options::{BatchOptions, FsConfig, Options};
 
@@ -324,7 +322,7 @@ impl FsStore {
     /// The backend starts the metadata store on the store's runtime, and is
     /// shared by all entities as their configuration.
     async fn from_parts<B: Backend>(options: StoreOptions, backend: B) -> Result<FsStore> {
-        let started = actor::start(options, backend).await?;
+        let started = start(options, backend).await?;
         Ok(FsStore {
             #[cfg(test)]
             threads: started.threads,
@@ -415,9 +413,8 @@ pub mod tests {
     use crate::{
         api,
         store::engine::{
-            actor::{Actor, ClearScope},
-            entity::EntityApi,
-            entity_manager::SpawnArg,
+            testing::{Actor, ClearScope, SpawnArg},
+            EntityApi,
         },
         Hash, HashAndFormat,
     };

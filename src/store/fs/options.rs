@@ -5,10 +5,7 @@ use n0_future::time::Duration;
 
 use crate::{
     store::{
-        engine::{
-            bao::raw_outboard_size,
-            options::{temp_name, StoreOptions},
-        },
+        engine::{bao::raw_outboard_size, temp_name, StoreOptions},
         gc::GcConfig,
     },
     Hash,

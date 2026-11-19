@@ -31,7 +31,7 @@ use crate::{
         parts::BaoFilePart,
     },
     store::{
-        engine::{bao::raw_outboard_size, options::StoreOptions},
+        engine::{bao::raw_outboard_size, StoreOptions},
         fs::entity::{EntityOps, HashContext},
         util::{
             read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,

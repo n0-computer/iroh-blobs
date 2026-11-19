@@ -1028,7 +1028,7 @@ mod tests {
     };
     use crate::store::engine::{
         metadata::{parts::BaoFilePart, Db},
-        options::StoreOptions,
+        StoreOptions,
     };
 
     fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
@@ -1423,9 +1423,7 @@ mod tests {
         use n0_future::StreamExt;
 
         use crate::store::{
-            engine::{
-                actor::TaskContext, entity::EntityGlobal, entity_manager::EntityManagerState,
-            },
+            engine::{testing::EntityManagerState, EntityGlobal, TaskContext},
             fs,
         };
 
@@ -1466,12 +1464,12 @@ mod tests {
         };
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
         let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
-        let context = Arc::new(TaskContext {
-            options: Arc::new(StoreOptions::from(&*options)),
-            db: Db::new(db_tx),
-            internal_cmd_tx: fs_tx.clone(),
-        });
-        let mut actor = crate::store::engine::actor::Actor::<fs::FsBackend> {
+        let context = Arc::new(TaskContext::for_test(
+            Arc::new(StoreOptions::from(&*options)),
+            Db::new(db_tx),
+            fs_tx.clone(),
+        ));
+        let mut actor = crate::store::engine::testing::Actor::<fs::FsBackend> {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
@@ -1495,7 +1493,7 @@ mod tests {
             gc: None,
             deferred: Default::default(),
             idle_waiters: Vec::new(),
-            _rt: crate::store::engine::actor::RtWrapper(None),
+            _rt: crate::store::engine::testing::RtWrapper(None),
         };
         struct Worker {
             closed: Arc<AtomicBool>,

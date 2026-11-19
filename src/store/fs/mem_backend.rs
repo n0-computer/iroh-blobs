@@ -39,9 +39,6 @@ use crate::{
     },
     store::engine::{
         bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
-        entity::{Backend, EntityApi, EntityGlobal},
-        entity_manager::Reset,
-        import::{ImportEntry, ImportEntryMsg, ImportSource},
         metadata::{
             entry_state::{DataLocation, EntryState, OutboardLocation},
             parts::UnreferencedParts,
@@ -51,7 +48,8 @@ use crate::{
             },
             Failure, MetaChannels, MetaTask, Request,
         },
-        options::StoreOptions,
+        Backend, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg, ImportSource, Reset,
+        StoreOptions,
     },
     store::util::{MemOrFile, PartialMemStorage},
     util::temp_tag::TempTag,

@@ -91,12 +91,26 @@ pub(crate) struct TaskContext {
     pub options: Arc<StoreOptions>,
     // Metadata database, basically a mpsc sender with some extra functionality.
     pub db: metadata::Db,
-    // Handle to send internal commands
-    pub internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
+    // Handle to send internal commands, only for the engine.
+    pub(super) internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
 }
 
 impl TaskContext {
-    pub async fn clear_scope(&self, scope: Scope) {
+    /// A context for a store actor built by hand in a test.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        options: Arc<StoreOptions>,
+        db: metadata::Db,
+        internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
+    ) -> Self {
+        Self {
+            options,
+            db,
+            internal_cmd_tx,
+        }
+    }
+
+    pub(super) async fn clear_scope(&self, scope: Scope) {
         self.internal_cmd_tx
             .send(ClearScope { scope }.into())
             .await

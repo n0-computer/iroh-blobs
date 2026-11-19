@@ -11,17 +11,14 @@ use tracing::{error, instrument, trace};
 
 use super::options::FsConfig;
 use crate::store::engine::{
-    actor::TaskContext,
     bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
-    entity::{EntityApi, EntityGlobal},
-    entity_manager::{self},
-    import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource},
     metadata::{
         self,
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
-    options::StoreOptions,
+    reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
+    ImportSource, Reset, StoreOptions, TaskContext,
 };
 use crate::{
     api::proto::{
@@ -246,7 +243,7 @@ impl FsEntity {
     }
 }
 
-impl entity_manager::Reset<Hash> for FsEntity {
+impl Reset<Hash> for FsEntity {
     fn new(id: &Hash) -> Self {
         Self {
             id: *id,
