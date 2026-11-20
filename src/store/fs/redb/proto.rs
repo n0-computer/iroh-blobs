@@ -4,10 +4,10 @@ use std::fmt;
 use nested_enum_utils::enum_conversions;
 use tracing::Span;
 
-pub(crate) use crate::store::engine::metadata::proto::*;
+pub(crate) use crate::store::host::metadata::proto::*;
 use crate::{
     api::proto::{BlobStatusMsg, ShutdownMsg, SyncDbMsg},
-    store::engine::metadata::Request,
+    store::host::metadata::Request,
 };
 
 #[derive(Debug)]

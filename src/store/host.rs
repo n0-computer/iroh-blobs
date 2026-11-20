@@ -1,7 +1,7 @@
-//! The store engine: what a store is built from, and the generic part that runs it.
+//! The store host: the generic part that runs a store, and what a backend plugs into it.
 //!
 //! A store is the generic store actor plus a [`Backend`], which names the
-//! per-hash entity type and starts the metadata store. The engine owns
+//! per-hash entity type and starts the metadata store. The host owns
 //! everything that is the same for every store: routing requests by hash,
 //! temp tags, gc sessions, imports, and the order of operations between
 //! entities and the metadata store. A backend owns how entries are stored.
@@ -190,7 +190,7 @@ pub(crate) use import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryM
 pub(crate) use options::{temp_name, StoreOptions};
 pub(crate) use state::{Phase, StateCell, WriteGuard};
 
-/// The engine's internals, for tests that build a store actor by hand.
+/// The host's internals, for tests that build a store actor by hand.
 #[cfg(test)]
 pub(crate) mod testing {
     pub(crate) use super::{

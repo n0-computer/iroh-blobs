@@ -6,11 +6,11 @@
 //! have access to a writeable filesystem.
 use bao_tree::BlockSize;
 #[cfg(feature = "fs-store")]
-pub(crate) mod engine;
-#[cfg(feature = "fs-store")]
 #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub mod fs;
 mod gc;
+#[cfg(feature = "fs-store")]
+pub(crate) mod host;
 pub mod mem;
 pub mod readonly_mem;
 mod test;

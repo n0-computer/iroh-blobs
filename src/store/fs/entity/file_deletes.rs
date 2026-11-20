@@ -2,7 +2,7 @@
 use tracing::warn;
 
 use crate::store::fs::options::PathOptions;
-use crate::{store::engine::metadata::parts::BaoFilePart, Hash};
+use crate::{store::host::metadata::parts::BaoFilePart, Hash};
 
 /// Delete the given files of an entry, ignoring files that do not exist.
 pub(super) fn delete_files(options: &PathOptions, hash: &Hash, parts: &[BaoFilePart]) {

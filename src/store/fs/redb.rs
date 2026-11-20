@@ -50,7 +50,7 @@ use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
 use tracing::{debug, info, info_span, trace, warn};
 
 use super::options::{BatchOptions, FsConfig, PathOptions};
-use crate::store::engine::metadata::{
+use crate::store::host::metadata::{
     self,
     entry_state::{DataLocation, EntryState, InconsistentEntry, OutboardLocation},
     parts::{referenced_parts, BaoFileParts, UnreferencedParts},
@@ -1033,7 +1033,7 @@ mod tests {
         super::options::{CrashConsistency, Options, PathOptions},
         *,
     };
-    use crate::store::engine::{
+    use crate::store::host::{
         metadata::{parts::BaoFilePart, Db},
         StoreOptions,
     };
@@ -1430,8 +1430,8 @@ mod tests {
         use n0_future::StreamExt;
 
         use crate::store::{
-            engine::{testing::EntityManagerState, EntityGlobal, TaskContext},
             fs,
+            host::{testing::EntityManagerState, EntityGlobal, TaskContext},
         };
 
         let dir = tempfile::tempdir()?;
@@ -1476,7 +1476,7 @@ mod tests {
             Db::new(db_tx),
             fs_tx.clone(),
         ));
-        let mut actor = crate::store::engine::testing::Actor::<fs::FsBackend> {
+        let mut actor = crate::store::host::testing::Actor::<fs::FsBackend> {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
@@ -1500,7 +1500,7 @@ mod tests {
             gc: None,
             deferred: Default::default(),
             idle_waiters: Vec::new(),
-            _rt: crate::store::engine::testing::RtWrapper(None),
+            _rt: crate::store::host::testing::RtWrapper(None),
         };
         struct Worker {
             closed: Arc<AtomicBool>,

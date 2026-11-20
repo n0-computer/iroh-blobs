@@ -2,7 +2,7 @@
 //!
 //! A file based blob store needs a writeable directory to work with.
 //!
-//! It runs on the store engine (`store::engine`), which routes requests,
+//! It runs on the store host (`store::host`), which routes requests,
 //! keeps temp tags, runs gc sessions and imports, and orders operations
 //! between entities and the metadata store. The fs store adds its two parts:
 //!
@@ -71,7 +71,7 @@ use entity::FsEntity;
 mod lazyfs_tests;
 pub mod options;
 mod redb;
-use crate::store::engine::{
+use crate::store::host::{
     metadata::{MetaChannels, MetaTask},
     start, Backend, StoreOptions,
 };
@@ -221,7 +221,7 @@ pub mod tests {
 
     use crate::{
         api,
-        store::engine::{
+        store::host::{
             testing::{Actor, ClearScope, SpawnArg},
             EntityApi,
         },
@@ -1293,7 +1293,7 @@ pub mod tests {
         assert!(notice
             .1
              .0
-            .contains(&crate::store::engine::metadata::parts::BaoFilePart::Data));
+            .contains(&crate::store::host::metadata::parts::BaoFilePart::Data));
         store
             .blobs()
             .delete_with_opts(crate::api::proto::BlobDeleteRequest {

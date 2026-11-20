@@ -957,10 +957,10 @@ mod tests {
         Ok(())
     }
 
-    /// The store engine on the memory backend, see `store::engine::mem_backend`.
+    /// The store host on the memory backend, see `store::host::mem_backend`.
     #[cfg(feature = "fs-store")]
     async fn membackend_store(dir: &std::path::Path) -> TestResult<Store> {
-        Ok(crate::store::engine::mem_backend::store(dir).await?)
+        Ok(crate::store::host::mem_backend::store(dir).await?)
     }
 
     #[tokio::test]

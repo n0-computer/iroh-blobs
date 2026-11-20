@@ -91,7 +91,7 @@ pub(crate) struct TaskContext {
     pub options: Arc<StoreOptions>,
     // Metadata database, basically a mpsc sender with some extra functionality.
     pub db: metadata::Db,
-    // Handle to send internal commands, only for the engine.
+    // Handle to send internal commands, only for the host.
     pub(super) internal_cmd_tx: tokio::sync::mpsc::Sender<InternalCommand>,
 }
 

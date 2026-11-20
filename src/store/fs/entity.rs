@@ -1,6 +1,6 @@
 //! The fs store's entity: an entry's data and outboard in files, read and written through file descriptors.
 //!
-//! See the store engine's docs for how entities, the metadata store and the
+//! See the store host's docs for how entities, the metadata store and the
 //! store actor work together.
 //!
 //! # States
@@ -55,7 +55,7 @@ use n0_future::io;
 use tracing::{error, instrument, trace};
 
 use super::options::FsConfig;
-use crate::store::engine::{
+use crate::store::host::{
     bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
     metadata::{
         self,
@@ -97,7 +97,7 @@ async fn wait_writable<'a>(ctx: &HashContext<'a>) -> WriteGuard<'a, BaoStorage> 
     ctx.state.wait_writable().await
 }
 
-/// Loads the entry and freezes it, see [`StateCell::freeze`](crate::store::engine::StateCell::freeze).
+/// Loads the entry and freezes it, see [`StateCell::freeze`](crate::store::host::StateCell::freeze).
 async fn freeze_entry(
     ctx: &HashContext<'_>,
     ack: tokio::sync::oneshot::Sender<()>,

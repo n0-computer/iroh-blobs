@@ -1725,7 +1725,7 @@ mod tests {
     #[tokio::test]
     async fn membackend_export_bao_end() -> TestResult<()> {
         let testdir = tempfile::tempdir()?;
-        let store = crate::store::engine::mem_backend::store(testdir.path()).await?;
+        let store = crate::store::host::mem_backend::store(testdir.path()).await?;
         check_export_bao_end(&store).await?;
         store.shutdown().await?;
         Ok(())

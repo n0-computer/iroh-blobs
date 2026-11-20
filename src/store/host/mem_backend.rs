@@ -36,7 +36,7 @@ use crate::{
         tags::TagInfo,
         Tag,
     },
-    store::engine::{
+    store::host::{
         bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
         metadata::{
             entry_state::{DataLocation, EntryState, OutboardLocation},

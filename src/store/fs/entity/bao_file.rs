@@ -22,14 +22,14 @@ use tracing::{debug, info, trace};
 use crate::store::fs::options::FsConfig;
 use crate::{
     api::blobs::Bitfield,
-    store::engine::metadata::{
+    store::host::metadata::{
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::BaoFilePart,
     },
-    store::engine::{Phase, StateCell, WriteGuard},
+    store::host::{Phase, StateCell, WriteGuard},
     store::{
-        engine::{bao::raw_outboard_size, StoreOptions},
         fs::entity::HashContext,
+        host::{bao::raw_outboard_size, StoreOptions},
         util::{
             read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
             PartialMemStorage, DD,
