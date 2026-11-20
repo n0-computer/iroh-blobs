@@ -18,9 +18,9 @@ use std::{
 
 use bao_tree::io::mixed::EncodedItem;
 use n0_error::{Result, StdResultExt};
+use n0_future::task::{JoinError, JoinSet};
 use n0_future::{io, stream, StreamExt};
 use nested_enum_utils::enum_conversions;
-use tokio::task::{JoinError, JoinSet};
 use tracing::{error, trace, warn, Instrument};
 
 use super::{
@@ -194,7 +194,7 @@ pub(crate) struct Actor<B: Backend> {
     // Parts committed metadata batches stopped referencing, from the database actor.
     pub(crate) unreferenced: tokio::sync::mpsc::UnboundedReceiver<(Hash, UnreferencedParts)>,
     // A failed metadata task must abort the workers, including waiting deletes.
-    pub(crate) metadata_task: Option<tokio::task::JoinHandle<Result<(), metadata::Failure>>>,
+    pub(crate) metadata_task: Option<n0_future::task::JoinHandle<Result<(), metadata::Failure>>>,
     // How many deletes are running, so shutdown can let them finish.
     pub(crate) deletes: Arc<tokio::sync::watch::Sender<usize>>,
     // Tasks for import and export operations.
@@ -790,7 +790,7 @@ impl<B: Backend> Actor<B> {
             db: metadata::Db::new(db_send),
             internal_cmd_tx: fs_commands_tx,
         });
-        let metadata_task = Some(tokio::spawn(metadata));
+        let metadata_task = Some(n0_future::task::spawn(metadata));
         let global = Arc::new(HandlerGlobal {
             store: slot_context.clone(),
             backend,
