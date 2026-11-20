@@ -119,6 +119,63 @@ impl<S> StateCell<S> {
         self.send_modify(|state| state.storage = storage);
     }
 
+    /// Loads the entry, unless it is loaded already.
+    ///
+    /// The first task to find it `Initial` opens it, and the others wait for
+    /// it. `open` always gives a state, so a failure must map to one that
+    /// marks the entry invalid: waiting tasks would stall otherwise.
+    pub(crate) async fn load<F>(&self, open: impl FnOnce() -> F)
+    where
+        F: std::future::Future<Output = S>,
+    {
+        self.wait_settled().await;
+        let mut claimed = false;
+        self.send_if_modified(|state| {
+            if matches!(state.storage, Phase::Initial) {
+                state.storage = Phase::Loading;
+                claimed = true;
+            }
+            claimed
+        });
+        if claimed {
+            let settled = open().await;
+            self.set_storage(Phase::ReadWrite(settled));
+        }
+    }
+
+    /// Deletes the loaded entry, starting a new generation.
+    ///
+    /// Waits until the entry is writable, then hands its settled state to
+    /// `delete`, which commits the delete and cleans up after it. Meanwhile the
+    /// entry is `Deleting`: readers see no entry, and changes wait. The new
+    /// generation ends current observers, even if they next wake only after
+    /// the entry was filled again. `delete` returns the state to settle on,
+    /// and the result.
+    pub(crate) async fn delete<F, T>(&self, delete: impl FnOnce(S) -> F) -> std::io::Result<T>
+    where
+        F: std::future::Future<Output = (S, std::io::Result<T>)>,
+    {
+        self.wait_writable().await;
+        let mut old = None;
+        self.send_modify(|state| {
+            state.generation += 1;
+            match std::mem::replace(&mut state.storage, Phase::Deleting) {
+                Phase::ReadWrite(settled) => old = Some(settled),
+                // Not loaded: put it back, the generation may grow anyway.
+                other => state.storage = other,
+            }
+        });
+        let Some(old) = old else {
+            debug_assert!(false, "delete of an entry that is not loaded");
+            return Err(std::io::Error::other(
+                "delete of an entry that is not loaded",
+            ));
+        };
+        let (settled, res) = delete(old).await;
+        self.set_storage(Phase::ReadWrite(settled));
+        res
+    }
+
     /// Waits until the entry is neither loading nor deleting.
     ///
     /// Loading may create files, and deleting resets the state, so both must be

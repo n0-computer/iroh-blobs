@@ -92,12 +92,6 @@ const MAX_EXTERNAL_PATHS: usize = 8;
 
 /// Waits until the entity is neither loading nor deleting.
 ///
-/// Loading may create files, and deleting resets the state, so both must be
-/// done before a task may look at the state or touch files.
-async fn wait_settled(ctx: &HashContext<'_>) {
-    ctx.state.wait_settled().await
-}
-
 /// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
 async fn wait_writable(ctx: &HashContext<'_>) {
     ctx.state.wait_writable().await
@@ -113,39 +107,25 @@ async fn freeze_entry(
     ctx.state.freeze(ack, release).await
 }
 
-/// Loads the entity's state from the metadata, unless it is loaded already.
-async fn load_entity(ctx: &HashContext<'_>) {
-    wait_settled(ctx).await;
-    let mut load = false;
-    ctx.state.send_if_modified(|guard| {
-        if matches!(guard.storage, BaoFileStorage::Initial) {
-            guard.storage = BaoFileStorage::Loading;
-            load = true;
-        }
-        load
-    });
-    if !load {
-        return;
-    }
-    // we must assign a new state even in the error case, otherwise
-    // tasks waiting for loading would stall!
+/// Opens the entry from the metadata, marking it invalid if that fails.
+async fn open_entry(ctx: &HashContext<'_>) -> Settled {
     let state = match ctx.meta().get().await {
-        Ok(state) => match Settled::open(state, ctx).await {
-            Ok(settled) => settled,
-            Err(cause) => {
-                error!("failed to open {}, marking it invalid: {cause}", ctx.id);
-                Settled::Invalid
-            }
-        },
+        Ok(state) => state,
         Err(cause) => {
             error!(
                 "failed to get {} from db, marking it invalid: {cause}",
                 ctx.id
             );
-            Settled::Invalid
+            return Settled::Invalid;
         }
     };
-    ctx.state.set_storage(BaoFileStorage::ReadWrite(state));
+    match Settled::open(state, ctx).await {
+        Ok(settled) => settled,
+        Err(cause) => {
+            error!("failed to open {}, marking it invalid: {cause}", ctx.id);
+            Settled::Invalid
+        }
+    }
 }
 
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
@@ -154,34 +134,26 @@ async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
     // Loaded, the entity's state knows all its files: those of its entry, and
     // those it wrote that the entry does not reference yet.
     ctx.load().await;
-    wait_writable(ctx).await;
-    let parts: BaoFileParts = {
-        let state = ctx.state.borrow();
-        ALL_PARTS
-            .into_iter()
-            .filter(|part| state.references(*part))
-            .collect()
-    };
-    // A new generation ends observers, even if they next wake only after this
-    // hash was re-imported.
-    ctx.state.send_modify(|state| {
-        state.generation += 1;
-        state.storage = BaoFileStorage::Deleting;
-    });
-    // Answered once the delete is committed.
-    if let Err(cause) = ctx.meta().delete().await {
-        // Metadata failure aborts the store. A command racing a graceful
-        // shutdown can also be rejected, without a failure to trigger abort.
-        // Release waiters with an error instead of restoring the old state.
-        ctx.state
-            .set_storage(BaoFileStorage::ReadWrite(Settled::Invalid));
-        return Err(cause);
-    }
-    // No durable state references the files anymore.
-    delete_files(&ctx.config.path, &ctx.id, &parts);
     ctx.state
-        .set_storage(BaoFileStorage::ReadWrite(Settled::NonExisting));
-    Ok(())
+        .delete(|old| async move {
+            let parts: BaoFileParts = ALL_PARTS
+                .into_iter()
+                .filter(|part| old.references(*part))
+                .collect();
+            // Close the files before unlinking them.
+            drop(old);
+            // Answered once the delete is committed.
+            if let Err(cause) = ctx.meta().delete().await {
+                // Metadata failure aborts the store. A command racing a graceful
+                // shutdown can also be rejected, without a failure to trigger abort.
+                // Release waiters with an error instead of restoring the old state.
+                return (Settled::Invalid, Err(cause));
+            }
+            // No durable state references the files anymore.
+            delete_files(&ctx.config.path, &ctx.id, &parts);
+            (Settled::NonExisting, Ok(()))
+        })
+        .await
 }
 
 /// Deletes the parts a committed batch stopped referencing, unless the entry still uses them.
@@ -394,13 +366,9 @@ impl HashContext<'_> {
         &self.global.options
     }
 
-    /// Load the state from the database.
-    ///
-    /// If the state is Initial, this will start the load.
-    /// If it is Loading, it will wait until loading is done.
-    /// If it is any other state, it will be a noop.
+    /// Loads the entry from the metadata, unless it is loaded already.
     async fn load(&self) {
-        load_entity(self).await
+        self.state.load(|| open_entry(self)).await
     }
 }
 

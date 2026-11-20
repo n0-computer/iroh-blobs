@@ -486,7 +486,7 @@ impl Settled {
     }
 
     /// Whether this state uses the given file of its entry.
-    fn references(&self, part: BaoFilePart) -> bool {
+    pub(super) fn references(&self, part: BaoFilePart) -> bool {
         match self {
             Settled::NonExisting => false,
             Settled::Partial(_) => true,
