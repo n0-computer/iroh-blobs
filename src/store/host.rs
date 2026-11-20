@@ -1,11 +1,33 @@
 //! The store host: the generic part that runs a store, and what a backend plugs into it.
 //!
-//! A store is the host plus a [`Backend`]. The host owns everything that is
-//! the same for every store: routing requests by hash, temp tags, gc sessions,
-//! imports, and the order of operations between entities and the metadata
-//! store. A backend owns how entries are stored. A store is started with
-//! [`start`] and then driven through the irpc client it returns, like any
-//! other store.
+//! The host is one opinionated way to build a store, not the only one. A
+//! store is anything that answers the store protocol ([`crate::api::proto::Request`]):
+//! a store can implement the protocol itself and be wrapped with
+//! [`Store::from_client`](crate::api::Store::from_client), or wrap another
+//! store and forward what it does not handle. That is the way to go for a
+//! store that only serves part of the protocol, or that works very differently.
+//!
+//! With the host, a store is the host plus a [`Backend`]. The host owns
+//! everything that is the same for every store: routing requests by hash, temp
+//! tags, gc sessions, imports, and the order of operations between entities
+//! and the metadata store. A backend owns how entries are stored. A store is
+//! started with [`start`] and then driven through the irpc client it returns,
+//! like any other store.
+//!
+//! # The entity manager
+//!
+//! The biggest thing the host gives a backend is its entity manager. Every
+//! request for a hash goes to that hash's entity, which runs it as a task. The
+//! tasks of one entity run concurrently on one entity actor, and only
+//! interleave at `.await` points. So the entity is the single place that
+//! decides about its hash, and needs no locks against other code. The manager:
+//!
+//! - creates an entity when the first request for its hash arrives,
+//! - runs a set of tasks per entity, and keeps the entity alive while any runs,
+//! - gives each live entity its own actor, a task on the store's runtime, so
+//!   different hashes are worked on in parallel,
+//! - persists an idle entity and recycles it and its actor for another hash,
+//!   keeping their allocations.
 //!
 //! # Building a backend
 //!
@@ -28,8 +50,8 @@
 //! - [`bao::BaoAccess`] gives the generic bao import and exports, for backends
 //!   with synchronous reads.
 //!
-//! Data outside the store is named by [`metadata::entry_state::Location`],
-//! bytes that only the backend interprets: the fs backend keeps a path there.
+//! Data outside the store is named by a [`Location`], bytes that only the
+//! backend interprets: the fs backend keeps a path there.
 //!
 //! Not yet up to the backend: the host builds its own runtime, and it stages
 //! imports in temp files under [`StoreOptions`]' temp path.
@@ -208,6 +230,7 @@ mod state;
 pub(crate) use actor::{start, TaskContext};
 pub(crate) use entity::{Backend, EntityApi, EntityGlobal};
 pub(crate) use import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource};
+pub(crate) use metadata::entry_state::Location;
 pub(crate) use options::{temp_name, StoreOptions};
 pub(crate) use state::{Phase, StateCell, WriteGuard};
 

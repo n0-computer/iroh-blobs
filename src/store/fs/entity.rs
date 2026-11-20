@@ -59,11 +59,11 @@ use crate::store::host::{
     bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
     metadata::{
         self,
-        entry_state::{DataLocation, EntryState, Location, OutboardLocation},
+        entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
     reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
-    ImportSource, Phase, StateCell, StoreOptions, TaskContext, WriteGuard,
+    ImportSource, Location, Phase, StateCell, StoreOptions, TaskContext, WriteGuard,
 };
 use crate::{
     api::proto::{

@@ -23,10 +23,10 @@ use crate::store::fs::options::FsConfig;
 use crate::{
     api::blobs::Bitfield,
     store::host::metadata::{
-        entry_state::{DataLocation, EntryState, Location, OutboardLocation},
+        entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::BaoFilePart,
     },
-    store::host::{Phase, StateCell, WriteGuard},
+    store::host::{Location, Phase, StateCell, WriteGuard},
     store::{
         fs::entity::HashContext,
         host::{bao::raw_outboard_size, StoreOptions},

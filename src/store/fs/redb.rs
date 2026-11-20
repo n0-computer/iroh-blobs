@@ -1029,7 +1029,7 @@ mod tests {
 
     use tracing::Span;
 
-    use crate::store::host::metadata::entry_state::Location;
+    use crate::store::host::Location;
 
     use super::{
         super::options::{CrashConsistency, Options, PathOptions},
