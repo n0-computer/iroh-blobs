@@ -6,7 +6,7 @@
 //! # States
 //!
 //! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
-//! transition, and otherwise a loaded `Settled` entry: `NonExisting`,
+//! transition, and otherwise a loaded `BaoStorage` entry: `NonExisting`,
 //! `Partial`, `Complete` or `Invalid`. A settled entry is `ReadWrite`, or
 //! `ReadOnly` while a gc session freezes it.
 //!
@@ -63,7 +63,7 @@ use crate::store::engine::{
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
     reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
-    ImportSource, Reset, StoreOptions, TaskContext, WriteGuard,
+    ImportSource, Phase, Reset, StateCell, StoreOptions, TaskContext, WriteGuard,
 };
 use crate::{
     api::proto::{
@@ -82,7 +82,7 @@ use crate::api::{
 
 mod bao_file;
 mod file_deletes;
-use bao_file::{complete, BaoFileHandle, BaoFileStorage, DataReader, OutboardReader, Settled};
+use bao_file::{complete, BaoStorage, DataReader, OutboardReader};
 
 use super::FsBackend;
 use file_deletes::delete_files;
@@ -93,7 +93,7 @@ const MAX_EXTERNAL_PATHS: usize = 8;
 /// Waits until the entity is neither loading nor deleting.
 ///
 /// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
-async fn wait_writable<'a>(ctx: &HashContext<'a>) -> WriteGuard<'a, Settled> {
+async fn wait_writable<'a>(ctx: &HashContext<'a>) -> WriteGuard<'a, BaoStorage> {
     ctx.state.wait_writable().await
 }
 
@@ -108,7 +108,7 @@ async fn freeze_entry(
 }
 
 /// Opens the entry from the metadata, marking it invalid if that fails.
-async fn open_entry(ctx: &HashContext<'_>) -> Settled {
+async fn open_entry(ctx: &HashContext<'_>) -> BaoStorage {
     let state = match ctx.meta().get().await {
         Ok(state) => state,
         Err(cause) => {
@@ -116,14 +116,14 @@ async fn open_entry(ctx: &HashContext<'_>) -> Settled {
                 "failed to get {} from db, marking it invalid: {cause}",
                 ctx.id
             );
-            return Settled::Invalid;
+            return BaoStorage::Invalid;
         }
     };
-    match Settled::open(state, ctx).await {
+    match BaoStorage::open(state, ctx).await {
         Ok(settled) => settled,
         Err(cause) => {
             error!("failed to open {}, marking it invalid: {cause}", ctx.id);
-            Settled::Invalid
+            BaoStorage::Invalid
         }
     }
 }
@@ -147,11 +147,11 @@ async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
                 // Metadata failure aborts the store. A command racing a graceful
                 // shutdown can also be rejected, without a failure to trigger abort.
                 // Release waiters with an error instead of restoring the old state.
-                return (Settled::Invalid, Err(cause));
+                return (BaoStorage::Invalid, Err(cause));
             }
             // No durable state references the files anymore.
             delete_files(&ctx.config.path, &ctx.id, &parts);
-            (Settled::NonExisting, Ok(()))
+            (BaoStorage::NonExisting, Ok(()))
         })
         .await
 }
@@ -181,14 +181,14 @@ pub(super) struct HashContext<'a> {
     id: Hash,
     global: &'a TaskContext,
     config: &'a FsConfig,
-    state: &'a BaoFileHandle,
+    state: &'a StateCell<BaoStorage>,
 }
 
 /// The fs store's entity: the state of a hash's files.
 #[derive(Debug, Clone)]
 pub(super) struct FsEntity {
     id: Hash,
-    handle: BaoFileHandle,
+    handle: StateCell<BaoStorage>,
 }
 
 impl FsEntity {
@@ -207,7 +207,7 @@ impl Reset<Hash> for FsEntity {
     fn new(id: &Hash) -> Self {
         Self {
             id: *id,
-            handle: BaoFileHandle::default(),
+            handle: StateCell::default(),
         }
     }
 
@@ -292,7 +292,7 @@ impl BaoAccess for HashContext<'_> {
             // Imports load the entity first, and wait_writable leaves it
             // loaded and writable.
             let settled = match state.take() {
-                BaoFileStorage::ReadWrite(settled) => settled,
+                Phase::ReadWrite(settled) => settled,
                 other => {
                     debug_assert!(false, "write to an entry that is not writable");
                     *state = other;
@@ -312,7 +312,7 @@ impl BaoAccess for HashContext<'_> {
                 }
             };
             res = Ok(update);
-            *state = BaoFileStorage::ReadWrite(settled);
+            *state = Phase::ReadWrite(settled);
             true
         });
         drop(write);
@@ -343,20 +343,20 @@ impl BaoAccess for HashContext<'_> {
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
         self.state.peek(|state| match state.try_settled()? {
-            Settled::Complete(mem) => Ok(mem.size()),
-            Settled::Partial(file) => file.current_size(),
-            Settled::Invalid => Err(io::Error::other("invalid storage")),
-            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoStorage::Complete(mem) => Ok(mem.size()),
+            BaoStorage::Partial(file) => file.current_size(),
+            BaoStorage::Invalid => Err(io::Error::other("invalid storage")),
+            BaoStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         })
     }
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
         self.state.peek(|state| match state.try_settled()? {
-            Settled::Complete(mem) => Ok(mem.bitfield()),
-            Settled::Partial(file) => Ok(file.bitfield().clone()),
-            Settled::Invalid => Err(io::Error::other("invalid storage")),
-            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoStorage::Complete(mem) => Ok(mem.bitfield()),
+            BaoStorage::Partial(file) => Ok(file.bitfield().clone()),
+            BaoStorage::Invalid => Err(io::Error::other("invalid storage")),
+            BaoStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         })
     }
 }
@@ -434,7 +434,7 @@ impl EntityOps for HashContext<'_> {
         self.load().await;
         self.state
             .observer()
-            .forward(cmd.tx, Settled::observed_bitfield)
+            .forward(cmd.tx, BaoStorage::observed_bitfield)
             .await
             .ok();
     }
@@ -515,8 +515,8 @@ impl EntityOps for HashContext<'_> {
         self.state.retire(|state| {
             let hash = &self.id;
             // A freeze task dropped at shutdown leaves its freeze in place.
-            let (BaoFileStorage::ReadWrite(Settled::Partial(fs))
-            | BaoFileStorage::ReadOnly(Settled::Partial(fs))) = state.take()
+            let (Phase::ReadWrite(BaoStorage::Partial(fs))
+            | Phase::ReadOnly(BaoStorage::Partial(fs))) = state.take()
             else {
                 return;
             };
@@ -783,7 +783,7 @@ async fn export_path_impl(
                 let write = wait_writable(ctx).await;
                 let complete = ctx
                     .state
-                    .peek(|state| matches!(state, BaoFileStorage::ReadWrite(Settled::Complete(_))));
+                    .peek(|state| matches!(state, Phase::ReadWrite(BaoStorage::Complete(_))));
                 drop(write);
                 if complete {
                     // After the commit, the owned data file comes back as an

@@ -327,14 +327,9 @@ fn read_size(size_file: &File) -> io::Result<u64> {
     }
 }
 
-/// The state of an entity's entry: its lifecycle phase around a settled entry.
-pub(crate) type BaoFileStorage = Phase<Settled>;
-/// A cheaply cloneable handle to an entity's entry state.
-pub(crate) type BaoFileHandle = StateCell<Settled>;
-
 /// A loaded entry.
 #[derive(derive_more::From)]
-pub(crate) enum Settled {
+pub(crate) enum BaoStorage {
     /// There is no entry for this hash in the metadata.
     NonExisting,
     /// The entry is incomplete and on disk.
@@ -350,13 +345,13 @@ pub(crate) enum Settled {
     Invalid,
 }
 
-impl fmt::Debug for Settled {
+impl fmt::Debug for BaoStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Settled::NonExisting => f.debug_struct("NonExisting").finish(),
-            Settled::Partial(x) => x.fmt(f),
-            Settled::Complete(x) => x.fmt(f),
-            Settled::Invalid => f.debug_struct("Invalid").finish(),
+            BaoStorage::NonExisting => f.debug_struct("NonExisting").finish(),
+            BaoStorage::Partial(x) => x.fmt(f),
+            BaoStorage::Complete(x) => x.fmt(f),
+            BaoStorage::Invalid => f.debug_struct("Invalid").finish(),
         }
     }
 }
@@ -426,23 +421,23 @@ impl PartialMemStorage {
     }
 }
 
-impl Settled {
+impl BaoStorage {
     /// The bitfield an observer sees, or `None` if the entry is invalid.
     ///
     /// Observers end the stream on `None`, since there is no error channel.
     pub(super) fn observed_bitfield(&self) -> Option<Bitfield> {
         match self {
-            Settled::Invalid => None,
+            BaoStorage::Invalid => None,
             _ => Some(self.bitfield()),
         }
     }
 
     pub fn bitfield(&self) -> Bitfield {
         match self {
-            Settled::NonExisting => Bitfield::empty(),
-            Settled::Partial(x) => x.bitfield.clone(),
-            Settled::Complete(x) => Bitfield::complete(x.data.size()),
-            Settled::Invalid => panic!("invalid storage should not be used"),
+            BaoStorage::NonExisting => Bitfield::empty(),
+            BaoStorage::Partial(x) => x.bitfield.clone(),
+            BaoStorage::Complete(x) => Bitfield::complete(x.data.size()),
+            BaoStorage::Invalid => panic!("invalid storage should not be used"),
         }
     }
 
@@ -455,10 +450,10 @@ impl Settled {
         Ok(match self {
             // A new entry starts in memory, but never stays there: it leaves
             // this call partial on disk, or complete.
-            Settled::NonExisting => {
+            BaoStorage::NonExisting => {
                 write_new_entry(PartialMemStorage::default(), batch, bitfield, ctx)?
             }
-            Settled::Partial(mut fs) => {
+            BaoStorage::Partial(mut fs) => {
                 fs.write_batch(bitfield.size(), batch)?;
                 let changes = fs.bitfield.update(bitfield);
                 let new = changes.new_state();
@@ -476,27 +471,27 @@ impl Settled {
                     (fs.into(), None)
                 }
             }
-            Settled::Complete(_) => {
+            BaoStorage::Complete(_) => {
                 // we are complete, so just ignore the write
                 // unless there is a bug, this would just write the exact same data
                 (self, None)
             }
-            Settled::Invalid => return Err(io::Error::other("invalid storage")),
+            BaoStorage::Invalid => return Err(io::Error::other("invalid storage")),
         })
     }
 
     /// Whether this state uses the given file of its entry.
     pub(super) fn references(&self, part: BaoFilePart) -> bool {
         match self {
-            Settled::NonExisting => false,
-            Settled::Partial(_) => true,
-            Settled::Complete(x) => match part {
+            BaoStorage::NonExisting => false,
+            BaoStorage::Partial(_) => true,
+            BaoStorage::Complete(x) => match part {
                 BaoFilePart::Data => matches!(x.data, MemOrFile::File(_)),
                 BaoFilePart::Outboard => matches!(x.outboard, MemOrFile::File(_)),
                 BaoFilePart::Sizes | BaoFilePart::Bitfield => false,
             },
             // Cannot tell.
-            Settled::Invalid => true,
+            BaoStorage::Invalid => true,
         }
     }
 }
@@ -507,7 +502,7 @@ fn write_new_entry(
     batch: &[BaoContentItem],
     bitfield: &Bitfield,
     ctx: &HashContext<'_>,
-) -> io::Result<(Settled, Option<EntryState<bytes::Bytes>>)> {
+) -> io::Result<(BaoStorage, Option<EntryState<bytes::Bytes>>)> {
     // check if we need to switch to file mode, otherwise write to memory
     Ok(
         if max_offset(batch) <= ctx.global.options.inline.max_data_inlined {
@@ -549,7 +544,7 @@ fn write_new_entry(
     )
 }
 
-impl BaoFileStorage {
+impl Phase<BaoStorage> {
     /// Whether this state uses the given file of its entry.
     ///
     /// Says yes when it cannot tell, since a file kept too long only leaks,
@@ -564,41 +559,41 @@ impl BaoFileStorage {
 
     /// Takes the state, leaving an invalid one behind.
     pub fn take(&mut self) -> Self {
-        std::mem::replace(self, Self::ReadWrite(Settled::Invalid))
+        std::mem::replace(self, Self::ReadWrite(BaoStorage::Invalid))
     }
 }
 
 /// A reader for a bao file, reading just the data.
 #[derive(Debug)]
-pub struct DataReader(pub(super) BaoFileHandle);
+pub struct DataReader(pub(super) StateCell<BaoStorage>);
 
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
         self.0.peek(|state| match state.try_settled()? {
-            Settled::Partial(x) => x.data.read_bytes_at(offset, size),
-            Settled::Complete(x) => x.data.read_bytes_at(offset, size),
-            Settled::Invalid => Err(io::Error::other("invalid storage")),
-            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoStorage::Partial(x) => x.data.read_bytes_at(offset, size),
+            BaoStorage::Complete(x) => x.data.read_bytes_at(offset, size),
+            BaoStorage::Invalid => Err(io::Error::other("invalid storage")),
+            BaoStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         })
     }
 }
 
 /// A reader for the outboard part of a bao file.
 #[derive(Debug)]
-pub struct OutboardReader(pub(super) BaoFileHandle);
+pub struct OutboardReader(pub(super) StateCell<BaoStorage>);
 
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         self.0.peek(|state| match state.try_settled()? {
-            Settled::Partial(x) => x.outboard.read_at(offset, buf),
-            Settled::Complete(x) => x.outboard.read_at(offset, buf),
-            Settled::Invalid => Err(io::Error::other("invalid storage")),
-            Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
+            BaoStorage::Partial(x) => x.outboard.read_at(offset, buf),
+            BaoStorage::Complete(x) => x.outboard.read_at(offset, buf),
+            BaoStorage::Invalid => Err(io::Error::other("invalid storage")),
+            BaoStorage::NonExisting => Err(io::ErrorKind::NotFound.into()),
         })
     }
 }
 
-impl Settled {
+impl BaoStorage {
     pub(super) async fn open(
         state: Option<EntryState<Bytes>>,
         ctx: &HashContext<'_>,
@@ -664,7 +659,7 @@ impl Settled {
 
 /// Completes the entry, for a finished import.
 pub(super) fn complete(
-    write: &WriteGuard<'_, Settled>,
+    write: &WriteGuard<'_, BaoStorage>,
     data: MemOrFile<Bytes, FixedSize<File>>,
     outboard: MemOrFile<Bytes, File>,
 ) {
@@ -672,13 +667,12 @@ pub(super) fn complete(
         // A finished import does not depend on the old content, so it
         // completes any writable state, an invalid one included.
         let needs_complete = match state {
-            BaoFileStorage::ReadWrite(Settled::Complete(_)) => false,
-            BaoFileStorage::ReadWrite(_) => true,
+            Phase::ReadWrite(BaoStorage::Complete(_)) => false,
+            Phase::ReadWrite(_) => true,
             _ => false,
         };
         if needs_complete {
-            *state =
-                BaoFileStorage::ReadWrite(Settled::Complete(CompleteStorage { data, outboard }));
+            *state = Phase::ReadWrite(BaoStorage::Complete(CompleteStorage { data, outboard }));
         }
         true
     });
