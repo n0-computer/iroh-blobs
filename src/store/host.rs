@@ -1,16 +1,38 @@
 //! The store host: the generic part that runs a store, and what a backend plugs into it.
 //!
-//! A store is the generic store actor plus a [`Backend`], which names the
-//! per-hash entity type and starts the metadata store. The host owns
-//! everything that is the same for every store: routing requests by hash,
-//! temp tags, gc sessions, imports, and the order of operations between
-//! entities and the metadata store. A backend owns how entries are stored.
+//! A store is the host plus a [`Backend`]. The host owns everything that is
+//! the same for every store: routing requests by hash, temp tags, gc sessions,
+//! imports, and the order of operations between entities and the metadata
+//! store. A backend owns how entries are stored. A store is started with
+//! [`start`] and then driven through the irpc client it returns, like any
+//! other store.
 //!
-//! What an implementation of a backend needs is re-exported here: the traits
-//! ([`Backend`], [`EntityApi`]), what their methods get
-//! ([`EntityGlobal`], [`TaskContext`], the import types), the metadata
-//! protocol ([`metadata`]), and optional helpers ([`bao`]). A store is started
-//! with [`start`] and then driven through the irpc client it returns.
+//! # Building a backend
+//!
+//! A backend implements two traits, and answers one protocol:
+//!
+//! - [`Backend`] names the entity type and starts the metadata store. Its value
+//!   is the entities' configuration, shared through [`EntityGlobal`].
+//! - [`EntityApi`] is one hash's entity: created and recycled by the host, with
+//!   one async handler per request.
+//! - The metadata store answers the [`metadata`] protocol, a flat request enum,
+//!   in whatever way the backend keeps its entries.
+//!
+//! Two helpers do most of the work of an entity. Both are optional, and a
+//! backend with unusual needs can do without them:
+//!
+//! - [`StateCell`] is the entry's lifecycle: loading once, writes behind a
+//!   [`WriteGuard`], freezes for gc sessions, deletes that start a new
+//!   generation, and observers. The backend only defines the loaded state,
+//!   the type the cell wraps in a [`Phase`].
+//! - [`bao::BaoAccess`] gives the generic bao import and exports, for backends
+//!   with synchronous reads.
+//!
+//! Data outside the store is named by [`metadata::entry_state::Location`],
+//! bytes that only the backend interprets: the fs backend keeps a path there.
+//!
+//! Not yet up to the backend: the host builds its own runtime, and it stages
+//! imports in temp files under [`StoreOptions`]' temp path.
 //!
 //! # Design
 //!
@@ -117,13 +139,13 @@
 //! takes the same view and freezes its handles in place.
 //!
 //! A freeze makes an entry read-only: reads go on, while writes, replacing
-//! imports and deletes wait. Complete and
-//! invalid entries are frozen too, since a delete would turn them into an entry
-//! that can grow again. A freeze task keeps the entity alive. All freezes of a
-//! session wait on one release channel; ending the session drops it, and each
-//! freeze task makes its entry writable again itself. A freeze waits for an
-//! earlier one to end, so freezes never overlap. If a freeze task is dropped at shutdown instead, `persist` looks
-//! through the freeze.
+//! imports and deletes wait. A freeze in turn waits for writes in flight. Complete
+//! and invalid entries are frozen too, since a delete would turn them into an
+//! entry that can grow again. A freeze task keeps the entity alive. All freezes
+//! of a session wait on one release channel; ending the session drops it, and
+//! each freeze task makes its entry writable again itself. A freeze waits for
+//! an earlier one to end, so freezes never overlap. If a freeze task is dropped
+//! at shutdown instead, `persist` looks through the freeze.
 //!
 //! GC traverses exactly the snapshot's roots, calls the protect callback, and
 //! sweeps only the snapshot's candidates. Incomplete HashSeqs contribute the
