@@ -1,8 +1,8 @@
 //! Bao import and export over synchronous access to an entry's data.
 //!
-//! Any handler implementation can use these: it implements [`BaoAccess`]
-//! for the duration of a request, and gets validated bao import, range export
-//! and bao export.
+//! A handler implements [`BaoAccess`] on a view of itself for one request, and
+//! gets [`import_bao`], [`export_ranges`] and [`export_bao`], which do the work
+//! and reply. The handler loads its entry first, as for any other request.
 use std::{io, num::NonZeroU64};
 
 use bao_tree::{
@@ -23,7 +23,10 @@ use crate::{
     api::{
         self,
         blobs::Bitfield,
-        proto::{bitfield::is_validated, ExportBaoRequest, ExportRangesItem, ExportRangesRequest},
+        proto::{
+            bitfield::is_validated, ExportBaoMsg, ExportBaoRequest, ExportRangesItem,
+            ExportRangesMsg, ExportRangesRequest, ImportBaoMsg, ImportBaoRequest,
+        },
     },
     protocol::ChunkRangesExt,
     store::{util::BaoTreeSender, IROH_BLOCK_SIZE},
@@ -75,7 +78,45 @@ fn chunk_range(leaf: &Leaf) -> ChunkRanges {
     (start..end).into()
 }
 
-pub(crate) async fn import_bao_impl(
+/// Handles an [`ImportBaoMsg`] for a loaded entry: imports, and replies.
+pub(crate) async fn import_bao(access: &impl BaoAccess, cmd: ImportBaoMsg) {
+    let ImportBaoMsg {
+        inner: ImportBaoRequest { size, .. },
+        mut rx,
+        tx,
+        ..
+    } = cmd;
+    let res = import_bao_impl(access, size, &mut rx).await;
+    trace!("{res:?}");
+    // Answer before dropping `rx`, so the sender sees our error rather than
+    // just a closed channel.
+    tx.send(res).await.ok();
+    drop(rx);
+}
+
+/// Handles an [`ExportRangesMsg`] for a loaded entry: exports, and replies.
+pub(crate) async fn export_ranges(access: &impl BaoAccess, mut cmd: ExportRangesMsg) {
+    if let Err(cause) = export_ranges_impl(access, cmd.inner, &mut cmd.tx).await {
+        cmd.tx
+            .send(ExportRangesItem::Error(cause.into()))
+            .await
+            .ok();
+    }
+}
+
+/// Handles an [`ExportBaoMsg`] for a loaded entry: exports, and replies.
+pub(crate) async fn export_bao(access: &impl BaoAccess, mut cmd: ExportBaoMsg) {
+    if let Err(cause) = export_bao_impl(access, cmd.inner, &mut cmd.tx).await {
+        // A missing entry is an io error of kind NotFound. Pass it on as is,
+        // so the requester can tell.
+        cmd.tx
+            .send(bao_tree::io::EncodeError::Io(cause).into())
+            .await
+            .ok();
+    }
+}
+
+async fn import_bao_impl(
     ctx: &impl BaoAccess,
     size: NonZeroU64,
     rx: &mut mpsc::Receiver<BaoContentItem>,
@@ -108,7 +149,7 @@ pub(crate) async fn import_bao_impl(
     Ok(())
 }
 
-pub(crate) async fn export_ranges_impl(
+async fn export_ranges_impl(
     ctx: &impl BaoAccess,
     cmd: ExportRangesRequest,
     tx: &mut mpsc::Sender<ExportRangesItem>,
@@ -151,7 +192,7 @@ pub(crate) async fn export_ranges_impl(
     Ok(())
 }
 
-pub(crate) async fn export_bao_impl(
+async fn export_bao_impl(
     ctx: &impl BaoAccess,
     cmd: ExportBaoRequest,
     tx: &mut mpsc::Sender<EncodedItem>,

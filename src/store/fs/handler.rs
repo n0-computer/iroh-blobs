@@ -56,7 +56,7 @@ use tracing::{error, instrument, trace};
 
 use super::options::FsConfig;
 use crate::store::host::{
-    bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
+    bao::{self, BaoAccess},
     metadata::{
         self,
         entry_state::{DataLocation, EntryState, OutboardLocation},
@@ -67,8 +67,8 @@ use crate::store::host::{
 };
 use crate::{
     api::proto::{
-        Bitfield, ExportBaoMsg, ExportPathMsg, ExportPathRequest, ExportRangesItem,
-        ExportRangesMsg, HashSpecific, ImportBaoMsg, ImportBaoRequest, ObserveMsg,
+        Bitfield, ExportBaoMsg, ExportPathMsg, ExportPathRequest, ExportRangesMsg, HashSpecific,
+        ImportBaoMsg, ObserveMsg,
     },
     store::util::{FixedSize, MemOrFile},
     util::temp_tag::TempTag,
@@ -224,18 +224,7 @@ impl HashHandler for FsHandler {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
-        let ImportBaoMsg {
-            inner: ImportBaoRequest { size, .. },
-            mut rx,
-            tx,
-            ..
-        } = cmd;
-        let res = import_bao_impl(&ctx, size, &mut rx).await;
-        trace!("{res:?}");
-        // Answer before dropping `rx`, so the sender sees our error rather
-        // than just a closed channel.
-        tx.send(res).await.ok();
-        drop(rx);
+        bao::import_bao(&ctx, cmd).await
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -275,31 +264,19 @@ impl HashHandler for FsHandler {
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_ranges(&self, global: &HandlerGlobal<FsBackend>, mut cmd: ExportRangesMsg) {
+    async fn export_ranges(&self, global: &HandlerGlobal<FsBackend>, cmd: ExportRangesMsg) {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
-        if let Err(cause) = export_ranges_impl(&ctx, cmd.inner, &mut cmd.tx).await {
-            cmd.tx
-                .send(ExportRangesItem::Error(cause.into()))
-                .await
-                .ok();
-        }
+        bao::export_ranges(&ctx, cmd).await
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_bao(&self, global: &HandlerGlobal<FsBackend>, mut cmd: ExportBaoMsg) {
+    async fn export_bao(&self, global: &HandlerGlobal<FsBackend>, cmd: ExportBaoMsg) {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
-        if let Err(cause) = export_bao_impl(&ctx, cmd.inner, &mut cmd.tx).await {
-            // if the entry is in state NonExisting, this will be an io error with
-            // kind NotFound. So we must not wrap this somehow but pass it on directly.
-            cmd.tx
-                .send(bao_tree::io::EncodeError::Io(cause).into())
-                .await
-                .ok();
-        }
+        bao::export_bao(&ctx, cmd).await
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
@@ -445,13 +422,13 @@ impl BaoAccess for HashContext<'_> {
 }
 
 impl HashContext<'_> {
-    pub fn options(&self) -> &StoreOptions {
-        &self.global.options
-    }
-
     /// Loads the entry from the metadata, unless it is loaded already.
     async fn load(&self) {
         self.state.load(|| open_entry(self)).await
+    }
+
+    pub fn options(&self) -> &StoreOptions {
+        &self.global.options
     }
 
     /// The metadata of the entry.

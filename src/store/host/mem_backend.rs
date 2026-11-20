@@ -29,15 +29,15 @@ use crate::{
         blobs::{Bitfield, BlobStatus},
         proto::{
             AddProgressItem, BlobStatusMsg, BlobStatusRequest, CreateTagRequest, DeleteTagsRequest,
-            ExportBaoMsg, ExportPathMsg, ExportPathRequest, ExportProgressItem, ExportRangesItem,
-            ExportRangesMsg, ImportBaoMsg, ImportBaoRequest, ListTagsRequest, ObserveMsg,
-            RenameTagRequest, SetTagRequest, ShutdownMsg, SyncDbMsg,
+            ExportBaoMsg, ExportPathMsg, ExportPathRequest, ExportProgressItem, ExportRangesMsg,
+            ImportBaoMsg, ListTagsRequest, ObserveMsg, RenameTagRequest, SetTagRequest,
+            ShutdownMsg, SyncDbMsg,
         },
         tags::TagInfo,
         Tag,
     },
     store::host::{
-        bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
+        bao::{self, BaoAccess},
         metadata::{
             entry_state::{DataLocation, EntryState, OutboardLocation},
             parts::UnreferencedParts,
@@ -512,15 +512,7 @@ impl HashHandler for MemHandler {
     }
 
     async fn import_bao(&self, global: &HandlerGlobal<MemBackend>, cmd: ImportBaoMsg) {
-        let ImportBaoMsg {
-            inner: ImportBaoRequest { size, .. },
-            mut rx,
-            tx,
-            ..
-        } = cmd;
-        let res = import_bao_impl(&self.ctx(global), size, &mut rx).await;
-        tx.send(res).await.ok();
-        drop(rx);
+        bao::import_bao(&self.ctx(global), cmd).await
     }
 
     async fn finish_import(
@@ -593,24 +585,14 @@ impl HashHandler for MemHandler {
         }
     }
 
-    async fn export_ranges(&self, global: &HandlerGlobal<MemBackend>, mut cmd: ExportRangesMsg) {
+    async fn export_ranges(&self, global: &HandlerGlobal<MemBackend>, cmd: ExportRangesMsg) {
         self.wait_readable().await;
-        if let Err(cause) = export_ranges_impl(&self.ctx(global), cmd.inner, &mut cmd.tx).await {
-            cmd.tx
-                .send(ExportRangesItem::Error(cause.into()))
-                .await
-                .ok();
-        }
+        bao::export_ranges(&self.ctx(global), cmd).await
     }
 
-    async fn export_bao(&self, global: &HandlerGlobal<MemBackend>, mut cmd: ExportBaoMsg) {
+    async fn export_bao(&self, global: &HandlerGlobal<MemBackend>, cmd: ExportBaoMsg) {
         self.wait_readable().await;
-        if let Err(cause) = export_bao_impl(&self.ctx(global), cmd.inner, &mut cmd.tx).await {
-            cmd.tx
-                .send(bao_tree::io::EncodeError::Io(cause).into())
-                .await
-                .ok();
-        }
+        bao::export_bao(&self.ctx(global), cmd).await
     }
 
     async fn export_path(&self, global: &HandlerGlobal<MemBackend>, cmd: ExportPathMsg) {
@@ -673,7 +655,7 @@ impl HashHandler for MemHandler {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "fs-store"))]
 mod tests {
     use std::time::Duration;
 
