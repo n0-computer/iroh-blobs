@@ -2,7 +2,6 @@ use core::fmt;
 use std::{
     fs::{File, OpenOptions},
     io,
-    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
 };
 
@@ -30,6 +29,7 @@ use crate::{
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::BaoFilePart,
     },
+    store::engine::{CellState, Phase, StateCell},
     store::{
         engine::{bao::raw_outboard_size, StoreOptions},
         fs::entity::{EntityOps, HashContext},
@@ -330,28 +330,12 @@ fn read_size(size_file: &File) -> io::Result<u64> {
     }
 }
 
-/// The state of an entity's entry, as the entity sees it.
-///
-/// `Initial`, `Loading` and `Deleting` are transient: tasks that load or change
-/// the entry wait while it is in one of them. Otherwise the entry is settled,
-/// and either writable or frozen for a gc session.
-#[derive(Default)]
-pub(crate) enum BaoFileStorage {
-    /// Not loaded yet.
-    #[default]
-    Initial,
-    /// The entry is being loaded from the metadata.
-    Loading,
-    /// An unconditional delete is awaiting its post-commit file cleanup.
-    /// Readers see the entry as absent; mutations wait until cleanup finishes.
-    /// Metadata failure aborts the store instead of restoring the old state.
-    Deleting,
-    /// Settled, and open for reads and writes.
-    ReadWrite(Settled),
-    /// Settled, and frozen by a gc session: reads go on, writes, imports and
-    /// deletes wait until the session ends.
-    ReadOnly(Settled),
-}
+/// The state of an entity's entry: its lifecycle phase around a settled entry.
+pub(crate) type BaoFileStorage = Phase<Settled>;
+/// The phase and generation of an entity's entry.
+pub(crate) type EntityState = CellState<Settled>;
+/// A cheaply cloneable handle to an entity's entry state.
+pub(crate) type BaoFileHandle = StateCell<Settled>;
 
 /// A loaded entry.
 #[derive(derive_more::From)]
@@ -369,18 +353,6 @@ pub(crate) enum Settled {
     /// operation, or the entity was persisted. Writes fail. A finished import
     /// or a delete replaces it, and recycling the entity resets it.
     Invalid,
-}
-
-impl fmt::Debug for BaoFileStorage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BaoFileStorage::Initial => f.debug_struct("Initial").finish(),
-            BaoFileStorage::Loading => f.debug_struct("Loading").finish(),
-            BaoFileStorage::Deleting => f.debug_struct("Deleting").finish(),
-            BaoFileStorage::ReadWrite(x) => f.debug_tuple("ReadWrite").field(x).finish(),
-            BaoFileStorage::ReadOnly(x) => f.debug_tuple("ReadOnly").field(x).finish(),
-        }
-    }
 }
 
 impl fmt::Debug for Settled {
@@ -573,25 +545,6 @@ fn write_new_entry(
 }
 
 impl BaoFileStorage {
-    /// The loaded entry, writable or frozen, if the state is not transient.
-    pub(super) fn settled(&self) -> Option<&Settled> {
-        match self {
-            Self::ReadWrite(s) | Self::ReadOnly(s) => Some(s),
-            Self::Initial | Self::Loading | Self::Deleting => None,
-        }
-    }
-
-    /// The loaded entry for a reader, or the error for a state in transition.
-    pub(super) fn try_settled(&self) -> io::Result<&Settled> {
-        match self {
-            Self::ReadWrite(s) | Self::ReadOnly(s) => Ok(s),
-            Self::Initial => Err(io::Error::other("initial")),
-            Self::Loading => Err(io::Error::other("loading")),
-            // A delete in progress: readers see no entry.
-            Self::Deleting => Err(io::ErrorKind::NotFound.into()),
-        }
-    }
-
     pub fn bitfield(&self) -> Bitfield {
         match self {
             Self::Initial => panic!("initial storage should not be used"),
@@ -616,47 +569,6 @@ impl BaoFileStorage {
     /// Takes the state, leaving an invalid one behind.
     pub fn take(&mut self) -> Self {
         std::mem::replace(self, Self::ReadWrite(Settled::Invalid))
-    }
-}
-
-/// The state of an entity: its storage, and the generation of its entry.
-///
-/// Derefs to the storage, which is what almost all code looks at.
-#[derive(Debug, Default)]
-pub(crate) struct EntityState {
-    /// Starts a new generation with every delete of the entry. Observers end
-    /// when it changes, even if they wake only after the entry was filled
-    /// again. Only ever grows, also across recycling.
-    pub generation: u64,
-    pub storage: BaoFileStorage,
-}
-
-impl Deref for EntityState {
-    type Target = BaoFileStorage;
-
-    fn deref(&self) -> &BaoFileStorage {
-        &self.storage
-    }
-}
-
-impl DerefMut for EntityState {
-    fn deref_mut(&mut self) -> &mut BaoFileStorage {
-        &mut self.storage
-    }
-}
-
-/// A cheaply cloneable handle to a bao file.
-///
-/// You must call [Self::persist] to write the bitfield to disk, if you want to persist
-/// the file handle, otherwise the bitfield will not be written to disk and will have
-/// to be reconstructed on next use.
-#[derive(Debug, Clone, Default, derive_more::Deref)]
-pub(crate) struct BaoFileHandle(pub(super) watch::Sender<EntityState>);
-
-impl BaoFileHandle {
-    /// Replaces the storage, keeping the generation.
-    pub(super) fn set_storage(&self, storage: BaoFileStorage) {
-        self.send_modify(|state| state.storage = storage);
     }
 }
 
@@ -693,7 +605,10 @@ impl ReadAt for OutboardReader {
 }
 
 impl Settled {
-    pub async fn open(state: Option<EntryState<Bytes>>, ctx: &HashContext<'_>) -> io::Result<Self> {
+    pub(super) async fn open(
+        state: Option<EntryState<Bytes>>,
+        ctx: &HashContext<'_>,
+    ) -> io::Result<Self> {
         let hash = &ctx.id;
         Ok(match state {
             Some(EntryState::Complete {

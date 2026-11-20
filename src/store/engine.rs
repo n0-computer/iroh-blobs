@@ -181,12 +181,14 @@ mod import;
 pub(crate) mod mem_backend;
 pub(crate) mod metadata;
 mod options;
+mod state;
 
 pub(crate) use actor::{start, TaskContext};
 pub(crate) use entity::{Backend, EntityApi, EntityGlobal};
 pub(crate) use entity_manager::Reset;
 pub(crate) use import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource};
 pub(crate) use options::{temp_name, StoreOptions};
+pub(crate) use state::{CellState, Phase, StateCell};
 
 /// The engine's internals, for tests that build a store actor by hand.
 #[cfg(test)]

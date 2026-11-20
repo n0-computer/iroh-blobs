@@ -97,28 +97,12 @@ const MAX_EXTERNAL_PATHS: usize = 8;
 /// Loading may create files, and deleting resets the state, so both must be
 /// done before a task may look at the state or touch files.
 async fn wait_settled(ctx: &HashContext<'_>) {
-    // Checking and subscribing is one synchronous step, so no change can slip
-    // in between: tasks of an entity only interleave at awaits.
-    while matches!(
-        &ctx.state.borrow().storage,
-        BaoFileStorage::Loading | BaoFileStorage::Deleting
-    ) {
-        ctx.state.0.subscribe().changed().await.ok();
-    }
+    ctx.state.wait_settled().await
 }
 
 /// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
 async fn wait_writable(ctx: &HashContext<'_>) {
-    loop {
-        let mut changes = ctx.state.0.subscribe();
-        if !matches!(
-            &ctx.state.borrow().storage,
-            BaoFileStorage::Loading | BaoFileStorage::Deleting | BaoFileStorage::ReadOnly(_)
-        ) {
-            return;
-        }
-        changes.changed().await.ok();
-    }
+    ctx.state.wait_writable().await
 }
 
 /// Freezes the entry until the sender of `release` is dropped, then restores it.
