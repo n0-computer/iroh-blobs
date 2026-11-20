@@ -8,10 +8,7 @@
 //! `Initial`, `Loading` and `Deleting` are transient: tasks that load or change
 //! the entry wait while it is in one of them. Otherwise the entry is settled,
 //! and either writable or frozen for a gc session.
-use std::{
-    fmt,
-    ops::{Deref, DerefMut},
-};
+use std::fmt;
 
 use irpc::channel::mpsc;
 use n0_error::StdResultExt;
@@ -62,16 +59,14 @@ impl<S: fmt::Debug> fmt::Debug for Phase<S> {
     }
 }
 
-/// An entry's phase, and the generation of the entry.
-///
-/// Derefs to the phase, which is what almost all code looks at.
+/// An entry's phase, the generation of the entry, and the writes in flight.
 #[derive(Debug)]
-pub(crate) struct CellState<S> {
+struct CellState<S> {
     /// Starts a new generation with every delete of the entry. Observers end
     /// when it changes, even if they wake only after the entry was filled
     /// again. Only ever grows, also across recycling.
-    pub generation: u64,
-    pub storage: Phase<S>,
+    generation: u64,
+    storage: Phase<S>,
     /// Writes in flight, each holding a [`WriteGuard`].
     writers: usize,
     /// A freeze or delete waits for the writes in flight to end. New writes
@@ -99,9 +94,18 @@ fn writable<S>(phase: &Phase<S>) -> bool {
 #[must_use = "the write is only protected while the guard is held"]
 pub(crate) struct WriteGuard<'a, S>(&'a StateCell<S>);
 
+impl<S> WriteGuard<'_, S> {
+    /// Changes the phase, waking observers and waiting tasks if `f` returns true.
+    ///
+    /// Must not peek at or change the cell from inside `f`: that deadlocks.
+    pub(crate) fn modify(&self, f: impl FnOnce(&mut Phase<S>) -> bool) -> bool {
+        self.0 .0.send_if_modified(|state| f(&mut state.storage))
+    }
+}
+
 impl<S> Drop for WriteGuard<'_, S> {
     fn drop(&mut self) {
-        self.0.send_if_modified(|state| {
+        self.0 .0.send_if_modified(|state| {
             state.writers -= 1;
             // Wake only a waiting freeze or delete, not every observer.
             state.writers == 0 && state.exclusive_waiting
@@ -109,23 +113,13 @@ impl<S> Drop for WriteGuard<'_, S> {
     }
 }
 
-impl<S> Deref for CellState<S> {
-    type Target = Phase<S>;
-
-    fn deref(&self) -> &Phase<S> {
-        &self.storage
-    }
-}
-
-impl<S> DerefMut for CellState<S> {
-    fn deref_mut(&mut self) -> &mut Phase<S> {
-        &mut self.storage
-    }
-}
-
 /// A cheaply cloneable handle to an entry's state.
-#[derive(Debug, derive_more::Deref)]
-pub(crate) struct StateCell<S>(pub(crate) watch::Sender<CellState<S>>);
+///
+/// Readers [`peek`](Self::peek), writers change the phase through the
+/// [`WriteGuard`] from [`wait_writable`](Self::wait_writable). The generation
+/// and the write bookkeeping are the cell's own.
+#[derive(Debug)]
+pub(crate) struct StateCell<S>(watch::Sender<CellState<S>>);
 
 impl<S> Clone for StateCell<S> {
     fn clone(&self) -> Self {
@@ -140,9 +134,29 @@ impl<S> Default for StateCell<S> {
 }
 
 impl<S> StateCell<S> {
+    /// Looks at the phase, for synchronous readers.
+    ///
+    /// Must not peek at or change the cell from inside `f`: that deadlocks.
+    pub(crate) fn peek<R>(&self, f: impl FnOnce(&Phase<S>) -> R) -> R {
+        f(&self.0.borrow().storage)
+    }
+
+    /// Changes the phase without a write guard, without waking anyone.
+    ///
+    /// Only for the entity's last act, like persisting at shutdown: it
+    /// ignores a freeze that a task dropped at shutdown left in place.
+    pub(crate) fn retire<R>(&self, f: impl FnOnce(&mut Phase<S>) -> R) -> R {
+        let mut res = None;
+        self.0.send_if_modified(|state| {
+            res = Some(f(&mut state.storage));
+            false
+        });
+        res.expect("ran")
+    }
+
     /// Replaces the phase, keeping the generation.
-    pub(crate) fn set_storage(&self, storage: Phase<S>) {
-        self.send_modify(|state| state.storage = storage);
+    fn set_storage(&self, storage: Phase<S>) {
+        self.0.send_modify(|state| state.storage = storage);
     }
 
     /// Makes the state `Initial` again for a recycled entity, keeping the generation.
@@ -150,7 +164,7 @@ impl<S> StateCell<S> {
     /// The entity is idle, so no write is in flight. A freeze or delete that
     /// was dropped while waiting leaves its flag behind, which is cleared here.
     pub(crate) fn reset(&self) {
-        self.send_modify(|state| {
+        self.0.send_modify(|state| {
             debug_assert_eq!(state.writers, 0, "reset with writes in flight");
             state.storage = Phase::Initial;
             state.exclusive_waiting = false;
@@ -165,9 +179,9 @@ impl<S> StateCell<S> {
     async fn exclusive<R>(&self, f: impl FnOnce(&mut CellState<S>) -> (bool, R)) -> R {
         let mut f = Some(f);
         loop {
-            let mut changes = self.subscribe();
+            let mut changes = self.0.subscribe();
             let mut out = None;
-            self.send_if_modified(|state| {
+            self.0.send_if_modified(|state| {
                 if !writable(&state.storage) {
                     return false;
                 }
@@ -200,7 +214,7 @@ impl<S> StateCell<S> {
     {
         self.wait_settled().await;
         let mut claimed = false;
-        self.send_if_modified(|state| {
+        self.0.send_if_modified(|state| {
             if matches!(state.storage, Phase::Initial) {
                 state.storage = Phase::Loading;
                 claimed = true;
@@ -256,7 +270,7 @@ impl<S> StateCell<S> {
     pub(crate) async fn wait_settled(&self) {
         // Checking and subscribing is one synchronous step, so no change can
         // slip in between: tasks of an entity only interleave at awaits.
-        while matches!(&self.borrow().storage, Phase::Loading | Phase::Deleting) {
+        while matches!(&self.0.borrow().storage, Phase::Loading | Phase::Deleting) {
             self.0.subscribe().changed().await.ok();
         }
     }
@@ -269,7 +283,7 @@ impl<S> StateCell<S> {
         loop {
             let mut changes = self.0.subscribe();
             let mut acquired = false;
-            self.send_if_modified(|state| {
+            self.0.send_if_modified(|state| {
                 if writable(&state.storage) && !state.exclusive_waiting {
                     state.writers += 1;
                     acquired = true;
@@ -326,7 +340,7 @@ impl<S> StateCell<S> {
 
     /// Makes a frozen entry writable again.
     fn unfreeze(&self) {
-        self.send_if_modified(|state| {
+        self.0.send_if_modified(|state| {
             match std::mem::replace(&mut state.storage, Phase::Initial) {
                 Phase::ReadOnly(settled) => {
                     state.storage = Phase::ReadWrite(settled);
@@ -342,7 +356,7 @@ impl<S> StateCell<S> {
 
     /// An observer of the entry's bitfield, for the current generation.
     pub(crate) fn observer(&self) -> Observer<S> {
-        let receiver = self.subscribe();
+        let receiver = self.0.subscribe();
         let generation = receiver.borrow().generation;
         Observer {
             receiver,

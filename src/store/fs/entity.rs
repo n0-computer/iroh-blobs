@@ -82,7 +82,7 @@ use crate::api::{
 
 mod bao_file;
 mod file_deletes;
-use bao_file::{BaoFileHandle, BaoFileStorage, DataReader, OutboardReader, Settled};
+use bao_file::{complete, BaoFileHandle, BaoFileStorage, DataReader, OutboardReader, Settled};
 
 use super::FsBackend;
 use file_deletes::delete_files;
@@ -165,12 +165,13 @@ async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
 async fn delete_unreferenced(ctx: &HashContext<'_>, parts: UnreferencedParts) {
     ctx.load().await;
     let _write = wait_writable(ctx).await;
-    let state = ctx.state.borrow();
-    let parts: BaoFileParts = parts
-        .0
-        .into_iter()
-        .filter(|part| !state.references(*part))
-        .collect();
+    let parts: BaoFileParts = ctx.state.peek(|state| {
+        parts
+            .0
+            .into_iter()
+            .filter(|part| !state.references(*part))
+            .collect()
+    });
     delete_files(&ctx.config.path, &ctx.id, &parts);
 }
 
@@ -287,14 +288,14 @@ impl BaoAccess for HashContext<'_> {
         // delete in progress.
         let write = wait_writable(self).await;
         let mut res = Ok(None);
-        self.state.send_if_modified(|state| {
+        write.modify(|state| {
             // Imports load the entity first, and wait_writable leaves it
             // loaded and writable.
             let settled = match state.take() {
                 BaoFileStorage::ReadWrite(settled) => settled,
                 other => {
                     debug_assert!(false, "write to an entry that is not writable");
-                    state.storage = other;
+                    *state = other;
                     return false;
                 }
             };
@@ -311,7 +312,7 @@ impl BaoAccess for HashContext<'_> {
                 }
             };
             res = Ok(update);
-            state.storage = BaoFileStorage::ReadWrite(settled);
+            *state = BaoFileStorage::ReadWrite(settled);
             true
         });
         drop(write);
@@ -341,24 +342,22 @@ impl BaoAccess for HashContext<'_> {
 
     /// The most precise known total size of the data file.
     fn current_size(&self) -> io::Result<u64> {
-        let state = self.state.borrow();
-        match state.try_settled()? {
+        self.state.peek(|state| match state.try_settled()? {
             Settled::Complete(mem) => Ok(mem.size()),
             Settled::Partial(file) => file.current_size(),
             Settled::Invalid => Err(io::Error::other("invalid storage")),
             Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
+        })
     }
 
     /// The most precise known total size of the data file.
     fn bitfield(&self) -> io::Result<Bitfield> {
-        let state = self.state.borrow();
-        match state.try_settled()? {
+        self.state.peek(|state| match state.try_settled()? {
             Settled::Complete(mem) => Ok(mem.bitfield()),
             Settled::Partial(file) => Ok(file.bitfield().clone()),
             Settled::Invalid => Err(io::Error::other("invalid storage")),
             Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
+        })
     }
 }
 
@@ -513,13 +512,13 @@ impl EntityOps for HashContext<'_> {
 
     #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
     async fn persist(&self) {
-        self.state.send_if_modified(|guard| {
+        self.state.retire(|state| {
             let hash = &self.id;
             // A freeze task dropped at shutdown leaves its freeze in place.
             let (BaoFileStorage::ReadWrite(Settled::Partial(fs))
-            | BaoFileStorage::ReadOnly(Settled::Partial(fs))) = guard.take()
+            | BaoFileStorage::ReadOnly(Settled::Partial(fs))) = state.take()
             else {
-                return false;
+                return;
             };
             let path = self.config.path.bitfield_path(hash);
             trace!("writing bitfield for hash {} to {}", hash, path.display());
@@ -531,7 +530,6 @@ impl EntityOps for HashContext<'_> {
                     cause
                 );
             }
-            false
         });
     }
 }
@@ -586,7 +584,6 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
     }
     ctx.load().await;
     let write = wait_writable(ctx).await;
-    let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
     //   the entry exists in the db, but we don't have a handle
@@ -667,7 +664,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
             MemOrFile::File(file)
         }
     };
-    handle.complete(data, outboard);
+    complete(&write, data, outboard);
     drop(write);
     let state = EntryState::Complete {
         data_location,
@@ -784,10 +781,9 @@ async fn export_path_impl(
                 // meanwhile. Then it stays deleted, and this was just a copy.
                 // No await between the check and sending the set.
                 let write = wait_writable(ctx).await;
-                let complete = matches!(
-                    &ctx.state.borrow().storage,
-                    BaoFileStorage::ReadWrite(Settled::Complete(_))
-                );
+                let complete = ctx
+                    .state
+                    .peek(|state| matches!(state, BaoFileStorage::ReadWrite(Settled::Complete(_))));
                 drop(write);
                 if complete {
                     // After the commit, the owned data file comes back as an

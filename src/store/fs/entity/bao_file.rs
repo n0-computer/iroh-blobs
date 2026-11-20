@@ -26,7 +26,7 @@ use crate::{
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::BaoFilePart,
     },
-    store::engine::{Phase, StateCell},
+    store::engine::{Phase, StateCell, WriteGuard},
     store::{
         engine::{bao::raw_outboard_size, StoreOptions},
         fs::entity::{EntityOps, HashContext},
@@ -574,13 +574,12 @@ pub struct DataReader(pub(super) BaoFileHandle);
 
 impl ReadBytesAt for DataReader {
     fn read_bytes_at(&self, offset: u64, size: usize) -> std::io::Result<Bytes> {
-        let guard = self.0.borrow();
-        match guard.try_settled()? {
+        self.0.peek(|state| match state.try_settled()? {
             Settled::Partial(x) => x.data.read_bytes_at(offset, size),
             Settled::Complete(x) => x.data.read_bytes_at(offset, size),
             Settled::Invalid => Err(io::Error::other("invalid storage")),
             Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
+        })
     }
 }
 
@@ -590,13 +589,12 @@ pub struct OutboardReader(pub(super) BaoFileHandle);
 
 impl ReadAt for OutboardReader {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let guard = self.0.borrow();
-        match guard.try_settled()? {
+        self.0.peek(|state| match state.try_settled()? {
             Settled::Partial(x) => x.outboard.read_at(offset, buf),
             Settled::Complete(x) => x.outboard.read_at(offset, buf),
             Settled::Invalid => Err(io::Error::other("invalid storage")),
             Settled::NonExisting => Err(io::ErrorKind::NotFound.into()),
-        }
+        })
     }
 }
 
@@ -664,32 +662,26 @@ impl Settled {
     }
 }
 
-impl BaoFileHandle {
-    /// Complete the handle
-    pub fn complete(
-        &self,
-        data: MemOrFile<Bytes, FixedSize<File>>,
-        outboard: MemOrFile<Bytes, File>,
-    ) {
-        self.send_if_modified(|guard| {
-            // A finished import does not depend on the old content, so it
-            // completes any writable state, an invalid one included.
-            let needs_complete = match &guard.storage {
-                BaoFileStorage::ReadWrite(Settled::Complete(_)) => false,
-                BaoFileStorage::ReadWrite(_) => true,
-                _ => false,
-            };
-            if needs_complete {
-                guard.storage = BaoFileStorage::ReadWrite(Settled::Complete(CompleteStorage {
-                    data,
-                    outboard,
-                }));
-                true
-            } else {
-                true
-            }
-        });
-    }
+/// Completes the entry, for a finished import.
+pub(super) fn complete(
+    write: &WriteGuard<'_, Settled>,
+    data: MemOrFile<Bytes, FixedSize<File>>,
+    outboard: MemOrFile<Bytes, File>,
+) {
+    write.modify(|state| {
+        // A finished import does not depend on the old content, so it
+        // completes any writable state, an invalid one included.
+        let needs_complete = match state {
+            BaoFileStorage::ReadWrite(Settled::Complete(_)) => false,
+            BaoFileStorage::ReadWrite(_) => true,
+            _ => false,
+        };
+        if needs_complete {
+            *state =
+                BaoFileStorage::ReadWrite(Settled::Complete(CompleteStorage { data, outboard }));
+        }
+        true
+    });
 }
 
 impl PartialMemStorage {
