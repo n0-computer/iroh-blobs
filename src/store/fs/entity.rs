@@ -63,7 +63,7 @@ use crate::store::host::{
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
     reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
-    ImportSource, Phase, Reset, StateCell, StoreOptions, TaskContext, WriteGuard,
+    ImportSource, Phase, StateCell, StoreOptions, TaskContext, WriteGuard,
 };
 use crate::{
     api::proto::{
@@ -203,7 +203,9 @@ impl FsEntity {
     }
 }
 
-impl Reset<Hash> for FsEntity {
+impl EntityApi for FsEntity {
+    type Backend = FsBackend;
+
     fn new(id: &Hash) -> Self {
         Self {
             id: *id,
@@ -216,10 +218,6 @@ impl Reset<Hash> for FsEntity {
         // Keeps the generation.
         self.handle.reset();
     }
-}
-
-impl EntityApi for FsEntity {
-    type Backend = FsBackend;
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, global: &EntityGlobal<FsBackend>, cmd: ImportBaoMsg) {

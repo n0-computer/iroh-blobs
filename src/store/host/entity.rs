@@ -2,12 +2,12 @@
 //!
 //! A backend names the types that belong together and starts the parts the
 //! store does not run itself. Today that is the entity type and the metadata
-//! store; import staging and the location type are meant to follow, without
-//! changing how a store is built from it.
+//! store; import staging is meant to follow, without changing how a store is
+//! built from it.
 //!
 //! An entity is the state of one hash. The entity manager creates it with
-//! [`Reset::new`] when a request for the hash arrives, and recycles it with
-//! [`Reset::reset`] for another hash once it is idle, keeping its allocations.
+//! [`EntityApi::new`] when a request for the hash arrives, and recycles it with
+//! [`EntityApi::reset`] for another hash once it is idle, keeping its allocations.
 //! Neither may do IO: loading is lazy, in the first request that needs it.
 //!
 //! Each request runs as a task on the entity's actor. Tasks of one entity
@@ -44,8 +44,8 @@ use crate::{
 pub(crate) trait Backend: fmt::Debug + Send + Sync + 'static {
     /// The state of one hash, which handles its requests.
     ///
-    /// The entity manager creates it with [`Reset::new`], so this type is the
-    /// entity factory.
+    /// The entity manager creates it with [`EntityApi::new`], so this type is
+    /// the entity factory.
     type Entity: EntityApi<Backend = Self>;
 
     /// Starts the metadata store with its channels, on the store's runtime.
@@ -64,11 +64,17 @@ pub(crate) struct EntityGlobal<B> {
 }
 
 /// The state of one hash, which handles its requests.
-pub(crate) trait EntityApi:
-    Reset<Hash> + fmt::Debug + Clone + Send + Sync + 'static
-{
+pub(crate) trait EntityApi: fmt::Debug + Clone + Send + Sync + 'static {
     /// The backend this entity belongs to.
     type Backend: Backend<Entity = Self>;
+
+    /// A new entity for `hash`. Must be cheap and do no IO.
+    fn new(hash: &Hash) -> Self;
+
+    /// Rebinds a recycled entity to `hash`.
+    ///
+    /// Drops what it held for its previous hash, but keeps its allocations.
+    fn reset(&mut self, hash: &Hash);
 
     /// Import from a stream of n0 bao encoded data.
     fn import_bao(
@@ -165,3 +171,14 @@ impl<B: Backend> entity_manager::Params for EmParams<B> {
 
 /// An entity as the manager hands it to a task: its hash, the shared state, and the entity.
 pub(crate) type EntityCtx<B> = ActiveEntityState<EmParams<B>>;
+
+/// The entity manager is generic over its states; entities are the store's.
+impl<E: EntityApi> Reset<Hash> for E {
+    fn new(id: &Hash) -> Self {
+        EntityApi::new(id)
+    }
+
+    fn reset(&mut self, id: &Hash) {
+        EntityApi::reset(self, id)
+    }
+}

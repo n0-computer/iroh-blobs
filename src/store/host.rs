@@ -7,7 +7,7 @@
 //! entities and the metadata store. A backend owns how entries are stored.
 //!
 //! What an implementation of a backend needs is re-exported here: the traits
-//! ([`Backend`], [`EntityApi`], [`Reset`]), what their methods get
+//! ([`Backend`], [`EntityApi`]), what their methods get
 //! ([`EntityGlobal`], [`TaskContext`], the import types), the metadata
 //! protocol ([`metadata`]), and optional helpers ([`bao`]). A store is started
 //! with [`start`] and then driven through the irpc client it returns.
@@ -185,7 +185,6 @@ mod state;
 
 pub(crate) use actor::{start, TaskContext};
 pub(crate) use entity::{Backend, EntityApi, EntityGlobal};
-pub(crate) use entity_manager::Reset;
 pub(crate) use import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource};
 pub(crate) use options::{temp_name, StoreOptions};
 pub(crate) use state::{Phase, StateCell, WriteGuard};

@@ -47,8 +47,7 @@ use crate::{
             },
             Failure, MetaChannels, MetaTask, Request,
         },
-        Backend, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg, ImportSource, Reset,
-        StoreOptions,
+        Backend, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg, ImportSource, StoreOptions,
     },
     store::util::{MemOrFile, PartialMemStorage},
     util::temp_tag::TempTag,
@@ -286,24 +285,6 @@ pub(crate) struct MemEntity {
     state: watch::Sender<MemState>,
 }
 
-impl Reset<Hash> for MemEntity {
-    fn new(id: &Hash) -> Self {
-        Self {
-            id: *id,
-            state: watch::Sender::new(MemState::default()),
-        }
-    }
-
-    fn reset(&mut self, id: &Hash) {
-        self.id = *id;
-        // Keeps the generation, like the fs entity.
-        self.state.send_modify(|s| {
-            s.frozen = false;
-            s.deleting = false;
-        });
-    }
-}
-
 impl MemEntity {
     /// Waits until writes may go on: not frozen, not deleting.
     async fn wait_writable(&self) {
@@ -512,6 +493,22 @@ fn read_part(part: MemOrFile<Bytes, impl AsRef<Path>>) -> io::Result<Bytes> {
 
 impl EntityApi for MemEntity {
     type Backend = MemBackend;
+
+    fn new(id: &Hash) -> Self {
+        Self {
+            id: *id,
+            state: watch::Sender::new(MemState::default()),
+        }
+    }
+
+    fn reset(&mut self, id: &Hash) {
+        self.id = *id;
+        // Keeps the generation, like the fs entity.
+        self.state.send_modify(|s| {
+            s.frozen = false;
+            s.deleting = false;
+        });
+    }
 
     async fn import_bao(&self, global: &EntityGlobal<MemBackend>, cmd: ImportBaoMsg) {
         let ImportBaoMsg {
