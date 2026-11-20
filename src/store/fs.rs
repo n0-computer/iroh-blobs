@@ -1833,6 +1833,15 @@ fn sync_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Syncs a file and the directory that holds it, so both survive an OS crash.
+fn sync_file_and_dir(path: &Path) -> io::Result<()> {
+    sync_file(path)?;
+    match path.parent() {
+        Some(dir) => sync_dir(dir),
+        None => Ok(()),
+    }
+}
+
 async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::Result<()> {
     let ImportEntry {
         source,
@@ -1884,11 +1893,14 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
             DataLocation::Owned(size)
         }
     };
+    // A complete external entry relies on its outboard, and recovery after an
+    // OS crash does not check it. So its outboard file is synced in every mode.
+    let external = matches!(data_location, DataLocation::External(..));
     let outboard_location = match outboard {
         MemOrFile::Mem(bytes) if bytes.is_empty() => OutboardLocation::NotNeeded,
         MemOrFile::Mem(bytes) => OutboardLocation::Inline(bytes),
         MemOrFile::File(path) => {
-            if sync {
+            if sync || external {
                 sync_file(path.as_ref())?;
             }
             // the same caveat as above applies here
@@ -1908,7 +1920,8 @@ async fn finish_import_impl(ctx: &HashContext, import_data: ImportEntry) -> io::
     };
     let moved = matches!(data_location, DataLocation::Owned(_))
         || matches!(outboard_location, OutboardLocation::Owned);
-    if sync && moved {
+    let external_outboard = external && matches!(outboard_location, OutboardLocation::Owned);
+    if (sync && moved) || external_outboard {
         // A rename survives a crash only once its directory is synced.
         sync_dir(&options.path.data_path)?;
     }
@@ -2125,6 +2138,8 @@ async fn export_path_impl(
                         source_path.display(),
                         target.display()
                     );
+                    // The entry will rely on this copy, see below.
+                    sync_file_and_dir(&target)?;
                     external.push(target);
                     external.sort();
                     external.dedup();
@@ -2145,8 +2160,19 @@ async fn export_path_impl(
                             }
                         }
                     }
+                    // The entry will rely on the moved file, see below. Our
+                    // data files are not synced in every mode, and the rename
+                    // changed our data directory too.
+                    sync_file_and_dir(&target)?;
+                    sync_dir(&ctx.options().path.data_path)?;
                     external.push(target);
                 };
+                // Recovery after an OS crash leaves complete external entries
+                // alone, so everything this one relies on must be on disk
+                // before it is recorded, in every mode.
+                if let OutboardLocation::Owned = outboard_location {
+                    sync_file_and_dir(&ctx.options().path.outboard_path(&cmd.hash))?;
+                }
                 // The copy took a while, so the entry may have been deleted
                 // meanwhile. Then it stays deleted, and this was just a copy.
                 // No await between the check and sending the set.
