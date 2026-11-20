@@ -72,6 +72,11 @@ pub(crate) struct CellState<S> {
     /// again. Only ever grows, also across recycling.
     pub generation: u64,
     pub storage: Phase<S>,
+    /// Writes in flight, each holding a [`WriteGuard`].
+    writers: usize,
+    /// A freeze or delete waits for the writes in flight to end. New writes
+    /// wait for it, and the last write out wakes it.
+    exclusive_waiting: bool,
 }
 
 impl<S> Default for CellState<S> {
@@ -79,7 +84,28 @@ impl<S> Default for CellState<S> {
         Self {
             generation: 0,
             storage: Phase::Initial,
+            writers: 0,
+            exclusive_waiting: false,
         }
+    }
+}
+
+/// Whether the phase allows changes: settled and not frozen, or not loaded yet.
+fn writable<S>(phase: &Phase<S>) -> bool {
+    !matches!(phase, Phase::Loading | Phase::Deleting | Phase::ReadOnly(_))
+}
+
+/// A write in flight. A freeze or delete waits until all are dropped.
+#[must_use = "the write is only protected while the guard is held"]
+pub(crate) struct WriteGuard<'a, S>(&'a StateCell<S>);
+
+impl<S> Drop for WriteGuard<'_, S> {
+    fn drop(&mut self) {
+        self.0.send_if_modified(|state| {
+            state.writers -= 1;
+            // Wake only a waiting freeze or delete, not every observer.
+            state.writers == 0 && state.exclusive_waiting
+        });
     }
 }
 
@@ -119,6 +145,50 @@ impl<S> StateCell<S> {
         self.send_modify(|state| state.storage = storage);
     }
 
+    /// Makes the state `Initial` again for a recycled entity, keeping the generation.
+    ///
+    /// The entity is idle, so no write is in flight. A freeze or delete that
+    /// was dropped while waiting leaves its flag behind, which is cleared here.
+    pub(crate) fn reset(&self) {
+        self.send_modify(|state| {
+            debug_assert_eq!(state.writers, 0, "reset with writes in flight");
+            state.storage = Phase::Initial;
+            state.exclusive_waiting = false;
+        });
+    }
+
+    /// Runs `f` once the entry may be changed and no write is in flight.
+    ///
+    /// For changes that exclude writes: a freeze or a delete. While it waits
+    /// for writes in flight, new writes wait for it, so it cannot starve. `f`
+    /// returns whether to wake waiters, and its result.
+    async fn exclusive<R>(&self, f: impl FnOnce(&mut CellState<S>) -> (bool, R)) -> R {
+        let mut f = Some(f);
+        loop {
+            let mut changes = self.subscribe();
+            let mut out = None;
+            self.send_if_modified(|state| {
+                if !writable(&state.storage) {
+                    return false;
+                }
+                if state.writers > 0 {
+                    state.exclusive_waiting = true;
+                    return false;
+                }
+                // Writes waiting for the flag must wake even if `f` does not change anything.
+                let was_waiting = std::mem::take(&mut state.exclusive_waiting);
+                let f = f.take().expect("runs once");
+                let (wake, res) = f(state);
+                out = Some(res);
+                wake || was_waiting
+            });
+            if let Some(res) = out {
+                return res;
+            }
+            changes.changed().await.ok();
+        }
+    }
+
     /// Loads the entry, unless it is loaded already.
     ///
     /// The first task to find it `Initial` opens it, and the others wait for
@@ -155,16 +225,19 @@ impl<S> StateCell<S> {
     where
         F: std::future::Future<Output = (S, std::io::Result<T>)>,
     {
-        self.wait_writable().await;
-        let mut old = None;
-        self.send_modify(|state| {
-            state.generation += 1;
-            match std::mem::replace(&mut state.storage, Phase::Deleting) {
-                Phase::ReadWrite(settled) => old = Some(settled),
-                // Not loaded: put it back, the generation may grow anyway.
-                other => state.storage = other,
-            }
-        });
+        let old = self
+            .exclusive(|state| {
+                state.generation += 1;
+                match std::mem::replace(&mut state.storage, Phase::Deleting) {
+                    Phase::ReadWrite(settled) => (true, Some(settled)),
+                    // Not loaded: put it back, the generation may grow anyway.
+                    other => {
+                        state.storage = other;
+                        (true, None)
+                    }
+                }
+            })
+            .await;
         let Some(old) = old else {
             debug_assert!(false, "delete of an entry that is not loaded");
             return Err(std::io::Error::other(
@@ -189,14 +262,22 @@ impl<S> StateCell<S> {
     }
 
     /// Waits until the entry may be changed: settled, and not frozen.
-    pub(crate) async fn wait_writable(&self) {
+    ///
+    /// A freeze or delete waits until the returned guard is dropped, so a
+    /// write that awaits IO holds it until its change is in the state.
+    pub(crate) async fn wait_writable(&self) -> WriteGuard<'_, S> {
         loop {
             let mut changes = self.0.subscribe();
-            if !matches!(
-                &self.borrow().storage,
-                Phase::Loading | Phase::Deleting | Phase::ReadOnly(_)
-            ) {
-                return;
+            let mut acquired = false;
+            self.send_if_modified(|state| {
+                if writable(&state.storage) && !state.exclusive_waiting {
+                    state.writers += 1;
+                    acquired = true;
+                }
+                false
+            });
+            if acquired {
+                return WriteGuard(self);
             }
             changes.changed().await.ok();
         }
@@ -216,20 +297,21 @@ impl<S> StateCell<S> {
         ack: tokio::sync::oneshot::Sender<()>,
         mut release: watch::Receiver<()>,
     ) {
-        self.wait_writable().await;
         // Settled, and not in a delete or another freeze, see above.
-        let frozen = self.send_if_modified(|state| {
-            match std::mem::replace(&mut state.storage, Phase::Initial) {
-                Phase::ReadWrite(settled) => {
-                    state.storage = Phase::ReadOnly(settled);
-                    true
-                }
-                other => {
-                    state.storage = other;
-                    false
-                }
-            }
-        });
+        let frozen = self
+            .exclusive(
+                |state| match std::mem::replace(&mut state.storage, Phase::Initial) {
+                    Phase::ReadWrite(settled) => {
+                        state.storage = Phase::ReadOnly(settled);
+                        (true, true)
+                    }
+                    other => {
+                        state.storage = other;
+                        (false, false)
+                    }
+                },
+            )
+            .await;
         if !frozen {
             debug_assert!(false, "freeze of an entry that is not writable");
             // Without an ack, the gc session fails instead of trusting the freeze.

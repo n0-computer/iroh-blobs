@@ -63,7 +63,7 @@ use crate::store::engine::{
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
     reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
-    ImportSource, Reset, StoreOptions, TaskContext,
+    ImportSource, Reset, StoreOptions, TaskContext, WriteGuard,
 };
 use crate::{
     api::proto::{
@@ -93,7 +93,7 @@ const MAX_EXTERNAL_PATHS: usize = 8;
 /// Waits until the entity is neither loading nor deleting.
 ///
 /// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
-async fn wait_writable(ctx: &HashContext<'_>) {
+async fn wait_writable<'a>(ctx: &HashContext<'a>) -> WriteGuard<'a, Settled> {
     ctx.state.wait_writable().await
 }
 
@@ -164,7 +164,7 @@ async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
 /// entry. An entity woken just for this loads first.
 async fn delete_unreferenced(ctx: &HashContext<'_>, parts: UnreferencedParts) {
     ctx.load().await;
-    wait_writable(ctx).await;
+    let _write = wait_writable(ctx).await;
     let state = ctx.state.borrow();
     let parts: BaoFileParts = parts
         .0
@@ -213,7 +213,7 @@ impl Reset<Hash> for FsEntity {
     fn reset(&mut self, id: &Hash) {
         self.id = *id;
         // Keeps the generation.
-        self.handle.set_storage(BaoFileStorage::Initial);
+        self.handle.reset();
     }
 }
 
@@ -285,7 +285,7 @@ impl BaoAccess for HashContext<'_> {
         trace!("write_batch bitfield={:?} batch={}", bitfield, batch.len());
         // No await between this and the closure, so the closure never sees a
         // delete in progress.
-        wait_writable(self).await;
+        let write = wait_writable(self).await;
         let mut res = Ok(None);
         self.state.send_if_modified(|state| {
             // Imports load the entity first, and wait_writable leaves it
@@ -314,6 +314,7 @@ impl BaoAccess for HashContext<'_> {
             state.storage = BaoFileStorage::ReadWrite(settled);
             true
         });
+        drop(write);
         if let Some(update) = res? {
             self.meta().update(update).await?;
         }
@@ -584,7 +585,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
         }
     }
     ctx.load().await;
-    wait_writable(ctx).await;
+    let write = wait_writable(ctx).await;
     let handle = &ctx.state;
     // if I do have an existing handle, I have to possibly deal with observers.
     // if I don't have an existing handle, there are 2 cases:
@@ -667,6 +668,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
         }
     };
     handle.complete(data, outboard);
+    drop(write);
     let state = EntryState::Complete {
         data_location,
         outboard_location,
@@ -743,7 +745,9 @@ async fn export_path_impl(
                 );
             }
             ExportMode::TryReference => {
-                wait_writable(ctx).await;
+                // Only waits: the copy below may take long, and must not hold
+                // off a freeze or delete.
+                drop(wait_writable(ctx).await);
                 if !external.is_empty() {
                     // the file already exists externally, so we need to copy it.
                     // if the OS supports reflink, we might as well use that.
@@ -779,11 +783,13 @@ async fn export_path_impl(
                 // The copy took a while, so the entry may have been deleted
                 // meanwhile. Then it stays deleted, and this was just a copy.
                 // No await between the check and sending the set.
-                wait_writable(ctx).await;
-                if matches!(
+                let write = wait_writable(ctx).await;
+                let complete = matches!(
                     &ctx.state.borrow().storage,
                     BaoFileStorage::ReadWrite(Settled::Complete(_))
-                ) {
+                );
+                drop(write);
+                if complete {
                     // After the commit, the owned data file comes back as an
                     // unreferenced part, and this entity deletes it unless its
                     // state still uses it.
