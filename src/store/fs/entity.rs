@@ -82,9 +82,7 @@ use crate::api::{
 
 mod bao_file;
 mod file_deletes;
-use bao_file::{
-    BaoFileHandle, BaoFileStorage, BaoFileStorageSubscriber, DataReader, OutboardReader, Settled,
-};
+use bao_file::{BaoFileHandle, BaoFileStorage, DataReader, OutboardReader, Settled};
 
 use super::FsBackend;
 use file_deletes::delete_files;
@@ -105,54 +103,14 @@ async fn wait_writable(ctx: &HashContext<'_>) {
     ctx.state.wait_writable().await
 }
 
-/// Freezes the entry until the sender of `release` is dropped, then restores it.
-///
-/// The task is the only one that ends its freeze, and a freeze waits in
-/// `wait_writable` for an earlier one to end. So no two freezes overlap, and a
-/// freeze needs no owner id. The task keeps the entity alive while it holds the
-/// freeze. If the task is dropped instead, the entity is shutting down, and
-/// `persist` looks through the freeze.
+/// Loads the entry and freezes it, see [`StateCell::freeze`](crate::store::engine::StateCell::freeze).
 async fn freeze_entry(
     ctx: &HashContext<'_>,
     ack: tokio::sync::oneshot::Sender<()>,
-    mut release: tokio::sync::watch::Receiver<()>,
+    release: tokio::sync::watch::Receiver<()>,
 ) {
     ctx.load().await;
-    wait_writable(ctx).await;
-    // Loaded, and not in a delete or another freeze, see above.
-    let frozen = ctx.state.send_if_modified(|state| match state.take() {
-        BaoFileStorage::ReadWrite(settled) => {
-            state.storage = BaoFileStorage::ReadOnly(settled);
-            true
-        }
-        other => {
-            state.storage = other;
-            false
-        }
-    });
-    if !frozen {
-        debug_assert!(false, "freeze of an entry that is not writable");
-        // Without an ack, the gc session fails instead of trusting the freeze.
-        return;
-    }
-    if ack.send(()).is_ok() {
-        // Nothing is ever sent, so this returns once the sender is dropped.
-        release.changed().await.ok();
-    }
-    unfreeze_entry(ctx);
-}
-
-fn unfreeze_entry(ctx: &HashContext<'_>) {
-    ctx.state.send_if_modified(|state| {
-        if !matches!(state.storage, BaoFileStorage::ReadOnly(_)) {
-            return false;
-        }
-        let BaoFileStorage::ReadOnly(settled) = state.take() else {
-            unreachable!()
-        };
-        state.storage = BaoFileStorage::ReadWrite(settled);
-        true
-    });
+    ctx.state.freeze(ack, release).await
 }
 
 /// Loads the entity's state from the metadata, unless it is loaded already.
@@ -506,8 +464,9 @@ impl EntityOps for HashContext<'_> {
     async fn observe(&self, cmd: ObserveMsg) {
         trace!("{cmd:?}");
         self.load().await;
-        BaoFileStorageSubscriber::new(self.state)
-            .forward(cmd.tx)
+        self.state
+            .observer()
+            .forward(cmd.tx, Settled::observed_bitfield)
             .await
             .ok();
     }

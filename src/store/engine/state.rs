@@ -13,7 +13,11 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use irpc::channel::mpsc;
+use n0_error::StdResultExt;
 use tokio::sync::watch;
+
+use crate::api::blobs::Bitfield;
 
 /// Where an entry is in its lifecycle, around its settled state `S`.
 #[derive(Default)]
@@ -34,14 +38,6 @@ pub(crate) enum Phase<S> {
 }
 
 impl<S> Phase<S> {
-    /// The settled entry, writable or frozen, if the phase is not transient.
-    pub(crate) fn settled(&self) -> Option<&S> {
-        match self {
-            Self::ReadWrite(s) | Self::ReadOnly(s) => Some(s),
-            Self::Initial | Self::Loading | Self::Deleting => None,
-        }
-    }
-
     /// The settled entry for a reader, or the error for a phase in transition.
     pub(crate) fn try_settled(&self) -> std::io::Result<&S> {
         match self {
@@ -146,6 +142,138 @@ impl<S> StateCell<S> {
                 return;
             }
             changes.changed().await.ok();
+        }
+    }
+}
+
+impl<S> StateCell<S> {
+    /// Freezes the settled entry until the sender of `release` is dropped, then restores it.
+    ///
+    /// Call it once the entry is loaded. It waits for writes and for an earlier
+    /// freeze to end, so no two freezes overlap and a freeze needs no owner id.
+    /// The caller keeps the entity alive while it holds the freeze. If the task
+    /// is dropped instead, the entity is shutting down, and persisting has to
+    /// look through the freeze.
+    pub(crate) async fn freeze(
+        &self,
+        ack: tokio::sync::oneshot::Sender<()>,
+        mut release: watch::Receiver<()>,
+    ) {
+        self.wait_writable().await;
+        // Settled, and not in a delete or another freeze, see above.
+        let frozen = self.send_if_modified(|state| {
+            match std::mem::replace(&mut state.storage, Phase::Initial) {
+                Phase::ReadWrite(settled) => {
+                    state.storage = Phase::ReadOnly(settled);
+                    true
+                }
+                other => {
+                    state.storage = other;
+                    false
+                }
+            }
+        });
+        if !frozen {
+            debug_assert!(false, "freeze of an entry that is not writable");
+            // Without an ack, the gc session fails instead of trusting the freeze.
+            return;
+        }
+        if ack.send(()).is_ok() {
+            // Nothing is ever sent, so this returns once the sender is dropped.
+            release.changed().await.ok();
+        }
+        self.unfreeze();
+    }
+
+    /// Makes a frozen entry writable again.
+    fn unfreeze(&self) {
+        self.send_if_modified(|state| {
+            match std::mem::replace(&mut state.storage, Phase::Initial) {
+                Phase::ReadOnly(settled) => {
+                    state.storage = Phase::ReadWrite(settled);
+                    true
+                }
+                other => {
+                    state.storage = other;
+                    false
+                }
+            }
+        });
+    }
+
+    /// An observer of the entry's bitfield, for the current generation.
+    pub(crate) fn observer(&self) -> Observer<S> {
+        let receiver = self.subscribe();
+        let generation = receiver.borrow().generation;
+        Observer {
+            receiver,
+            generation,
+        }
+    }
+}
+
+/// Follows an entry's bitfield until the entry is deleted or its data shrinks.
+pub(crate) struct Observer<S> {
+    receiver: watch::Receiver<CellState<S>>,
+    /// The entry's generation when the subscription started.
+    generation: u64,
+}
+
+impl<S> Observer<S> {
+    /// Forwards the bitfield each time it grows.
+    ///
+    /// `bitfield` gives the bitfield of a settled entry, or `None` if it is
+    /// invalid. The stream ends on `None`, on a new generation, or when the
+    /// ranges shrink, since observers only ever see them grow. Returns an error
+    /// if sending fails or the state's sender is dropped.
+    pub(crate) async fn forward(
+        mut self,
+        mut tx: mpsc::Sender<Bitfield>,
+        bitfield: impl Fn(&S) -> Option<Bitfield>,
+    ) -> n0_error::Result<()> {
+        let Some(value) = self.bitfield(&bitfield) else {
+            return Ok(());
+        };
+        let mut last = value.clone();
+        tx.send(value).await?;
+        loop {
+            self.update_or_closed(&mut tx).await?;
+            let Some(value) = self.bitfield(&bitfield) else {
+                return Ok(());
+            };
+            if !value.ranges.is_superset(&last.ranges) {
+                return Ok(());
+            }
+            // Skip notifications that do not change the observed bitfield.
+            if value == last {
+                continue;
+            }
+            last = value.clone();
+            tx.send(value).await?;
+        }
+    }
+
+    /// The current bitfield, or `None` if the stream must end.
+    fn bitfield(&self, bitfield: &impl Fn(&S) -> Option<Bitfield>) -> Option<Bitfield> {
+        // The generation and the phase come from the same value.
+        let state = self.receiver.borrow();
+        if state.generation != self.generation {
+            return None;
+        }
+        match &state.storage {
+            Phase::ReadWrite(s) | Phase::ReadOnly(s) => bitfield(s),
+            Phase::Deleting => Some(Bitfield::empty()),
+            Phase::Initial | Phase::Loading => None,
+        }
+    }
+
+    async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> n0_error::Result<()> {
+        tokio::select! {
+            _ = tx.closed() => {
+                // the receiver is gone, we are done
+                Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into())
+            }
+            e = self.receiver.changed() => Ok(e.anyerr()?),
         }
     }
 }

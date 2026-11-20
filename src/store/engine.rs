@@ -188,7 +188,7 @@ pub(crate) use entity::{Backend, EntityApi, EntityGlobal};
 pub(crate) use entity_manager::Reset;
 pub(crate) use import::{reflink_or_copy_with_progress, ImportEntry, ImportEntryMsg, ImportSource};
 pub(crate) use options::{temp_name, StoreOptions};
-pub(crate) use state::{CellState, Phase, StateCell};
+pub(crate) use state::{Phase, StateCell};
 
 /// The engine's internals, for tests that build a store actor by hand.
 #[cfg(test)]

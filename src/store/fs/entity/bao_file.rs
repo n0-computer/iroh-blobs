@@ -17,9 +17,6 @@ use bao_tree::{
 };
 use bytes::{Bytes, BytesMut};
 use derive_more::Debug;
-use irpc::channel::mpsc;
-use n0_error::{Result, StdResultExt};
-use tokio::sync::watch;
 use tracing::{debug, info, trace};
 
 use crate::store::fs::options::FsConfig;
@@ -29,7 +26,7 @@ use crate::{
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::BaoFilePart,
     },
-    store::engine::{CellState, Phase, StateCell},
+    store::engine::{Phase, StateCell},
     store::{
         engine::{bao::raw_outboard_size, StoreOptions},
         fs::entity::{EntityOps, HashContext},
@@ -332,8 +329,6 @@ fn read_size(size_file: &File) -> io::Result<u64> {
 
 /// The state of an entity's entry: its lifecycle phase around a settled entry.
 pub(crate) type BaoFileStorage = Phase<Settled>;
-/// The phase and generation of an entity's entry.
-pub(crate) type EntityState = CellState<Settled>;
 /// A cheaply cloneable handle to an entity's entry state.
 pub(crate) type BaoFileHandle = StateCell<Settled>;
 
@@ -432,6 +427,16 @@ impl PartialMemStorage {
 }
 
 impl Settled {
+    /// The bitfield an observer sees, or `None` if the entry is invalid.
+    ///
+    /// Observers end the stream on `None`, since there is no error channel.
+    pub(super) fn observed_bitfield(&self) -> Option<Bitfield> {
+        match self {
+            Settled::Invalid => None,
+            _ => Some(self.bitfield()),
+        }
+    }
+
     pub fn bitfield(&self) -> Bitfield {
         match self {
             Settled::NonExisting => Bitfield::empty(),
@@ -545,15 +550,6 @@ fn write_new_entry(
 }
 
 impl BaoFileStorage {
-    pub fn bitfield(&self) -> Bitfield {
-        match self {
-            Self::Initial => panic!("initial storage should not be used"),
-            Self::Loading => panic!("loading storage should not be used"),
-            Self::Deleting => Bitfield::empty(),
-            Self::ReadWrite(s) | Self::ReadOnly(s) => s.bitfield(),
-        }
-    }
-
     /// Whether this state uses the given file of its entry.
     ///
     /// Says yes when it cannot tell, since a file kept too long only leaks,
@@ -720,101 +716,5 @@ impl PartialMemStorage {
             sizes,
             bitfield: self.bitfield,
         })
-    }
-}
-
-pub struct BaoFileStorageSubscriber {
-    receiver: watch::Receiver<EntityState>,
-    /// The entry's generation when the subscription started.
-    generation: u64,
-}
-
-impl BaoFileStorageSubscriber {
-    pub fn new(handle: &BaoFileHandle) -> Self {
-        let receiver = handle.subscribe();
-        let generation = receiver.borrow().generation;
-        Self {
-            receiver,
-            generation,
-        }
-    }
-
-    /// Forward observed *values* to the given sender
-    ///
-    /// Returns an error if sending fails, or if the last sender is dropped
-    ///
-    /// Ends the stream if the ranges shrink, for example when the entry was
-    /// deleted while observed, since observers only ever see them grow.
-    pub async fn forward(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let Some(value) = self.bitfield() else {
-            return Ok(());
-        };
-        let mut last = value.clone();
-        tx.send(value).await?;
-        loop {
-            self.update_or_closed(&mut tx).await?;
-            let Some(value) = self.bitfield() else {
-                return Ok(());
-            };
-            if !value.ranges.is_superset(&last.ranges) {
-                return Ok(());
-            }
-            // Skip notifications that do not change the observed bitfield.
-            if value == last {
-                continue;
-            }
-            last = value.clone();
-            tx.send(value).await?;
-        }
-    }
-
-    /// Forward observed *deltas* to the given sender
-    ///
-    /// Returns an error if sending fails, or if the last sender is dropped
-    #[allow(dead_code)]
-    pub async fn forward_delta(mut self, mut tx: mpsc::Sender<Bitfield>) -> Result<()> {
-        let Some(value) = self.bitfield() else {
-            return Ok(());
-        };
-        let mut old = value.clone();
-        tx.send(value).await?;
-        loop {
-            self.update_or_closed(&mut tx).await?;
-            let Some(new) = self.bitfield() else {
-                return Ok(());
-            };
-            let diff = old.diff(&new);
-            if diff.is_empty() {
-                continue;
-            }
-            tx.send(diff).await?;
-            old = new;
-        }
-    }
-
-    /// The current bitfield, or `None` if the storage is invalid or the entry was deleted.
-    ///
-    /// Observers end the stream on `None`, since there is no error channel,
-    /// and since observed ranges must only ever grow.
-    fn bitfield(&self) -> Option<Bitfield> {
-        // The generation and the storage come from the same value.
-        let state = self.receiver.borrow();
-        if state.generation != self.generation {
-            return None;
-        }
-        match state.settled() {
-            Some(Settled::Invalid) => None,
-            _ => Some(state.storage.bitfield()),
-        }
-    }
-
-    async fn update_or_closed(&mut self, tx: &mut mpsc::Sender<Bitfield>) -> Result<()> {
-        tokio::select! {
-            _ = tx.closed() => {
-                // the sender is closed, we are done
-                Err(n0_error::e!(irpc::channel::SendError::ReceiverClosed).into())
-            }
-            e = self.receiver.changed() => Ok(e.anyerr()?),
-        }
     }
 }
