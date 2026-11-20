@@ -221,37 +221,102 @@ impl Reset<Hash> for FsEntity {
 impl EntityApi for FsEntity {
     type Backend = FsBackend;
 
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn import_bao(&self, global: &EntityGlobal<FsBackend>, cmd: ImportBaoMsg) {
-        self.ctx(global).import_bao(cmd).await
+        trace!("{cmd:?}");
+        let ctx = self.ctx(global);
+        ctx.load().await;
+        let ImportBaoMsg {
+            inner: ImportBaoRequest { size, .. },
+            mut rx,
+            tx,
+            ..
+        } = cmd;
+        let res = import_bao_impl(&ctx, size, &mut rx).await;
+        trace!("{res:?}");
+        // Answer before dropping `rx`, so the sender sees our error rather
+        // than just a closed channel.
+        tx.send(res).await.ok();
+        drop(rx);
     }
 
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn finish_import(
         &self,
         global: &EntityGlobal<FsBackend>,
         cmd: ImportEntryMsg,
-        tt: TempTag,
+        mut tt: TempTag,
     ) {
-        self.ctx(global).finish_import(cmd, tt).await
+        trace!("{cmd:?}");
+        let ctx = self.ctx(global);
+        ctx.load().await;
+        let res = match finish_import_impl(&ctx, cmd.inner).await {
+            Ok(()) => {
+                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
+                // it will be cleaned up when either the process exits or scope ends
+                if cmd.tx.is_rpc() {
+                    trace!("leaking temp tag {}", tt.hash_and_format());
+                    tt.leak();
+                }
+                AddProgressItem::Done(tt)
+            }
+            Err(cause) => AddProgressItem::Error(cause),
+        };
+        cmd.tx.send(res).await.ok();
     }
 
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn observe(&self, global: &EntityGlobal<FsBackend>, cmd: ObserveMsg) {
-        self.ctx(global).observe(cmd).await
+        trace!("{cmd:?}");
+        self.ctx(global).load().await;
+        self.handle
+            .observer()
+            .forward(cmd.tx, BaoStorage::observed_bitfield)
+            .await
+            .ok();
     }
 
-    async fn export_ranges(&self, global: &EntityGlobal<FsBackend>, cmd: ExportRangesMsg) {
-        self.ctx(global).export_ranges(cmd).await
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_ranges(&self, global: &EntityGlobal<FsBackend>, mut cmd: ExportRangesMsg) {
+        trace!("{cmd:?}");
+        let ctx = self.ctx(global);
+        ctx.load().await;
+        if let Err(cause) = export_ranges_impl(&ctx, cmd.inner, &mut cmd.tx).await {
+            cmd.tx
+                .send(ExportRangesItem::Error(cause.into()))
+                .await
+                .ok();
+        }
     }
 
-    async fn export_bao(&self, global: &EntityGlobal<FsBackend>, cmd: ExportBaoMsg) {
-        self.ctx(global).export_bao(cmd).await
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
+    async fn export_bao(&self, global: &EntityGlobal<FsBackend>, mut cmd: ExportBaoMsg) {
+        trace!("{cmd:?}");
+        let ctx = self.ctx(global);
+        ctx.load().await;
+        if let Err(cause) = export_bao_impl(&ctx, cmd.inner, &mut cmd.tx).await {
+            // if the entry is in state NonExisting, this will be an io error with
+            // kind NotFound. So we must not wrap this somehow but pass it on directly.
+            cmd.tx
+                .send(bao_tree::io::EncodeError::Io(cause).into())
+                .await
+                .ok();
+        }
     }
 
+    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn export_path(&self, global: &EntityGlobal<FsBackend>, cmd: ExportPathMsg) {
-        self.ctx(global).export_path(cmd).await
+        trace!("{cmd:?}");
+        let ctx = self.ctx(global);
+        ctx.load().await;
+        let ExportPathMsg { inner, mut tx, .. } = cmd;
+        if let Err(cause) = export_path_impl(&ctx, inner, &mut tx).await {
+            tx.send(cause.into()).await.ok();
+        }
     }
 
     async fn delete(&self, global: &EntityGlobal<FsBackend>) -> io::Result<()> {
-        self.ctx(global).delete().await
+        delete_entry(&self.ctx(global)).await
     }
 
     async fn freeze(
@@ -260,7 +325,7 @@ impl EntityApi for FsEntity {
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     ) {
-        self.ctx(global).freeze(ack, release).await
+        freeze_entry(&self.ctx(global), ack, release).await
     }
 
     async fn delete_unreferenced(
@@ -268,11 +333,31 @@ impl EntityApi for FsEntity {
         global: &EntityGlobal<FsBackend>,
         parts: UnreferencedParts,
     ) {
-        self.ctx(global).delete_unreferenced(parts).await
+        delete_unreferenced(&self.ctx(global), parts).await
     }
 
+    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
     async fn persist(&self, global: &EntityGlobal<FsBackend>) {
-        self.ctx(global).persist().await
+        let config = &global.backend.config;
+        self.handle.retire(|state| {
+            let hash = &self.id;
+            // A freeze task dropped at shutdown leaves its freeze in place.
+            let (Phase::ReadWrite(BaoStorage::Partial(fs))
+            | Phase::ReadOnly(BaoStorage::Partial(fs))) = state.take()
+            else {
+                return;
+            };
+            let path = config.path.bitfield_path(hash);
+            trace!("writing bitfield for hash {} to {}", hash, path.display());
+            if let Err(cause) = fs.write_bitfield(&path, config.syncs_files()) {
+                error!(
+                    "failed to write bitfield for {} at {}: {:?}",
+                    hash,
+                    path.display(),
+                    cause
+                );
+            }
+        });
     }
 }
 
@@ -370,167 +455,10 @@ impl HashContext<'_> {
     async fn load(&self) {
         self.state.load(|| open_entry(self)).await
     }
-}
 
-/// The requests the fs entity's code handles, for one hash.
-trait EntityOps {
     /// The metadata of the entry.
-    fn meta(&self) -> metadata::EntryMeta<'_>;
-    /// Import from a stream of n0 bao encoded data.
-    async fn import_bao(&self, cmd: ImportBaoMsg);
-    /// Finish an import from a local file or memory.
-    async fn finish_import(&self, cmd: ImportEntryMsg, tt: TempTag);
-    /// Observe the bitfield of the entry.
-    async fn observe(&self, cmd: ObserveMsg);
-    /// Export byte ranges of the entry as data
-    async fn export_ranges(&self, cmd: ExportRangesMsg);
-    /// Export chunk ranges of the entry as a n0 bao encoded stream.
-    async fn export_bao(&self, cmd: ExportBaoMsg);
-    /// Export the entry to a local file.
-    async fn export_path(&self, cmd: ExportPathMsg);
-    /// Delete the entry, for a delete request or a gc sweep.
-    async fn delete(&self) -> io::Result<()>;
-    /// Hold off writes during a gc run, acknowledging through `ack`, until `release` ends.
-    async fn freeze(
-        &self,
-        ack: tokio::sync::oneshot::Sender<()>,
-        release: tokio::sync::watch::Receiver<()>,
-    );
-    /// Delete the parts a committed batch stopped referencing, after checking each against the loaded state.
-    ///
-    /// The notice may be stale, so the entity must load before deciding.
-    async fn delete_unreferenced(&self, parts: UnreferencedParts);
-    /// Persist the entry at the end of its lifecycle.
-    async fn persist(&self);
-}
-
-/// The high level entry point per entry.
-impl EntityOps for HashContext<'_> {
     fn meta(&self) -> metadata::EntryMeta<'_> {
         self.global.db.entry(self.id)
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn import_bao(&self, cmd: ImportBaoMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ImportBaoMsg {
-            inner: ImportBaoRequest { size, .. },
-            mut rx,
-            tx,
-            ..
-        } = cmd;
-        let res = import_bao_impl(self, size, &mut rx).await;
-        trace!("{res:?}");
-        // Answer before dropping `rx`, so the sender sees our error rather
-        // than just a closed channel.
-        tx.send(res).await.ok();
-        drop(rx);
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn observe(&self, cmd: ObserveMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        self.state
-            .observer()
-            .forward(cmd.tx, BaoStorage::observed_bitfield)
-            .await
-            .ok();
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_ranges(&self, mut cmd: ExportRangesMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        if let Err(cause) = export_ranges_impl(self, cmd.inner, &mut cmd.tx).await {
-            cmd.tx
-                .send(ExportRangesItem::Error(cause.into()))
-                .await
-                .ok();
-        }
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_bao(&self, mut cmd: ExportBaoMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        if let Err(cause) = export_bao_impl(self, cmd.inner, &mut cmd.tx).await {
-            // if the entry is in state NonExisting, this will be an io error with
-            // kind NotFound. So we must not wrap this somehow but pass it on directly.
-            cmd.tx
-                .send(bao_tree::io::EncodeError::Io(cause).into())
-                .await
-                .ok();
-        }
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_path(&self, cmd: ExportPathMsg) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let ExportPathMsg { inner, mut tx, .. } = cmd;
-        if let Err(cause) = export_path_impl(self, inner, &mut tx).await {
-            tx.send(cause.into()).await.ok();
-        }
-    }
-
-    #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn finish_import(&self, cmd: ImportEntryMsg, mut tt: TempTag) {
-        trace!("{cmd:?}");
-        self.load().await;
-        let res = match finish_import_impl(self, cmd.inner).await {
-            Ok(()) => {
-                // for a remote call, we can't have the on_drop callback, so we have to leak the temp tag
-                // it will be cleaned up when either the process exits or scope ends
-                if cmd.tx.is_rpc() {
-                    trace!("leaking temp tag {}", tt.hash_and_format());
-                    tt.leak();
-                }
-                AddProgressItem::Done(tt)
-            }
-            Err(cause) => AddProgressItem::Error(cause),
-        };
-        cmd.tx.send(res).await.ok();
-    }
-
-    async fn delete(&self) -> io::Result<()> {
-        delete_entry(self).await
-    }
-
-    async fn freeze(
-        &self,
-        ack: tokio::sync::oneshot::Sender<()>,
-        release: tokio::sync::watch::Receiver<()>,
-    ) {
-        freeze_entry(self, ack, release).await
-    }
-
-    async fn delete_unreferenced(&self, parts: UnreferencedParts) {
-        delete_unreferenced(self, parts).await
-    }
-
-    #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
-    async fn persist(&self) {
-        self.state.retire(|state| {
-            let hash = &self.id;
-            // A freeze task dropped at shutdown leaves its freeze in place.
-            let (Phase::ReadWrite(BaoStorage::Partial(fs))
-            | Phase::ReadOnly(BaoStorage::Partial(fs))) = state.take()
-            else {
-                return;
-            };
-            let path = self.config.path.bitfield_path(hash);
-            trace!("writing bitfield for hash {} to {}", hash, path.display());
-            if let Err(cause) = fs.write_bitfield(&path, self.config.syncs_files()) {
-                error!(
-                    "failed to write bitfield for {} at {}: {:?}",
-                    hash,
-                    path.display(),
-                    cause
-                );
-            }
-        });
     }
 }
 
