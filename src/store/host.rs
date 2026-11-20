@@ -108,7 +108,7 @@ mod import;
 #[cfg(test)]
 pub(crate) mod mem_backend;
 pub(crate) mod metadata;
-mod options;
+pub(crate) mod options;
 mod state;
 
 pub(crate) use actor::{start, TaskContext};

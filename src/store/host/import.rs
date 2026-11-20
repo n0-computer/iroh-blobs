@@ -570,7 +570,7 @@ async fn copy_with_progress<T: CopyProgress>(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "fs-store"))]
 mod tests {
 
     use bao_tree::io::outboard::PreOrderMemOutboard;

@@ -220,7 +220,7 @@ pub(crate) mod serde {
     }
 }
 
-#[cfg(feature = "fs-store")]
+#[cfg(feature = "host")]
 pub(crate) mod outboard_with_progress {
     use std::io::{self, BufReader, Read};
 
@@ -335,7 +335,7 @@ pub(crate) mod outboard_with_progress {
         Ok(Ok(()))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "fs-store"))]
     mod tests {
         use bao_tree::{
             blake3,

@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use n0_future::time::Duration;
 
+pub use crate::store::host::options::InlineOptions;
+
 use crate::{
     store::{
         gc::GcConfig,
@@ -48,37 +50,6 @@ impl PathOptions {
 
     pub fn temp_file_name(&self) -> PathBuf {
         self.temp_path.join(temp_name())
-    }
-}
-
-/// Options for inlining small complete data or outboards.
-#[derive(Debug, Clone)]
-pub struct InlineOptions {
-    /// Maximum data size to inline.
-    pub max_data_inlined: u64,
-    /// Maximum outboard size to inline.
-    pub max_outboard_inlined: u64,
-}
-
-impl InlineOptions {
-    /// Do not inline anything, ever.
-    pub const NO_INLINE: Self = Self {
-        max_data_inlined: 0,
-        max_outboard_inlined: 0,
-    };
-    /// Always inline everything
-    pub const ALWAYS_INLINE: Self = Self {
-        max_data_inlined: u64::MAX,
-        max_outboard_inlined: u64::MAX,
-    };
-}
-
-impl Default for InlineOptions {
-    fn default() -> Self {
-        Self {
-            max_data_inlined: 1024 * 16,
-            max_outboard_inlined: 1024 * 16,
-        }
     }
 }
 

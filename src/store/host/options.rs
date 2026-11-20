@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use super::bao::raw_outboard_size;
-use crate::store::{fs::options::InlineOptions, gc::GcConfig};
+use crate::store::gc::GcConfig;
 
 /// The part of the fs store's `Options` the store itself uses.
 ///
@@ -60,4 +60,35 @@ fn new_uuid() -> [u8; 16] {
 /// Create temp file name based on a 16 byte UUID.
 pub(crate) fn temp_name() -> String {
     format!("{}.temp", hex::encode(new_uuid()))
+}
+
+/// Options for inlining small complete data or outboards.
+#[derive(Debug, Clone)]
+pub struct InlineOptions {
+    /// Maximum data size to inline.
+    pub max_data_inlined: u64,
+    /// Maximum outboard size to inline.
+    pub max_outboard_inlined: u64,
+}
+
+impl InlineOptions {
+    /// Do not inline anything, ever.
+    pub const NO_INLINE: Self = Self {
+        max_data_inlined: 0,
+        max_outboard_inlined: 0,
+    };
+    /// Always inline everything
+    pub const ALWAYS_INLINE: Self = Self {
+        max_data_inlined: u64::MAX,
+        max_outboard_inlined: u64::MAX,
+    };
+}
+
+impl Default for InlineOptions {
+    fn default() -> Self {
+        Self {
+            max_data_inlined: 1024 * 16,
+            max_outboard_inlined: 1024 * 16,
+        }
+    }
 }

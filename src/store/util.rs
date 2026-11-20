@@ -13,16 +13,16 @@ use serde::{Deserialize, Serialize};
 pub use sparse_mem_file::SparseMemFile;
 pub mod observer;
 mod size_info;
-#[cfg(feature = "fs-store")]
+#[cfg(feature = "host")]
 pub(crate) use size_info::size_slot;
 pub use size_info::SizeInfo;
 mod partial_mem_storage;
 pub use partial_mem_storage::PartialMemStorage;
 
-#[cfg(feature = "fs-store")]
+#[cfg(feature = "host")]
 mod mem_or_file;
-#[cfg(feature = "fs-store")]
-#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
+#[cfg(feature = "host")]
+#[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "host")))]
 pub use mem_or_file::{FixedSize, MemOrFile};
 
 /// Sends the items of a listing to its client, then the end marker.
@@ -217,7 +217,7 @@ impl<T: RangeSetEntry + Clone> RangeSetExt<T> for RangeSetRef<T> {
     }
 }
 
-#[cfg(feature = "fs-store")]
+#[cfg(feature = "host")]
 mod fs {
     use std::{
         fmt,
@@ -229,6 +229,7 @@ mod fs {
     use bao_tree::blake3;
     use serde::{de::DeserializeOwned, Serialize};
 
+    #[cfg(feature = "fs-store")]
     mod redb_support {
         use bytes::Bytes;
         use redb::{Key as RedbKey, Value as RedbValue};
@@ -441,7 +442,7 @@ mod fs {
         }
     }
 }
-#[cfg(feature = "fs-store")]
+#[cfg(feature = "host")]
 pub use fs::*;
 
 /// Given a prefix, increment it lexographically.
