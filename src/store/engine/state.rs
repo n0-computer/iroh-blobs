@@ -268,10 +268,14 @@ impl<S> StateCell<S> {
     /// Loading may create files, and deleting resets the state, so both must be
     /// done before a task may look at the state or touch the entry's data.
     pub(crate) async fn wait_settled(&self) {
-        // Checking and subscribing is one synchronous step, so no change can
-        // slip in between: tasks of an entity only interleave at awaits.
-        while matches!(&self.0.borrow().storage, Phase::Loading | Phase::Deleting) {
-            self.0.subscribe().changed().await.ok();
+        loop {
+            // Subscribe before checking, so a change right after the check
+            // still wakes us, even with tasks running in parallel.
+            let mut changes = self.0.subscribe();
+            if !matches!(&self.0.borrow().storage, Phase::Loading | Phase::Deleting) {
+                return;
+            }
+            changes.changed().await.ok();
         }
     }
 
