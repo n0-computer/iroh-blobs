@@ -30,9 +30,9 @@ impl fmt::Debug for Get {
     }
 }
 
-/// Delete the entry of one hash, sent by the hash's entity.
+/// Delete the entry of one hash, sent by the hash's handler.
 ///
-/// The entity sends this from its `Deleting` state, so none of its writes can
+/// The handler sends this from its `Deleting` state, so none of its writes can
 /// follow. The reply comes once the delete is committed, even if no entry
 /// existed, and it also detects commands dropped during shutdown or a failed
 /// batch, since then it is dropped.
@@ -99,8 +99,8 @@ impl fmt::Debug for GcSnapshot {
 
 /// Merge into the entry state of a hash, without a reply.
 ///
-/// Sent by the hash's entity for its writes. If applying it fails, the
-/// metadata actor fails, and with it the store, so the entity never runs on
+/// Sent by the hash's handler for its writes. If applying it fails, the
+/// metadata actor fails, and with it the store, so the handler never runs on
 /// a state the metadata does not have.
 pub struct Update {
     pub hash: Hash,

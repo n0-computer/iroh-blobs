@@ -4,7 +4,7 @@
 //! outboards of small blobs, and the tags. It groups queued requests into read
 //! or write transactions. Commits are durable (redb's default
 //! `Durability::Immediate`). It never touches data files, except for recovery
-//! when the store opens after an unclean shutdown, before any entity exists.
+//! when the store opens after an unclean shutdown, before any handler exists.
 //! A failed batch fails the actor without clearing the unclean-run marker.
 #![allow(clippy::result_large_err)]
 use std::{
@@ -351,7 +351,7 @@ impl Bookkeeping {
     /// The parts the batch stopped referencing, to send once it is committed.
     ///
     /// For each hash written but not deleted in the batch: which files it
-    /// referenced in the batch and no longer does. The entity of a deleted
+    /// referenced in the batch and no longer does. The handler of a deleted
     /// hash removes all its files itself, once its delete is answered.
     fn unreferenced_parts(
         &mut self,
@@ -520,7 +520,7 @@ impl Actor {
         trace!("{cmd:?}");
         let Delete { hash, tx, .. } = cmd;
         let entry = tables.blobs.remove(hash)?.map(|entry| entry.value());
-        // answered after the commit, then the entity deletes the files
+        // answered after the commit, then the handler deletes the files
         state.deleted(hash, entry.as_ref(), tx);
         if let Some(EntryState::Complete {
             data_location,
@@ -796,14 +796,14 @@ impl Actor {
                     drop(tables);
                     tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
                     // Files are only touched once the commit that stops
-                    // referencing them is durable. A delete's entity removes
+                    // referencing them is durable. A delete's handler removes
                     // its files once its delete is answered. If the batch
                     // fails, the answers are dropped and the deletes fail.
                     for tx in deletes {
                         tx.send(Ok(()));
                     }
                     // The main actor hands unreferenced parts to the hash's
-                    // entity, which checks them against its own state, or
+                    // handler, which checks them against its own state, or
                     // deletes them itself if there is none. Unbounded, so this
                     // actor never waits on the main actor, which waits on this
                     // one.
@@ -1222,7 +1222,7 @@ mod tests {
         Ok(unreferenced)
     }
 
-    /// An update from an entity, without waiting for it to be applied.
+    /// An update from a handler, without waiting for it to be applied.
     fn update(hash: Hash, state: EntryState<Bytes>) -> Update {
         Update {
             hash,
@@ -1324,7 +1324,7 @@ mod tests {
         Ok(())
     }
 
-    /// A delete is answered once committed, and leaves its files to its entity.
+    /// A delete is answered once committed, and leaves its files to its handler.
     #[test]
     fn a_delete_is_answered_after_the_commit() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
@@ -1358,13 +1358,13 @@ mod tests {
         })?;
         assert!(
             unreferenced.is_empty(),
-            "the entity deletes the files itself"
+            "the handler deletes the files itself"
         );
         assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         Ok(())
     }
 
-    /// Deleting an absent entry is answered too, to release its entity.
+    /// Deleting an absent entry is answered too, to release its handler.
     #[test]
     fn deleting_an_absent_entry_is_confirmed() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
@@ -1436,7 +1436,7 @@ mod tests {
 
         use crate::store::{
             fs,
-            host::{testing::EntityManagerState, EntityGlobal, TaskContext},
+            host::{testing::EntityManagerState, HandlerGlobal, TaskContext},
         };
 
         let dir = tempfile::tempdir()?;
@@ -1492,7 +1492,7 @@ mod tests {
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: tokio::task::JoinSet::new(),
             handles: EntityManagerState::new(
-                Arc::new(EntityGlobal {
+                Arc::new(HandlerGlobal {
                     store: context,
                     // The metadata actor above is built by hand, so start_meta is not used.
                     backend: fs::FsBackend::new(db_path.clone(), &options),
@@ -1537,7 +1537,7 @@ mod tests {
         store.sync_db().await?;
         let mut observer = Box::pin(store.observe(other).stream().await?);
         assert!(observer.next().await.unwrap().is_complete());
-        // This waiter cannot complete while the observer keeps its entity busy.
+        // This waiter cannot complete while the observer keeps its handler busy.
         let idle_store = store.clone();
         let idle = tokio::spawn(async move { idle_store.wait_idle().await });
 

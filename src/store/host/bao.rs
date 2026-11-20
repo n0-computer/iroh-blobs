@@ -1,6 +1,6 @@
 //! Bao import and export over synchronous access to an entry's data.
 //!
-//! Any entity implementation can use these: it implements [`BaoAccess`]
+//! Any handler implementation can use these: it implements [`BaoAccess`]
 //! for the duration of a request, and gets validated bao import, range export
 //! and bao export.
 use std::{io, num::NonZeroU64};
@@ -32,8 +32,8 @@ use crate::{
 
 /// Synchronous access to one entry's data, which the bao import and export code is generic over.
 ///
-/// Not tied to files: the fs entity implements it on its files, a memory
-/// backed entity on its buffers.
+/// Not tied to files: the fs handler implements it on its files, a memory
+/// backed handler on its buffers.
 pub(crate) trait BaoAccess {
     /// The hash of the entry.
     fn id(&self) -> Hash;

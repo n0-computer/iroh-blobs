@@ -1,10 +1,10 @@
 //! A memory backed [`Backend`], to check that the abstraction carries a second implementation.
 //!
-//! The "storage" is a map shared by all entities through the backend value:
-//! entities read their blob from it and write it back, and keep only
+//! The "storage" is a map shared by all handlers through the backend value:
+//! handlers read their blob from it and write it back, and keep only
 //! coordination state themselves (generation, freeze, delete). The metadata
-//! store is an in-memory actor answering [`Request`]. Imports still stage in a
-//! temp directory, since staging is not part of the backend yet.
+//! store is an in-memory actor answering [`Request`]. Imports stage in a temp
+//! directory, as in every store on the host.
 use std::{
     collections::{BTreeMap, HashMap},
     io,
@@ -47,7 +47,8 @@ use crate::{
             },
             Failure, MetaChannels, MetaTask, Request,
         },
-        Backend, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg, ImportSource, StoreOptions,
+        Backend, HandlerGlobal, HashHandler, ImportEntry, ImportEntryMsg, ImportSource,
+        StoreOptions,
     },
     store::util::{MemOrFile, PartialMemStorage},
     util::temp_tag::TempTag,
@@ -83,14 +84,14 @@ impl Blob {
 
 type Storage = Arc<Mutex<HashMap<Hash, Blob>>>;
 
-/// The memory backend: the shared storage is the entities' configuration.
+/// The memory backend: the shared storage is the handlers' configuration.
 #[derive(Debug, Default)]
 pub(crate) struct MemBackend {
     storage: Storage,
 }
 
 impl Backend for MemBackend {
-    type Entity = MemEntity;
+    type Handler = MemHandler;
 
     fn start_meta(&self, channels: MetaChannels) -> n0_error::Result<impl MetaTask> {
         Ok(MemMeta::default().run(channels))
@@ -267,7 +268,7 @@ fn bound(tag: Option<Tag>, f: fn(Tag) -> Bound<Tag>) -> Bound<Tag> {
     tag.map(f).unwrap_or(Bound::Unbounded)
 }
 
-/// What an entity coordinates itself; its data is in the shared storage.
+/// What a handler coordinates itself; its data is in the shared storage.
 #[derive(Debug, Default)]
 struct MemState {
     /// Grows with every delete; observers end when it changes.
@@ -278,14 +279,14 @@ struct MemState {
     deleting: bool,
 }
 
-/// The memory backend's entity.
+/// The memory backend's handler.
 #[derive(Debug, Clone)]
-pub(crate) struct MemEntity {
+pub(crate) struct MemHandler {
     id: Hash,
     state: watch::Sender<MemState>,
 }
 
-impl MemEntity {
+impl MemHandler {
     /// Waits until writes may go on: not frozen, not deleting.
     async fn wait_writable(&self) {
         let mut rx = self.state.subscribe();
@@ -298,9 +299,9 @@ impl MemEntity {
         rx.wait_for(|s| !s.deleting).await.ok();
     }
 
-    fn ctx<'a>(&'a self, global: &'a EntityGlobal<MemBackend>) -> MemCtx<'a> {
+    fn ctx<'a>(&'a self, global: &'a HandlerGlobal<MemBackend>) -> MemCtx<'a> {
         MemCtx {
-            entity: self,
+            handler: self,
             global,
         }
     }
@@ -317,8 +318,8 @@ impl MemEntity {
 
 /// What the generic bao code works on for one request.
 struct MemCtx<'a> {
-    entity: &'a MemEntity,
-    global: &'a EntityGlobal<MemBackend>,
+    handler: &'a MemHandler,
+    global: &'a HandlerGlobal<MemBackend>,
 }
 
 impl MemCtx<'_> {
@@ -382,13 +383,13 @@ impl Size for MemReader {
 
 impl BaoAccess for MemCtx<'_> {
     fn id(&self) -> Hash {
-        self.entity.id
+        self.handler.id
     }
 
     fn data_reader(&self) -> impl ReadBytesAt {
         MemReader {
             storage: self.storage().clone(),
-            hash: self.entity.id,
+            hash: self.handler.id,
             outboard: false,
         }
     }
@@ -396,14 +397,14 @@ impl BaoAccess for MemCtx<'_> {
     fn outboard_reader(&self) -> impl ReadAt {
         MemReader {
             storage: self.storage().clone(),
-            hash: self.entity.id,
+            hash: self.handler.id,
             outboard: true,
         }
     }
 
     fn current_size(&self) -> io::Result<u64> {
         let storage = self.storage().lock().unwrap();
-        match storage.get(&self.entity.id) {
+        match storage.get(&self.handler.id) {
             Some(Blob::Partial(p)) => Ok(p.current_size()),
             Some(Blob::Complete { data, .. }) => Ok(data.len() as u64),
             None => Err(io::ErrorKind::NotFound.into()),
@@ -411,15 +412,15 @@ impl BaoAccess for MemCtx<'_> {
     }
 
     fn bitfield(&self) -> io::Result<Bitfield> {
-        Ok(self.entity.bitfield(self.storage()))
+        Ok(self.handler.bitfield(self.storage()))
     }
 
     async fn write_batch(&self, batch: &[BaoContentItem], bitfield: &Bitfield) -> io::Result<()> {
-        self.entity.wait_writable().await;
+        self.handler.wait_writable().await;
         let update = {
             let mut storage = self.storage().lock().unwrap();
             let blob = storage
-                .entry(self.entity.id)
+                .entry(self.handler.id)
                 .or_insert_with(|| Blob::Partial(PartialMemStorage::default()));
             let Blob::Partial(p) = blob else {
                 // Complete: the write is the same data again.
@@ -457,9 +458,9 @@ impl BaoAccess for MemCtx<'_> {
             }
         };
         if let Some(state) = update {
-            self.global.store.db.update(self.entity.id, state).await?;
+            self.global.store.db.update(self.handler.id, state).await?;
         }
-        self.entity.state.send_modify(|s| s.version += 1);
+        self.handler.state.send_modify(|s| s.version += 1);
         Ok(())
     }
 }
@@ -491,7 +492,7 @@ fn read_part(part: MemOrFile<Bytes, impl AsRef<Path>>) -> io::Result<Bytes> {
     })
 }
 
-impl EntityApi for MemEntity {
+impl HashHandler for MemHandler {
     type Backend = MemBackend;
 
     fn new(id: &Hash) -> Self {
@@ -503,14 +504,14 @@ impl EntityApi for MemEntity {
 
     fn reset(&mut self, id: &Hash) {
         self.id = *id;
-        // Keeps the generation, like the fs entity.
+        // Keeps the generation, like the fs handler.
         self.state.send_modify(|s| {
             s.frozen = false;
             s.deleting = false;
         });
     }
 
-    async fn import_bao(&self, global: &EntityGlobal<MemBackend>, cmd: ImportBaoMsg) {
+    async fn import_bao(&self, global: &HandlerGlobal<MemBackend>, cmd: ImportBaoMsg) {
         let ImportBaoMsg {
             inner: ImportBaoRequest { size, .. },
             mut rx,
@@ -524,7 +525,7 @@ impl EntityApi for MemEntity {
 
     async fn finish_import(
         &self,
-        global: &EntityGlobal<MemBackend>,
+        global: &HandlerGlobal<MemBackend>,
         cmd: ImportEntryMsg,
         mut tt: TempTag,
     ) {
@@ -564,7 +565,7 @@ impl EntityApi for MemEntity {
         cmd.tx.send(item).await.ok();
     }
 
-    async fn observe(&self, global: &EntityGlobal<MemBackend>, cmd: ObserveMsg) {
+    async fn observe(&self, global: &HandlerGlobal<MemBackend>, cmd: ObserveMsg) {
         self.wait_readable().await;
         let storage = &global.backend.storage;
         let tx = cmd.tx;
@@ -592,7 +593,7 @@ impl EntityApi for MemEntity {
         }
     }
 
-    async fn export_ranges(&self, global: &EntityGlobal<MemBackend>, mut cmd: ExportRangesMsg) {
+    async fn export_ranges(&self, global: &HandlerGlobal<MemBackend>, mut cmd: ExportRangesMsg) {
         self.wait_readable().await;
         if let Err(cause) = export_ranges_impl(&self.ctx(global), cmd.inner, &mut cmd.tx).await {
             cmd.tx
@@ -602,7 +603,7 @@ impl EntityApi for MemEntity {
         }
     }
 
-    async fn export_bao(&self, global: &EntityGlobal<MemBackend>, mut cmd: ExportBaoMsg) {
+    async fn export_bao(&self, global: &HandlerGlobal<MemBackend>, mut cmd: ExportBaoMsg) {
         self.wait_readable().await;
         if let Err(cause) = export_bao_impl(&self.ctx(global), cmd.inner, &mut cmd.tx).await {
             cmd.tx
@@ -612,7 +613,7 @@ impl EntityApi for MemEntity {
         }
     }
 
-    async fn export_path(&self, global: &EntityGlobal<MemBackend>, cmd: ExportPathMsg) {
+    async fn export_path(&self, global: &HandlerGlobal<MemBackend>, cmd: ExportPathMsg) {
         self.wait_readable().await;
         let ExportPathMsg { inner, tx, .. } = cmd;
         // The memory backend cannot hand out a file it owns, so it copies in both modes.
@@ -634,7 +635,7 @@ impl EntityApi for MemEntity {
         }
     }
 
-    async fn delete(&self, global: &EntityGlobal<MemBackend>) -> io::Result<()> {
+    async fn delete(&self, global: &HandlerGlobal<MemBackend>) -> io::Result<()> {
         self.wait_writable().await;
         self.state.send_modify(|s| {
             s.generation += 1;
@@ -648,7 +649,7 @@ impl EntityApi for MemEntity {
 
     async fn freeze(
         &self,
-        _global: &EntityGlobal<MemBackend>,
+        _global: &HandlerGlobal<MemBackend>,
         ack: tokio::sync::oneshot::Sender<()>,
         mut release: tokio::sync::watch::Receiver<()>,
     ) {
@@ -661,13 +662,13 @@ impl EntityApi for MemEntity {
 
     async fn delete_unreferenced(
         &self,
-        _global: &EntityGlobal<MemBackend>,
+        _global: &HandlerGlobal<MemBackend>,
         _parts: UnreferencedParts,
     ) {
         // The memory metadata store never sends any.
     }
 
-    async fn persist(&self, _global: &EntityGlobal<MemBackend>) {
+    async fn persist(&self, _global: &HandlerGlobal<MemBackend>) {
         // The data is in the shared storage already.
     }
 }

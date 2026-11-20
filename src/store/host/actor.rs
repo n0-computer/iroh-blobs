@@ -1,6 +1,6 @@
 //! The generic store actor: routing by hash, temp tags, gc sessions, imports, and shutdown.
 //!
-//! It runs the entities of a [`Backend`] on the entity manager and talks to
+//! It runs the handlers of a [`Backend`] on the entity manager and talks to
 //! the backend's metadata store through the metadata protocol. See the fs
 //! store's module docs for how the parts work together.
 use std::{
@@ -24,8 +24,8 @@ use tokio::task::{JoinError, JoinSet};
 use tracing::{error, trace, warn, Instrument};
 
 use super::{
-    entity::{Backend, EmParams, EntityApi, EntityCtx, EntityGlobal},
     entity_manager::{self, EntityManagerState, SpawnArg},
+    handler::{Backend, EmParams, HandlerCtx, HandlerGlobal, HashHandler},
     import::{import_byte_stream, import_bytes, import_path, ImportEntryMsg},
     metadata::{self, parts::UnreferencedParts, MetaChannels},
     options::StoreOptions,
@@ -199,7 +199,7 @@ pub(crate) struct Actor<B: Backend> {
     pub(crate) deletes: Arc<tokio::sync::watch::Sender<usize>>,
     // Tasks for import and export operations.
     pub(crate) tasks: JoinSet<()>,
-    // Entity manager that handles concurrency for entities.
+    // Handler manager that handles concurrency for handlers.
     pub(crate) handles: EntityManagerState<EmParams<B>>,
     // temp tags
     pub(crate) temp_tags: TempTags,
@@ -420,7 +420,7 @@ impl<B: Backend> Actor<B> {
                 self.temp_tags.end_scope(cmd.scope);
             }
             InternalCommand::FinishImport(cmd) => {
-                // Finishing an import both modifies an entity and creates a temp tag.
+                // Finishing an import both modifies a handler and creates a temp tag.
                 if self.gc.is_some() {
                     self.deferred.push_back(Deferred::Import(cmd));
                     return;
@@ -508,7 +508,7 @@ impl<B: Backend> Actor<B> {
             let mut result = Ok(snapshot);
             for ack in acks {
                 if ack.await.is_err() {
-                    result = Err(api::Error::other("entity stopped while freezing"));
+                    result = Err(api::Error::other("handler stopped while freezing"));
                 }
             }
             let ok = result.is_ok();
@@ -630,7 +630,7 @@ impl<B: Backend> Actor<B> {
         }
         // A delete waits for the metadata actor to answer once it is
         // committed, and then unlinks the files, so let running deletes
-        // finish before the entities and the metadata actor shut down.
+        // finish before the handlers and the metadata actor shut down.
         let mut deletes = self.deletes.subscribe();
         while *deletes.borrow_and_update() > 0 {
             tokio::select! {
@@ -658,7 +658,7 @@ impl<B: Backend> Actor<B> {
         if let Some(cmd) = shutdown {
             self.db().send(cmd.into()).await.ok();
             // Keep the runtime alive until metadata has delivered the shutdown
-            // reply, even when there are no entity tasks left to drain.
+            // reply, even when there are no handler tasks left to drain.
             if let Some(task) = self.metadata_task.take() {
                 if Self::abort_on_metadata_failure(task.await, &mut self.tasks).await {
                     return;
@@ -666,7 +666,7 @@ impl<B: Backend> Actor<B> {
             }
         }
         // The metadata actor committed its last batch. Hand what that left to
-        // do to the entities while they still take tasks, since only they
+        // do to the handlers while they still take tasks, since only they
         // touch files.
         while let Ok((hash, parts)) = self.unreferenced.try_recv() {
             self.route_unreferenced(hash, parts).await;
@@ -685,15 +685,15 @@ impl<B: Backend> Actor<B> {
             }
         }
         // Parts that still arrive now stay, as after a crash: nothing
-        // references them, and only entities touch files.
+        // references them, and only handlers touch files.
     }
 
-    /// Hands unreferenced parts to the hash's entity, waking it if there is none.
+    /// Hands unreferenced parts to the hash's handler, waking it if there is none.
     ///
-    /// All file IO happens in entities. A woken entity loads before it checks the parts.
+    /// All file IO happens in handlers. A woken handler loads before it checks the parts.
     async fn route_unreferenced(&mut self, hash: Hash, parts: UnreferencedParts) {
         trace!("{} {parts:?}", hash.fmt_short());
-        // Queued even while the entity is shutting down. The entity checks
+        // Queued even while the handler is shutting down. The handler checks
         // the parts against its own state before deleting.
         let task = self
             .handles
@@ -703,7 +703,7 @@ impl<B: Backend> Actor<B> {
                         ctx.state.delete_unreferenced(&ctx.global, parts).await
                     }
                     SpawnArg::Dead => {
-                        warn!("no entity for {}, its files stay", hash);
+                        warn!("no handler for {}, its files stay", hash);
                     }
                 }
             })
@@ -713,7 +713,7 @@ impl<B: Backend> Actor<B> {
         }
     }
 
-    /// Deletes through each hash's entity, and answers once all are done.
+    /// Deletes through each hash's handler, and answers once all are done.
     async fn delete_blobs(&mut self, cmd: proto::DeleteBlobsMsg) {
         let proto::DeleteBlobsMsg {
             inner: proto::BlobDeleteRequest { hashes, force },
@@ -726,7 +726,7 @@ impl<B: Backend> Actor<B> {
         });
     }
 
-    /// Starts a delete through the entity of each hash that is not protected.
+    /// Starts a delete through the handler of each hash that is not protected.
     async fn spawn_deletes(
         &mut self,
         hashes: Vec<Hash>,
@@ -737,7 +737,7 @@ impl<B: Backend> Actor<B> {
             let (res_tx, res_rx) = tokio::sync::oneshot::channel();
             results.push(res_rx);
             // Only this actor creates temp tags, so none can appear between
-            // this check and the delete reaching the entity.
+            // this check and the delete reaching the handler.
             if !force && self.temp_tags.protects(hash) {
                 trace!("delete {hash}: skip, protected by a temp tag");
                 res_tx.send(Ok(())).ok();
@@ -750,7 +750,7 @@ impl<B: Backend> Actor<B> {
                     let _running = running;
                     let res = match arg {
                         SpawnArg::Active(ctx) => ctx.state.delete(&ctx.global).await,
-                        SpawnArg::Dead => Err(io::Error::other("no entity to delete through")),
+                        SpawnArg::Dead => Err(io::Error::other("no handler to delete through")),
                     };
                     res_tx.send(res).ok();
                 })
@@ -791,7 +791,7 @@ impl<B: Backend> Actor<B> {
             internal_cmd_tx: fs_commands_tx,
         });
         let metadata_task = Some(tokio::spawn(metadata));
-        let global = Arc::new(EntityGlobal {
+        let global = Arc::new(HandlerGlobal {
             store: slot_context.clone(),
             backend,
         });
@@ -815,7 +815,7 @@ impl<B: Backend> Actor<B> {
 
 /// Counts a running delete for as long as it lives, see `Actor::deletes`.
 ///
-/// Counted by drop, so a delete whose entity never ran it is not waited for.
+/// Counted by drop, so a delete whose handler never ran it is not waited for.
 struct RunningDelete(Arc<tokio::sync::watch::Sender<usize>>);
 
 impl RunningDelete {
@@ -854,9 +854,9 @@ fn remove_all_files(dir: &Path) {
 
 trait HashSpecificCommand: HashSpecific + Send + 'static {
     /// Handle the command on success by spawning a task into the per-hash context.
-    fn handle<B: Backend>(self, ctx: EntityCtx<B>) -> impl Future<Output = ()> + Send + 'static;
+    fn handle<B: Backend>(self, ctx: HandlerCtx<B>) -> impl Future<Output = ()> + Send + 'static;
 
-    /// Opportunity to send an error if the entity is dead (e.g. after a panic).
+    /// Opportunity to send an error if the handler is dead (e.g. after a panic).
     fn on_error(self) -> impl Future<Output = ()> + Send + 'static;
 
     async fn spawn<B: Backend>(
@@ -889,17 +889,17 @@ trait HashSpecificCommand: HashSpecific + Send + 'static {
 }
 
 impl HashSpecificCommand for ObserveMsg {
-    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
+    async fn handle<B: Backend>(self, ctx: HandlerCtx<B>) {
         ctx.state.observe(&ctx.global, self).await
     }
     async fn on_error(self) {}
 }
 impl HashSpecificCommand for ExportPathMsg {
-    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
+    async fn handle<B: Backend>(self, ctx: HandlerCtx<B>) {
         ctx.state.export_path(&ctx.global, self).await
     }
     async fn on_error(self) {
-        let err = err_entity_dead();
+        let err = err_handler_dead();
         self.tx
             .send(ExportProgressItem::Error(api::Error::from(err)))
             .await
@@ -907,11 +907,11 @@ impl HashSpecificCommand for ExportPathMsg {
     }
 }
 impl HashSpecificCommand for ExportBaoMsg {
-    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
+    async fn handle<B: Backend>(self, ctx: HandlerCtx<B>) {
         ctx.state.export_bao(&ctx.global, self).await
     }
     async fn on_error(self) {
-        let err = err_entity_dead();
+        let err = err_handler_dead();
         self.tx
             .send(EncodedItem::Error(bao_tree::io::EncodeError::Io(err)))
             .await
@@ -919,11 +919,11 @@ impl HashSpecificCommand for ExportBaoMsg {
     }
 }
 impl HashSpecificCommand for ExportRangesMsg {
-    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
+    async fn handle<B: Backend>(self, ctx: HandlerCtx<B>) {
         ctx.state.export_ranges(&ctx.global, self).await
     }
     async fn on_error(self) {
-        let err = err_entity_dead();
+        let err = err_handler_dead();
         self.tx
             .send(ExportRangesItem::Error(api::Error::from(err)))
             .await
@@ -931,11 +931,11 @@ impl HashSpecificCommand for ExportRangesMsg {
     }
 }
 impl HashSpecificCommand for ImportBaoMsg {
-    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
+    async fn handle<B: Backend>(self, ctx: HandlerCtx<B>) {
         ctx.state.import_bao(&ctx.global, self).await
     }
     async fn on_error(self) {
-        let err = err_entity_dead();
+        let err = err_handler_dead();
         self.tx.send(Err(api::Error::from(err))).await.ok();
     }
 }
@@ -945,18 +945,18 @@ impl HashSpecific for (TempTag, ImportEntryMsg) {
     }
 }
 impl HashSpecificCommand for (TempTag, ImportEntryMsg) {
-    async fn handle<B: Backend>(self, ctx: EntityCtx<B>) {
+    async fn handle<B: Backend>(self, ctx: HandlerCtx<B>) {
         let (tt, cmd) = self;
         ctx.state.finish_import(&ctx.global, cmd, tt).await
     }
     async fn on_error(self) {
-        let err = err_entity_dead();
+        let err = err_handler_dead();
         self.1.tx.send(AddProgressItem::Error(err)).await.ok();
     }
 }
 
-fn err_entity_dead() -> io::Error {
-    io::Error::other("entity is dead")
+fn err_handler_dead() -> io::Error {
+    io::Error::other("handler is dead")
 }
 
 pub(crate) struct RtWrapper(pub(crate) Option<tokio::runtime::Runtime>);
@@ -1022,7 +1022,7 @@ pub(crate) struct Started {
 /// Starts a store from its options and a backend, on a runtime of its own.
 ///
 /// The backend starts the metadata store on that runtime, and is shared by
-/// all entities as their configuration.
+/// all handlers as their configuration.
 pub(crate) async fn start<B: Backend>(options: StoreOptions, backend: B) -> Result<Started> {
     static THREAD_NR: AtomicU64 = AtomicU64::new(0);
     let mut builder = tokio::runtime::Builder::new_multi_thread();

@@ -25,7 +25,7 @@ impl std::error::Error for InconsistentEntry {}
 /// Where a backend keeps data outside the store, in a format only it interprets.
 ///
 /// The host never looks inside. The fs backend keeps a UTF-8 path. It is
-/// encoded like a string, so it reads entries written when this was a path.
+/// encoded like a string, the format of external paths in stored entries.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Location(Bytes);
@@ -334,7 +334,7 @@ mod tests {
 
     use super::*;
 
-    /// The location as entries stored it before, when it was a path.
+    /// A location as stored entries encode it: as a `PathBuf`.
     #[derive(Serialize)]
     enum OldDataLocation {
         #[allow(dead_code)]

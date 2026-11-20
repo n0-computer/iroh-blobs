@@ -4,9 +4,9 @@
 //!
 //! It runs on the store host (`store::host`), which routes requests,
 //! keeps temp tags, runs gc sessions and imports, and orders operations
-//! between entities and the metadata store. The fs store adds its two parts:
+//! between handlers and the metadata store. The fs store adds its two parts:
 //!
-//! - the file entity (`entity`): each hash's data, outboard, sizes and
+//! - the file handler (`handler`): each hash's data, outboard, sizes and
 //!   bitfield in files in the data directory, read and written through file
 //!   descriptors, and
 //! - the redb metadata store (`redb`): the entry of each hash, inlined data
@@ -47,7 +47,7 @@
 //! - A crash between a commit and the unlink that follows it leaves files that
 //!   nothing references.
 //! - After `export_path` with `TryReference` copies across file systems, the
-//!   entity still uses the owned data file, so its check keeps the file when
+//!   handler still uses the owned data file, so its check keeps the file when
 //!   it comes back unreferenced, and it leaks.
 //! - A same-file-system `TryReference` export renames the file before it
 //!   commits the external location. If that commit fails, the metadata can
@@ -65,8 +65,8 @@ use n0_error::Result;
 use tracing::trace;
 
 use crate::api::{proto, ApiClient};
-mod entity;
-use entity::FsEntity;
+mod handler;
+use handler::FsHandler;
 #[cfg(test)]
 mod lazyfs_tests;
 pub mod options;
@@ -79,10 +79,10 @@ use options::{BatchOptions, FsConfig, Options};
 
 use crate::api::Store;
 
-/// The fs store's backend: entities with their files in a data directory, and a redb metadata store.
+/// The fs store's backend: handlers with their files in a data directory, and a redb metadata store.
 #[derive(Debug)]
 struct FsBackend {
-    /// What the entities need: paths and sync mode.
+    /// What the handlers need: paths and sync mode.
     config: FsConfig,
     /// Where the redb database is.
     db_path: PathBuf,
@@ -101,7 +101,7 @@ impl FsBackend {
 }
 
 impl Backend for FsBackend {
-    type Entity = FsEntity;
+    type Handler = FsHandler;
 
     fn start_meta(&self, channels: MetaChannels) -> Result<impl MetaTask> {
         redb::start(&self.db_path, &self.config, &self.batch, channels)
@@ -129,7 +129,7 @@ impl FsStore {
     /// Starts a store from its options and a backend.
     ///
     /// The backend starts the metadata store on the store's runtime, and is
-    /// shared by all entities as their configuration.
+    /// shared by all handlers as their configuration.
     async fn from_parts<B: Backend>(options: StoreOptions, backend: B) -> Result<FsStore> {
         let started = start(options, backend).await?;
         Ok(FsStore {
@@ -223,7 +223,7 @@ pub mod tests {
         api,
         store::host::{
             testing::{Actor, ClearScope, SpawnArg},
-            EntityApi,
+            HashHandler,
         },
         Hash, HashAndFormat,
     };
@@ -246,10 +246,10 @@ pub mod tests {
         1024 * 1024 * 8, // data file, outboard file
     ];
 
-    /// A write to an entity that a read loaded sees a delete that happened in between.
+    /// A write to a handler that a read loaded sees a delete that happened in between.
     ///
-    /// The observer keeps the entity loaded for reading while the blob is
-    /// deleted. If the write took the entity's old state, the import would find
+    /// The observer keeps the handler loaded for reading while the blob is
+    /// deleted. If the write took the handler's old state, the import would find
     /// the blob complete and do nothing, and the blob would be gone.
     #[tokio::test]
     #[traced_test]
@@ -295,7 +295,7 @@ pub mod tests {
     }
 
     /// Disconnecting a GC client must not resume tags ahead of an accepted
-    /// delete. Hold its entity frozen independently to make that race explicit.
+    /// delete. Hold its handler frozen independently to make that race explicit.
     #[tokio::test]
     async fn gc_cancel_waits_for_accepted_delete() -> TestResult<()> {
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -869,7 +869,7 @@ pub mod tests {
         std::fs::remove_file(options.path.data_path(&hash))?;
         let store = FsStore::load_with_opts(db_dir.join("blobs.db"), options).await?;
         assert!(store.observe(hash).await.is_err());
-        // the entity for the hash must still be alive, so re-adding works
+        // the handler for the hash must still be alive, so re-adding works
         store.add_bytes(data).await?;
         store.shutdown().await?;
         Ok(())
@@ -1196,7 +1196,7 @@ pub mod tests {
                 let (_, bao) = create_n0_bao(&data, &rest)?;
                 store.import_bao_bytes(hash, rest, bao).await?;
             }
-            // The files go after the commit, as unreferenced parts the entity deletes.
+            // The files go after the commit, as unreferenced parts the handler deletes.
             store.sync_db().await?;
             store.wait_idle().await?;
             let inlined = size <= options.inline.max_data_inlined as usize;
@@ -1250,7 +1250,7 @@ pub mod tests {
         Ok(())
     }
 
-    /// Unreferenced parts that arrive after the entry was recreated and its entity unloaded do not delete the new files.
+    /// Unreferenced parts that arrive after the entry was recreated and its handler unloaded do not delete the new files.
     #[tokio::test]
     #[traced_test]
     async fn test_stale_unreferenced_parts_keep_recreated_files() -> TestResult<()> {
@@ -1268,7 +1268,7 @@ pub mod tests {
             fs_backend(dir.path().join("blobs.db"), &options)?,
         )
         .await?;
-        // Hold back the notices; metadata and entities run normally.
+        // Hold back the notices; metadata and handlers run normally.
         let (deliver, delayed) = tokio::sync::mpsc::unbounded_channel();
         let mut notices = std::mem::replace(&mut actor.unreferenced, delayed);
         let actor_task = tokio::spawn(actor.run());
@@ -1301,7 +1301,7 @@ pub mod tests {
                 force: true,
             })
             .await?;
-        // Partial again, with a new data file, and no entity in memory.
+        // Partial again, with a new data file, and no handler in memory.
         store
             .import_bao_bytes(hash, half.clone(), half_bao.clone())
             .await?;
@@ -1322,7 +1322,7 @@ pub mod tests {
         Ok(())
     }
 
-    /// Deleting an entry whose entity is not loaded removes the files the entry referenced.
+    /// Deleting an entry whose handler is not loaded removes the files the entry referenced.
     #[tokio::test]
     #[traced_test]
     async fn test_delete_unloaded_entry_removes_files() -> TestResult<()> {

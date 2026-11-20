@@ -1,7 +1,7 @@
-//! The lifecycle of an entity's entry, for [`EntityApi`](super::EntityApi) implementations to build on.
+//! The lifecycle of a handler's entry, for [`HashHandler`](super::HashHandler) implementations to build on.
 //!
 //! A [`StateCell`] holds an entry's [`Phase`] and its generation in a `watch`,
-//! so tasks of the entity can wait for it and observers wake when it changes.
+//! so tasks of the handler can wait for it and observers wake when it changes.
 //! It knows nothing about how the entry is stored: that is the settled state
 //! `S`, which the implementation defines.
 //!
@@ -143,7 +143,7 @@ impl<S> StateCell<S> {
 
     /// Changes the phase without a write guard, without waking anyone.
     ///
-    /// Only for the entity's last act, like persisting at shutdown: it
+    /// Only for the handler's last act, like persisting at shutdown: it
     /// ignores a freeze that a task dropped at shutdown left in place.
     pub(crate) fn retire<R>(&self, f: impl FnOnce(&mut Phase<S>) -> R) -> R {
         let mut res = None;
@@ -159,9 +159,9 @@ impl<S> StateCell<S> {
         self.0.send_modify(|state| state.storage = storage);
     }
 
-    /// Makes the state `Initial` again for a recycled entity, keeping the generation.
+    /// Makes the state `Initial` again for a recycled handler, keeping the generation.
     ///
-    /// The entity is idle, so no write is in flight. A freeze or delete that
+    /// The handler is idle, so no write is in flight. A freeze or delete that
     /// was dropped while waiting leaves its flag behind, which is cleared here.
     pub(crate) fn reset(&self) {
         self.0.send_modify(|state| {
@@ -307,8 +307,8 @@ impl<S> StateCell<S> {
     ///
     /// Call it once the entry is loaded. It waits for writes and for an earlier
     /// freeze to end, so no two freezes overlap and a freeze needs no owner id.
-    /// The caller keeps the entity alive while it holds the freeze. If the task
-    /// is dropped instead, the entity is shutting down, and persisting has to
+    /// The caller keeps the handler alive while it holds the freeze. If the task
+    /// is dropped instead, the handler is shutting down, and persisting has to
     /// look through the freeze.
     pub(crate) async fn freeze(
         &self,

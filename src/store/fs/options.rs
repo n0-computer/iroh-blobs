@@ -140,7 +140,7 @@ pub enum CrashConsistency {
     /// writes inherited from an earlier run, but may wait for unrelated writes
     /// on the same filesystem. If the flush fails, opening the store returns an
     /// error and leaves the previous run record in place for the next attempt.
-    /// Other platforms do not yet perform this startup flush, so switching from
+    /// Other platforms do not perform this startup flush, so switching from
     /// `ProcessCrash` can leave earlier writes unsynced.
     PowerLoss,
 }
@@ -199,7 +199,7 @@ impl From<&Options> for StoreOptions {
     }
 }
 
-/// What the fs entity needs: where its files live, and whether to sync them.
+/// What the fs handler needs: where its files live, and whether to sync them.
 #[derive(Debug, Clone)]
 pub(crate) struct FsConfig {
     /// Where the entries' files live.

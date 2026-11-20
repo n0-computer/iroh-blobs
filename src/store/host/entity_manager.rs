@@ -1000,8 +1000,8 @@ mod tests {
             }
             tokio::spawn(actor).await?;
             // Shutdown parks the receiver. ShutdownComplete is queued, but
-            // the manager has not processed it yet. The old bounded inbox
-            // blocked here and prevented that processing.
+            // the manager has not processed it yet. A bounded inbox would
+            // block here and prevent that processing.
             assert!(manager.tick().await.is_none());
             tokio::time::timeout(std::time::Duration::from_secs(1), async {
                 for index in 128..256 {

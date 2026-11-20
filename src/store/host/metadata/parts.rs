@@ -55,12 +55,12 @@ pub(crate) fn referenced_parts<I>(state: Option<&EntryState<I>>) -> BaoFileParts
 ///
 /// The metadata actor sends these with the entry's hash after the commit, so
 /// no durable state references them anymore. That does not make them garbage:
-/// the entry's entity may still use them, since its state is never behind its
-/// entry. So before deleting, the entity must check each part against its own
-/// state, and only delete those it does not use. Only the hash's entity
+/// the entry's handler may still use them, since its state is never behind its
+/// entry. So before deleting, the handler must check each part against its own
+/// state, and only delete those it does not use. Only the hash's handler
 /// touches its files.
 ///
-/// Deletes do not come through here: the entity removes its files once its
+/// Deletes do not come through here: the handler removes its files once its
 /// delete is answered, after the commit.
 #[derive(Debug)]
 pub(crate) struct UnreferencedParts(pub BaoFileParts);

@@ -1,7 +1,7 @@
 //! The metadata protocol: what a metadata store answers, independent of how it stores it.
 //!
 //! A metadata store is one actor that receives [`Request`]s on one ordered
-//! channel. Entities send the per-entry requests for their own hash, and the
+//! channel. Handlers send the per-entry requests for their own hash, and the
 //! main actor sends the store-wide ones. The actor sends unreferenced parts
 //! back to the store after each commit, and fails the store by ending with an
 //! error.
@@ -94,7 +94,7 @@ impl fmt::Debug for Failure {
 #[derive(Debug)]
 #[enum_conversions()]
 pub(crate) enum Request {
-    // Per entry, sent by the hash's entity.
+    // Per entry, sent by the hash's handler.
     /// Get the entry state, with inline data and outboard.
     Get(Get),
     /// Replace the entry state. Answered once applied.

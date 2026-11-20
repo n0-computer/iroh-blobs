@@ -28,7 +28,7 @@ use crate::{
     },
     store::host::{Location, Phase, StateCell, WriteGuard},
     store::{
-        fs::entity::HashContext,
+        fs::handler::HashContext,
         host::{bao::raw_outboard_size, StoreOptions},
         util::{
             read_checksummed_and_truncate, size_slot, write_checksummed, FixedSize, MemOrFile,
@@ -337,8 +337,8 @@ pub(crate) enum BaoStorage {
     /// Writing to this is a no-op, since it is already complete.
     Complete(CompleteStorage),
     /// The in-memory state cannot be trusted: an IO error happened during an
-    /// operation, or the entity was persisted. Writes fail. A finished import
-    /// or a delete replaces it, and recycling the entity resets it.
+    /// operation, or the handler was persisted. Writes fail. A finished import
+    /// or a delete replaces it, and recycling the handler resets it.
     Invalid,
 }
 
@@ -548,7 +548,7 @@ impl Phase<BaoStorage> {
     /// while a file deleted too early loses data.
     pub(super) fn references(&self, part: BaoFilePart) -> bool {
         match self {
-            // Not loaded: the entity knows nothing about its files.
+            // Not loaded: the handler knows nothing about its files.
             Self::Initial | Self::Loading | Self::Deleting => true,
             Self::ReadWrite(s) | Self::ReadOnly(s) => s.references(part),
         }

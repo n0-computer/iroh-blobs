@@ -1,26 +1,26 @@
-//! The fs store's entity: an entry's data and outboard in files, read and written through file descriptors.
+//! The fs store's handler: an entry's data and outboard in files, read and written through file descriptors.
 //!
-//! See the store host's docs for how entities, the metadata store and the
+//! See the store host's docs for how handlers, the metadata store and the
 //! store actor work together.
 //!
 //! # States
 //!
-//! An entity's state is `Initial`, `Loading` or `Deleting` while it is in
+//! A handler's state is `Initial`, `Loading` or `Deleting` while it is in
 //! transition, and otherwise a loaded `BaoStorage` entry: `NonExisting`,
 //! `Partial`, `Complete` or `Invalid`. A settled entry is `ReadWrite`, or
 //! `ReadOnly` while a gc session freezes it.
 //!
-//! An entity's tasks are futures polled by one actor, so they only interleave at
-//! `.await` points. Every change of an entity's state or files runs after
+//! A handler's tasks are futures polled by one actor, so they only interleave at
+//! `.await` points. Every change of a handler's state or files runs after
 //! `wait_writable`, which waits while the state is `Loading`, `Deleting` or
 //! `ReadOnly`, with no `.await` between the check and the change. Readers use
 //! `wait_settled`, which only waits for `Loading` and `Deleting`. Both wait on
-//! the entity's state `watch`.
+//! the handler's state `watch`.
 //!
 //! # Unreferenced parts
 //!
-//! The entity checks each part against its own state, and only unlinks those
-//! it does not use. An entity that is not loaded, like one woken for the
+//! The handler checks each part against its own state, and only unlinks those
+//! it does not use. A handler that is not loaded, like one woken for the
 //! notice, loads first. It is also told about parts while it shuts down,
 //! since its shutdown may write the bitfield.
 //!
@@ -34,7 +34,7 @@
 //! 2. Sends `delete` to the metadata store. Deletes that arrive together still
 //!    land in one transaction.
 //! 3. Waits for the answer, which comes once the delete is committed, even if
-//!    there was no entry. Waiting keeps the entity alive, so it cannot unload
+//!    there was no entry. Waiting keeps the handler alive, so it cannot unload
 //!    and come back with new files that the unlink would take.
 //! 4. Unlinks the files it noted, so an inline entry costs no unlink, and
 //!    switches to `NonExisting`. Waiting writes continue on an empty entry: a
@@ -46,7 +46,7 @@
 //! # Context
 //!
 //! For one request, a `HashContext` combines the store's context, the fs
-//! entity's configuration, and the entity's state.
+//! handler's configuration, and the handler's state.
 use std::{fmt::Debug, fs, io::Write, path::Path};
 
 use bao_tree::io::BaoContentItem;
@@ -62,7 +62,7 @@ use crate::store::host::{
         entry_state::{DataLocation, EntryState, OutboardLocation},
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
-    reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
+    reflink_or_copy_with_progress, HandlerGlobal, HashHandler, ImportEntry, ImportEntryMsg,
     ImportSource, Location, Phase, StateCell, StoreOptions, TaskContext, WriteGuard,
 };
 use crate::{
@@ -90,7 +90,7 @@ use file_deletes::delete_files;
 /// Maximum number of external paths we track per blob.
 const MAX_EXTERNAL_PATHS: usize = 8;
 
-/// Waits until the entity is neither loading nor deleting.
+/// Waits until the handler is neither loading nor deleting.
 ///
 /// Mutations also wait for a GC freeze. Readers only need `wait_settled`.
 async fn wait_writable<'a>(ctx: &HashContext<'a>) -> WriteGuard<'a, BaoStorage> {
@@ -131,7 +131,7 @@ async fn open_entry(ctx: &HashContext<'_>) -> BaoStorage {
 /// Delete unconditionally, keeping writes suspended until committed cleanup.
 /// Metadata failure aborts the store, so there is no rollback state to retain.
 async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
-    // Loaded, the entity's state knows all its files: those of its entry, and
+    // Loaded, the handler's state knows all its files: those of its entry, and
     // those it wrote that the entry does not reference yet.
     ctx.load().await;
     ctx.state
@@ -159,9 +159,9 @@ async fn delete_entry(ctx: &HashContext<'_>) -> io::Result<()> {
 /// Deletes the parts a committed batch stopped referencing, unless the entry still uses them.
 ///
 /// The notice is only as recent as its commit: by the time it arrives, the
-/// entry may have been deleted and created again, and its entity unloaded. So
+/// entry may have been deleted and created again, and its handler unloaded. So
 /// the parts are checked against the loaded state, which is never behind the
-/// entry. An entity woken just for this loads first.
+/// entry. A handler woken just for this loads first.
 async fn delete_unreferenced(ctx: &HashContext<'_>, parts: UnreferencedParts) {
     ctx.load().await;
     let _write = wait_writable(ctx).await;
@@ -175,7 +175,7 @@ async fn delete_unreferenced(ctx: &HashContext<'_>, parts: UnreferencedParts) {
     delete_files(&ctx.config.path, &ctx.id, &parts);
 }
 
-/// What the fs entity's code works on: the hash, the store, and the entity's state.
+/// What the fs handler's code works on: the hash, the store, and the handler's state.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HashContext<'a> {
     id: Hash,
@@ -184,16 +184,16 @@ pub(super) struct HashContext<'a> {
     state: &'a StateCell<BaoStorage>,
 }
 
-/// The fs store's entity: the state of a hash's files.
+/// The fs store's handler: the state of a hash's files.
 #[derive(Debug, Clone)]
-pub(super) struct FsEntity {
+pub(super) struct FsHandler {
     id: Hash,
     handle: StateCell<BaoStorage>,
 }
 
-impl FsEntity {
+impl FsHandler {
     /// The context its code runs in, for one request.
-    fn ctx<'a>(&'a self, global: &'a EntityGlobal<FsBackend>) -> HashContext<'a> {
+    fn ctx<'a>(&'a self, global: &'a HandlerGlobal<FsBackend>) -> HashContext<'a> {
         HashContext {
             id: self.id,
             global: &global.store,
@@ -203,7 +203,7 @@ impl FsEntity {
     }
 }
 
-impl EntityApi for FsEntity {
+impl HashHandler for FsHandler {
     type Backend = FsBackend;
 
     fn new(id: &Hash) -> Self {
@@ -220,7 +220,7 @@ impl EntityApi for FsEntity {
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn import_bao(&self, global: &EntityGlobal<FsBackend>, cmd: ImportBaoMsg) {
+    async fn import_bao(&self, global: &HandlerGlobal<FsBackend>, cmd: ImportBaoMsg) {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
@@ -241,7 +241,7 @@ impl EntityApi for FsEntity {
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
     async fn finish_import(
         &self,
-        global: &EntityGlobal<FsBackend>,
+        global: &HandlerGlobal<FsBackend>,
         cmd: ImportEntryMsg,
         mut tt: TempTag,
     ) {
@@ -264,7 +264,7 @@ impl EntityApi for FsEntity {
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn observe(&self, global: &EntityGlobal<FsBackend>, cmd: ObserveMsg) {
+    async fn observe(&self, global: &HandlerGlobal<FsBackend>, cmd: ObserveMsg) {
         trace!("{cmd:?}");
         self.ctx(global).load().await;
         self.handle
@@ -275,7 +275,7 @@ impl EntityApi for FsEntity {
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_ranges(&self, global: &EntityGlobal<FsBackend>, mut cmd: ExportRangesMsg) {
+    async fn export_ranges(&self, global: &HandlerGlobal<FsBackend>, mut cmd: ExportRangesMsg) {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
@@ -288,7 +288,7 @@ impl EntityApi for FsEntity {
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_bao(&self, global: &EntityGlobal<FsBackend>, mut cmd: ExportBaoMsg) {
+    async fn export_bao(&self, global: &HandlerGlobal<FsBackend>, mut cmd: ExportBaoMsg) {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
@@ -303,7 +303,7 @@ impl EntityApi for FsEntity {
     }
 
     #[instrument(skip_all, fields(hash = %cmd.hash_short()))]
-    async fn export_path(&self, global: &EntityGlobal<FsBackend>, cmd: ExportPathMsg) {
+    async fn export_path(&self, global: &HandlerGlobal<FsBackend>, cmd: ExportPathMsg) {
         trace!("{cmd:?}");
         let ctx = self.ctx(global);
         ctx.load().await;
@@ -313,13 +313,13 @@ impl EntityApi for FsEntity {
         }
     }
 
-    async fn delete(&self, global: &EntityGlobal<FsBackend>) -> io::Result<()> {
+    async fn delete(&self, global: &HandlerGlobal<FsBackend>) -> io::Result<()> {
         delete_entry(&self.ctx(global)).await
     }
 
     async fn freeze(
         &self,
-        global: &EntityGlobal<FsBackend>,
+        global: &HandlerGlobal<FsBackend>,
         ack: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::watch::Receiver<()>,
     ) {
@@ -328,14 +328,14 @@ impl EntityApi for FsEntity {
 
     async fn delete_unreferenced(
         &self,
-        global: &EntityGlobal<FsBackend>,
+        global: &HandlerGlobal<FsBackend>,
         parts: UnreferencedParts,
     ) {
         delete_unreferenced(&self.ctx(global), parts).await
     }
 
     #[instrument(skip_all, fields(hash = %self.id.fmt_short()))]
-    async fn persist(&self, global: &EntityGlobal<FsBackend>) {
+    async fn persist(&self, global: &HandlerGlobal<FsBackend>) {
         let config = &global.backend.config;
         self.handle.retire(|state| {
             let hash = &self.id;
@@ -372,7 +372,7 @@ impl BaoAccess for HashContext<'_> {
         let write = wait_writable(self).await;
         let mut res = Ok(None);
         write.modify(|state| {
-            // Imports load the entity first, and wait_writable leaves it
+            // Imports load the handler first, and wait_writable leaves it
             // loaded and writable.
             let settled = match state.take() {
                 Phase::ReadWrite(settled) => settled,
@@ -719,7 +719,7 @@ async fn export_path_impl(
                 drop(write);
                 if complete {
                     // After the commit, the owned data file comes back as an
-                    // unreferenced part, and this entity deletes it unless its
+                    // unreferenced part, and this handler deletes it unless its
                     // state still uses it.
                     // TODO: after a copy across file systems it does, so the
                     // owned file leaks.

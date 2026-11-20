@@ -140,7 +140,7 @@ impl Db {
     /// Apply an unconditional delete, answered once it is committed, even if
     /// there was no metadata entry.
     ///
-    /// Only the hash's entity sends this, see [`Delete`].
+    /// Only the hash's handler sends this, see [`Delete`].
     pub async fn delete(&self, hash: Hash) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         let span = Span::current();
@@ -172,7 +172,7 @@ impl Db {
 
 /// The metadata of a single entry.
 ///
-/// This is all an entity gets to see of the database.
+/// This is all a handler gets to see of the database.
 #[derive(Debug, Clone, Copy)]
 pub struct EntryMeta<'a> {
     db: &'a Db,

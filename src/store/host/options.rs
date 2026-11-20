@@ -6,20 +6,20 @@ use crate::store::{fs::options::InlineOptions, gc::GcConfig};
 
 /// The part of the fs store's `Options` the store itself uses.
 ///
-/// The rest goes to the parts the store is built from: the fs entity gets its
+/// The rest goes to the parts the store is built from: the fs handler gets its
 /// paths and sync mode as `FsConfig`, and the redb metadata store gets the
 /// options it needs when it is created.
 #[derive(Debug, Clone)]
 pub(crate) struct StoreOptions {
-    /// Inlining, which every entity implementation shares.
+    /// Inlining, which every handler implementation shares.
     pub inline: InlineOptions,
     /// Where imports stage their files.
     ///
     /// Imports stage and hash their data before the hash is known, so outside
-    /// any entity, and the fs entity then renames the files into place. So
-    /// this belongs to the fs entity really, and must be on the same device as
+    /// any handler, and the fs handler then renames the files into place. So
+    /// this belongs to the fs handler really, and must be on the same device as
     /// its data directory. It moves there once import staging is part of the
-    /// entity implementation.
+    /// handler implementation.
     pub temp_path: PathBuf,
     /// Gc configuration.
     pub gc: Option<GcConfig>,
