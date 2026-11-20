@@ -59,7 +59,7 @@ use crate::store::host::{
     bao::{export_bao_impl, export_ranges_impl, import_bao_impl, BaoAccess},
     metadata::{
         self,
-        entry_state::{DataLocation, EntryState, OutboardLocation},
+        entry_state::{DataLocation, EntryState, Location, OutboardLocation},
         parts::{BaoFileParts, UnreferencedParts, ALL_PARTS},
     },
     reflink_or_copy_with_progress, EntityApi, EntityGlobal, ImportEntry, ImportEntryMsg,
@@ -519,7 +519,9 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
     // convert the import source to a data location and drop the open files
     let data_location = match source {
         ImportSource::Memory(data) => DataLocation::Inline(data),
-        ImportSource::External(path, _file, size) => DataLocation::External(vec![path], size),
+        ImportSource::External(path, _file, size) => {
+            DataLocation::External(vec![Location::from_path(&path)?], size)
+        }
         ImportSource::TempFile(path, _file, size) => {
             if sync {
                 sync_file(path.as_ref())?;
@@ -579,7 +581,7 @@ async fn finish_import_impl(ctx: &HashContext<'_>, import_data: ImportEntry) -> 
             let Some(path) = paths.iter().next() else {
                 return Err(io::Error::other("no external data path"));
             };
-            let file = fs::File::open(path)?;
+            let file = fs::File::open(path.to_path()?)?;
             MemOrFile::File(FixedSize::new(file, *size))
         }
     };
@@ -642,9 +644,13 @@ async fn export_path_impl(
         ),
         DataLocation::External(paths, size) => (
             MemOrFile::File((
-                paths.first().cloned().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "no external data path")
-                })?,
+                paths
+                    .first()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotFound, "no external data path")
+                    })?
+                    .to_path()?
+                    .to_path_buf(),
                 size,
             )),
             paths,
@@ -683,7 +689,7 @@ async fn export_path_impl(
                         source_path.display(),
                         target.display()
                     );
-                    external.push(target);
+                    external.push(Location::from_path(&target)?);
                     external.sort();
                     external.dedup();
                     external.truncate(MAX_EXTERNAL_PATHS);
@@ -703,7 +709,7 @@ async fn export_path_impl(
                             }
                         }
                     }
-                    external.push(target);
+                    external.push(Location::from_path(&target)?);
                 };
                 // The copy took a while, so the entry may have been deleted
                 // meanwhile. Then it stays deleted, and this was just a copy.

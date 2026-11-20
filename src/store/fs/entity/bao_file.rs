@@ -2,7 +2,7 @@ use core::fmt;
 use std::{
     fs::{File, OpenOptions},
     io,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use bao_tree::{
@@ -23,7 +23,7 @@ use crate::store::fs::options::FsConfig;
 use crate::{
     api::blobs::Bitfield,
     store::host::metadata::{
-        entry_state::{DataLocation, EntryState, OutboardLocation},
+        entry_state::{DataLocation, EntryState, Location, OutboardLocation},
         parts::BaoFilePart,
     },
     store::host::{Phase, StateCell, WriteGuard},
@@ -95,16 +95,13 @@ fn create_read_write(path: impl AsRef<Path>) -> io::Result<File> {
 /// Fails with `NotFound` only if all files are missing. Otherwise the first
 /// error that is not `NotFound` is returned, so real IO faults stay visible.
 /// An empty list never happens in normal use and is reported as corrupt metadata.
-fn open_external(paths: &[PathBuf]) -> io::Result<File> {
+fn open_external(paths: &[Location]) -> io::Result<File> {
     let mut error: Option<io::Error> = None;
-    for path in paths {
-        match File::open(path) {
+    for location in paths {
+        match location.to_path().and_then(File::open) {
             Ok(file) => return Ok(file),
             Err(cause) => {
-                debug!(
-                    "failed to open external data file {}: {cause}",
-                    path.display()
-                );
+                debug!("failed to open external data file {location:?}: {cause}");
                 if error
                     .as_ref()
                     .is_none_or(|e| e.kind() == io::ErrorKind::NotFound)

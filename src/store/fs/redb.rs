@@ -1029,6 +1029,8 @@ mod tests {
 
     use tracing::Span;
 
+    use crate::store::host::metadata::entry_state::Location;
+
     use super::{
         super::options::{CrashConsistency, Options, PathOptions},
         *,
@@ -1260,7 +1262,10 @@ mod tests {
                 Set {
                     hash,
                     state: EntryState::Complete {
-                        data_location: DataLocation::External(vec![external.clone()], 7),
+                        data_location: DataLocation::External(
+                            vec![Location::from_path(&external).unwrap()],
+                            7,
+                        ),
                         outboard_location: OutboardLocation::NotNeeded,
                     },
                     tx: reply,

@@ -1,9 +1,11 @@
 //! The state of an entry, as the metadata store keeps it.
 use std::{
     fmt::{self, Debug},
-    path::PathBuf,
+    io,
+    path::Path,
 };
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::store::util::SliceInfoExt;
@@ -20,6 +22,55 @@ impl fmt::Display for InconsistentEntry {
 
 impl std::error::Error for InconsistentEntry {}
 
+/// Where a backend keeps data outside the store, in a format only it interprets.
+///
+/// The host never looks inside. The fs backend keeps a UTF-8 path. It is
+/// encoded like a string, so it reads entries written when this was a path.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Location(Bytes);
+
+impl Location {
+    /// A location in a backend's own format.
+    pub fn new(location: impl Into<Bytes>) -> Self {
+        Self(location.into())
+    }
+
+    /// The location in the backend's own format.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// The location of a file, for backends that keep paths.
+    ///
+    /// Fails for a path that is not UTF-8, the only kind every platform can read back.
+    pub fn from_path(path: &Path) -> io::Result<Self> {
+        let path = path.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path is not UTF-8: {}", path.display()),
+            )
+        })?;
+        Ok(Self(Bytes::copy_from_slice(path.as_bytes())))
+    }
+
+    /// The location as a file path, for backends that keep paths.
+    pub fn to_path(&self) -> io::Result<&Path> {
+        let path = std::str::from_utf8(&self.0)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "location is not UTF-8"))?;
+        Ok(Path::new(path))
+    }
+}
+
+impl Debug for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match std::str::from_utf8(&self.0) {
+            Ok(s) => Debug::fmt(s, f),
+            Err(_) => write!(f, "{:?}", self.0),
+        }
+    }
+}
+
 /// Location of the data.
 ///
 /// Data can be inlined in the database, a file conceptually owned by the store,
@@ -33,7 +84,7 @@ pub enum DataLocation<I = (), E = ()> {
     /// Data is in the canonical location in the data directory.
     Owned(E),
     /// Data is in several external locations. This should be a non-empty list.
-    External(Vec<PathBuf>, E),
+    External(Vec<Location>, E),
 }
 
 impl<I: AsRef<[u8]>, E: Debug> DataLocation<I, E> {
@@ -43,10 +94,7 @@ impl<I: AsRef<[u8]>, E: Debug> DataLocation<I, E> {
                 format!("Inline({}, addr={})", d.as_ref().len(), d.addr_short())
             }
             DataLocation::Owned(e) => format!("Owned({e:?})"),
-            DataLocation::External(paths, e) => {
-                let paths = paths.iter().map(|p| p.display()).collect::<Vec<_>>();
-                format!("External({paths:?}, {e:?})")
-            }
+            DataLocation::External(paths, e) => format!("External({paths:?}, {e:?})"),
         }
     }
 }
@@ -277,5 +325,45 @@ impl EntryState {
                 Ok(Self::Partial { size })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    /// The location as entries stored it before, when it was a path.
+    #[derive(Serialize)]
+    enum OldDataLocation {
+        #[allow(dead_code)]
+        Inline(()),
+        #[allow(dead_code)]
+        Owned(u64),
+        External(Vec<PathBuf>, u64),
+    }
+
+    #[test]
+    fn location_reads_entries_stored_as_paths() {
+        let path = PathBuf::from("/some/dir/ünïcode file.bin");
+        let old = postcard::to_allocvec(&OldDataLocation::External(vec![path.clone()], 7)).unwrap();
+        let read: DataLocation<(), u64> = postcard::from_bytes(&old).unwrap();
+        let DataLocation::External(locations, 7) = &read else {
+            panic!("unexpected {read:?}");
+        };
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].to_path().unwrap(), path.as_path());
+        // And it writes them the same way.
+        assert_eq!(postcard::to_allocvec(&read).unwrap(), old);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn location_rejects_non_utf8_paths() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+        let path = Path::new(OsStr::from_bytes(b"/tmp/\xff"));
+        let err = Location::from_path(path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }
