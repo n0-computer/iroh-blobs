@@ -28,8 +28,9 @@ use super::{
     FsStore,
 };
 use crate::{
+    api::blobs::{AddPathOptions, ExportMode, ExportOptions, ImportMode},
     store::{mem::MemStore, util::tests::create_n0_bao},
-    Hash,
+    BlobFormat, Hash,
 };
 
 /// The LazyFS binary to mount with.
@@ -218,6 +219,116 @@ async fn power_loss_keeps_every_recorded_blob() -> TestResult<()> {
     let partial = blobs().pop().expect("a partial blob");
     let bitfield = store.observe(partial.hash()).await?;
     assert_eq!(bitfield.ranges, partial.ranges, "the partial blob survives");
+    store.shutdown().await?;
+    Ok(())
+}
+
+/// Blobs large enough for an outboard file: one imported by reference, one moved out by export.
+fn external_blobs() -> [Vec<u8>; 2] {
+    let data = |seed: u8| -> Vec<u8> {
+        (0..5_000_000usize)
+            .map(|i| seed.wrapping_add((i / 1024) as u8) ^ (i as u8))
+            .collect()
+    };
+    [data(5), data(6)]
+}
+
+/// Where the user's files live, inside the store directory so LazyFS covers them.
+fn user_dir(dir: &Path) -> PathBuf {
+    dir.join("user")
+}
+
+/// Writes a file and syncs it and its directory, as a user would before handing it over.
+fn write_synced(path: &Path, data: &[u8]) -> TestResult<()> {
+    let dir = path.parent().expect("a parent");
+    fs::create_dir_all(dir)?;
+    let mut file = File::create(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// In the child: creates complete external entries in every way, and exits as a crash would.
+///
+/// An import by reference, a copy of that entry to a second path, and an
+/// owned entry moved out by export.
+async fn write_external_and_crash(dir: &Path) -> TestResult<()> {
+    let store = open(dir, CrashConsistency::ProcessCrash).await?;
+    let [imported, moved] = external_blobs();
+    let user = user_dir(dir);
+    let source = user.join("imported.bin");
+    write_synced(&source, &imported)?;
+    store
+        .add_path_with_opts(AddPathOptions {
+            path: source,
+            format: BlobFormat::Raw,
+            mode: ImportMode::TryReference,
+        })
+        .await?;
+    store
+        .export_with_opts(ExportOptions {
+            hash: Hash::new(&imported),
+            mode: ExportMode::TryReference,
+            target: user.join("imported-copy.bin"),
+        })
+        .await?;
+    store.add_bytes(moved.clone()).await?;
+    store
+        .export_with_opts(ExportOptions {
+            hash: Hash::new(&moved),
+            mode: ExportMode::TryReference,
+            target: user.join("moved.bin"),
+        })
+        .await?;
+    store.sync_db().await?;
+    std::process::exit(0);
+}
+
+/// Checks that every external entry is complete and serves verified data.
+///
+/// The imported file is removed first, so the entry has to serve from its copy.
+async fn check_external(dir: &Path, store: &FsStore) -> TestResult<()> {
+    fs::remove_file(user_dir(dir).join("imported.bin"))?;
+    for data in external_blobs() {
+        let hash = Hash::new(&data);
+        let bitfield = store.observe(hash).await?;
+        assert!(bitfield.is_complete(), "{hash} is still complete");
+        let bao = store
+            .export_bao(hash, ChunkRanges::all())
+            .bao_to_vec()
+            .await?;
+        let verify = MemStore::new();
+        verify
+            .import_bao_bytes(hash, ChunkRanges::all(), bao)
+            .await?;
+        assert_eq!(store.get_bytes(hash).await?.as_ref(), data.as_slice());
+    }
+    Ok(())
+}
+
+/// After an OS crash, complete external entries still serve their data, without syncing data files.
+///
+/// Recovery leaves complete external entries alone, so what they rely on must
+/// have been synced before they were recorded: the outboard, a copy, or a
+/// file moved out of the store.
+#[tokio::test]
+#[ignore = "needs LazyFS, see the module docs"]
+async fn os_crash_keeps_external_entries() -> TestResult<()> {
+    if let Some(dir) = env::var_os(CHILD) {
+        return write_external_and_crash(Path::new(&dir)).await;
+    }
+    let root = tempfile::tempdir()?;
+    let lazyfs = LazyFs::mount(root.path())?;
+    run_child("os_crash_keeps_external_entries", lazyfs.mount_point())?;
+    lazyfs.clear_cache()?;
+    // LazyFS keeps the boot id, so stand in for the reboot.
+    assert!(
+        trigger_reboot_check(&lazyfs.mount_point().join("blobs.db"))?,
+        "the crashed run must still be recorded"
+    );
+    let store = open(lazyfs.mount_point(), CrashConsistency::ProcessCrash).await?;
+    check_external(lazyfs.mount_point(), &store).await?;
     store.shutdown().await?;
     Ok(())
 }
