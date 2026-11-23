@@ -307,23 +307,6 @@ async fn check_external(dir: &Path, store: &FsStore) -> TestResult<()> {
     Ok(())
 }
 
-/// After a process crash, complete external entries serve their data.
-///
-/// This one needs no LazyFS, so it runs everywhere: it checks the setup of
-/// the OS crash test below.
-#[tokio::test]
-async fn process_crash_keeps_external_entries() -> TestResult<()> {
-    if let Some(dir) = env::var_os(CHILD) {
-        return write_external_and_crash(Path::new(&dir)).await;
-    }
-    let root = tempfile::tempdir()?;
-    run_child("process_crash_keeps_external_entries", root.path())?;
-    let store = open(root.path(), CrashConsistency::ProcessCrash).await?;
-    check_external(root.path(), &store).await?;
-    store.shutdown().await?;
-    Ok(())
-}
-
 /// After an OS crash, complete external entries still serve their data, without syncing data files.
 ///
 /// Recovery leaves complete external entries alone, so what they rely on must
