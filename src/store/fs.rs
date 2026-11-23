@@ -123,15 +123,7 @@ impl FsStore {
         let data_path = &backend.config.path.data_path;
         trace!("creating data directory: {}", data_path.display());
         fs::create_dir_all(data_path)?;
-        Self::from_parts(StoreOptions::from(&options), backend).await
-    }
-
-    /// Starts a store from its options and a backend.
-    ///
-    /// The backend starts the metadata store on the store's runtime, and is
-    /// shared by all handlers as their configuration.
-    async fn from_parts<B: Backend>(options: StoreOptions, backend: B) -> Result<FsStore> {
-        let started = start(options, backend).await?;
+        let started = start(StoreOptions::from(&options), backend).await?;
         Ok(FsStore {
             #[cfg(test)]
             threads: started.threads,

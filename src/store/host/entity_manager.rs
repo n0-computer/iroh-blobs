@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::{fmt::Debug, future::Future, hash::Hash};
 
 use n0_future::{future, FuturesUnordered};
@@ -680,9 +679,11 @@ mod main_actor {
 /// Dropping the `EntityManager` will shut down the entity actors without waiting for their
 /// tasks to complete. For a more gentle shutdown, use the [`EntityManager::shutdown`] function
 /// that does wait for tasks to complete.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct EntityManager<P: Params>(mpsc::Sender<main_actor::Command<P>>);
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     /// Maximum number of inactive entity actors that are being pooled for reuse.
@@ -697,6 +698,7 @@ pub struct Options {
     pub entity_futures_initial_capacity: usize,
 }
 
+#[cfg(test)]
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -708,6 +710,7 @@ impl Default for Options {
     }
 }
 
+#[cfg(test)]
 impl<P: Params> EntityManager<P> {
     pub fn new(state: P::GlobalState, options: Options) -> Self {
         let (send, recv) = mpsc::channel(options.inbox_size);
@@ -1060,7 +1063,6 @@ mod tests {
     mod fs {
         //! The fs db uses one file per counter, stored as a 16-byte big-endian u128.
         use std::{
-            collections::HashSet,
             path::{Path, PathBuf},
             sync::{Arc, Mutex},
         };
@@ -1073,7 +1075,6 @@ mod tests {
         #[derive(Debug, Clone, Default)]
         struct State {
             value: Option<u128>,
-            tasks: HashSet<tokio::task::Id>,
         }
 
         #[derive(Debug)]

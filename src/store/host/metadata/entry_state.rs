@@ -142,15 +142,6 @@ impl<X> DataLocation<X, u64> {
 }
 
 impl<I, E> DataLocation<I, E> {
-    #[allow(dead_code)]
-    pub fn discard_inline_data(self) -> DataLocation<(), E> {
-        match self {
-            DataLocation::Inline(_) => DataLocation::Inline(()),
-            DataLocation::Owned(x) => DataLocation::Owned(x),
-            DataLocation::External(paths, x) => DataLocation::External(paths, x),
-        }
-    }
-
     pub fn split_inline_data(self) -> (DataLocation<(), E>, Option<I>) {
         match self {
             DataLocation::Inline(x) => (DataLocation::Inline(()), Some(x)),
@@ -195,15 +186,6 @@ impl<I> OutboardLocation<I> {
             OutboardLocation::NotNeeded
         } else {
             OutboardLocation::Inline(data)
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn discard_extra_data(self) -> OutboardLocation<()> {
-        match self {
-            Self::Inline(_) => OutboardLocation::Inline(()),
-            Self::Owned => OutboardLocation::Owned,
-            Self::NotNeeded => OutboardLocation::NotNeeded,
         }
     }
 
