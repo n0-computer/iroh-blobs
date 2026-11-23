@@ -570,7 +570,7 @@ async fn copy_with_progress<T: CopyProgress>(
     Ok(())
 }
 
-#[cfg(all(test, feature = "fs-store"))]
+#[cfg(test)]
 mod tests {
 
     use bao_tree::io::outboard::PreOrderMemOutboard;
@@ -579,10 +579,7 @@ mod tests {
     use testresult::TestResult;
 
     use super::*;
-    use crate::{
-        api::proto::BoxedByteStream,
-        store::fs::options::{CrashConsistency, InlineOptions, Options, PathOptions},
-    };
+    use crate::{api::proto::BoxedByteStream, store::host::options::InlineOptions};
 
     async fn drain<T: RpcMessage>(mut recv: mpsc::Receiver<T>) -> TestResult<Vec<T>> {
         let mut res = Vec::new();
@@ -673,16 +670,14 @@ mod tests {
         let dir = tempfile::tempdir()?;
         std::fs::create_dir_all(dir.path().join("data"))?;
         std::fs::create_dir_all(dir.path().join("temp"))?;
-        let options = Arc::new(StoreOptions::from(&Options {
+        let options = Arc::new(StoreOptions {
             inline: InlineOptions {
                 max_data_inlined: 1024 * 16,
                 max_outboard_inlined: 1024 * 16,
             },
-            batch: Default::default(),
-            path: PathOptions::new(dir.path()),
+            temp_path: dir.path().join("temp"),
             gc: None,
-            crash_consistency: CrashConsistency::PowerLoss,
-        }));
+        });
         // test different sizes, below, at, and above the inline threshold
         let sizes = [
             0,               // empty, no outboard
@@ -706,7 +701,11 @@ mod tests {
     #[tokio::test]
     async fn cancelled_import_removes_temp_file() -> TestResult<()> {
         let dir = tempfile::tempdir()?;
-        let options = Arc::new(StoreOptions::from(&Options::new(dir.path())));
+        let options = Arc::new(StoreOptions {
+            inline: InlineOptions::default(),
+            temp_path: dir.path().join("temp"),
+            gc: None,
+        });
         std::fs::create_dir_all(&options.temp_path)?;
         let (mut tx, rx) = mpsc::channel(16);
         drop(rx);

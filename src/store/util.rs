@@ -481,9 +481,28 @@ impl bao_tree::io::mixed::Sender for BaoTreeSender {
 #[cfg(test)]
 pub mod tests {
     use bao_tree::{io::outboard::PreOrderMemOutboard, ChunkRanges};
+    use bytes::Bytes;
     use n0_error::{Result, StdResultExt};
 
     use crate::{hash::Hash, store::IROH_BLOCK_SIZE};
+
+    /// Generate test data for size n.
+    ///
+    /// We don't really care about the content, since we assume blake3 works.
+    /// The only thing it should not be is all zeros, since that is what you
+    /// will get for a gap.
+    pub fn test_data(n: usize) -> Bytes {
+        let mut res = Vec::with_capacity(n);
+        // Using uppercase A-Z (65-90), 26 possible characters
+        for i in 0..n {
+            // Change character every 1024 bytes
+            let block_num = i / 1024;
+            // Map to uppercase A-Z range (65-90)
+            let ascii_val = 65 + (block_num % 26) as u8;
+            res.push(ascii_val);
+        }
+        Bytes::from(res)
+    }
 
     /// Create n0 flavoured bao. Note that this can be used to request ranges below a chunk group size,
     /// which can not be exported via bao because we don't store hashes below the chunk group level.

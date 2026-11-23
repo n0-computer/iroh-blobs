@@ -655,7 +655,7 @@ impl HashHandler for MemHandler {
     }
 }
 
-#[cfg(all(test, feature = "fs-store"))]
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -664,7 +664,7 @@ mod tests {
     use testresult::TestResult;
 
     use super::*;
-    use crate::store::{fs::tests::test_data, util::tests::create_n0_bao};
+    use crate::store::util::tests::{create_n0_bao, test_data};
 
     /// Bytes and files go in and come out unchanged, small and large.
     #[tokio::test]

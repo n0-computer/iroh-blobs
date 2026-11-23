@@ -335,7 +335,7 @@ pub(crate) mod outboard_with_progress {
         Ok(Ok(()))
     }
 
-    #[cfg(all(test, feature = "fs-store"))]
+    #[cfg(test)]
     mod tests {
         use bao_tree::{
             blake3,
@@ -345,7 +345,7 @@ pub(crate) mod outboard_with_progress {
         use testresult::TestResult;
 
         use crate::{
-            store::{fs::tests::test_data, IROH_BLOCK_SIZE},
+            store::{util::tests::test_data, IROH_BLOCK_SIZE},
             util::{outboard_with_progress::init_outboard, sink::Drain},
         };
 
