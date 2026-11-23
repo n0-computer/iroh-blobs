@@ -3,8 +3,15 @@ use std::path::{Path, PathBuf};
 
 use n0_future::time::Duration;
 
-use super::{meta::raw_outboard_size, temp_name};
-use crate::{store::gc::GcConfig, Hash};
+pub use crate::store::host::options::InlineOptions;
+
+use crate::{
+    store::{
+        gc::GcConfig,
+        host::{bao::raw_outboard_size, temp_name, StoreOptions},
+    },
+    Hash,
+};
 
 /// Options for directories used by the file store.
 #[derive(Debug, Clone)]
@@ -43,37 +50,6 @@ impl PathOptions {
 
     pub fn temp_file_name(&self) -> PathBuf {
         self.temp_path.join(temp_name())
-    }
-}
-
-/// Options for inlining small complete data or outboards.
-#[derive(Debug, Clone)]
-pub struct InlineOptions {
-    /// Maximum data size to inline.
-    pub max_data_inlined: u64,
-    /// Maximum outboard size to inline.
-    pub max_outboard_inlined: u64,
-}
-
-impl InlineOptions {
-    /// Do not inline anything, ever.
-    pub const NO_INLINE: Self = Self {
-        max_data_inlined: 0,
-        max_outboard_inlined: 0,
-    };
-    /// Always inline everything
-    pub const ALWAYS_INLINE: Self = Self {
-        max_data_inlined: u64::MAX,
-        max_outboard_inlined: u64::MAX,
-    };
-}
-
-impl Default for InlineOptions {
-    fn default() -> Self {
-        Self {
-            max_data_inlined: 1024 * 16,
-            max_outboard_inlined: 1024 * 16,
-        }
     }
 }
 
@@ -135,7 +111,7 @@ pub enum CrashConsistency {
     /// writes inherited from an earlier run, but may wait for unrelated writes
     /// on the same filesystem. If the flush fails, opening the store returns an
     /// error and leaves the previous run record in place for the next attempt.
-    /// Other platforms do not yet perform this startup flush, so switching from
+    /// Other platforms do not perform this startup flush, so switching from
     /// `ProcessCrash` can leave earlier writes unsynced.
     PowerLoss,
 }
@@ -167,11 +143,6 @@ impl Options {
         }
     }
 
-    /// True if files must reach the disk before metadata that depends on them is recorded.
-    pub(crate) fn syncs_files(&self) -> bool {
-        self.crash_consistency == CrashConsistency::PowerLoss
-    }
-
     // check if the data will be inlined, based on the size of the data
     pub fn is_inlined_data(&self, data_size: u64) -> bool {
         data_size <= self.inline.max_data_inlined
@@ -186,5 +157,40 @@ impl Options {
     pub fn is_inlined_all(&self, data_size: u64) -> bool {
         let outboard_size = raw_outboard_size(data_size);
         self.is_inlined_data(data_size) && self.is_inlined_outboard(outboard_size)
+    }
+}
+
+impl From<&Options> for StoreOptions {
+    fn from(options: &Options) -> Self {
+        Self {
+            inline: options.inline.clone(),
+            temp_path: options.path.temp_path.clone(),
+            gc: options.gc.clone(),
+        }
+    }
+}
+
+/// What the fs handler needs: where its files live, and whether to sync them.
+#[derive(Debug, Clone)]
+pub(crate) struct FsConfig {
+    /// Where the entries' files live.
+    pub path: PathOptions,
+    /// What kind of crash the store stays consistent through.
+    pub crash_consistency: CrashConsistency,
+}
+
+impl FsConfig {
+    /// True if files must reach the disk before metadata that depends on them is recorded.
+    pub fn syncs_files(&self) -> bool {
+        self.crash_consistency == CrashConsistency::PowerLoss
+    }
+}
+
+impl From<&Options> for FsConfig {
+    fn from(options: &Options) -> Self {
+        Self {
+            path: options.path.clone(),
+            crash_consistency: options.crash_consistency,
+        }
     }
 }

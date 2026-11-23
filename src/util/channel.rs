@@ -1,4 +1,4 @@
-#[cfg(feature = "fs-store")]
+#[cfg(feature = "host")]
 pub mod oneshot {
     use std::{
         future::Future,

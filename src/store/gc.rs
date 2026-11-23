@@ -957,6 +957,52 @@ mod tests {
         Ok(())
     }
 
+    /// The store host on the memory backend, see `store::host::mem_backend`.
+    #[cfg(feature = "fs-store")]
+    async fn membackend_store(dir: &std::path::Path) -> TestResult<Store> {
+        Ok(crate::store::host::mem_backend::store(dir).await?)
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_session_membackend() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let store = membackend_store(dir.path()).await?;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            gc_freezes_hashseqs(&store).await?;
+            gc_suspends_tag_mutations(&store).await?;
+            gc_cancellation_releases_session(&store).await?;
+            gc_cancel_during_delete(&store).await?;
+            gc_closed_scope_rejects_deferred_work(&store).await?;
+            gc_shutdown_releases_session(&store).await
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_smoke_membackend() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let store = membackend_store(dir.path()).await?;
+        gc_smoke(&store).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "fs-store")]
+    async fn gc_hashseq_roots_membackend() -> TestResult {
+        // Each on a fresh store, like the other backends' tests.
+        let dir = tempfile::tempdir()?;
+        let store = membackend_store(&dir.path().join("a")).await?;
+        gc_dual_tagged_root_keeps_children(&store).await?;
+        let store = membackend_store(&dir.path().join("b")).await?;
+        gc_protected_root_keeps_children(&store).await?;
+        let store = membackend_store(&dir.path().join("c")).await?;
+        gc_import_after_mark_survives(&store).await?;
+        Ok(())
+    }
+
     /// Shutdown must not wait for a gc client that does not read its replies.
     #[tokio::test]
     #[cfg(feature = "fs-store")]

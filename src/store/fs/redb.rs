@@ -1,18 +1,24 @@
-//! The metadata database
+//! The redb metadata store: one actor that batches requests into redb transactions.
+//!
+//! It owns the redb database with the entry of each hash, inlined data and
+//! outboards of small blobs, and the tags. It groups queued requests into read
+//! or write transactions. Commits are durable (redb's default
+//! `Durability::Immediate`). It never touches data files, except for recovery
+//! when the store opens after an unclean shutdown, before any handler exists.
+//! A failed batch fails the actor without clearing the unclean-run marker.
 #![allow(clippy::result_large_err)]
 use std::{
     collections::HashMap,
     io,
     ops::{Bound, Deref, DerefMut},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
 };
 
-use bao_tree::BaoTree;
 use bytes::Bytes;
 use n0_error::{anyerr, e, stack_error, AnyError, StdResultExt};
-use n0_future::{stream, Stream};
+use n0_future::stream;
 use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable};
 use tokio::pin;
 
@@ -34,19 +40,22 @@ mod proto;
 mod recovery;
 mod run;
 pub use proto::*;
+mod boot_id;
+mod peekable;
+mod sync_fs;
 pub(crate) mod tables;
+use peekable::PeekableReceiver;
 use run::{LastShutdown, Run};
 use tables::{ReadOnlyTables, ReadableTables, Tables, META_TABLE};
-use tracing::{debug, info, info_span, trace, warn, Span};
+use tracing::{debug, info, info_span, trace, warn};
 
-use super::{
-    boot_id,
-    entry_state::{DataLocation, EntryState, OutboardLocation},
-    file_deletes::{referenced_parts, BaoFileParts, UnreferencedParts},
-    options::{BatchOptions, PathOptions},
-    util::PeekableReceiver,
+use super::options::{BatchOptions, FsConfig, PathOptions};
+use crate::store::host::metadata::{
+    self,
+    entry_state::{DataLocation, EntryState, InconsistentEntry, OutboardLocation},
+    parts::{referenced_parts, BaoFileParts, UnreferencedParts},
+    MetaChannels, MetaTask, Request,
 };
-use crate::store::IROH_BLOCK_SIZE;
 
 /// Error type for message handler functions of the redb actor.
 ///
@@ -101,233 +110,9 @@ impl ActorError {
 
 pub type ActorResult<T> = std::result::Result<T, ActorError>;
 
-#[derive(Debug, Clone)]
-pub struct Db {
-    sender: tokio::sync::mpsc::Sender<Command>,
-}
-
-impl Db {
-    pub fn new(sender: tokio::sync::mpsc::Sender<Command>) -> Self {
-        Self { sender }
-    }
-
-    /// Takes a read snapshot after all earlier commands.
-    async fn snapshot(&self, span: tracing::Span) -> io::Result<ReadOnlyTables> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(Snapshot { tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send snapshot"))?;
-        rx.await.map_err(|_| io::Error::other("receive snapshot"))
-    }
-
-    /// Lists the tags of a snapshot taken after all earlier commands.
-    ///
-    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
-    pub async fn list_tags(
-        &self,
-        span: tracing::Span,
-        request: ListTagsRequest,
-    ) -> io::Result<impl Stream<Item = api::Result<TagInfo>> + Send + 'static> {
-        let snapshot = self.snapshot(span).await?;
-        let ListTagsRequest {
-            from,
-            to,
-            raw,
-            hash_seq,
-        } = request;
-        let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
-        let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-        let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
-        let tags = rows.filter_map(move |row| {
-            let (name, value) = match row {
-                Ok(row) => row,
-                Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
-            };
-            let value = value.value();
-            let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
-            wanted.then(|| {
-                Ok(TagInfo {
-                    name: name.value(),
-                    hash: value.hash,
-                    format: value.format,
-                })
-            })
-        });
-        Ok(stream::iter(tags))
-    }
-
-    /// Lists the blobs of a snapshot taken after all earlier commands.
-    ///
-    /// The stream owns the snapshot, so the metadata actor does not wait for the reader.
-    pub async fn list_blobs(
-        &self,
-        span: tracing::Span,
-    ) -> io::Result<impl Stream<Item = api::Result<Hash>> + Send + 'static> {
-        let snapshot = self.snapshot(span).await?;
-        Ok(stream::iter(blob_hashes(&snapshot)?))
-    }
-
-    /// Reads the gc candidates (every blob) and the named tag roots from one
-    /// snapshot taken after all earlier commands.
-    pub async fn gc_snapshot(
-        &self,
-        span: tracing::Span,
-    ) -> io::Result<(
-        impl Stream<Item = api::Result<Hash>> + Send + 'static,
-        impl Stream<Item = api::Result<crate::HashAndFormat>> + Send + 'static,
-    )> {
-        let snapshot = self.snapshot(span).await?;
-        let candidates = blob_hashes(&snapshot)?;
-        let roots = snapshot
-            .tags
-            .range::<Tag>(..)
-            .map_err(io::Error::other)?
-            .map(|row| {
-                row.map(|(_, root)| root.value())
-                    .map_err(api_error_from_storage_error)
-            });
-        Ok((stream::iter(candidates), stream::iter(roots)))
-    }
-
-    pub async fn update_await(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(
-                Update {
-                    hash,
-                    state,
-                    tx: Some(tx),
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send update"))?;
-        rx.await
-            .map_err(|_e| io::Error::other("receive update"))??;
-        Ok(())
-    }
-
-    /// Update the entry state for a hash, without awaiting completion.
-    pub async fn update(&self, hash: Hash, state: EntryState<Bytes>) -> io::Result<()> {
-        self.sender
-            .send(
-                Update {
-                    hash,
-                    state,
-                    tx: None,
-                    span: Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send update"))
-    }
-
-    /// Set the entry state and await completion.
-    pub async fn set(&self, hash: Hash, entry_state: EntryState<Bytes>) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(
-                Set {
-                    hash,
-                    state: entry_state,
-                    tx,
-                    span: Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send update"))?;
-        rx.await.map_err(|_| io::Error::other("receive update"))??;
-        Ok(())
-    }
-
-    /// Get the entry state for a hash, if any.
-    pub async fn get(&self, hash: Hash) -> io::Result<Option<EntryState<Bytes>>> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(
-                Get {
-                    hash,
-                    tx,
-                    span: tracing::Span::current(),
-                }
-                .into(),
-            )
-            .await
-            .map_err(|_| io::Error::other("send get"))?;
-        let res = rx.await.map_err(|_| io::Error::other("receive get"))?;
-        Ok(res.state?)
-    }
-
-    /// Apply an unconditional delete, answered once it is committed, even if
-    /// there was no metadata entry.
-    ///
-    /// Only the hash's entity sends this, see [`Delete`].
-    pub async fn delete(&self, hash: Hash) -> io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let span = Span::current();
-        self.sender
-            .send(Delete { hash, tx, span }.into())
-            .await
-            .map_err(|_| io::Error::other("send delete"))?;
-        rx.await.map_err(|_| io::Error::other("receive delete"))??;
-        Ok(())
-    }
-
-    /// A view of this database scoped to a single entry.
-    pub fn entry(&self, hash: Hash) -> EntryMeta<'_> {
-        EntryMeta { db: self, hash }
-    }
-
-    /// Send a command. This exists so the main actor can directly forward commands.
-    ///
-    /// This will fail only if the database actor is dead. In that case the main
-    /// actor should probably also shut down.
-    pub async fn send(&self, cmd: Command) -> io::Result<()> {
-        self.sender
-            .send(cmd)
-            .await
-            .map_err(|_e| io::Error::other("actor down"))?;
-        Ok(())
-    }
-}
-
-/// The metadata of a single entry.
-///
-/// This is all an entity gets to see of the database.
-#[derive(Debug, Clone, Copy)]
-pub struct EntryMeta<'a> {
-    db: &'a Db,
-    hash: Hash,
-}
-
-impl EntryMeta<'_> {
-    /// Apply an unconditional delete, answered once it is committed.
-    pub async fn delete(&self) -> io::Result<()> {
-        self.db.delete(self.hash).await
-    }
-
-    /// Get the entry state.
-    pub async fn get(&self) -> io::Result<Option<EntryState<Bytes>>> {
-        self.db.get(self.hash).await
-    }
-
-    /// Replace the entry state, and wait for completion.
-    pub async fn set(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db.set(self.hash, state).await
-    }
-
-    /// Merge into the entry state, without waiting for completion.
-    pub async fn update(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db.update(self.hash, state).await
-    }
-
-    /// Merge into the entry state, and wait for completion.
-    pub async fn update_await(&self, state: EntryState<Bytes>) -> io::Result<()> {
-        self.db.update_await(self.hash, state).await
+impl From<InconsistentEntry> for ActorError {
+    fn from(e: InconsistentEntry) -> Self {
+        ActorError::inconsistent(e.0)
     }
 }
 
@@ -356,53 +141,6 @@ fn handle_get(cmd: Get, tables: &impl ReadableTables) -> ActorResult<()> {
     tx.send(GetResult {
         state: Ok(Some(entry)),
     });
-    Ok(())
-}
-
-fn handle_dump(cmd: Dump, tables: &impl ReadableTables) -> ActorResult<()> {
-    trace!("{cmd:?}");
-    trace!("dumping database");
-    for e in tables
-        .blobs()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("blobs: {} -> {:?}", k.to_hex(), v);
-    }
-    for e in tables
-        .tags()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("tags: {k} -> {v:?}");
-    }
-    for e in tables
-        .inline_data()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("inline_data: {} -> {:?}", k.to_hex(), v.len());
-    }
-    for e in tables
-        .inline_outboard()
-        .iter()
-        .map_err(|e| e!(ActorError::Storage, e))?
-    {
-        let (k, v) = e.map_err(|e| e!(ActorError::Storage, e))?;
-        let k = k.value();
-        let v = v.value();
-        println!("inline_outboard: {} -> {:?}", k.to_hex(), v.len());
-    }
-    cmd.tx.send(Ok(()));
     Ok(())
 }
 
@@ -455,9 +193,7 @@ fn handle_update(
     tables: &mut Tables,
 ) -> ActorResult<()> {
     trace!("{cmd:?}");
-    let Update {
-        hash, state, tx, ..
-    } = cmd;
+    let Update { hash, state, .. } = cmd;
     trace!("updating hash {} to {}", hash.to_hex(), state.fmt_short());
     let old_entry_opt = tables.blobs.get(hash)?.map(|e| e.value());
     bookkeeping.written(hash, old_entry_opt.as_ref());
@@ -500,9 +236,23 @@ fn handle_update(
             .insert(hash, outboard.as_ref())
             .map_err(|e| e!(ActorError::Storage, e))?;
     }
-    if let Some(tx) = tx {
-        tx.send(Ok(()));
-    }
+    Ok(())
+}
+
+/// Like [`handle_update`], and replies once the update is applied.
+fn handle_update_await(
+    cmd: UpdateAwait,
+    bookkeeping: &mut Bookkeeping,
+    tables: &mut Tables,
+) -> ActorResult<()> {
+    let UpdateAwait {
+        hash,
+        state,
+        tx,
+        span,
+    } = cmd;
+    handle_update(Update { hash, state, span }, bookkeeping, tables)?;
+    tx.send(Ok(()));
     Ok(())
 }
 
@@ -560,7 +310,7 @@ struct Bookkeeping {
     /// any state the batch gave it. Files may exist for each of those.
     written: HashMap<Hash, BaoFileParts>,
     /// Deletes in the current write batch, answered once it is committed.
-    deleted: HashMap<Hash, Vec<oneshot::Sender<ActorResult<()>>>>,
+    deleted: HashMap<Hash, Vec<oneshot::Sender<io::Result<()>>>>,
 }
 
 impl Bookkeeping {
@@ -587,21 +337,21 @@ impl Bookkeeping {
         &mut self,
         hash: Hash,
         before: Option<&EntryState<I>>,
-        tx: oneshot::Sender<ActorResult<()>>,
+        tx: oneshot::Sender<io::Result<()>>,
     ) {
         self.written(hash, before);
         self.deleted.entry(hash).or_default().push(tx);
     }
 
     /// The deletes of the batch, to answer once it is committed.
-    fn take_deletes(&mut self) -> Vec<oneshot::Sender<ActorResult<()>>> {
+    fn take_deletes(&mut self) -> Vec<oneshot::Sender<io::Result<()>>> {
         self.deleted.drain().flat_map(|(_, txs)| txs).collect()
     }
 
     /// The parts the batch stopped referencing, to send once it is committed.
     ///
     /// For each hash written but not deleted in the batch: which files it
-    /// referenced in the batch and no longer does. The entity of a deleted
+    /// referenced in the batch and no longer does. The handler of a deleted
     /// hash removes all its files itself, once its delete is answered.
     fn unreferenced_parts(
         &mut self,
@@ -675,7 +425,7 @@ pub(super) fn trigger_reboot_check(db: &std::path::Path) -> n0_error::Result<boo
 #[derive(Debug)]
 pub struct Actor {
     db: DbWrapper,
-    cmds: PeekableReceiver<Command>,
+    cmds: PeekableReceiver<Command, Request>,
     /// Where the parts each committed batch stopped referencing go, see [`UnreferencedParts`].
     unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
     options: BatchOptions,
@@ -685,7 +435,7 @@ pub struct Actor {
 impl Actor {
     pub fn new(
         db_path: PathBuf,
-        cmds: tokio::sync::mpsc::Receiver<Command>,
+        cmds: tokio::sync::mpsc::Receiver<Request>,
         unreferenced: tokio::sync::mpsc::UnboundedSender<(Hash, UnreferencedParts)>,
         paths: Arc<PathOptions>,
         options: BatchOptions,
@@ -734,8 +484,7 @@ impl Actor {
         // Sync after recovery so its writes and bitfield deletions are included,
         // and before committing the new run so a failed sync leaves the old one.
         if syncs_files {
-            super::sync_fs::sync(&paths.data_path)
-                .std_context("syncing the data filesystem on open")?;
+            sync_fs::sync(&paths.data_path).std_context("syncing the data filesystem on open")?;
         }
         drop(meta);
         drop(tables);
@@ -763,7 +512,6 @@ impl Actor {
         let _guard = span.enter();
         match cmd {
             ReadOnlyCommand::Get(cmd) => handle_get(cmd, tables),
-            ReadOnlyCommand::Dump(cmd) => handle_dump(cmd, tables),
             ReadOnlyCommand::GetBlobStatus(cmd) => handle_get_blob_status(cmd, tables).await,
         }
     }
@@ -772,7 +520,7 @@ impl Actor {
         trace!("{cmd:?}");
         let Delete { hash, tx, .. } = cmd;
         let entry = tables.blobs.remove(hash)?.map(|entry| entry.value());
-        // answered after the commit, then the entity deletes the files
+        // answered after the commit, then the handler deletes the files
         state.deleted(hash, entry.as_ref(), tx);
         if let Some(EntryState::Complete {
             data_location,
@@ -881,6 +629,7 @@ impl Actor {
         let _guard = span.enter();
         match cmd {
             ReadWriteCommand::Update(cmd) => handle_update(cmd, state, tables),
+            ReadWriteCommand::UpdateAwait(cmd) => handle_update_await(cmd, state, tables),
             ReadWriteCommand::Set(cmd) => handle_set(cmd, state, tables),
             ReadWriteCommand::Delete(cmd) => Self::delete(state, tables, cmd),
             ReadWriteCommand::SetTag(cmd) => Self::set_tag(tables, cmd).await,
@@ -933,13 +682,24 @@ impl Actor {
                 Self::clear_run(db)?;
                 Some(cmd)
             }
-            TopLevelCommand::Snapshot(cmd) => {
+            TopLevelCommand::ListTags(cmd) => {
                 trace!("{cmd:?}");
-                let txn = db
-                    .begin_read()
-                    .map_err(|e| e!(ActorError::Transaction, e))?;
-                let snapshot = ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))?;
-                cmd.tx.send(snapshot).ok();
+                let snapshot = read_tables(db)?;
+                cmd.tx.send(list_tags(snapshot, cmd.request)).ok();
+                None
+            }
+            TopLevelCommand::ListBlobs(cmd) => {
+                trace!("{cmd:?}");
+                let snapshot = read_tables(db)?;
+                let blobs =
+                    blob_hashes(&snapshot).map(|rows| Box::pin(stream::iter(rows)) as Listing<_>);
+                cmd.tx.send(blobs).ok();
+                None
+            }
+            TopLevelCommand::GcSnapshot(cmd) => {
+                trace!("{cmd:?}");
+                let snapshot = read_tables(db)?;
+                cmd.tx.send(gc_snapshot(snapshot)).ok();
                 None
             }
         })
@@ -1036,14 +796,14 @@ impl Actor {
                     drop(tables);
                     tx.commit().map_err(|e| e!(ActorError::Commit, e))?;
                     // Files are only touched once the commit that stops
-                    // referencing them is durable. A delete's entity removes
+                    // referencing them is durable. A delete's handler removes
                     // its files once its delete is answered. If the batch
                     // fails, the answers are dropped and the deletes fail.
                     for tx in deletes {
                         tx.send(Ok(()));
                     }
                     // The main actor hands unreferenced parts to the hash's
-                    // entity, which checks them against its own state, or
+                    // handler, which checks them against its own state, or
                     // deletes them itself if there is none. Unbounded, so this
                     // actor never waits on the main actor, which waits on this
                     // one.
@@ -1062,6 +822,38 @@ impl Actor {
 pub(super) struct Failure {
     pub error: ActorError,
     _db: DbWrapper,
+}
+
+impl From<Failure> for metadata::Failure {
+    fn from(failure: Failure) -> Self {
+        Self::new(failure.error.into(), failure._db)
+    }
+}
+
+/// Starts the redb metadata store at `db_path`, on the store's runtime.
+///
+/// Creates the database's directory, opens or creates the database, and runs
+/// recovery if the last run did not shut down cleanly. Returns the store
+/// running, for [`super::FsStore`] to spawn.
+pub(super) fn start(
+    db_path: &Path,
+    config: &FsConfig,
+    batch: &BatchOptions,
+    channels: MetaChannels,
+) -> n0_error::Result<impl MetaTask> {
+    if let Some(parent) = db_path.parent() {
+        trace!("creating parent directory for db file {}", parent.display());
+        std::fs::create_dir_all(parent)?;
+    }
+    let actor = Actor::new(
+        db_path.to_path_buf(),
+        channels.requests,
+        channels.unreferenced,
+        Arc::new(config.path.clone()),
+        batch.clone(),
+        config.syncs_files(),
+    )?;
+    Ok(async move { actor.run().await.map_err(Into::into) })
 }
 
 /// Logs what recovery did.
@@ -1166,11 +958,61 @@ fn load_outboard(
     })
 }
 
-pub(crate) fn raw_outboard_size(size: u64) -> u64 {
-    BaoTree::new(size, IROH_BLOCK_SIZE).outboard_size()
+/// The hashes of all blobs in a snapshot.
+/// Opens a read snapshot of the tables.
+fn read_tables(db: &Database) -> ActorResult<ReadOnlyTables> {
+    let txn = db
+        .begin_read()
+        .map_err(|e| e!(ActorError::Transaction, e))?;
+    ReadOnlyTables::new(&txn).map_err(|e| e!(ActorError::Table, e))
 }
 
-/// The hashes of all blobs in a snapshot.
+/// The tags of a snapshot that the request asks for. The stream owns the snapshot.
+fn list_tags(snapshot: ReadOnlyTables, request: ListTagsRequest) -> io::Result<Listing<TagInfo>> {
+    let ListTagsRequest {
+        from,
+        to,
+        raw,
+        hash_seq,
+    } = request;
+    let from = from.map(Bound::Included).unwrap_or(Bound::Unbounded);
+    let to = to.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+    let rows = snapshot.tags.range((from, to)).map_err(io::Error::other)?;
+    let tags = rows.filter_map(move |row| {
+        let (name, value) = match row {
+            Ok(row) => row,
+            Err(cause) => return Some(Err(api_error_from_storage_error(cause))),
+        };
+        let value = value.value();
+        let wanted = raw && value.format.is_raw() || hash_seq && value.format.is_hash_seq();
+        wanted.then(|| {
+            Ok(TagInfo {
+                name: name.value(),
+                hash: value.hash,
+                format: value.format,
+            })
+        })
+    });
+    Ok(Box::pin(stream::iter(tags)))
+}
+
+/// The gc candidates (every blob) and the named tag roots of one snapshot.
+fn gc_snapshot(snapshot: ReadOnlyTables) -> io::Result<GcSnapshotReply> {
+    let candidates = blob_hashes(&snapshot)?;
+    let roots = snapshot
+        .tags
+        .range::<Tag>(..)
+        .map_err(io::Error::other)?
+        .map(|row| {
+            row.map(|(_, root)| root.value())
+                .map_err(api_error_from_storage_error)
+        });
+    Ok((
+        Box::pin(stream::iter(candidates)),
+        Box::pin(stream::iter(roots)),
+    ))
+}
+
 fn blob_hashes(
     snapshot: &ReadOnlyTables,
 ) -> io::Result<impl Iterator<Item = api::Result<Hash>> + Send + 'static> {
@@ -1185,12 +1027,17 @@ fn blob_hashes(
 mod tests {
     use std::sync::Arc;
 
+    use tracing::Span;
+
+    use crate::store::host::Location;
+
     use super::{
-        super::{
-            file_deletes::BaoFilePart,
-            options::{CrashConsistency, Options, PathOptions},
-        },
+        super::options::{CrashConsistency, Options, PathOptions},
         *,
+    };
+    use crate::store::host::{
+        metadata::{parts::BaoFilePart, Db},
+        StoreOptions,
     };
 
     fn a_run(boot_id: Option<&str>, syncs_files: bool) -> Run {
@@ -1375,12 +1222,11 @@ mod tests {
         Ok(unreferenced)
     }
 
-    /// An update from an entity, without waiting for it to be applied.
+    /// An update from a handler, without waiting for it to be applied.
     fn update(hash: Hash, state: EntryState<Bytes>) -> Update {
         Update {
             hash,
             state,
-            tx: None,
             span: Span::none(),
         }
     }
@@ -1416,7 +1262,10 @@ mod tests {
                 Set {
                     hash,
                     state: EntryState::Complete {
-                        data_location: DataLocation::External(vec![external.clone()], 7),
+                        data_location: DataLocation::External(
+                            vec![Location::from_path(&external).unwrap()],
+                            7,
+                        ),
                         outboard_location: OutboardLocation::NotNeeded,
                     },
                     tx: reply,
@@ -1432,7 +1281,6 @@ mod tests {
                         data_location: DataLocation::Owned(7),
                         outboard_location: OutboardLocation::NotNeeded,
                     },
-                    tx: None,
                     span: Span::none(),
                 },
                 state,
@@ -1449,7 +1297,34 @@ mod tests {
         Ok(())
     }
 
-    /// A delete is answered once committed, and leaves its files to its entity.
+    /// An awaited update is answered once applied, before its batch commits.
+    #[test]
+    fn an_update_await_is_answered_before_the_commit() -> testresult::TestResult<()> {
+        let (_dir, _paths, db) = setup()?;
+        let hash = Hash::new(b"partial");
+        let mut state = Bookkeeping::default();
+        let (tx, rx) = oneshot::channel();
+        let oneshot::Receiver::Tokio(mut rx) = rx;
+        write_batch(&db, &mut state, |tables, state| {
+            handle_update_await(
+                UpdateAwait {
+                    hash,
+                    state: EntryState::Partial {
+                        size: Some(100_000),
+                    },
+                    tx,
+                    span: Span::none(),
+                },
+                state,
+                tables,
+            )?;
+            assert!(matches!(rx.try_recv(), Ok(Ok(()))));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// A delete is answered once committed, and leaves its files to its handler.
     #[test]
     fn a_delete_is_answered_after_the_commit() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
@@ -1483,13 +1358,13 @@ mod tests {
         })?;
         assert!(
             unreferenced.is_empty(),
-            "the entity deletes the files itself"
+            "the handler deletes the files itself"
         );
         assert!(matches!(rx.try_recv(), Ok(Ok(()))));
         Ok(())
     }
 
-    /// Deleting an absent entry is answered too, to release its entity.
+    /// Deleting an absent entry is answered too, to release its handler.
     #[test]
     fn deleting_an_absent_entry_is_confirmed() -> testresult::TestResult<()> {
         let (_dir, _paths, db) = setup()?;
@@ -1559,7 +1434,10 @@ mod tests {
 
         use n0_future::StreamExt;
 
-        use crate::store::fs::{self, entity_manager::EntityManagerState};
+        use crate::store::{
+            fs,
+            host::{testing::EntityManagerState, HandlerGlobal, TaskContext},
+        };
 
         let dir = tempfile::tempdir()?;
         let options = Arc::new(Options::new(dir.path()));
@@ -1598,25 +1476,36 @@ mod tests {
         };
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(100);
         let (fs_tx, fs_cmd_rx) = tokio::sync::mpsc::channel(100);
-        let context = Arc::new(fs::TaskContext {
-            options: options.clone(),
-            db: Db::new(db_tx),
-            internal_cmd_tx: fs_tx.clone(),
-        });
-        let mut actor = fs::Actor {
+        let context = Arc::new(TaskContext::for_test(
+            Arc::new(StoreOptions::from(&*options)),
+            Db::new(db_tx),
+            fs_tx.clone(),
+        ));
+        let mut actor = crate::store::host::testing::Actor::<fs::FsBackend> {
             context: context.clone(),
             cmd_rx,
             fs_cmd_rx,
             unreferenced,
-            metadata_task: Some(tokio::spawn(metadata.run())),
+            metadata_task: Some(tokio::spawn(async move {
+                metadata.run().await.map_err(Into::into)
+            })),
             deletes: Arc::new(tokio::sync::watch::Sender::new(0)),
             tasks: tokio::task::JoinSet::new(),
-            handles: EntityManagerState::new(context, 16, 32, 2),
+            handles: EntityManagerState::new(
+                Arc::new(HandlerGlobal {
+                    store: context,
+                    // The metadata actor above is built by hand, so start_meta is not used.
+                    backend: fs::FsBackend::new(db_path.clone(), &options),
+                }),
+                16,
+                32,
+                2,
+            ),
             temp_tags: Default::default(),
             gc: None,
             deferred: Default::default(),
             idle_waiters: Vec::new(),
-            _rt: fs::RtWrapper(None),
+            _rt: crate::store::host::testing::RtWrapper(None),
         };
         struct Worker {
             closed: Arc<AtomicBool>,
@@ -1641,14 +1530,14 @@ mod tests {
             std::future::pending::<()>().await;
         });
         let task = tokio::spawn(actor.run());
-        let store = fs::FsStore::new(cmd_tx.into(), fs_tx);
+        let store = fs::FsStore::new(cmd_tx.into());
         let data = fs::tests::test_data(100_000);
         let hash = store.add_bytes(data.clone()).await?.hash;
         let other = store.add_slice("cached observer").await?.hash;
         store.sync_db().await?;
         let mut observer = Box::pin(store.observe(other).stream().await?);
         assert!(observer.next().await.unwrap().is_complete());
-        // This waiter cannot complete while the observer keeps its entity busy.
+        // This waiter cannot complete while the observer keeps its handler busy.
         let idle_store = store.clone();
         let idle = tokio::spawn(async move { idle_store.wait_idle().await });
 

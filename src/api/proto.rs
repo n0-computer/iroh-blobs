@@ -252,7 +252,7 @@ pub enum BatchResponse {
 pub struct BlobDeleteRequest {
     pub hashes: Vec<Hash>,
     /// Bypass current and retained temp-tag protection. In the fs store,
-    /// deletion still runs through the entity to coordinate state and files.
+    /// deletion still runs through the handler to coordinate state and files.
     pub force: bool,
 }
 

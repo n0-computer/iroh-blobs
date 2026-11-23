@@ -1097,6 +1097,19 @@ async fn export_ranges_smoke_mem() -> TestResult {
     export_ranges_smoke(&store).await
 }
 
+/// The generic tests on the store host with the memory backend, see `store::host::mem_backend`.
+#[tokio::test]
+#[traced_test]
+async fn generic_tests_membackend() -> TestResult {
+    let testdir = tempfile::tempdir()?;
+    let store = crate::store::host::mem_backend::store(&testdir.path().join("a")).await?;
+    export_ranges_smoke(&store).await?;
+    let store = crate::store::host::mem_backend::store(&testdir.path().join("b")).await?;
+    check_add_stream_source_error(&store).await?;
+    let store = crate::store::host::mem_backend::store(&testdir.path().join("c")).await?;
+    empty_hash_is_complete(&store, testdir.path()).await
+}
+
 async fn export_ranges_smoke(store: &Store) -> TestResult {
     let sizes = INTERESTING_SIZES;
     for size in sizes {

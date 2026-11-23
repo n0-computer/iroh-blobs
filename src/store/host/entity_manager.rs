@@ -1,17 +1,21 @@
-#![allow(dead_code)]
 use std::{fmt::Debug, future::Future, hash::Hash};
 
 use n0_future::{future, FuturesUnordered};
 use tokio::sync::{mpsc, oneshot};
 
-/// Trait to reset an entity state in place.
+/// Trait to create an entity state, and to reset it in place for another entity.
 ///
 /// In many cases this is just assigning the default value, but e.g. for an
 /// `Arc<Mutex<T>>` resetting to the default value means an allocation, whereas
 /// reset can be done without.
-pub trait Reset: Default {
-    /// Reset the state to its default value.
-    fn reset(&mut self);
+pub trait Reset<Id> {
+    /// A new state for the entity `id`. Must be cheap and do no IO.
+    fn new(id: &Id) -> Self;
+    /// Rebind a recycled state to the entity `id`.
+    ///
+    /// Drops what the state held for its previous entity, but keeps its
+    /// allocations.
+    fn reset(&mut self, id: &Id);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,8 +43,8 @@ pub trait Params: Send + Sync + 'static {
     type GlobalState: Debug + Clone + Send + Sync + 'static;
     /// Entity state type.
     ///
-    /// This is the actual distinct per-entity state. This needs to implement
-    /// `Default` and a matching `Reset`. It also needs to implement `Clone`
+    /// This is the actual distinct per-entity state. It is created with
+    /// [`Reset::new`] and recycled with [`Reset::reset`]. It also needs to implement `Clone`
     /// since we unfortunately need to pass an owned copy of the state to the
     /// callback - otherwise we run into some rust lifetime limitations
     /// <https://github.com/rust-lang/rust/issues/100013>.
@@ -48,7 +52,7 @@ pub trait Params: Send + Sync + 'static {
     /// Frequently this is an `Arc<Mutex<T>>` or similar. Note that per entity
     /// access is concurrent but not parallel, so you can use a more efficient
     /// synchronization primitive like [`AtomicRefCell`](https://crates.io/crates/atomic_refcell) if you want to.
-    type EntityState: Default + Debug + Reset + Clone + Send + Sync + 'static;
+    type EntityState: Debug + Reset<Self::EntityId> + Clone + Send + Sync + 'static;
     /// Function being called when an entity actor is shutting down.
     fn on_shutdown(
         state: entity_actor::State<Self>,
@@ -247,7 +251,7 @@ mod entity_actor {
                 self.tasks.is_empty(),
                 "Tasks must be empty before recycling"
             );
-            self.state.state.reset();
+            self.state.state.reset(&self.state.id);
         }
     }
 }
@@ -467,7 +471,7 @@ mod main_actor {
                             // No commands during shutdown, we can recycle the actor.
                             self.recycle(send, actor);
                         } else {
-                            actor.state.state.reset();
+                            actor.state.state.reset(&id);
                             self.live.insert(id.clone(), EntityHandle::Live { send });
                             return Some(actor.run());
                         }
@@ -500,8 +504,9 @@ mod main_actor {
                     // Get an actor from the pool of inactive actors and initialize it.
                     actor.state.id = id.clone();
                     actor.state.global = self.state.clone();
-                    // strictly speaking this is not needed, since we reset the state when adding the actor to the pool.
-                    actor.state.state.reset();
+                    // Binds the state to its new entity. What it held was
+                    // already dropped when the actor went into the pool.
+                    actor.state.state.reset(&id);
                     task = Some(actor.run());
                     EntityHandle::Live { send }
                 } else {
@@ -513,7 +518,7 @@ mod main_actor {
                     let state: entity_actor::State<P> = entity_actor::State {
                         id: id.clone(),
                         global: self.state.clone(),
-                        state: Default::default(),
+                        state: P::EntityState::new(&id),
                     };
                     let actor = entity_actor::Actor {
                         main: self.internal_send.clone(),
@@ -674,9 +679,11 @@ mod main_actor {
 /// Dropping the `EntityManager` will shut down the entity actors without waiting for their
 /// tasks to complete. For a more gentle shutdown, use the [`EntityManager::shutdown`] function
 /// that does wait for tasks to complete.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct EntityManager<P: Params>(mpsc::Sender<main_actor::Command<P>>);
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     /// Maximum number of inactive entity actors that are being pooled for reuse.
@@ -691,6 +698,7 @@ pub struct Options {
     pub entity_futures_initial_capacity: usize,
 }
 
+#[cfg(test)]
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -702,6 +710,7 @@ impl Default for Options {
     }
 }
 
+#[cfg(test)]
 impl<P: Params> EntityManager<P> {
     pub fn new(state: P::GlobalState, options: Options) -> Self {
         let (send, recv) = mpsc::channel(options.inbox_size);
@@ -821,8 +830,12 @@ mod tests {
         #[derive(Debug, Clone, Default)]
         struct State(Arc<AtomicRefCell<Inner>>);
 
-        impl Reset for State {
-            fn reset(&mut self) {
+        impl Reset<u64> for State {
+            fn new(_id: &u64) -> Self {
+                Self::default()
+            }
+
+            fn reset(&mut self, _id: &u64) {
                 *self.0.borrow_mut() = Default::default();
             }
         }
@@ -990,8 +1003,8 @@ mod tests {
             }
             tokio::spawn(actor).await?;
             // Shutdown parks the receiver. ShutdownComplete is queued, but
-            // the manager has not processed it yet. The old bounded inbox
-            // blocked here and prevented that processing.
+            // the manager has not processed it yet. A bounded inbox would
+            // block here and prevent that processing.
             assert!(manager.tick().await.is_none());
             tokio::time::timeout(std::time::Duration::from_secs(1), async {
                 for index in 128..256 {
@@ -1050,7 +1063,6 @@ mod tests {
     mod fs {
         //! The fs db uses one file per counter, stored as a 16-byte big-endian u128.
         use std::{
-            collections::HashSet,
             path::{Path, PathBuf},
             sync::{Arc, Mutex},
         };
@@ -1063,7 +1075,6 @@ mod tests {
         #[derive(Debug, Clone, Default)]
         struct State {
             value: Option<u128>,
-            tasks: HashSet<tokio::task::Id>,
         }
 
         #[derive(Debug)]
@@ -1075,8 +1086,12 @@ mod tests {
         #[derive(Debug, Clone, Default)]
         struct EntityState(Arc<AtomicRefCell<State>>);
 
-        impl Reset for EntityState {
-            fn reset(&mut self) {
+        impl Reset<u64> for EntityState {
+            fn new(_id: &u64) -> Self {
+                Self::default()
+            }
+
+            fn reset(&mut self, _id: &u64) {
                 *self.0.borrow_mut() = Default::default();
             }
         }

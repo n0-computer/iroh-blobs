@@ -94,7 +94,7 @@ mod platform {
     windows
 )))]
 mod platform {
-    /// No boot ID on this platform yet.
+    /// No boot ID on this platform.
     pub(super) fn current() -> Option<String> {
         None
     }

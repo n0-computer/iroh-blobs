@@ -18,32 +18,34 @@ use std::{
     sync::Arc,
 };
 
+use bao_tree::io::sync::ReadAt;
 use bao_tree::{
     io::outboard::{PreOrderMemOutboard, PreOrderOutboard},
     BaoTree, ChunkNum,
 };
 use bytes::Bytes;
 use genawaiter::sync::Gen;
+use irpc::RpcMessage;
 use irpc::{
     channel::{mpsc, none::NoReceiver},
     Channels, WithChannels,
 };
+use n0_future::future::yield_now;
 use n0_future::{stream, Stream, StreamExt};
 use ref_cast::RefCast;
 use smallvec::SmallVec;
 use tracing::{instrument, trace};
 
-use super::{meta::raw_outboard_size, options::Options, TaskContext};
+use super::{actor::TaskContext, bao::raw_outboard_size, options::StoreOptions};
 use crate::{
     api::{
-        blobs::{AddProgressItem, ImportMode},
+        blobs::{AddProgressItem, ExportProgressItem, ImportMode},
         proto::{
             HashSpecific, ImportByteStreamMsg, ImportByteStreamRequest, ImportByteStreamUpdate,
             ImportBytesMsg, ImportBytesRequest, ImportPathMsg, ImportPathRequest, Request, Scope,
         },
     },
     store::{
-        fs::reflink_or_copy_with_progress,
         util::{MemOrFile, DD},
         IROH_BLOCK_SIZE,
     },
@@ -305,7 +307,7 @@ async fn import_byte_stream_impl(
     cmd: ImportByteStreamRequest,
     tx: &mut mpsc::Sender<AddProgressItem>,
     stream: impl Stream<Item = io::Result<Bytes>> + Unpin,
-    options: Arc<Options>,
+    options: Arc<StoreOptions>,
 ) -> io::Result<ImportEntry> {
     let ImportByteStreamRequest { format, scope } = cmd;
     let import_source = get_import_source(stream, tx, &options).await?;
@@ -317,7 +319,7 @@ async fn import_byte_stream_impl(
 async fn get_import_source(
     stream: impl Stream<Item = io::Result<Bytes>> + Unpin,
     tx: &mut mpsc::Sender<AddProgressItem>,
-    options: &Options,
+    options: &StoreOptions,
 ) -> io::Result<ImportSource> {
     let mut stream = stream.fuse();
     let mut peek = SmallVec::<[_; 2]>::new();
@@ -346,7 +348,7 @@ async fn get_import_source(
         let chunk = chunk?;
         size += chunk.len() as u64;
         if size > options.inline.max_data_inlined {
-            let temp_path = TempPath::new(options.path.temp_file_name());
+            let temp_path = TempPath::new(options.temp_file_name());
             trace!("writing to temp file: {:?}", temp_path);
             let mut file = fs::OpenOptions::new()
                 .read(true)
@@ -400,7 +402,7 @@ async fn compute_outboard(
     source: ImportSource,
     format: BlobFormat,
     scope: Scope,
-    options: Arc<Options>,
+    options: Arc<StoreOptions>,
     tx: &mut mpsc::Sender<AddProgressItem>,
 ) -> io::Result<ImportEntry> {
     let size = source.size();
@@ -413,7 +415,7 @@ async fn compute_outboard(
     let (hash, outboard) = if outboard_size > options.inline.max_outboard_inlined {
         // outboard will eventually be stored as a file, so compute it directly to a file
         // we don't know the hash yet, so we need to create a temp file
-        let outboard_path = TempPath::new(options.path.temp_file_name());
+        let outboard_path = TempPath::new(options.temp_file_name());
         trace!("Creating outboard file in {:?}", outboard_path);
         // we don't need to read from this file!
         let mut outboard_file = File::create(&outboard_path)?;
@@ -462,7 +464,7 @@ pub async fn import_path(mut cmd: ImportPathMsg, context: Arc<TaskContext>) {
 async fn import_path_impl(
     cmd: ImportPathRequest,
     tx: &mut mpsc::Sender<AddProgressItem>,
-    options: Arc<Options>,
+    options: Arc<StoreOptions>,
 ) -> io::Result<ImportEntry> {
     let ImportPathRequest {
         path,
@@ -496,7 +498,7 @@ async fn import_path_impl(
         let file = OpenOptions::new().read(true).open(&path)?;
         ImportSource::External(path, file, size)
     } else {
-        let temp_path = TempPath::new(options.path.temp_file_name());
+        let temp_path = TempPath::new(options.temp_file_name());
         // todo: if reflink works, we don't need progress.
         // But if it does not, it might take a while and we won't get progress.
         let res = reflink_or_copy_with_progress(&path, &temp_path, size, tx).await?;
@@ -509,6 +511,65 @@ async fn import_path_impl(
     compute_outboard(import_source, format, batch, options, tx).await
 }
 
+pub(crate) trait CopyProgress: RpcMessage {
+    fn from_offset(offset: u64) -> Self;
+}
+
+impl CopyProgress for ExportProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        ExportProgressItem::CopyProgress(offset)
+    }
+}
+
+impl CopyProgress for AddProgressItem {
+    fn from_offset(offset: u64) -> Self {
+        AddProgressItem::CopyProgress(offset)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum CopyResult {
+    Reflinked,
+    Copied,
+}
+
+pub(crate) async fn reflink_or_copy_with_progress(
+    from: impl AsRef<Path>,
+    to: impl AsRef<Path>,
+    size: u64,
+    tx: &mut mpsc::Sender<impl CopyProgress>,
+) -> io::Result<CopyResult> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+    if reflink_copy::reflink(from, to).is_ok() {
+        return Ok(CopyResult::Reflinked);
+    }
+    let source = fs::File::open(from)?;
+    let mut target = fs::File::create(to)?;
+    copy_with_progress(source, size, &mut target, tx).await?;
+    Ok(CopyResult::Copied)
+}
+
+async fn copy_with_progress<T: CopyProgress>(
+    file: impl ReadAt,
+    size: u64,
+    target: &mut impl Write,
+    tx: &mut mpsc::Sender<T>,
+) -> io::Result<()> {
+    let mut offset = 0;
+    let mut buf = vec![0u8; 1024 * 1024];
+    while offset < size {
+        let remaining = buf.len().min((size - offset) as usize);
+        let buf: &mut [u8] = &mut buf[..remaining];
+        file.read_exact_at(offset, buf)?;
+        target.write_all(buf)?;
+        tx.try_send(T::from_offset(offset)).await?;
+        yield_now().await;
+        offset += buf.len() as u64;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -518,10 +579,7 @@ mod tests {
     use testresult::TestResult;
 
     use super::*;
-    use crate::{
-        api::proto::BoxedByteStream,
-        store::fs::options::{CrashConsistency, InlineOptions, PathOptions},
-    };
+    use crate::{api::proto::BoxedByteStream, store::host::options::InlineOptions};
 
     async fn drain<T: RpcMessage>(mut recv: mpsc::Receiver<T>) -> TestResult<Vec<T>> {
         let mut res = Vec::new();
@@ -547,7 +605,10 @@ mod tests {
             .map(move |i| data.slice(i..std::cmp::min(i + chunk_size, data.len())))
     }
 
-    async fn test_import_byte_stream_task(data: Bytes, options: Arc<Options>) -> TestResult<()> {
+    async fn test_import_byte_stream_task(
+        data: Bytes,
+        options: Arc<StoreOptions>,
+    ) -> TestResult<()> {
         let stream: BoxedByteStream =
             Box::pin(stream::iter(chunk_bytes(data.clone(), 999).map(Ok)));
         let expected_outboard = PreOrderMemOutboard::create(data.as_ref(), IROH_BLOCK_SIZE);
@@ -576,8 +637,8 @@ mod tests {
         Ok(())
     }
 
-    async fn test_import_file_task(data: Bytes, options: Arc<Options>) -> TestResult<()> {
-        let path = options.path.temp_file_name();
+    async fn test_import_file_task(data: Bytes, options: Arc<StoreOptions>) -> TestResult<()> {
+        let path = options.temp_file_name();
         std::fs::write(&path, &data)?;
         let expected_outboard = PreOrderMemOutboard::create(data.as_ref(), IROH_BLOCK_SIZE);
         // make the channel absurdly large, so we don't have to drain it
@@ -609,15 +670,13 @@ mod tests {
         let dir = tempfile::tempdir()?;
         std::fs::create_dir_all(dir.path().join("data"))?;
         std::fs::create_dir_all(dir.path().join("temp"))?;
-        let options = Arc::new(Options {
+        let options = Arc::new(StoreOptions {
             inline: InlineOptions {
                 max_data_inlined: 1024 * 16,
                 max_outboard_inlined: 1024 * 16,
             },
-            batch: Default::default(),
-            path: PathOptions::new(dir.path()),
+            temp_path: dir.path().join("temp"),
             gc: None,
-            crash_consistency: CrashConsistency::PowerLoss,
         });
         // test different sizes, below, at, and above the inline threshold
         let sizes = [
@@ -642,8 +701,12 @@ mod tests {
     #[tokio::test]
     async fn cancelled_import_removes_temp_file() -> TestResult<()> {
         let dir = tempfile::tempdir()?;
-        let options = Arc::new(Options::new(dir.path()));
-        std::fs::create_dir_all(&options.path.temp_path)?;
+        let options = Arc::new(StoreOptions {
+            inline: InlineOptions::default(),
+            temp_path: dir.path().join("temp"),
+            gc: None,
+        });
+        std::fs::create_dir_all(&options.temp_path)?;
         let (mut tx, rx) = mpsc::channel(16);
         drop(rx);
         // a single chunk above the inline limit goes to a temp file before any progress
@@ -655,7 +718,7 @@ mod tests {
         let res =
             import_byte_stream_impl(cmd, &mut tx, stream::iter([Ok(data)]), options.clone()).await;
         assert!(res.is_err());
-        assert_eq!(std::fs::read_dir(&options.path.temp_path)?.count(), 0);
+        assert_eq!(std::fs::read_dir(&options.temp_path)?.count(), 0);
         Ok(())
     }
 }

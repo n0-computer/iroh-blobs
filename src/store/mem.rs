@@ -1146,7 +1146,7 @@ impl BaoFileHandle {
         loop {
             let mut changes = self.0.state.subscribe();
             let mut done = false;
-            // Check and mutation share the write lock: unlike fs entities,
+            // Check and mutation share the write lock: unlike fs handlers,
             // mem-store tasks can run on different executor threads.
             self.0.state.send_if_modified(|state| {
                 if matches!(state, BaoFileStorage::Frozen(..)) {

@@ -70,7 +70,7 @@ impl<'de> Deserialize<'de> for Bitfield {
 }
 
 impl Bitfield {
-    #[cfg(feature = "fs-store")]
+    #[cfg(feature = "host")]
     pub(crate) fn new_unchecked(ranges: ChunkRanges, size: u64) -> Self {
         Self { ranges, size }
     }

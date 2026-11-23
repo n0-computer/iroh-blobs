@@ -23,8 +23,8 @@ use bao_tree::{ChunkNum, ChunkRanges};
 use testresult::TestResult;
 
 use super::{
-    meta::trigger_reboot_check,
     options::{CrashConsistency, Options},
+    redb::trigger_reboot_check,
     FsStore,
 };
 use crate::{

@@ -9,6 +9,8 @@ use bao_tree::BlockSize;
 #[cfg_attr(iroh_blobs_docsrs, doc(cfg(feature = "fs-store")))]
 pub mod fs;
 mod gc;
+#[cfg(feature = "host")]
+pub(crate) mod host;
 pub mod mem;
 pub mod readonly_mem;
 mod test;

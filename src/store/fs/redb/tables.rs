@@ -1,6 +1,8 @@
 //! Table definitions and accessors for the redb database.
 use redb::{ReadableTable, TableDefinition, TableError};
 
+use smallvec::SmallVec;
+
 use super::EntryState;
 use crate::{api::Tag, Hash, HashAndFormat};
 
@@ -25,7 +27,6 @@ pub(super) const RUN_KEY: &str = "run";
 /// mutable table is needed.
 pub(super) trait ReadableTables {
     fn blobs(&self) -> &impl ReadableTable<Hash, EntryState>;
-    fn tags(&self) -> &impl ReadableTable<Tag, HashAndFormat>;
     fn inline_data(&self) -> &impl ReadableTable<Hash, &'static [u8]>;
     fn inline_outboard(&self) -> &impl ReadableTable<Hash, &'static [u8]>;
 }
@@ -53,9 +54,6 @@ impl<'txn> Tables<'txn> {
 impl ReadableTables for Tables<'_> {
     fn blobs(&self) -> &impl ReadableTable<Hash, EntryState> {
         &self.blobs
-    }
-    fn tags(&self) -> &impl ReadableTable<Tag, HashAndFormat> {
-        &self.tags
     }
     fn inline_data(&self) -> &impl ReadableTable<Hash, &'static [u8]> {
         &self.inline_data
@@ -90,13 +88,40 @@ impl ReadableTables for ReadOnlyTables {
     fn blobs(&self) -> &impl ReadableTable<Hash, EntryState> {
         &self.blobs
     }
-    fn tags(&self) -> &impl ReadableTable<Tag, HashAndFormat> {
-        &self.tags
-    }
     fn inline_data(&self) -> &impl ReadableTable<Hash, &'static [u8]> {
         &self.inline_data
     }
     fn inline_outboard(&self) -> &impl ReadableTable<Hash, &'static [u8]> {
         &self.inline_outboard
+    }
+}
+
+/// Entry states are stored as postcard.
+impl redb::Value for EntryState {
+    type SelfType<'a> = EntryState;
+
+    type AsBytes<'a> = SmallVec<[u8; 128]>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        postcard::from_bytes(data).unwrap()
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'a,
+        Self: 'b,
+    {
+        postcard::to_extend(value, SmallVec::new()).unwrap()
+    }
+
+    fn type_name() -> redb::TypeName {
+        redb::TypeName::new("EntryState")
     }
 }

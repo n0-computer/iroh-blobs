@@ -1,5 +1,10 @@
 #![cfg_attr(iroh_blobs_docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
+// The host is crate private, and only the fs store uses it so far.
+#![cfg_attr(
+    all(feature = "host", not(feature = "fs-store")),
+    allow(dead_code, unused_imports)
+)]
 //! # Module docs
 //!
 //! The crate is designed to be used from the [iroh] crate.
