@@ -1740,9 +1740,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "1.4.1"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43b72366b16001af3a51574233df88ca6d62da0215807549a769e7de887da803"
+checksum = "eff8f9146946feac461ef2e5fcf7b4b795eff44958ef6faa85cba3cecea62ab3"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1753,6 +1753,7 @@ dependencies = [
  "n0-error",
  "rand",
  "serde",
+ "tracing",
  "url",
  "zeroize",
 ]
